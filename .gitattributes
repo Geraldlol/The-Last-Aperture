@@ -1,0 +1,8 @@
+# Normalise line endings so contributors on Windows, macOS and Linux
+# don't produce whole-file diffs. Lenses are read by agents, so a stray
+# CRLF flipping every line is pure review noise.
+* text=auto eol=lf
+
+# Fixtures are read as source code by the audit pipeline. Keep them LF
+# regardless of platform so a proof recipe's line numbers stay stable.
+fixtures/** text eol=lf
