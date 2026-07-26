@@ -3,6 +3,7 @@
 **Date:** 2026-07-26
 **Status:** Approved design, pending implementation plan
 **License target:** MIT
+**Companion:** `2026-07-26-recon-punch-list.md` — a 22-agent recon pass over the existing reference files and the external facts they cite. It carries the per-lens correction list, the topic-ownership assignment, seed content for the new lens sections, the verified packaging schema, and the fixture proposal. This spec records decisions; the punch list records the evidence behind them.
 
 ## 1. Purpose
 
@@ -71,14 +72,14 @@ red-team-audit/                      # repo root == plugin root
 │           ├── _schema.md           # candidate-finding contract
 │           ├── _topics.md           # canonical topic-slug registry
 │           ├── web-and-api.md
-│           ├── mobile.md
+│           ├── mobile-app-security.md      # renamed from mobile.md
 │           ├── llm-and-ai.md
 │           ├── cloud-and-iac.md
 │           ├── cicd-and-supply-chain.md
 │           ├── crypto-deep-dive.md
-│           ├── salesforce.md
+│           ├── salesforce-platform.md      # renamed from salesforce.md
 │           ├── hipaa-and-phi.md
-│           ├── privacy-and-compliance.md
+│           ├── privacy-and-data-protection.md   # renamed from privacy-and-compliance.md
 │           ├── threat-modeling.md
 │           ├── attack-chaining.md   # cross-cutting
 │           ├── business-logic.md    # cross-cutting
@@ -267,6 +268,17 @@ Stated in `SKILL.md` as non-negotiable, because the proof phase is the only part
 4. Never commit. Changes are left staged for the user.
 5. Never source production credentials to make a proof succeed.
 
+### Rail mode, chosen per audit
+
+Before Phase 3 begins, the skill asks which enforcement mode this audit runs under. The choice is per-audit and never remembered, because the right answer depends on what the repository is connected to today.
+
+| Mode | Behaviour |
+|---|---|
+| **Guided** | Rails stated, T2 available. The skill self-polices and asks before booting anything. |
+| **Restricted** | T2 is declined outright. Proof stops at T1, and findings that needed a running app are reported `UNPROVEN` rather than proven against a live process. |
+
+Restricted mode is enforcement by self-restriction rather than by tooling, which is what makes it portable: it works identically on a harness with no hook system. For users who want mechanical rather than instructed enforcement across all sessions, the README documents an opt-in `PreToolUse` hook that denies non-loopback hosts and blocks `git commit` and `git push`. That hook is documented, never bundled as mandatory, and is Claude Code specific — which is exactly why it cannot be the primary mechanism.
+
 ## 7. Evaluation
 
 `fixtures/` holds at least twelve vulnerable cases and at least four clean ones, with `EXPECTED.md` as the manifest. The exact file list is enumerated in the implementation plan.
@@ -276,6 +288,10 @@ Vulnerable fixtures cover one bug class per major lens, each with the expected s
 Clean fixtures are the more important half, and are deliberately adversarial toward the auditor: parameterized SQL assembled in a way that reads like concatenation, `dangerouslySetInnerHTML` fed a sanitized constant, MD5 used as a cache key rather than a password hash, `verify=False` confined to a test-only file. Each must produce **zero findings at Low severity or above**; an `Info` observation is acceptable, since Info is explicitly not a vulnerability claim. A skill that flags these as vulnerabilities will cry wolf on real repositories, and crying wolf is what makes security tooling get switched off.
 
 `CONTRIBUTING.md` documents the procedure: run the skill against `fixtures/`, compare with `EXPECTED.md`, and report both misses and false positives. Automated scoring is out of scope for v1 because it requires driving an agent, not running a script.
+
+**Every bullet in a lens's `Known false positives` section is backed by a case in `fixtures/clean/`.** This is what keeps those sections load-bearing rather than decorative: a false-positive rule with no canary behind it is an untested assertion, and an over-firing lens is caught by nothing else in the design. It also guards the inverse failure — a false-positive rule written so broadly that it suppresses a real finding — because the vulnerable fixture for the same bug class must still be caught.
+
+**Vulnerable fixtures ship non-functional.** No working payloads, no real or realistic-looking credentials, `fixtures/` excluded from code scanning, and a README warning explaining why the directory exists. A repository of working exploits reads as a malware sample to scanners and to people, and would drown the project in Dependabot and CodeQL noise. Both `vulnerable/` and `clean/` fixtures are written from scratch, never reduced from real code.
 
 ## 8. Packaging and release
 
@@ -297,18 +313,40 @@ The repository is canonical. `~/.claude/skills/red-team-audit` is replaced with 
 
 Claims are limited to what the design actually delivers: parallel lens fan-out, deduplication and reachability triage, proof-backed findings with an explicit unproven label, and a fixture corpus including false-positive canaries. It states plainly that this is not a scanner and does not replace SAST, and it does not claim detection rates that have not been measured.
 
+### Attribution and disclaimers
+
+- Copyright in the author's personal name. This is a personal project; no employer, tenant, product, or person names appear anywhere in the content.
+- Commit history is authored from a personal email address. The two commits predating this decision are rewritten before any remote exists.
+- A "not legal advice, no attorney-client relationship, verify against current OCR / EDPB / PCI SSC guidance" banner appears in the README and at the top of both `hipaa-and-phi.md` and `privacy-and-data-protection.md`.
+- One `AS_OF: 2026-07` line in the README, plus an explicit note that the lenses are point-in-time and will drift. **No review cadence is promised** and no CI staleness check is added — a cadence is a commitment only a maintainer can make, and an unmet one is worse than none.
+- Date-bound content is neutralised rather than kept fresh. `frameworks` identifiers stay unversioned; named-vendor compliance verdicts are deleted rather than relocated; provider-specific guidance becomes an undated provider-agnostic questionnaire, because questions rot far more slowly than answers. Named incidents are cited with dates as illustrations, never as a current-threat inventory.
+
 ## 9. Implementation phasing
 
 The work is large enough that a single undifferentiated plan would have no checkpoints. Four phases, each ending in something verifiable:
 
 | Phase | Work | Checkpoint |
 |---|---|---|
-| **A · Lens registry** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton. Author `_topics.md` and `_schema.md`. Write the lint script and CI workflow. Apply the de-branding pass. | `node scripts/lint-lenses.mjs` exits zero |
+| **A · Lens registry and content correction** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton. **Correct the content at the same time** — see below. Author `_topics.md` and `_schema.md`. Write the lint script and CI workflow. Apply the de-branding pass. | `node scripts/lint-lenses.mjs` exits zero, and every correction in punch list §1 is applied |
 | **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the three cross-cutting lenses. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint still green with thirteen lenses |
 | **C · Evaluation** | Build `fixtures/vulnerable/`, `fixtures/clean/`, and `EXPECTED.md`. Run the skill against every fixture. | Success criteria 3 and 4 |
 | **D · Packaging** | Pin `plugin.json` and `marketplace.json` against the official reference. Write `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `LICENSE`. Swap the installed copy for a junction. | Success criteria 7 and 8 |
 
 B depends on A. C depends on B. D can proceed in parallel with C, since packaging does not depend on fixture results.
+
+### Phase A is mostly content correction, not restructuring
+
+A 22-agent recon pass over the existing reference files, recorded in `2026-07-26-recon-punch-list.md`, rates **nine of the ten as not publication-ready** — almost entirely for factual errors rather than structural problems. Restructuring and correcting are therefore the same pass, not sequential ones, and Phase A should be budgeted accordingly.
+
+Three classes of error, in descending order of how much they matter:
+
+1. **Checks that can never match real code** — eleven of them across six lenses. Grepping for `pwn-request` (a research label that never appears in a vulnerable workflow), `.pip.conf` (not a real filename), `Crypto.AES` (does not exist in PyCrypto or PyCryptodome), PyJWT `verify=False` (removed in 2.0), React Native `fetch` with `rejectUnauthorized` (ignored by the RN polyfill). These are worse than missing checks: they run, match nothing, and produce a **silent all-clear**.
+2. **Advice that is inverted** — `crypto-deep-dive.md` labels a fresh per-call CSPRNG nonce as `VULNERABLE` and a monotonic counter nonce as `CATASTROPHIC`, and attributes GCM nonce reuse to key compromise rather than to GHASH subkey recovery. `cloud-and-iac.md` inverts AWS policy evaluation twice, claiming bucket policies override Block Public Access and that resource policies can override an identity-based `Deny`. Lenses in this state generate false positives against correct code.
+3. **Framework claims that do not hold** — `SANS Top 25` is not a separate list (SANS co-branding ended after 2011); `web-and-api.md` claims ASVS L1/L2 while no requirement in it is traceable to an ASVS ID; two internal cross-references still use 2021 category numbering, so a reader chasing SSRF lands on exception handling.
+
+Because unfireable checks are the highest-consequence class and cannot be caught by frontmatter linting, Phase A adds a review requirement: **every literal string, filename, or API symbol a lens tells an auditor to search for must be verified to occur in real code of that stack.** Where it cannot be, the check is rewritten structurally.
+
+One correction the recon pass got wrong is worth recording, because it shows the failure mode: an inventory agent proposed "fixing" the `A09: Security Logging and Alerting Failures` heading. The independent fact-check confirmed that name is the official 2025 title. Applying the proposed fix would have broken name-based routing while citing a category OWASP never published. Where a lens inventory and the framework fact-check disagree, the fact-check wins.
 
 ## 10. Success criteria
 
@@ -322,6 +360,10 @@ Verifiable, in the order they can be checked:
 6. On the same repository, the report includes a `Coverage` block naming any file or lens not examined.
 7. The plugin installs from a local clone and the skill appears in the available-skills list.
 8. `~/.claude/skills/red-team-audit` resolves through the junction to the repository, and no second copy of `SKILL.md` exists on disk.
+9. Every bullet in every lens's `Known false positives` section has a corresponding case in `fixtures/clean/`.
+10. Every literal string, filename, or API symbol a lens instructs an auditor to search for has been verified to occur in real code of that stack, or has been rewritten as a structural check.
+11. The skill offers a rail mode before Phase 3, and Restricted mode declines T2 rather than merely warning about it.
+12. `git log` shows no employer email address and no employer, tenant, product, or person name appears in any tracked file.
 
 ## 11. Deferred to v1.1
 
@@ -338,4 +380,6 @@ Verifiable, in the order they can be checked:
 | Recon mis-scopes a large repository and the audit silently covers a fraction of it | Recon map surfaced before fan-out; `Coverage` block mandatory; completeness critic in phase 6. |
 | Lens content ages faster than anyone maintains it | Framework editions cited in lens bodies rather than in frontmatter, so an update touches one section. Contribution path optimised for single-lens PRs. |
 | Thirteen lenses activating at once makes an audit expensive | `activates_on` restricts the active set to stacks actually present; `severity_floor` suppresses low-value output per lens. |
-| Publishing employer-adjacent work | **Assumed cleared by the author; not verified during this design process.** Raised once and not contested. The de-branding pass before publication removes company-, tenant-, and product-specific content from all lenses, but that pass addresses content leakage, not ownership of the work. |
+| Ownership of the material | **Resolved: the author confirms this is a personal project.** No further gating. |
+| The corpus fingerprints its origin even after de-branding | Unscrubbable without changing coverage, and accepted. A reader who notes that `hipaa-and-phi` is among the most detailed lenses, that a Salesforce lens exists, that PHI needed removing from three unrelated lenses, and that a Microsoft 365 section was deleted can infer a US behavioural-health provider on Salesforce and M365. That is a category, not an identity. What *is* actionable is handled at release: commit-author email, and fixtures being synthetic rather than reduced from real code. |
+| Publishing compliance verdicts under a personal name | `hipaa-and-phi` and `privacy-and-compliance` keep their verdict language, gated behind a prominent "not legal advice, no attorney-client relationship, verify against current OCR / EDPB / PCI SSC guidance" banner in the README **and** at the top of both lens bodies. |
