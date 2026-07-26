@@ -218,6 +218,16 @@ These are the items whose fix must propagate into lens frontmatter (`frameworks`
 - **`threat-modeling` claims a framework it never uses.** `SKILL.md` advertises MITRE ATT&CK as in scope, and the `### Persistence / lateral movement (post-compromise)` section describes ATT&CK tactics in prose with no technique IDs. Either cite technique IDs so the output can be handed to a detection/IR team (the only audience for that section) or drop `mitre-attack` from `frameworks`.
 - **`cloud-and-iac` keeps `cis-benchmarks` unversioned â€” deliberately.** The fact-check confirms this is the one framework where omitting a version is correct, since CIS ships per-technology benchmarks monthly and no global version exists. Do not let a version-pinning pass add one; instead add one body clause instructing auditors to name the specific benchmark and version they checked (e.g. "CIS AWS Foundations v7.0.0, section 2.1.1") and to state that Level 2 items are hardening, not vulnerabilities.
 
+## 2–3. Overlap resolution and frontmatter — SUPERSEDED
+
+**This section is structurally incomplete and is not the source of truth.** The writer producing the overlap resolution table, the topic registry and the thirteen frontmatter blocks exceeded its output limit and continued in a fresh turn, so only the tail of its work was returned. Lost: the section headers, the complete overlap table, the head of the registry, and the frontmatter for `web-and-api` and `crypto-and-key-management`.
+
+**Use `2026-07-26-recon-punch-list-repair.md` instead.** It carries the complete assignment plus an adversarial invariant verification. Per the design spec, lens frontmatter is the single source of truth and `_topics.md` is generated from it — neither this section nor the repair companion is authoritative once Phase A0 produces the normalised artifact.
+
+What follows below, beginning mid-mapping, is the surviving fragment. It is retained only as provenance. The first block is the tail of the `crypto-and-key-management` frontmatter whose head was lost; the verifier confirmed it is byte-identical to the tail of the independently reconstructed block, which is what corroborates that reconstruction.
+
+<!-- BEGIN ORPHANED FRAGMENT — provenance only, do not implement from this -->
+
 -external-credentials: salesforce-platform
   connected-app-configuration: salesforce-platform
   phi-encryption-sufficiency: hipaa-and-phi
@@ -1475,6 +1485,8 @@ frameworks: []   # measures this lens set against itself, not an external standa
 severity_floor: info   # Phase 6 output is coverage and process gaps: an activated lens that returned nothing, a file matched by no lens, a finding dropped without a recorded reason, a Coverage block claim not backed by an auditor result. These are Info by construction. This is the only lens permitted to emit Info-only output, and `info` must therefore be added to the severity_floor enum. A floor of `low` would force it to inflate coverage gaps into vulnerabilities, which would also break the clean-fixture rule that clean/ produces zero findings at Low or above.
 ---
 ```
+
+<!-- END ORPHANED FRAGMENT -->
 
 ## 4. Known-false-positives seed content
 

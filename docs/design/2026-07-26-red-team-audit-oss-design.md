@@ -74,7 +74,8 @@ red-team-audit/                      # repo root == plugin root
 │       ├── SKILL.md                 # orchestrator only
 │       └── lenses/
 │           ├── _schema.md           # candidate-finding contract
-│           ├── _topics.md           # canonical topic-slug registry
+│           ├── _topics.md           # GENERATED from frontmatter — never hand-edited
+│           ├── _harness.md          # shared proof-harness pieces lenses reference by name
 │           ├── web-and-api.md
 │           ├── mobile-app-security.md      # renamed from mobile.md
 │           ├── llm-and-ai.md
@@ -93,8 +94,12 @@ red-team-audit/                      # repo root == plugin root
 │   ├── clean/
 │   └── EXPECTED.md
 ├── .github/workflows/lint-lenses.yml
-├── scripts/lint-lenses.mjs
-├── docs/design/
+├── scripts/
+│   ├── lint-lenses.mjs          # R1–R6, plus the migration-ledger gate
+│   └── gen-topics.mjs           # emits _topics.md and the overlap table from frontmatter
+├── docs/
+│   ├── migration-ledger.tsv     # every source check → destination → disposition
+│   └── design/
 ├── AGENTS.md                        # entry point for Codex, Cursor, and similar
 ├── CONTRIBUTING.md
 ├── README.md
@@ -117,15 +122,18 @@ cross_cutting: false
 activates_on:
   paths: ["**/routes/**", "**/controllers/**", "**/api/**", "**/middleware/**"]
   signals: ["express", "fastapi", "gin-gonic", "graphql", "@app.route", "actix-web"]
-owns: [http-authz, cors, csrf, xss, open-redirect, ssrf-http, rate-limiting, security-headers]
+owns: [authz-object-level, cors-policy, csrf, xss-and-output-encoding, open-redirect,
+       ssrf-application-path, rate-limiting-and-request-quotas, security-headers-and-csp]
 defers:
-  secrets-management: cicd-and-supply-chain
-  jwt-algorithm-confusion: crypto-deep-dive
-  phi-handling: hipaa-and-phi
-frameworks: [OWASP-Top-10, OWASP-API-Top-10, OWASP-ASVS]
+  dependency-pinning-and-lockfiles: cicd-and-supply-chain
+  jwt-jws-and-jwks-verification: crypto-and-key-management
+  phi-classification: hipaa-and-phi
+frameworks: [owasp-top-10, owasp-api-top-10, nist-sp-800-63b]
 severity_floor: low
 ---
 ```
+
+**This block is illustrative, not normative.** The authoritative values live in the generated ownership artifact described in §4.3 — a prose example in a design document is exactly the kind of second source of truth that drifts. `owasp-asvs` is deliberately absent: the existing file's "ASVS L1/L2" claim is not traceable to any ASVS requirement ID, and 5.0.0 renumbered the catalogue, so the identifier is not claimed until real requirement IDs appear in the body.
 
 Framework identifiers are unversioned in frontmatter; specific editions and versions are cited in the lens body, where they can be updated without touching the machine-readable contract.
 
@@ -150,7 +158,15 @@ Fixed body skeleton, so a lens can be handed to a subagent verbatim with no wrap
 
 `lenses/_topics.md` holds the canonical list of topic slugs. The invariant: **every slug is owned by exactly one lens.** This is what prevents duplicate findings by construction instead of cleaning them up afterwards.
 
-The registry is larger than it sounds: **165 slugs across the ten activating lenses, and 350 `defers` entries between them.** At that scale nobody maintains consistency by reading carefully, which is the entire argument for machine enforcement.
+The registry is larger than it sounds: the assignment produced **165 slugs across the ten activating lenses with 350 deferrals between them**, which becomes **164** once the pseudonymisation duplicate below is resolved. At that scale nobody maintains consistency by reading carefully, which is the entire argument for machine enforcement.
+
+### One canonical representation, everything else generated
+
+**Lens frontmatter is the single source of truth.** Nothing else is authoritative. `_topics.md`, the overlap resolution table, every slug count, and the deferral report are all **generated from frontmatter**, never hand-maintained alongside it.
+
+This is a correction to how the design work itself was done. The ownership assignment currently exists as prose spread across two companion documents, and they already disagree: this spec resolves the pseudonymisation duplicate while the repair companion still assigns and registers the slug, which is also why the two documents state incompatible counts. Any number written by hand in prose is a claim; only a generated number is a fact.
+
+Concretely, the first deliverable of Phase A is a normalised machine-readable assignment extracted from the two companions, plus `scripts/gen-topics.mjs` that emits `_topics.md` and the overlap table from the thirteen frontmatter blocks. After that point, a slug count appearing anywhere in prose is a bug, not a statement. Implementation agents read one artifact, never reconcile two prose documents.
 
 `scripts/lint-lenses.mjs`, run by `.github/workflows/lint-lenses.yml` on every pull request, asserts:
 
@@ -190,11 +206,17 @@ Four further renames make scope legible from the name rather than requiring the 
 
 `lenses/_schema.md` defines what every lens returns, so merging is mechanical.
 
+The record accumulates fields as it moves through the pipeline. Written at fan-out, extended at triage, extended again at proof.
+
+**Written by the lens at fan-out:**
+
 | Field | Type | Notes |
 |---|---|---|
+| `candidate_id` | stable string | Required. Survives dedup, merge and re-runs; every later stage and every report line references it |
 | `lens` | string | Originating lens `name` |
+| `topic` | topic slug | **Required.** Topic ownership is the deduplication boundary, so a finding that does not carry its slug cannot be deduplicated by the mechanism the whole registry exists to provide |
 | `title` | string | Short, specific |
-| `severity` | Critical / High / Medium / Low / Info | No hedged pairs |
+| `claimed_impact_severity` | Critical…Info | What the impact would be if the finding is real and reachable. **Never overwritten** |
 | `location` | `file:line`, one or more | Multiple sites allowed after semantic dedup |
 | `cwe` | string | CWE identifier where one applies |
 | `evidence` | quoted code | The actual vulnerable text, not a paraphrase |
@@ -203,6 +225,29 @@ Four further renames make scope legible from the name rather than requiring the 
 | `reachable_from` | entry point name, or `unknown` | Required |
 | `confidence` | High / Medium / Low | Auditor's own calibration |
 | `proof_plan` | string | How this could be proven, for the proof phase to execute |
+
+**Added at triage:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `effective_severity` | Critical…Info | After reachability capping, floors and chain elevation. Derived; `claimed_impact_severity` remains readable beside it |
+| `triage_disposition` | `queued` / `merged` / `dropped` / `elevated` | What triage did to it |
+| `drop_reason` | string | Required when dropped. A drop with no reason is indistinguishable from a loss |
+| `raised_by` | lens name | Set when a cross-cutting lens elevated it |
+| `component_finding_ids` | `candidate_id[]` | For chain findings: the components that compose into it |
+
+**Added at proof:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `proof_tier` | T0 / T1 / T2 / T3 | Tier actually reached, not attempted |
+| `verification_status` | see §6 | `CONFIRMED` / `NOT_REPRODUCED` / `INCONCLUSIVE` / `DISPROVED` / `UNPROVEN` |
+| `artifact` | path + hash | The test file or capture, hashed so the report is checkable after the fact |
+| `command` | string | The exact command run. **Identical before and after the patch** |
+| `pre_result` | structured | Outcome before the patch, including the assertion that fired |
+| `post_result` | structured | Outcome after the patch |
+
+Separating `claimed_impact_severity` from `effective_severity` is what breaks the deadlock described in §5.
 
 `reachable_from` is required and is the cheapest precision mechanism in the design. Forcing the auditor to name the path from untrusted input to the vulnerable line, at the moment it writes the finding, eliminates a large class of findings about code nothing can reach. `unknown` survives to triage but caps at Medium unless a proof lands.
 
@@ -228,14 +273,24 @@ Strict order, because later steps depend on earlier ones:
 
 1. **Structural dedup** — identical `file:line` plus `cwe` collapses; highest confidence wins.
 2. **Semantic dedup** — one root cause at several sites becomes one finding with several locations.
-3. **Reachability gate** — `reachable_from: unknown` caps at Medium pending proof.
+3. **Reachability gate** — `reachable_from: unknown` sets `effective_severity` to Medium. It does **not** overwrite `claimed_impact_severity`, and it does **not** remove the finding from the proof queue.
 4. **False-positive sweep** — each candidate re-checked against its own lens's `Known false positives`.
 5. **Cross-cutting lenses run** — `attack-chaining`, `business-logic`, and `completeness` read the merged set, which is the only point at which they have the input they need.
 6. **Chain elevation** — Mediums that compose into account takeover, data exfiltration, or privilege escalation are raised, with the chain written out step by step.
 
 ### Phase 3: Prove
 
-Per surviving Critical and High. See section 6.
+**The proof queue is built from `claimed_impact_severity`, not from `effective_severity`.** Every candidate whose claimed impact is High or Critical is enqueued, including those triage capped to Medium for unknown reachability.
+
+Ordering the other way round deadlocks, and the earlier draft of this spec did exactly that: triage capped unknown-reachability findings to Medium, proof only accepted Critical and High, so the findings whose reachability most needed resolving were the precise set that could never reach the phase that resolves it. A capped finding stayed capped forever, and the cap looked like a considered severity judgement rather than an artifact of queue ordering.
+
+The final severity is therefore computed **after** proof, not before it:
+
+1. Enqueue on `claimed_impact_severity` ≥ High.
+2. Run the tiered proof (§6). A successful proof establishes reachability as a side effect — a test that drives the vulnerable path from an entry point *is* the reachability evidence.
+3. Apply the final cap using what proof returned: reachability now known and confirmed lifts the Medium cap; still-unknown reachability keeps it, and the report says which.
+
+See section 6 for the tiers and the verification states.
 
 ### Phase 4: Patch
 
@@ -273,41 +328,76 @@ Auto-trigger behaviour on commit and deploy language is carried over unchanged.
 
 ## 6. Proof tiers and safety rails
 
-| Tier | Mechanism | Severity cap | Availability |
+Tier describes **what evidence exists.** Capability mode, below, describes **what the skill is permitted to do.** They are orthogonal, and conflating them was the defect that made the earlier "Restricted" mode meaningless.
+
+| Tier | Mechanism | Severity cap | Requires mode |
 |---|---|---|---|
-| T0 | Static reasoning with a cited code path | Medium | Always |
-| T1 | Failing test in the project's own framework, executed | None | Default, when a test framework exists |
-| T2 | Application booted locally, real request to `localhost` | None | Opt-in, when the app boots clean. The skill asks before booting anything, every time; there is no persistent opt-in. |
-| T3 | Written PoC, never executed, tagged `UNPROVEN` | Medium | Fallback |
+| T0 | Static reasoning with a cited code path | Medium | Static |
+| T1 | Detector or failing test executed by the project's own runner | None | Isolated test |
+| T2 | Application booted locally, real request to a loopback socket | None | Local dynamic |
+| T3 | Written PoC, never executed, tagged `UNPROVEN` | Medium | Static |
 
-### Three outcomes, not two
+A static checker counts as T1, not T0, when the repository's own test runner executes it and it asserts both directions — `detect(vulnerable) == 1` **and** `detect(clean) == 0`. Without that rule every cloud/IaC and CI/CD finding caps at Medium the moment dynamic proof is unavailable, which systematically under-rates the two domains with the largest blast radius. A detector that only passes on good input proves nothing about detection.
 
-- Test **fails** before the patch: **confirmed.** Report at full severity.
-- Test **passes** before the patch: the vulnerability is not there. **Drop the finding.** Record it in `Coverage` as disproved.
-- Test could not be written or run: **`UNPROVEN`.** Report anyway, capped at Medium, with the reason stated.
+### The proof oracle
 
-Separating *disproved* from *unproven* is the mechanism that removes false positives rather than merely flagging them. Today's skill cannot distinguish the two, so both ship as findings at full severity.
+A test result is not a verdict. "The test failed" can mean the vulnerability is real, or that an import blew up. "The test passed" can mean the code is safe, or that the test never reached the vulnerable line. The earlier two-outcome rule treated both ambiguities as certainties, in opposite directions — it could falsely confirm *and* falsely disprove.
 
-### Rails
+**A result counts as evidence only when all five hold:**
 
-Stated in `SKILL.md` as non-negotiable, because the proof phase is the only part of the skill that executes anything:
+1. **A declared assertion signature** — the specific security assertion, or the observable failure signature, named *before* the run. "It failed" is not a signature; `AssertionError: expected 403, got 200 with body containing other_user_email` is.
+2. **Path-reached evidence** — proof the vulnerable line executed. A log line, a spy, a coverage marker, an injected canary observed downstream.
+3. **A control** — a positive control that must fail, or a sensitivity control showing the test detects the condition when it is present. This is what distinguishes a test that passes because the code is safe from one that passes because it tests nothing.
+4. **The identical command before and after the patch.** Not an equivalent command. The same string.
+5. **The project's relevant regression tests passing after the patch** — a patch that blocks the attack by breaking the feature is not a patch.
 
-1. Targets are files in this repository and `localhost`. Never a remote host, never a hostname read from configuration or environment.
-2. No destructive payloads, even locally. Prove by observation, not by `DROP TABLE` or `rm -rf`.
-3. Security tests are written to their own directory. Existing project tests are never edited.
-4. Never commit. Changes are left staged for the user.
-5. Never source production credentials to make a proof succeed.
+**Five states, not three:**
 
-### Rail mode, chosen per audit
+| State | Meaning | Reported as |
+|---|---|---|
+| `CONFIRMED` | Assertion fired pre-patch, passed post-patch, all five conditions met | Full severity |
+| `NOT_REPRODUCED` | Oracle valid, ran correctly, the predicted behaviour did not occur | Withdrawn from findings, recorded in `Coverage` |
+| `INCONCLUSIVE` | Setup failed, path never reached, control failed, or the oracle was invalid | Reported, capped at Medium, with the specific reason |
+| `DISPROVED` | A validated oracle showed the code is not vulnerable, **or** the finding's code premise was falsified | Removed, with the falsified premise stated |
+| `UNPROVEN` | No proof attempted or possible in the current capability mode | Reported, capped at Medium, with the blocking reason |
 
-Before Phase 3 begins, the skill asks which enforcement mode this audit runs under. The choice is per-audit and never remembered, because the right answer depends on what the repository is connected to today.
+`DISPROVED` is now a strong claim requiring a validated oracle or a falsified premise. Everything that used to collapse into it — an import error, a test that never reached the path, a missing fixture — lands in `INCONCLUSIVE` instead. The earlier design would have silently deleted real findings on the strength of a `ModuleNotFoundError`.
 
-| Mode | Behaviour |
-|---|---|
-| **Guided** | Rails stated, T2 available. The skill self-polices and asks before booting anything. |
-| **Restricted** | T2 is declined outright. Proof stops at T1, and findings that needed a running app are reported `UNPROVEN` rather than proven against a live process. |
+### Capability modes, chosen per audit
 
-Restricted mode is enforcement by self-restriction rather than by tooling, which is what makes it portable: it works identically on a harness with no hook system. For users who want mechanical rather than instructed enforcement across all sessions, the README documents an opt-in `PreToolUse` hook that denies non-loopback hosts and blocks `git commit` and `git push`. That hook is documented, never bundled as mandatory, and is Claude Code specific — which is exactly why it cannot be the primary mechanism.
+Modes are defined by **capability granted**, not by tier permitted. The earlier design got this backwards: it defined "Restricted" as T1-only and called that a safety boundary. It isn't one. T1 runs the repository's own test command, which can execute lifecycle hooks, run migrations, start Docker containers and emulators, emit telemetry, and reach remote services using whatever ambient credentials are in the environment. "Only T1" grants arbitrary code execution with the user's full credential set.
+
+Binding to loopback does not help either. The proof request goes to `localhost`, but the application under test reads `DATABASE_URL` from `.env` and connects wherever that points — including production.
+
+| Mode | Capability | Requirements |
+|---|---|---|
+| **Static** | No writes, no execution | T0 and T3 only. Nothing runs. Always available, always safe. |
+| **Isolated test** | Runs the project's test command | Explicit consent. Sanitised environment. No implicit installs. Egress denied where the platform permits, with the achieved level declared. Wall-clock timeout. Process-tree cleanup. |
+| **Local dynamic** | Boots the application | Everything above, plus a disclosed boot manifest, a disposable datastore, a literal loopback bind, a random port the skill owns, and guaranteed teardown. |
+
+Asked before Phase 3, per audit, never remembered — the right answer depends on what the repository is wired to today, not on what it was wired to last week.
+
+**The sanitised environment is the real control**, not the loopback binding. Before any execution: credential-shaped variables are withheld rather than inherited, cloud credential files are not mounted, and any variable the repository's own configuration reads for a datastore or API endpoint is redirected to a disposable local instance or removed. If a test cannot run without a credential, that is reported as `INCONCLUSIVE`, not solved by supplying the credential.
+
+**Honest limits, stated in the README rather than implied away:**
+
+- Egress denial is not portable. It requires OS-level isolation — Linux network namespaces, cgroups, or a container. On Windows or macOS without Docker there is no mechanism a markdown skill can invoke. Where it cannot be enforced, Isolated mode **says so and asks** rather than claiming isolation it does not have.
+- The optional `PreToolUse` hook is weaker than a sandbox. It inspects a command string; it cannot see syscalls inside a child process. It stops `curl https://prod.example.com`. It does not stop a test that opens a socket.
+
+### Filesystem and Git transaction contract
+
+A dedicated test directory is not containment. Test runs also write coverage files, snapshots, caches, local databases, migration state, and whatever child processes decide to write. And automatically staging results is actively destructive: `git add` against a file with partially staged hunks discards the user's carefully split index.
+
+Proof work therefore runs in a **disposable mirror or worktree**, and the original index is preserved byte-for-byte. The audit returns a manifest rather than a mutated repository:
+
+1. **Owned paths** — every path the proof run created or modified — and the generated patch.
+2. **Exact commands** run, and the environment policy applied.
+3. **Pre and post results**, with artifact hashes so the report is checkable after the fact.
+4. **Cleanup report**, including any process still running and any path deliberately left behind.
+
+Staging remains supported, but only for **named files after explicit approval** — never as a default side effect, and never as a bulk `git add`.
+
+This is about the portable default promised to downstream users. Authorisation for this particular repository is settled; the default is what ships to people who have not thought about it.
 
 ## 7. Evaluation
 
@@ -358,12 +448,42 @@ The work is large enough that a single undifferentiated plan would have no check
 
 | Phase | Work | Checkpoint |
 |---|---|---|
-| **A · Lens registry and content correction** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton. **Correct the content at the same time** — see below. Author `_topics.md` and `_schema.md`. Write the lint script and CI workflow. Apply the de-branding pass. | `node scripts/lint-lenses.mjs` exits zero, and every correction in punch list §1 is applied |
+| **A · Lens registry and content correction** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton, **correcting the content in the same pass**. Author `_schema.md` and `_harness.md`; generate `_topics.md`. Write the lint and generator scripts. De-brand. Five internal gates, A0–A4, below. | A4 closes: lint green on R1–R6, and **zero unresolved migration-ledger entries** |
 | **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the three cross-cutting lenses. Add the body-aware lint rule now that bodies exist: every pair of lenses whose bodies both discuss a slug must have a `defers` entry. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint green over thirteen lenses including the body-aware rule |
 | **C · Evaluation** | Build `fixtures/vulnerable/`, `fixtures/clean/`, and `EXPECTED.md`. Run the skill against every fixture. | Success criteria 3 and 4 |
 | **D · Packaging** | Pin `plugin.json` and `marketplace.json` against the official reference. Write `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `LICENSE`. Swap the installed copy for a junction. | Success criteria 7 and 8 |
 
 B depends on A. C depends on B. D can proceed in parallel with C, since packaging does not depend on fixture results.
+
+### Phase A internal gates
+
+Phase A is large enough that "lint passes" is not a completion signal — lint checks metadata, and the risk in Phase A is losing *content*. Five gates:
+
+| Gate | Work | Closes when |
+|---|---|---|
+| **A0** | Checksum a private baseline of `SKILL.md` and all ten references. Freeze the canonical schema, the thirteen lens names, and the normalised ownership assignment. | Baseline hashed; schema, names and ownership are frozen and machine-readable |
+| **A1** | Migrate the ten lenses independently, recording every move in the migration ledger | All ten migrated, ledger rows written for each |
+| **A2** | For every corrected search instruction, supply a positive and a negative detector example, plus the evidence for the correction | No corrected instruction lacks a demonstrated match |
+| **A3** | Global validation: ownership, deferrals, schema conformance, and every `_harness.md` reference resolving | `lint-lenses.mjs` green; `gen-topics.mjs` output matches committed `_topics.md` |
+| **A4** | De-branding and history scan | Zero unresolved ledger entries; no employer, tenant, product or person name in any tracked file |
+
+The A0 baseline **stays untracked**, which matters because it collides with the release rule in §8: the baseline exists so migration can be verified against it, but it holds pre-scrub content and must never be committed. Checksums of it may be.
+
+### The migration ledger
+
+Phase A's checkpoint was originally metadata lint plus "every correction in punch list §1 is applied." Neither proves content was preserved, and the loss is not hypothetical: `references/web-and-api.md` currently delegates injection, deserialization and JWT handling back to `SKILL.md` with "Covered in main SKILL.md" — and Phase B rewrites `SKILL.md`. Those checks would evaporate with nothing detecting it.
+
+So every check, heading, severity rule and citation in `SKILL.md` and all ten references gets a ledger row in `docs/migration-ledger.tsv`:
+
+```
+source_location → destination_lens/topic → disposition → evidence_id
+```
+
+with `disposition` one of `preserved`, `corrected`, `moved`, or `intentionally_removed`. **Phase A closes only at zero unresolved rows**, and `lint-lenses.mjs` enforces that gate rather than a human declaring it done. `intentionally_removed` is a valid disposition — silent removal is not.
+
+Phase A's checkpoint also names punch list **§§4–6**, not just §1: the fixed body skeleton requires `Known false positives` (§4) and `Proof recipes` (§5), and Phase A owns the de-branding checklist (§6). A lens missing either new section is incomplete regardless of what lint says about its frontmatter.
+
+Phase A needs only the deterministic contract tests that show a corrected check can actually fire. Full end-to-end agent evaluation stays in Phase C.
 
 ### Phase A is mostly content correction, not restructuring
 
@@ -383,18 +503,23 @@ One correction the recon pass got wrong is worth recording, because it shows the
 
 Verifiable, in the order they can be checked:
 
-1. `node scripts/lint-lenses.mjs` exits zero across all six rules R1–R6: ownership is a partition over 165 slugs, every `defers` target resolves, every registry slug has exactly one overlap-table row, and slug orthography is uniform.
+1. `node scripts/lint-lenses.mjs` exits zero across R1–R6: ownership is a partition, every `defers` target resolves, every registry slug has exactly one overlap-table row, and slug orthography is uniform. No slug count is asserted here — counts are generated, and a count written by hand is a defect.
 2. `SKILL.md` is 8 KB or smaller and names no harness-specific tool in normative text.
 3. Running the skill against each `fixtures/vulnerable/` case reports the expected finding at the expected severity.
 4. Running it against each `fixtures/clean/` case reports **zero findings at Low severity or above**.
-5. On a repository with a working test framework, every reported Critical and High carries either an executed failing-then-passing test or an explicit `UNPROVEN` label with a reason.
+5. On a repository with a working test framework, **every finding reported at Critical or High has `verification_status: CONFIRMED`** with T1 or T2 evidence attached — the declared assertion signature, path-reached evidence, a control, the identical pre/post command, and passing regression tests. `UNPROVEN`, `INCONCLUSIVE` and T0/T3 evidence all cap at Medium, so a Critical or High carrying any of them is a contract violation, not a judgement call. T2 request-and-response evidence satisfies this criterion exactly as an executed test does.
 6. On the same repository, the report includes a `Coverage` block naming any file or lens not examined.
 7. The plugin installs from a local clone and the skill appears in the available-skills list.
 8. `~/.claude/skills/red-team-audit` resolves through the junction to the repository, and no second copy of `SKILL.md` exists on disk.
 9. Every bullet in every lens's `Known false positives` section has a corresponding case in `fixtures/clean/`.
 10. Every literal string, filename, or API symbol a lens instructs an auditor to search for has been verified to occur in real code of that stack, or has been rewritten as a structural check.
-11. The skill offers a rail mode before Phase 3, and Restricted mode declines T2 rather than merely warning about it.
+11. The skill asks for a capability mode before Phase 3, and each mode's tier ceiling is enforced rather than advertised: Static reaches T0/T3, Isolated test reaches T1, Local dynamic reaches T2.
 12. `git log` shows no employer email address and no employer, tenant, product, or person name appears in any tracked file.
+13. `node scripts/gen-topics.mjs` reproduces the committed `_topics.md` and overlap table byte-for-byte from frontmatter alone. Any divergence means a second source of truth has appeared.
+14. `docs/migration-ledger.tsv` has zero unresolved rows, and every row's disposition is one of `preserved`, `corrected`, `moved`, `intentionally_removed`.
+15. Every `_harness.md` component referenced by a lens's `Proof recipes` section exists and is referenced by name rather than re-described inline.
+16. After a proof run, `git diff --cached` is byte-identical to what it was before the audit started, and the audit returned a manifest naming every path it touched and every process it left running.
+17. In Static mode the skill executes nothing and writes nothing; in Isolated mode it states the egress-denial level it actually achieved on this platform rather than asserting isolation generically.
 
 ## 11. Deferred to v1.1
 
@@ -407,10 +532,11 @@ Verifiable, in the order they can be checked:
 
 | Risk | Mitigation |
 |---|---|
-| Proof phase edits a user's repository in ways they did not expect | Rails in section 6: dedicated test directory, never commit, changes left staged and reported. |
+| Proof phase edits a user's repository in ways they did not expect | The transaction contract in §6: proof runs in a disposable mirror or worktree, the original index is preserved byte-for-byte, and the audit returns a manifest of owned paths, commands, results with hashes, and leftover processes. Staging happens only for named files after explicit approval. A dedicated test directory was the earlier mitigation and was insufficient — test runs also write coverage, snapshots, caches, local databases and migration state, and a bulk `git add` destroys partially staged hunks. |
+| Proof execution reaches production despite loopback binding | The sanitised environment, not the binding, is the control: credential-shaped variables withheld, cloud credential files unmounted, datastore and endpoint variables redirected to disposable local instances. A test that cannot run without a real credential returns `INCONCLUSIVE` rather than being handed one. |
 | Recon mis-scopes a large repository and the audit silently covers a fraction of it | Recon map surfaced before fan-out; `Coverage` block mandatory; completeness critic in phase 6. |
 | Lens content ages faster than anyone maintains it | Framework editions cited in lens bodies rather than in frontmatter, so an update touches one section. Contribution path optimised for single-lens PRs. |
 | Thirteen lenses activating at once makes an audit expensive | `activates_on` restricts the active set to stacks actually present; `severity_floor` suppresses low-value output per lens. |
 | Ownership of the material | **Resolved: the author confirms this is a personal project.** No further gating. |
 | The corpus fingerprints its origin even after de-branding | Unscrubbable without changing coverage, and accepted. A reader who notes that `hipaa-and-phi` is among the most detailed lenses, that a Salesforce lens exists, that PHI needed removing from three unrelated lenses, and that a Microsoft 365 section was deleted can infer a US behavioural-health provider on Salesforce and M365. That is a category, not an identity. What *is* actionable is handled at release: commit-author email, and fixtures being synthetic rather than reduced from real code. |
-| Publishing compliance verdicts under a personal name | `hipaa-and-phi` and `privacy-and-compliance` keep their verdict language, gated behind a prominent "not legal advice, no attorney-client relationship, verify against current OCR / EDPB / PCI SSC guidance" banner in the README **and** at the top of both lens bodies. |
+| Publishing compliance verdicts under a personal name | `hipaa-and-phi` and `privacy-and-data-protection` keep their verdict language, gated behind a prominent "not legal advice, no attorney-client relationship, verify against current OCR / EDPB / PCI SSC guidance" banner in the README **and** at the top of both lens bodies. |
