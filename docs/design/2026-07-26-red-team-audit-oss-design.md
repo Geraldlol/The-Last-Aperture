@@ -333,7 +333,7 @@ Tier describes **what evidence exists.** Capability mode, below, describes **wha
 | Tier | Mechanism | Severity cap | Requires mode |
 |---|---|---|---|
 | T0 | Static reasoning with a cited code path | Medium | Static |
-| T1 | Detector or failing test executed by the project's own runner | None | Isolated test |
+| T1 | Detector or failing test executed by the project's own runner | None | Test execution |
 | T2 | Application booted locally, real request to a loopback socket | None | Local dynamic |
 | T3 | Written PoC, never executed, tagged `UNPROVEN` | Medium | Static |
 
@@ -371,18 +371,27 @@ Binding to loopback does not help either. The proof request goes to `localhost`,
 
 | Mode | Capability | Requirements |
 |---|---|---|
-| **Static** | No writes, no execution | T0 and T3 only. Nothing runs. Always available, always safe. |
-| **Isolated test** | Runs the project's test command | Explicit consent. Sanitised environment. No implicit installs. Egress denied where the platform permits, with the achieved level declared. Wall-clock timeout. Process-tree cleanup. |
-| **Local dynamic** | Boots the application | Everything above, plus a disclosed boot manifest, a disposable datastore, a literal loopback bind, a random port the skill owns, and guaranteed teardown. |
+| **Static** | Reads and reasons. Executes nothing, writes nothing. | T0 and T3 only |
+| **Test execution** | Runs the project's own test command, with the project's own environment | Explicit consent. No implicit installs. Wall-clock timeout. Process-tree cleanup. |
+| **Local dynamic** | Boots the application | Everything above, plus a disclosed boot manifest, a loopback bind, a random port the skill owns, and guaranteed teardown. |
 
 Asked before Phase 3, per audit, never remembered — the right answer depends on what the repository is wired to today, not on what it was wired to last week.
 
-**The sanitised environment is the real control**, not the loopback binding. Before any execution: credential-shaped variables are withheld rather than inherited, cloud credential files are not mounted, and any variable the repository's own configuration reads for a datastore or API endpoint is redirected to a disposable local instance or removed. If a test cannot run without a credential, that is reported as `INCONCLUSIVE`, not solved by supplying the credential.
+### This is disclosure, not a sandbox
 
-**Honest limits, stated in the README rather than implied away:**
+**The skill does not sandbox anything, and does not pretend to.** Test execution mode runs your test command with your environment, exactly as you would run it. If your test setup starts Docker, applies migrations, emits telemetry, or points at shared infrastructure, the audit does all of that too — because it is running the command you run.
 
-- Egress denial is not portable. It requires OS-level isolation — Linux network namespaces, cgroups, or a container. On Windows or macOS without Docker there is no mechanism a markdown skill can invoke. Where it cannot be enforced, Isolated mode **says so and asks** rather than claiming isolation it does not have.
-- The optional `PreToolUse` hook is weaker than a sandbox. It inspects a command string; it cannot see syscalls inside a child process. It stops `curl https://prod.example.com`. It does not stop a test that opens a socket.
+That is a deliberate choice, not an oversight:
+
+- **Real isolation isn't portable.** Denying egress needs Linux network namespaces, cgroups, or a container. On Windows or macOS without Docker there is no mechanism a markdown skill can invoke. A partial sandbox is worse than none, because it buys false confidence.
+- **Sanitising the environment breaks the thing being measured.** A repository's test suite is built to run with that repository's environment. Strip `DATABASE_URL` and tests fail for reasons unrelated to security, and the report fills with `INCONCLUSIVE` that says nothing about the code.
+- **It is not a new capability grant.** The audience is a developer auditing their own repository. `npm test` on that repo is something they already run daily. The audit is not introducing a risk class; it is doing what the owner does.
+
+So the contract is disclosure and consent, stated before execution and in the README, in these terms: *this runs your test suite and, if you allow it, boots your app. It inherits your environment. If your environment reaches production, so does this.*
+
+One behavioural rule survives, and it is enforceable by the model rather than by tooling: **the skill never goes hunting for credentials it was not already given.** It does not read `~/.aws`, does not unseal a vault, does not source `.env.production` to make a stubborn proof succeed. It inherits what is already in the environment and nothing more. A proof that cannot run without a credential it was not handed returns `INCONCLUSIVE` — which is a more useful result than a proof that reached production to get a green tick.
+
+The optional `PreToolUse` hook is documented as a convenience for people who want a tripwire, with its limit stated: it inspects a command string and cannot see syscalls inside a child process. It stops `curl https://prod.example.com`. It does not stop a test that opens a socket. Anyone who needs real isolation should run the audit in a container or a VM, and the README says so plainly instead of implying the skill provides it.
 
 ### Filesystem and Git transaction contract
 
@@ -432,6 +441,10 @@ The repository is canonical. `~/.claude/skills/red-team-audit` is replaced with 
 ### README
 
 Claims are limited to what the design actually delivers: parallel lens fan-out, deduplication and reachability triage, proof-backed findings with an explicit unproven label, and a fixture corpus including false-positive canaries. It states plainly that this is not a scanner and does not replace SAST, and it does not claim detection rates that have not been measured.
+
+**Stated audience:** a developer auditing a repository they own, frequently one holding code they did not write line by line — AI-generated or AI-assisted code that works and has never been read adversarially. That is the case the project is built for and the README says so, because it explains the design: the proof requirement exists because nobody wants a list of maybe-bugs in code they don't fully understand, and the false-positive canaries exist because a tool that cries wolf on generated code gets switched off within a day.
+
+**The README states the execution model up front, not in a footnote:** this runs your test suite and, with permission, boots your app; it inherits your environment; it provides no isolation; if you need isolation, run it in a container. A tool aimed at people auditing code they don't fully understand has an obligation to be blunt about what it does to their machine, and no obligation to pretend it is a sandbox.
 
 ### Attribution and disclaimers
 
@@ -513,13 +526,13 @@ Verifiable, in the order they can be checked:
 8. `~/.claude/skills/red-team-audit` resolves through the junction to the repository, and no second copy of `SKILL.md` exists on disk.
 9. Every bullet in every lens's `Known false positives` section has a corresponding case in `fixtures/clean/`.
 10. Every literal string, filename, or API symbol a lens instructs an auditor to search for has been verified to occur in real code of that stack, or has been rewritten as a structural check.
-11. The skill asks for a capability mode before Phase 3, and each mode's tier ceiling is enforced rather than advertised: Static reaches T0/T3, Isolated test reaches T1, Local dynamic reaches T2.
+11. The skill asks for a capability mode before Phase 3 and honours that mode's tier ceiling: Static reaches T0/T3, Test execution reaches T1, Local dynamic reaches T2.
 12. `git log` shows no employer email address and no employer, tenant, product, or person name appears in any tracked file.
 13. `node scripts/gen-topics.mjs` reproduces the committed `_topics.md` and overlap table byte-for-byte from frontmatter alone. Any divergence means a second source of truth has appeared.
 14. `docs/migration-ledger.tsv` has zero unresolved rows, and every row's disposition is one of `preserved`, `corrected`, `moved`, `intentionally_removed`.
 15. Every `_harness.md` component referenced by a lens's `Proof recipes` section exists and is referenced by name rather than re-described inline.
 16. After a proof run, `git diff --cached` is byte-identical to what it was before the audit started, and the audit returned a manifest naming every path it touched and every process it left running.
-17. In Static mode the skill executes nothing and writes nothing; in Isolated mode it states the egress-denial level it actually achieved on this platform rather than asserting isolation generically.
+17. In Static mode the skill executes nothing and writes nothing. Before any execution in the other two modes, it has stated plainly that it runs the project's own commands with the project's own environment and provides no isolation. The skill never reads a credential source it was not handed.
 
 ## 11. Deferred to v1.1
 
@@ -533,7 +546,7 @@ Verifiable, in the order they can be checked:
 | Risk | Mitigation |
 |---|---|
 | Proof phase edits a user's repository in ways they did not expect | The transaction contract in §6: proof runs in a disposable mirror or worktree, the original index is preserved byte-for-byte, and the audit returns a manifest of owned paths, commands, results with hashes, and leftover processes. Staging happens only for named files after explicit approval. A dedicated test directory was the earlier mitigation and was insufficient — test runs also write coverage, snapshots, caches, local databases and migration state, and a bulk `git add` destroys partially staged hunks. |
-| Proof execution reaches production despite loopback binding | The sanitised environment, not the binding, is the control: credential-shaped variables withheld, cloud credential files unmounted, datastore and endpoint variables redirected to disposable local instances. A test that cannot run without a real credential returns `INCONCLUSIVE` rather than being handed one. |
+| Proof execution reaches production because the environment points there | **Disclosed, not mitigated.** The skill runs the project's own test command with the project's own environment and provides no isolation; loopback binding does not change where the application under test connects. Stated before execution and in the README, in those words. Real isolation is the user's job — a container or a VM — because a partial sandbox buys false confidence and environment stripping breaks the test suite being measured. The skill's own rule is narrower and enforceable: it never reads a credential source it was not handed, so a proof that would need one returns `INCONCLUSIVE`. |
 | Recon mis-scopes a large repository and the audit silently covers a fraction of it | Recon map surfaced before fan-out; `Coverage` block mandatory; completeness critic in phase 6. |
 | Lens content ages faster than anyone maintains it | Framework editions cited in lens bodies rather than in frontmatter, so an update touches one section. Contribution path optimised for single-lens PRs. |
 | Thirteen lenses activating at once makes an audit expensive | `activates_on` restricts the active set to stacks actually present; `severity_floor` suppresses low-value output per lens. |
