@@ -3,7 +3,11 @@
 **Date:** 2026-07-26
 **Status:** Approved design, pending implementation plan
 **License target:** MIT
-**Companion:** `2026-07-26-recon-punch-list.md` — a 22-agent recon pass over the existing reference files and the external facts they cite. It carries the per-lens correction list, the topic-ownership assignment, seed content for the new lens sections, the verified packaging schema, and the fixture proposal. This spec records decisions; the punch list records the evidence behind them.
+**Companions:**
+- `2026-07-26-recon-punch-list.md` — a 22-agent recon pass over the existing reference files and the external facts they cite. Carries the per-lens correction list, seed content for the new lens sections, the verified packaging schema, and the fixture proposal.
+- `2026-07-26-recon-punch-list-repair.md` — the complete topic-ownership assignment (165 slugs, 350 deferrals, 13 frontmatter blocks, the overlap resolution table) plus an adversarial invariant verification that found fifteen defects invisible to the originally specified lint rules.
+
+This spec records decisions; the companions record the evidence behind them.
 
 ## 1. Purpose
 
@@ -76,7 +80,7 @@ red-team-audit/                      # repo root == plugin root
 │           ├── llm-and-ai.md
 │           ├── cloud-and-iac.md
 │           ├── cicd-and-supply-chain.md
-│           ├── crypto-deep-dive.md
+│           ├── crypto-and-key-management.md    # renamed from crypto-deep-dive.md
 │           ├── salesforce-platform.md      # renamed from salesforce.md
 │           ├── hipaa-and-phi.md
 │           ├── privacy-and-data-protection.md   # renamed from privacy-and-compliance.md
@@ -146,15 +150,41 @@ Fixed body skeleton, so a lens can be handed to a subagent verbatim with no wrap
 
 `lenses/_topics.md` holds the canonical list of topic slugs. The invariant: **every slug is owned by exactly one lens.** This is what prevents duplicate findings by construction instead of cleaning them up afterwards.
 
+The registry is larger than it sounds: **165 slugs across the ten activating lenses, and 350 `defers` entries between them.** At that scale nobody maintains consistency by reading carefully, which is the entire argument for machine enforcement.
+
 `scripts/lint-lenses.mjs`, run by `.github/workflows/lint-lenses.yml` on every pull request, asserts:
 
-1. Every lens has all required frontmatter keys.
-2. No topic slug appears in more than one lens's `owns`.
-3. Every slug in `_topics.md` is owned by some lens.
-4. Every slug used as a key in any `defers` map is owned by the lens named as its value.
-5. Cross-cutting lenses have empty `activates_on`; non-cross-cutting lenses do not.
+| # | Rule |
+|---|---|
+| R1 | No topic slug appears in more than one lens's `owns`, and no lens both owns and defers the same slug |
+| R2 | The registry is exactly the union of all `owns` lists — no unowned entries, no missing ones |
+| R3 | Every `defers` key resolves to the lens that actually owns that slug |
+| R4 | Every registry slug has exactly one row in the overlap resolution table |
+| R5 | Slug orthography is consistent — one spelling convention, enforced by regex |
+| R6 | Every lens has all required frontmatter keys; cross-cutting lenses have empty `activates_on` and `owns: []` |
 
-Without this, the non-overlap property is a promise in a document that a contributor can break without noticing. With it, breaking the property fails the build.
+### Why R1–R3 alone are not enough
+
+An adversarial verification pass over the completed ownership assignment found **fifteen real defects, every one of which passes R1, R2 and R3.** That result is more useful than a clean bill of health, and it is why R4 and R5 exist:
+
+- **The overlap table had 158 rows for 165 slugs.** Seven slugs were owned but never appeared in the table. R1–R3 never look at the table, so nothing caught it. R4 does.
+- **Ten `defers` keys were missing entirely.** R3 only validates keys that *exist*, so a lens that keeps reporting a topic another lens absorbed is invisible to it. The strongest example: `mobile-app-security` still declares `__DEV__` and `android:debuggable` as activation signals for a topic the table says `web-and-api` absorbed — the lens advertises a signal for a topic it neither owns nor defers.
+- **The slug namespace mixed British and American spelling** — `payment-page-script-authorisation` sitting three slugs from `rag-retrieval-authorization`. A typo hazard with no detector. R5 fixes it; the convention is American `-ization`.
+
+**32 of 165 slugs have zero inbound `defers` references.** For those, no rule constrains anything, so nothing detects a lens quietly starting to report one. Only the `completeness` lens would notice. This is a known and accepted gap in v1: the rule that would close it — *every pair of lenses whose bodies both discuss a slug must have a `defers` entry* — requires the lens bodies, which do not exist until Phase A is done. It becomes a Phase B addition, not a v1.1 deferral.
+
+Two things CI must special-case rather than flag:
+
+1. The three cross-cutting lenses have `owns: []` and `defers: {}`, so R1 and R3 are vacuous for them and R2 must not expect them to own anything.
+2. `web-and-api` owns `client-trusted-business-rules` and `race-conditions-and-toctou`, but `business-logic` is the lens that *raises* findings against them. Any rule inferring ownership from which lens emitted a finding will misfire here. Ownership is declared, never inferred.
+
+### One genuine ownership breach, resolved
+
+The same pass found a single real duplication that a string comparison cannot see: `hash-as-pseudonym-reversibility` (crypto) and `pseudonymisation-and-reidentification-risk` (privacy) are one defect on one line of code, split by *analysis type* rather than by code. Both lenses would fire on the same `sha256(ssn)` call. Every other parallel pair in the registry splits by regime or by platform — axes that partition code — and therefore does not duplicate.
+
+**Resolution:** `privacy-and-data-protection` owns `pseudonymisation-and-reidentification-risk`; `crypto-and-key-management` contributes the reversibility proof as evidence under its existing deferral. The crypto-side slug is removed.
+
+Four further renames make scope legible from the name rather than requiring the body: `client-cached-sensitive-state` → `lwc-client-state-exposure`, `hipaa-documentation-retention` → `hipaa-policy-documentation-retention`, `mobile-network-config-artifacts` → `mobile-cleartext-and-ats-config`, `native-module-provenance` → `vendored-native-code-provenance`.
 
 ### 4.4 Candidate-finding schema
 
@@ -329,7 +359,7 @@ The work is large enough that a single undifferentiated plan would have no check
 | Phase | Work | Checkpoint |
 |---|---|---|
 | **A · Lens registry and content correction** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton. **Correct the content at the same time** — see below. Author `_topics.md` and `_schema.md`. Write the lint script and CI workflow. Apply the de-branding pass. | `node scripts/lint-lenses.mjs` exits zero, and every correction in punch list §1 is applied |
-| **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the three cross-cutting lenses. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint still green with thirteen lenses |
+| **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the three cross-cutting lenses. Add the body-aware lint rule now that bodies exist: every pair of lenses whose bodies both discuss a slug must have a `defers` entry. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint green over thirteen lenses including the body-aware rule |
 | **C · Evaluation** | Build `fixtures/vulnerable/`, `fixtures/clean/`, and `EXPECTED.md`. Run the skill against every fixture. | Success criteria 3 and 4 |
 | **D · Packaging** | Pin `plugin.json` and `marketplace.json` against the official reference. Write `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `LICENSE`. Swap the installed copy for a junction. | Success criteria 7 and 8 |
 
@@ -353,7 +383,7 @@ One correction the recon pass got wrong is worth recording, because it shows the
 
 Verifiable, in the order they can be checked:
 
-1. `node scripts/lint-lenses.mjs` exits zero: all thirteen lenses have valid frontmatter, topic ownership is a partition, and every `defers` target is correct.
+1. `node scripts/lint-lenses.mjs` exits zero across all six rules R1–R6: ownership is a partition over 165 slugs, every `defers` target resolves, every registry slug has exactly one overlap-table row, and slug orthography is uniform.
 2. `SKILL.md` is 8 KB or smaller and names no harness-specific tool in normative text.
 3. Running the skill against each `fixtures/vulnerable/` case reports the expected finding at the expected severity.
 4. Running it against each `fixtures/clean/` case reports **zero findings at Low severity or above**.
