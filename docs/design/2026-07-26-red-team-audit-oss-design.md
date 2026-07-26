@@ -86,9 +86,10 @@ red-team-audit/                      # repo root == plugin root
 │           ├── hipaa-and-phi.md
 │           ├── privacy-and-data-protection.md   # renamed from privacy-and-compliance.md
 │           ├── threat-modeling.md
-│           ├── attack-chaining.md   # cross-cutting
-│           ├── business-logic.md    # cross-cutting
-│           └── completeness.md      # cross-cutting
+│           ├── ai-generated-code.md # always-on, fan-out, owns nothing
+│           ├── attack-chaining.md   # triage-time
+│           ├── business-logic.md    # triage-time
+│           └── completeness.md      # triage-time
 ├── fixtures/
 │   ├── vulnerable/
 │   ├── clean/
@@ -118,7 +119,7 @@ Every lens carries frontmatter so activation and ownership are mechanical rather
 ---
 name: web-and-api
 title: Web and API security
-cross_cutting: false
+runs_in: fanout
 activates_on:
   paths: ["**/routes/**", "**/controllers/**", "**/api/**", "**/middleware/**"]
   signals: ["express", "fastapi", "gin-gonic", "graphql", "@app.route", "actix-web"]
@@ -137,7 +138,21 @@ severity_floor: low
 
 Framework identifiers are unversioned in frontmatter; specific editions and versions are cited in the lens body, where they can be updated without touching the machine-readable contract.
 
-Cross-cutting lenses set `cross_cutting: true`, carry an empty `activates_on`, and declare `owns: []`. They activate on the presence of findings rather than on file paths, and they run in triage rather than in fan-out. Owning no topic slugs is correct for them: they reason over other lenses' output instead of claiming territory of their own.
+### Three lens shapes
+
+`runs_in` replaces an earlier `cross_cutting` boolean, because two bits of information were being carried by one flag — *when does this run* and *does it own territory* — and there is a real lens that runs in fan-out while owning nothing.
+
+| Shape | `runs_in` | `activates_on` | `owns` | Lenses |
+|---|---|---|---|---|
+| **Domain** | `fanout` | matched against the repo | claims slugs | The ten domain lenses |
+| **Always-on** | `fanout` + `always_active: true` | empty, never matched | `[]` | `ai-generated-code` |
+| **Triage** | `triage` | empty | `[]` | `attack-chaining`, `business-logic`, `completeness` |
+
+Fourteen lenses total. Owning no slugs is correct for the last two shapes: triage lenses reason over other lenses' output, and the always-on lens reads code through a posture rather than claiming a domain.
+
+**`ai-generated-code` is always-on because its trigger is not a stack.** It reads any repository for signs that code was generated and never adversarially read: plausible-but-wrong crypto, regex "sanitisation" instead of context-aware encoding, an auth check placed after the operation it guards, `try/except: pass` swallowing security-relevant errors, hallucinated package names an attacker can register, permissive defaults chosen because they made an example work. None of that is domain-scoped, and no `activates_on` glob describes it — the signal is the *shape of the mistake*, not the framework.
+
+Its findings are tagged with the owning domain lens's topic slug rather than one of its own, so a finding it raises about weak crypto is still owned by `crypto-and-key-management` for deduplication. That keeps the registry a clean partition while letting this lens report anywhere. Given that the stated audience is people auditing code they did not write line by line, this lens is the project's differentiator rather than an add-on.
 
 Fixed body skeleton, so a lens can be handed to a subagent verbatim with no wrapper prose:
 
@@ -166,7 +181,7 @@ The registry is larger than it sounds: the assignment produced **165 slugs acros
 
 This is a correction to how the design work itself was done. The ownership assignment currently exists as prose spread across two companion documents, and they already disagree: this spec resolves the pseudonymisation duplicate while the repair companion still assigns and registers the slug, which is also why the two documents state incompatible counts. Any number written by hand in prose is a claim; only a generated number is a fact.
 
-Concretely, the first deliverable of Phase A is a normalised machine-readable assignment extracted from the two companions, plus `scripts/gen-topics.mjs` that emits `_topics.md` and the overlap table from the thirteen frontmatter blocks. After that point, a slug count appearing anywhere in prose is a bug, not a statement. Implementation agents read one artifact, never reconcile two prose documents.
+Concretely, the first deliverable of Phase A is a normalised machine-readable assignment extracted from the two companions, plus `scripts/gen-topics.mjs` that emits `_topics.md` and the overlap table from the fourteen frontmatter blocks. After that point, a slug count appearing anywhere in prose is a bug, not a statement. Implementation agents read one artifact, never reconcile two prose documents.
 
 `scripts/lint-lenses.mjs`, run by `.github/workflows/lint-lenses.yml` on every pull request, asserts:
 
@@ -177,7 +192,7 @@ Concretely, the first deliverable of Phase A is a normalised machine-readable as
 | R3 | Every `defers` key resolves to the lens that actually owns that slug |
 | R4 | Every registry slug has exactly one row in the overlap resolution table |
 | R5 | Slug orthography is consistent — one spelling convention, enforced by regex |
-| R6 | Every lens has all required frontmatter keys; cross-cutting lenses have empty `activates_on` and `owns: []` |
+| R6 | Every lens has the required frontmatter keys and a coherent shape: `runs_in: triage` implies empty `activates_on` and `owns: []`; `always_active: true` implies `runs_in: fanout` and `owns: []`; a non-empty `owns` implies a matched domain lens |
 
 ### Why R1–R3 alone are not enough
 
@@ -191,7 +206,7 @@ An adversarial verification pass over the completed ownership assignment found *
 
 Two things CI must special-case rather than flag:
 
-1. The three cross-cutting lenses have `owns: []` and `defers: {}`, so R1 and R3 are vacuous for them and R2 must not expect them to own anything.
+1. The four non-owning lenses — one always-on, three triage — have `owns: []` and `defers: {}`, so R1 and R3 are vacuous for them and R2 must not expect them to own anything. `ai-generated-code` additionally reports against slugs it does not own, which R1 must not read as a collision.
 2. `web-and-api` owns `client-trusted-business-rules` and `race-conditions-and-toctou`, but `business-logic` is the lens that *raises* findings against them. Any rule inferring ownership from which lens emitted a finding will misfire here. Ownership is declared, never inferred.
 
 ### One genuine ownership breach, resolved
@@ -233,7 +248,7 @@ The record accumulates fields as it moves through the pipeline. Written at fan-o
 | `effective_severity` | Critical…Info | After reachability capping, floors and chain elevation. Derived; `claimed_impact_severity` remains readable beside it |
 | `triage_disposition` | `queued` / `merged` / `dropped` / `elevated` | What triage did to it |
 | `drop_reason` | string | Required when dropped. A drop with no reason is indistinguishable from a loss |
-| `raised_by` | lens name | Set when a cross-cutting lens elevated it |
+| `raised_by` | lens name | Set when a triage lens elevated it, or when `ai-generated-code` raised it against another lens's topic |
 | `component_finding_ids` | `candidate_id[]` | For chain findings: the components that compose into it |
 
 **Added at proof:**
@@ -265,7 +280,7 @@ Recon is what makes whole-repo audits work: fan-out auditors receive a scoped fi
 
 One auditor per active lens. Each receives its lens file verbatim, the repo map, its assigned file list, and `_schema.md`. Each returns candidate findings only, in schema form. No prose reports, no patches, no severity negotiation.
 
-Cross-cutting lenses do not run here.
+Triage lenses do not run here. The always-on `ai-generated-code` lens does, on every audit, over the full in-scope file set rather than an `activates_on` match.
 
 ### Phase 2: Triage
 
@@ -275,7 +290,7 @@ Strict order, because later steps depend on earlier ones:
 2. **Semantic dedup** — one root cause at several sites becomes one finding with several locations.
 3. **Reachability gate** — `reachable_from: unknown` sets `effective_severity` to Medium. It does **not** overwrite `claimed_impact_severity`, and it does **not** remove the finding from the proof queue.
 4. **False-positive sweep** — each candidate re-checked against its own lens's `Known false positives`.
-5. **Cross-cutting lenses run** — `attack-chaining`, `business-logic`, and `completeness` read the merged set, which is the only point at which they have the input they need.
+5. **Triage lenses run** — `attack-chaining`, `business-logic`, and `completeness` read the merged set, which is the only point at which they have the input they need.
 6. **Chain elevation** — Mediums that compose into account takeover, data exfiltration, or privilege escalation are raised, with the chain written out step by step.
 
 ### Phase 3: Prove
@@ -462,7 +477,7 @@ The work is large enough that a single undifferentiated plan would have no check
 | Phase | Work | Checkpoint |
 |---|---|---|
 | **A · Lens registry and content correction** | Restructure the ten reference files into lenses with frontmatter and the fixed skeleton, **correcting the content in the same pass**. Author `_schema.md` and `_harness.md`; generate `_topics.md`. Write the lint and generator scripts. De-brand. Five internal gates, A0–A4, below. | A4 closes: lint green on R1–R6, and **zero unresolved migration-ledger entries** |
-| **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the three cross-cutting lenses. Add the body-aware lint rule now that bodies exist: every pair of lenses whose bodies both discuss a slug must have a `defers` entry. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint green over thirteen lenses including the body-aware rule |
+| **B · Orchestrator** | Rewrite `SKILL.md` as the six-phase pipeline. Author the four non-owning lenses — `ai-generated-code`, `attack-chaining`, `business-logic`, `completeness`. Add the body-aware lint rule now that bodies exist: every pair of lenses whose bodies both discuss a slug must have a `defers` entry. | `SKILL.md` ≤ 8 KB, no harness-specific tool named in normative text, lint green over fourteen lenses including the body-aware rule |
 | **C · Evaluation** | Build `fixtures/vulnerable/`, `fixtures/clean/`, and `EXPECTED.md`. Run the skill against every fixture. | Success criteria 3 and 4 |
 | **D · Packaging** | Pin `plugin.json` and `marketplace.json` against the official reference. Write `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `LICENSE`. Swap the installed copy for a junction. | Success criteria 7 and 8 |
 
@@ -474,7 +489,7 @@ Phase A is large enough that "lint passes" is not a completion signal — lint c
 
 | Gate | Work | Closes when |
 |---|---|---|
-| **A0** | Checksum a private baseline of `SKILL.md` and all ten references. Freeze the canonical schema, the thirteen lens names, and the normalised ownership assignment. | Baseline hashed; schema, names and ownership are frozen and machine-readable |
+| **A0** | Checksum a private baseline of `SKILL.md` and all ten references. Freeze the canonical schema, the fourteen lens names, and the normalised ownership assignment. | Baseline hashed; schema, names and ownership are frozen and machine-readable |
 | **A1** | Migrate the ten lenses independently, recording every move in the migration ledger | All ten migrated, ledger rows written for each |
 | **A2** | For every corrected search instruction, supply a positive and a negative detector example, plus the evidence for the correction | No corrected instruction lacks a demonstrated match |
 | **A3** | Global validation: ownership, deferrals, schema conformance, and every `_harness.md` reference resolving | `lint-lenses.mjs` green; `gen-topics.mjs` output matches committed `_topics.md` |
@@ -493,6 +508,8 @@ source_location → destination_lens/topic → disposition → evidence_id
 ```
 
 with `disposition` one of `preserved`, `corrected`, `moved`, or `intentionally_removed`. **Phase A closes only at zero unresolved rows**, and `lint-lenses.mjs` enforces that gate rather than a human declaring it done. `intentionally_removed` is a valid disposition — silent removal is not.
+
+The highest-value row in the ledger is `SKILL.md`'s "LLM-generated-code tells" section, which moves to `ai-generated-code.md`. It is the only content in the current skill with no equivalent anywhere else, and it is the reason the stated audience would reach for this tool over a scanner. If Phase B rewrote `SKILL.md` and that section were not already migrated with a ledger row proving it, the project would lose its differentiator to a routine refactor and nothing would have flagged it.
 
 Phase A's checkpoint also names punch list **§§4–6**, not just §1: the fixed body skeleton requires `Known false positives` (§4) and `Proof recipes` (§5), and Phase A owns the de-branding checklist (§6). A lens missing either new section is incomplete regardless of what lint says about its frontmatter.
 
