@@ -1,0 +1,73 @@
+{
+  "_fixture": "C-023 — clean fixture. Expected findings at Low or above: ZERO.",
+  "_why_this_looks_like_a_finding": "Ranged dependency specifiers and no lockfile beside this manifest. 'No lockfile' and 'not using npm ci' are among the most-filed supply-chain findings, and both greps hit here.",
+  "_why_it_is_not_a_finding": [
+    "This is a LIBRARY, and the evidence is in the manifest rather than in a",
+    "comment: a published package name, `files`, `main`, `types` and `exports`",
+    "are all present, there is no `private: true`, and there is no Dockerfile or",
+    "deploy workflow in this directory. A consumer never reads a library's",
+    "lockfile, so the reproducibility argument reaches only this package's own CI",
+    "— and the CI job pins there instead, with `--frozen-lockfile` against a",
+    "lockfile committed at the workspace root (see `packageManager` below, which",
+    "is pnpm, not npm: flagging 'no npm ci' in a pnpm repository is a pure false",
+    "positive because `pnpm install --frozen-lockfile` is the equivalent).",
+    "Ranged specifiers are deliberate for a library: pinning them exactly is what",
+    "creates duplicate transitive trees in every consumer.",
+    "",
+    "The lifecycle-script control is a VALUE read, not a key-presence check, and",
+    "the value is in `.npmrc` beside this file: `ignore-scripts=true`. That is the",
+    "checkable half — `ignore-scripts=false` is a legal opt-out that a",
+    "key-presence grep misreads as the control being on."
+  ],
+  "_false_positive_entries_exercised": [
+    "cicd-and-supply-chain (5) — 'no lockfile' / 'not using npm ci': library vs",
+    "application told from evidence, and the frozen-install equivalent named"
+  ],
+
+  "name": "@example/notes-format",
+  "version": "2.4.1",
+  "description": "Formatting helpers for note bodies. Published to the public registry.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@9.12.3",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./markdown": {
+      "types": "./dist/markdown.d.ts",
+      "import": "./dist/markdown.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mdast-util-from-markdown": "^2.0.0",
+    "unist-util-visit": "^5.0.0"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.4"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "typescript": "5.6.3"
+  }
+}

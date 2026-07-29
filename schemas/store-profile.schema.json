@@ -1,0 +1,859 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/store-profile.schema.json",
+  "title": "Red Team Audit data-store assessment profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "store_context",
+    "engine_edition",
+    "compatibility_mode",
+    "tenancy",
+    "principal_path",
+    "evidence_paths",
+    "engine_evidence_paths",
+    "principal_evidence_paths",
+    "enforcement_paths",
+    "copy_artifact_closure",
+    "availability_budget",
+    "assumptions",
+    "coverage_state",
+    "assessed_topics",
+    "coverage_gaps"
+  ],
+  "properties": {
+    "store_context": {
+      "$ref": "https://red-team-audit.dev/schemas/finding.schema.json#/$defs/storeContext"
+    },
+    "principal_path": {
+      "allOf": [
+        {
+          "$ref": "https://red-team-audit.dev/schemas/finding.schema.json#/$defs/principalPath"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "authenticated_principal": {
+              "$ref": "#/$defs/principalDescriptor"
+            },
+            "session_principal": {
+              "$ref": "#/$defs/principalDescriptor"
+            },
+            "effective_principal": {
+              "$ref": "#/$defs/principalDescriptor"
+            },
+            "owner_or_definer": {
+              "$ref": "#/$defs/principalDescriptor"
+            },
+            "bypass_capabilities": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/principalDescriptor"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "engine_edition": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "compatibility_mode": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "engine_evidence_paths": {
+      "$ref": "#/$defs/evidencePaths"
+    },
+    "principal_evidence_paths": {
+      "$ref": "#/$defs/evidencePaths"
+    },
+    "tenancy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "tenant_attribute",
+        "claimed_guarantee",
+        "evidence",
+        "evidence_paths"
+      ],
+      "properties": {
+        "model": {
+          "enum": [
+            "shared-table",
+            "schema",
+            "database",
+            "account",
+            "file",
+            "single-tenant",
+            "mixed",
+            "unknown"
+          ]
+        },
+        "tenant_attribute": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "claimed_guarantee": {
+          "enum": [
+            "database-enforced",
+            "application-enforced",
+            "topology-enforced",
+            "single-tenant",
+            "unknown"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        }
+      }
+    },
+    "evidence_paths": {
+      "$ref": "#/$defs/evidencePaths"
+    },
+    "enforcement_paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory_closed",
+        "paths"
+      ],
+      "properties": {
+        "inventory_closed": {
+          "type": "boolean"
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/enforcementPath"
+          }
+        }
+      }
+    },
+    "copy_artifact_closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_set_closed",
+        "closure_basis",
+        "evidence_paths",
+        "categories"
+      ],
+      "properties": {
+        "artifact_set_closed": {
+          "type": "boolean"
+        },
+        "closure_basis": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        },
+        "categories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "replica",
+            "cdc",
+            "history",
+            "backup",
+            "export",
+            "cache"
+          ],
+          "properties": {
+            "replica": {
+              "$ref": "#/$defs/assessmentDimension"
+            },
+            "cdc": {
+              "$ref": "#/$defs/assessmentDimension"
+            },
+            "history": {
+              "$ref": "#/$defs/assessmentDimension"
+            },
+            "backup": {
+              "$ref": "#/$defs/assessmentDimension"
+            },
+            "export": {
+              "$ref": "#/$defs/assessmentDimension"
+            },
+            "cache": {
+              "$ref": "#/$defs/assessmentDimension"
+            }
+          }
+        }
+      }
+    },
+    "availability_budget": {
+      "$ref": "#/$defs/availabilityBudget"
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/assumption"
+      }
+    },
+    "coverage_state": {
+      "enum": [
+        "ASSESSED",
+        "PARTIAL",
+        "NOT_ASSESSED"
+      ]
+    },
+    "assessed_topics": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "database-audit-identity-and-coverage",
+          "database-backup-restore-and-clone-security",
+          "database-integrity-transactions-and-concurrency",
+          "database-lifecycle-and-copy-propagation",
+          "database-migration-security-drift",
+          "database-native-authorization-and-tenant-isolation",
+          "database-principal-and-role-boundaries",
+          "database-privileged-code-and-execution-context",
+          "database-replication-cdc-history-and-sharing",
+          "database-resource-governance-and-availability"
+        ]
+      }
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "area",
+          "reason"
+        ],
+        "properties": {
+          "area": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "reason": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "store_context": {
+            "properties": {
+              "adapter_id": {
+                "const": "inventory-only"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          }
+        },
+        "required": [
+          "store_context"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_state": {
+            "const": "NOT_ASSESSED"
+          },
+          "assessed_topics": {
+            "maxItems": 0
+          },
+          "coverage_gaps": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_state": {
+            "const": "ASSESSED"
+          }
+        },
+        "required": [
+          "coverage_state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assessed_topics": {
+            "minItems": 10,
+            "maxItems": 10,
+            "allOf": [
+              {
+                "contains": {
+                  "const": "database-audit-identity-and-coverage"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-backup-restore-and-clone-security"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-integrity-transactions-and-concurrency"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-lifecycle-and-copy-propagation"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-migration-security-drift"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-native-authorization-and-tenant-isolation"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-principal-and-role-boundaries"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-privileged-code-and-execution-context"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-replication-cdc-history-and-sharing"
+                }
+              },
+              {
+                "contains": {
+                  "const": "database-resource-governance-and-availability"
+                }
+              }
+            ]
+          },
+          "coverage_gaps": {
+            "maxItems": 0
+          },
+          "store_context": {
+            "properties": {
+              "engine_version": {
+                "$ref": "#/$defs/engineVersionDescriptor"
+              },
+              "deployment_variant": {
+                "$ref": "#/$defs/resolvedDescriptor"
+              },
+              "confidence": {
+                "const": "high"
+              }
+            }
+          },
+          "engine_edition": {
+            "$ref": "#/$defs/defensibleDescriptor"
+          },
+          "compatibility_mode": {
+            "$ref": "#/$defs/defensibleDescriptor"
+          },
+          "tenancy": {
+            "properties": {
+              "model": {
+                "not": {
+                  "const": "unknown"
+                }
+              },
+              "tenant_attribute": {
+                "$ref": "#/$defs/defensibleDescriptor"
+              },
+              "claimed_guarantee": {
+                "not": {
+                  "const": "unknown"
+                }
+              }
+            }
+          },
+          "principal_path": {
+            "properties": {
+              "authenticated_principal": {
+                "$ref": "#/$defs/defensibleDescriptor"
+              },
+              "session_principal": {
+                "$ref": "#/$defs/defensibleDescriptor"
+              },
+              "effective_principal": {
+                "$ref": "#/$defs/defensibleDescriptor"
+              },
+              "owner_or_definer": {
+                "$ref": "#/$defs/defensibleDescriptor"
+              },
+              "bypass_capabilities": {
+                "items": {
+                  "$ref": "#/$defs/defensibleDescriptor"
+                }
+              }
+            }
+          },
+          "enforcement_paths": {
+            "properties": {
+              "inventory_closed": {
+                "const": true
+              },
+              "paths": {
+                "not": {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "const": "NOT_ASSESSED"
+                      }
+                    },
+                    "required": [
+                      "state"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "copy_artifact_closure": {
+            "properties": {
+              "artifact_set_closed": {
+                "const": true
+              },
+              "categories": {
+                "properties": {
+                  "replica": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  },
+                  "cdc": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  },
+                  "history": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  },
+                  "backup": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  },
+                  "export": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  },
+                  "cache": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "ASSESSED",
+                          "NOT_PRESENT"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "availability_budget": {
+            "properties": {
+              "state": {
+                "const": "ASSESSED"
+              }
+            }
+          },
+          "assumptions": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "OPEN"
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_state": {
+            "enum": [
+              "PARTIAL",
+              "NOT_ASSESSED"
+            ]
+          }
+        },
+        "required": [
+          "coverage_state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_gaps": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_state": {
+            "const": "NOT_ASSESSED"
+          }
+        },
+        "required": [
+          "coverage_state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "assessed_topics": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "resolvedDescriptor": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "not": {
+            "pattern": "(?:^|[^A-Za-z0-9])(?:[Uu][Nn][Kk][Nn][Oo][Ww][Nn]|[Uu][Nn][Rr][Ee][Ss][Oo][Ll][Vv][Ee][Dd]|[Uu][Nn][Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Uu][Nn][Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Uu][Nn][Ss][Ee][Tt]|[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Pp][Ee][Nn][Dd][Ii][Nn][Gg]|[Pp][Ll][Aa][Cc][Ee][Hh][Oo][Ll][Dd][Ee][Rr]|[Rr][Ee][Dd][Aa][Cc][Tt][Ee][Dd]|[Tt][Oo][Dd][Oo]|[Tt][Bb][Dd]|[Dd][Ee][Ff][Aa][Uu][Ll][Tt]|[Cc][Uu][Rr][Rr][Ee][Nn][Tt]|[Ll][Aa][Tt][Ee][Ss][Tt]|[Aa][Uu][Tt][Oo](?:[Mm][Aa][Tt][Ii][Cc])?|[Aa][Nn][Yy]|[Nn][Oo][Nn][Ee]|[Nn][Uu][Ll][Ll]|[Nn](?:[/_-]?[Aa])|[Nn][Oo][Tt][-_ ]?(?:[Kk][Nn][Oo][Ww][Nn]|[Ss][Pp][Ee][Cc][Ii][Ff][Ii][Ee][Dd]|[Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Ss][Ee][Tt]|[Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]|[Aa][Pp][Pp][Ll][Ii][Cc][Aa][Bb][Ll][Ee]|[Pp][Rr][Oo][Vv][Ii][Dd][Ee][Dd]|[Ss][Uu][Rr][Ee])|[Tt][Oo][-_ ]?[Bb][Ee][-_ ]?(?:[Dd][Ee][Tt][Ee][Rr][Mm][Ii][Nn][Ee][Dd]|[Cc][Oo][Nn][Ff][Ii][Rr][Mm][Ee][Dd]|[Rr][Ee][Ss][Oo][Ll][Vv][Ee][Dd]))(?:$|[^A-Za-z0-9])"
+          }
+        }
+      ]
+    },
+    "defensibleDescriptor": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resolvedDescriptor"
+        },
+        {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 256,
+          "pattern": "[A-Za-z0-9]"
+        }
+      ]
+    },
+    "engineVersionDescriptor": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/resolvedDescriptor"
+        },
+        {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^(?=.*[0-9])[A-Za-z0-9][A-Za-z0-9._+:/ -]*$"
+        }
+      ]
+    },
+    "evidenceStatement": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "type": "string",
+          "minLength": 12
+        }
+      ]
+    },
+    "principalDescriptor": {
+      "oneOf": [
+        {
+          "const": "unknown"
+        },
+        {
+          "$ref": "#/$defs/resolvedDescriptor"
+        }
+      ]
+    },
+    "evidencePaths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "assessmentDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "ASSESSED",
+            "NOT_PRESENT",
+            "NOT_ASSESSED"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "NOT_ASSESSED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          },
+          "else": {
+            "required": [
+              "evidence",
+              "evidence_paths"
+            ]
+          }
+        }
+      ]
+    },
+    "enforcementPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "state"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "state": {
+          "enum": [
+            "ASSESSED",
+            "NOT_PRESENT",
+            "NOT_ASSESSED"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "NOT_ASSESSED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          },
+          "else": {
+            "required": [
+              "evidence",
+              "evidence_paths"
+            ]
+          }
+        }
+      ]
+    },
+    "availabilityBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "description"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "ASSESSED",
+            "NOT_ASSESSED"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "ASSESSED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence",
+              "evidence_paths"
+            ]
+          },
+          "else": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
+    },
+    "assumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "status"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "status": {
+          "enum": [
+            "VALIDATED",
+            "INVALIDATED",
+            "OPEN"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceStatement"
+        },
+        "evidence_paths": {
+          "$ref": "#/$defs/evidencePaths"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "OPEN"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          },
+          "else": {
+            "required": [
+              "evidence",
+              "evidence_paths"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

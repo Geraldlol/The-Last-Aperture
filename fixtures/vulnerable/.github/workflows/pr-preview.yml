@@ -1,0 +1,52 @@
+# V-009 — VULNERABLE fixture. NOT RUNNABLE. Written from scratch.
+#
+# Bug class (exactly one): a privileged trigger that checks out and executes
+# pull-request-controlled content.
+# Lens: cicd-and-supply-chain / topic `workflow-trigger-and-script-injection`
+# Expected: Critical, CWE-829
+#
+# Both legs of the finding, and nothing else:
+#   1. `pull_request_target` runs in the base repository's context, with its token
+#      and its secrets, and can be started by anyone who can open a pull request.
+#   2. `ref: ${{ github.event.pull_request.head.sha }}` puts that pull request's
+#      code in the workspace, and `npm ci` then executes it through lifecycle
+#      scripts.
+#
+# Deliberately absent, to test the owning lens's own rule that they are
+# aggravators rather than preconditions: there is no `secrets.*` reference, no
+# `permissions:` block, no `id-token: write`, and no explicit
+# `persist-credentials: true`. The finding stands on the two legs alone. A
+# detector that requires a third leg clears this file, which is the failure this
+# fixture exists to catch.
+#
+# WHY THIS CANNOT RUN: GitHub Actions reads workflows only from the repository
+# root `.github/workflows/`. This file is nested under `fixtures/vulnerable/`, so
+# it is never registered, never triggered and never scheduled. The action pin is
+# forty zeroes — structurally a valid digest pin, resolvable to nothing — so even
+# a manual copy of this file into a live workflow directory fails at checkout
+# before it reaches the untrusted code.
+
+name: PR preview
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned by digest on purpose: the mutable-reference defect belongs to a
+      # different bug class and must not appear in this fixture.
+      - uses: actions/checkout@0000000000000000000000000000000000000000 # fixture pin, resolves to nothing
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-node@0000000000000000000000000000000000000000 # fixture pin, resolves to nothing
+        with:
+          node-version: 20
+
+      # Untrusted code, executed in the base context. `npm ci` runs whatever
+      # lifecycle scripts the pull request's manifest declares.
+      - run: npm ci
+
+      - run: npm run build --if-present

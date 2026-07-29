@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  C-006 (part 3 of 4) — clean fixture. Expected findings at Low or above: ZERO.
+
+  Why this pattern-matches as vulnerable:
+    `android:exported="true"` appears here, and every IPC sweep hits it.
+
+  Why it is not a finding:
+    The one exported component is the launcher activity, for which export is
+    mandatory — an unexported LAUNCHER activity cannot be started by the home
+    screen. It takes no data from the intent: no `getData()`, no extras, no
+    scheme filter, only ACTION_MAIN / CATEGORY_LAUNCHER.
+
+    The two components that auditors most often "correct" to exported="true" are
+    declared FALSE here, which is the documented and functional value for both:
+      * the FCM messaging service, which the library's own exported receiver
+        (itself guarded by com.google.android.c2dm.permission.SEND) dispatches to
+        in-process;
+      * the BOOT_COMPLETED receiver, which the platform delivers to a
+        non-exported receiver because the broadcast is protected.
+    Setting either to `true` would be the finding. There is no <activity-alias>
+    and no forwarding component, so `exported="false"` here is not hiding a
+    reachable path behind an alias.
+
+    The deep-link activity is `exported="true"` only because an App Link requires
+    it, and it is bounded: `android:autoVerify="true"` plus an https scheme and a
+    single host, so an arbitrary installed app cannot drive it with a crafted
+    custom-scheme intent.
+
+  False-positive entries exercised:
+    mobile-app-security (4)  `android:exported="true"` on the launcher and on an
+                             autoVerify App Link activity; and the two shapes the
+                             entry corrects — a messaging service and a
+                             protected-broadcast receiver declared `false`
+    mobile-app-security (5)  release-variant network security config with
+                             cleartext refused
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".FieldNotesApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:label="@string/app_name">
+
+        <!-- Export is mandatory for a LAUNCHER activity. Reads no intent data. -->
+        <activity
+            android:name=".ui.HomeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- An App Link. Verified association, https only, one host. -->
+        <activity
+            android:name=".ui.NoteLinkActivity"
+            android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="notes.example.invalid" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Not exported, and it works. The messaging library's own exported
+          receiver is permission-guarded and dispatches here in-process.
+        -->
+        <service
+            android:name=".push.NoteMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Not exported, and it fires. BOOT_COMPLETED is a protected system
+          broadcast; the platform delivers it without needing the component to
+          be reachable by other apps.
+        -->
+        <receiver
+            android:name=".sync.BootSyncReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

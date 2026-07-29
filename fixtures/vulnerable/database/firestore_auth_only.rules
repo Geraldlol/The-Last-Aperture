@@ -1,0 +1,17 @@
+// V-021 — vulnerable database conformance fixture.
+// Lens: database-and-data-stores
+// Topic: database-native-authorization-and-tenant-isolation
+// Expected: High, CWE-639
+// Bug class: authentication alone permits get, list, and writes; tenantId and
+// admin remain caller-mutable because no field-difference rule constrains them.
+// STATIC ONLY: no Firebase project, CLI configuration, or deployment target.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /organizations/{organizationId}/members/{memberId} {
+      allow get, list: if request.auth != null;
+      allow create, update: if request.auth != null;
+    }
+  }
+}

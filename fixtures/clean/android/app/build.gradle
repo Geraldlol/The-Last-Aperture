@@ -1,0 +1,67 @@
+// C-006 (part 4 of 4), supporting C-030 — clean fixture. Expected findings at Low or above: ZERO.
+//
+// This file exists because mobile-app-security's false positive 5 refuses to
+// clear a <debug-overrides> block on the strength of the element alone: the
+// clearance has a precondition — the release variant must not be debuggable —
+// and the artifact that decides it is Gradle, not a manifest. So the precondition
+// is established here, in the fixture, rather than assumed.
+//
+// Read three things:
+//   * `debuggable false` on the release build type, in the Groovy DSL. (The
+//     Kotlin-DSL spelling would be `isDebuggable = false`, which a
+//     case-sensitive sweep for `debuggable` cannot see — hence `rg -ni`.)
+//   * no `extraPackagerArgs`, no `--dev true`, no `bundleCommand` override, no
+//     `SKIP_BUNDLING` / `FORCE_BUNDLING`, and no custom `transformerPath`, so
+//     nothing here reopens the `dev: false` question that false positive 1
+//     depends on.
+//   * console stripping is configured explicitly in `../babel.config.js`, because
+//     the `__DEV__` clearance does NOT extend to `console.log` and this fixture
+//     does not ask the reader to assume it does. `../metro.config.js` is the third
+//     file in the set: it overrides no transformer and no serializer, so nothing
+//     in the pipeline can re-inline `__DEV__` as true.
+
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.example.fieldnotes'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.example.fieldnotes'
+        minSdk 26
+        targetSdk 35
+        versionCode 41
+        versionName '3.2.0'
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            applicationIdSuffix '.debug'
+        }
+        release {
+            // The precondition for false positive 5. A shipped build is not
+            // debuggable, so app/src/debug/res/xml/network_security_config_debug.xml
+            // and its <debug-overrides> cannot be consulted at runtime.
+            debuggable false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/*.kotlin_module']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
+}

@@ -1,0 +1,4 @@
+source	destination	disposition	evidence
+SKILL.md#llm-generated-code-tells	ai-generated-code	moved	punch-list-§1
+references/web-and-api.md:43	web-and-api/injection-sql-nosql-orm	corrected	punch-list-§1-item-2
+references/mobile.md:88	—	intentionally_removed	punch-list-§6-branding

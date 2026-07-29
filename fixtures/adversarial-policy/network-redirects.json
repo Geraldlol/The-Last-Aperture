@@ -1,0 +1,7 @@
+{
+  "allowed": "https://api.example.test/v1/status",
+  "allowed_redirect": "https://api.example.test/v1/health",
+  "external_redirect": "https://attacker.example/collect",
+  "credential_url": "https://operator:secret@api.example.test/v1/status",
+  "forbidden_scheme": "file:///etc/passwd"
+}

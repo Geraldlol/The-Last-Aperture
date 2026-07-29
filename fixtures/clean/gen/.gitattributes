@@ -1,0 +1,12 @@
+# C-025 support file. A directory-scoped .gitattributes, which git applies to this
+# directory and below — so the claim `api_client.gen.ts` makes about being marked
+# generated is true in this checkout and checkable with
+# `git check-attr linguist-generated fixtures/clean/gen/api_client.gen.ts`.
+#
+# ai-generated-code's false positive 12 names three ways to establish that a file
+# is generated: its header banner, its path, and a `linguist-generated` attribute.
+# All three are present for this file, deliberately, because the entry's failure
+# mode is an auditor who cannot tell and files anyway.
+
+*.gen.ts linguist-generated=true
+*.gen.ts text eol=lf

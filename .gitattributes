@@ -6,3 +6,16 @@
 # Fixtures are read as source code by the audit pipeline. Keep them LF
 # regardless of platform so a proof recipe's line numbers stay stable.
 fixtures/** text eol=lf
+
+# The fixture corpus is deliberately defective code. It is written from scratch,
+# it is not runnable, and it is never imported by anything that ships — its only
+# consumer is the evaluation in fixtures/EXPECTED.md.
+#
+# `linguist-vendored` is what a repository can express here: it keeps the corpus
+# out of language statistics and out of GitHub's rendered diffs and code-search
+# results by default, which is the closest thing to "not analysed" that
+# .gitattributes reaches. It does NOT suppress a code scanner — CodeQL, Semgrep,
+# Snyk and Dependabot each read their own configuration, not this file. Anyone
+# wiring one of those up must exclude `fixtures/**` there as well; see
+# fixtures/README.md, which states this in the same words so the two do not drift.
+fixtures/** linguist-vendored

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supporting artifact for V-013, not a fixture of its own and not counted as one.
+  It carries no defect.
+
+  It exists because both halves of V-013 are graded on the object's org-wide
+  default, and that fact lives in object metadata rather than in the permission
+  set. <sharingModel>ReadWrite</sharingModel> is the value that makes this pair
+  worth having:
+
+    - for Care_Episode_Reporting (viewAllFields false) it earns the downgrade to
+      Low, because every user already reaches every record;
+    - for Care_Coordination_Team (viewAllFields true) it must NOT earn the
+      downgrade, because FLS is not a sharing control and no OWD value grants a
+      field.
+
+  Without this file the row could only be graded at a fallback and the evaluation
+  would be measuring a missing artifact instead of the lens.
+-->
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Care Episode</label>
+    <pluralLabel>Care Episodes</pluralLabel>
+    <nameField>
+        <label>Episode Number</label>
+        <type>AutoNumber</type>
+        <displayFormat>CE-{0000}</displayFormat>
+    </nameField>
+    <deploymentStatus>Deployed</deploymentStatus>
+    <sharingModel>ReadWrite</sharingModel>
+    <externalSharingModel>Private</externalSharingModel>
+</CustomObject>

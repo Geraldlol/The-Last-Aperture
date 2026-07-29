@@ -1,0 +1,313 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_id": "database-adapter-routing",
+  "verified_on": "2026-07-28",
+  "routing_policy": {
+    "minimum_confidence": "high",
+    "unknown_value": "unknown",
+    "require_engine_version": true,
+    "require_deployment_variant": true,
+    "require_detection_evidence": true
+  },
+  "fallback": {
+    "adapter_id": "inventory-only",
+    "adapter_file": "contract.md",
+    "selection_status": "INVENTORY_ONLY",
+    "coverage_state": "NOT_ASSESSED",
+    "verification_status": "UNPROVEN",
+    "effective_severity_cap": "Medium",
+    "can_clear": false,
+    "can_confirm": false
+  },
+  "semantic_metadata": {
+    "sensitivity_values": [
+      "stable",
+      "version-sensitive",
+      "deployment-sensitive"
+    ],
+    "required_for": [
+      "stable",
+      "version-sensitive",
+      "deployment-sensitive"
+    ],
+    "rule_id_pattern": "^db\\.[a-z0-9-]+\\.[a-z0-9-]+\\.[a-z0-9][a-z0-9.-]*$",
+    "source_protocol": "https:",
+    "source_verified_on_required": true
+  },
+  "adapters": [
+    {
+      "adapter_id": "postgresql",
+      "engine": "postgresql",
+      "engine_aliases": ["pg", "pgsql", "postgres"],
+      "adapter_file": "postgresql-and-supabase.md",
+      "semantic_source_hosts": ["www.postgresql.org", "supabase.com"],
+      "deployment_variants": [
+        {"id": "postgresql-self-managed", "aliases": ["self-managed"]},
+        {"id": "postgresql-managed", "aliases": []},
+        {"id": "supabase", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "sqlserver",
+      "engine": "sqlserver",
+      "engine_aliases": ["mssql", "sql-server"],
+      "adapter_file": "sqlserver-and-azure-sql.md",
+      "semantic_source_hosts": ["learn.microsoft.com"],
+      "deployment_variants": [
+        {"id": "sqlserver-self-managed", "aliases": ["self-managed"]},
+        {"id": "azure-sql-database", "aliases": []},
+        {"id": "azure-sql-managed-instance", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "mysql",
+      "engine": "mysql",
+      "engine_aliases": [],
+      "adapter_file": "mysql.md",
+      "semantic_source_hosts": ["dev.mysql.com"],
+      "deployment_variants": [
+        {"id": "mysql-self-managed", "aliases": ["self-managed"]},
+        {"id": "mysql-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "mariadb",
+      "engine": "mariadb",
+      "engine_aliases": [],
+      "adapter_file": "mariadb.md",
+      "semantic_source_hosts": ["mariadb.com"],
+      "deployment_variants": [
+        {"id": "mariadb-self-managed", "aliases": ["self-managed"]},
+        {"id": "mariadb-managed", "aliases": []},
+        {"id": "mariadb-galera", "aliases": ["galera"]}
+      ]
+    },
+    {
+      "adapter_id": "oracle",
+      "engine": "oracle",
+      "engine_aliases": ["oracle-database"],
+      "adapter_file": "oracle.md",
+      "semantic_source_hosts": ["docs.oracle.com"],
+      "deployment_variants": [
+        {"id": "oracle-self-managed", "aliases": ["self-managed"]},
+        {"id": "oracle-rac", "aliases": ["rac"]},
+        {"id": "oracle-autonomous-database", "aliases": ["autonomous-database"]},
+        {"id": "oracle-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "sqlite",
+      "engine": "sqlite",
+      "engine_aliases": ["sqlite3"],
+      "adapter_file": "sqlite.md",
+      "semantic_source_hosts": ["sqlite.org"],
+      "deployment_variants": [
+        {"id": "sqlite-embedded", "aliases": ["embedded"]},
+        {"id": "sqlite-file", "aliases": ["file"]},
+        {"id": "sqlite-in-memory", "aliases": ["in-memory"]}
+      ]
+    },
+    {
+      "adapter_id": "mongodb",
+      "engine": "mongodb",
+      "engine_aliases": ["mongo"],
+      "adapter_file": "mongodb.md",
+      "semantic_source_hosts": ["www.mongodb.com"],
+      "deployment_variants": [
+        {"id": "mongodb-self-managed", "aliases": ["self-managed"]},
+        {"id": "mongodb-atlas", "aliases": ["atlas"]},
+        {"id": "mongodb-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "redis",
+      "engine": "redis",
+      "engine_aliases": [],
+      "adapter_file": "redis-and-valkey.md",
+      "semantic_source_hosts": ["redis.io"],
+      "deployment_variants": [
+        {"id": "redis-self-managed", "aliases": ["self-managed"]},
+        {"id": "redis-managed", "aliases": []},
+        {"id": "redis-enterprise", "aliases": ["enterprise"]}
+      ]
+    },
+    {
+      "adapter_id": "valkey",
+      "engine": "valkey",
+      "engine_aliases": [],
+      "adapter_file": "redis-and-valkey.md",
+      "semantic_source_hosts": ["valkey.io"],
+      "deployment_variants": [
+        {"id": "valkey-self-managed", "aliases": ["self-managed"]},
+        {"id": "valkey-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "firestore",
+      "engine": "firestore",
+      "engine_aliases": ["cloud-firestore"],
+      "adapter_file": "firestore.md",
+      "semantic_source_hosts": ["firebase.google.com", "cloud.google.com"],
+      "deployment_variants": [
+        {"id": "firestore-native", "aliases": ["native"]},
+        {"id": "firestore-enterprise", "aliases": ["enterprise"]},
+        {"id": "firestore-emulator", "aliases": ["emulator"]}
+      ]
+    },
+    {
+      "adapter_id": "dynamodb",
+      "engine": "dynamodb",
+      "engine_aliases": ["dynamo-db"],
+      "adapter_file": "dynamodb.md",
+      "semantic_source_hosts": ["docs.aws.amazon.com"],
+      "deployment_variants": [
+        {"id": "dynamodb-aws", "aliases": ["aws"]},
+        {"id": "dynamodb-local", "aliases": ["local"]},
+        {"id": "dynamodb-compatible-managed", "aliases": ["compatible-managed"]}
+      ]
+    },
+    {
+      "adapter_id": "elasticsearch",
+      "engine": "elasticsearch",
+      "engine_aliases": ["elastic"],
+      "adapter_file": "elasticsearch-and-opensearch.md",
+      "semantic_source_hosts": ["www.elastic.co"],
+      "deployment_variants": [
+        {"id": "elasticsearch-self-managed", "aliases": ["self-managed"]},
+        {"id": "elastic-cloud", "aliases": ["cloud"]},
+        {"id": "elastic-serverless", "aliases": ["serverless"]}
+      ]
+    },
+    {
+      "adapter_id": "opensearch",
+      "engine": "opensearch",
+      "engine_aliases": ["open-search"],
+      "adapter_file": "elasticsearch-and-opensearch.md",
+      "semantic_source_hosts": ["docs.opensearch.org"],
+      "deployment_variants": [
+        {"id": "opensearch-self-managed", "aliases": ["self-managed"]},
+        {"id": "amazon-opensearch-service", "aliases": ["amazon-managed"]},
+        {"id": "opensearch-serverless", "aliases": ["serverless"]}
+      ]
+    },
+    {
+      "adapter_id": "cassandra",
+      "engine": "cassandra",
+      "engine_aliases": ["apache-cassandra"],
+      "adapter_file": "cassandra-and-scylla.md",
+      "semantic_source_hosts": ["cassandra.apache.org"],
+      "deployment_variants": [
+        {"id": "cassandra-self-managed", "aliases": ["self-managed"]},
+        {"id": "cassandra-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "scylla",
+      "engine": "scylla",
+      "engine_aliases": ["scylladb"],
+      "adapter_file": "cassandra-and-scylla.md",
+      "semantic_source_hosts": ["docs.scylladb.com"],
+      "deployment_variants": [
+        {"id": "scylla-self-managed", "aliases": ["self-managed"]},
+        {"id": "scylla-enterprise", "aliases": ["enterprise"]},
+        {"id": "scylla-cloud", "aliases": ["cloud"]}
+      ]
+    },
+    {
+      "adapter_id": "neo4j",
+      "engine": "neo4j",
+      "engine_aliases": [],
+      "adapter_file": "neo4j.md",
+      "semantic_source_hosts": ["neo4j.com"],
+      "deployment_variants": [
+        {"id": "neo4j-community", "aliases": ["community"]},
+        {"id": "neo4j-enterprise", "aliases": ["enterprise"]},
+        {"id": "neo4j-aura", "aliases": ["aura"]}
+      ]
+    },
+    {
+      "adapter_id": "pinecone",
+      "engine": "pinecone",
+      "engine_aliases": [],
+      "adapter_file": "vector-stores.md",
+      "semantic_source_hosts": ["docs.pinecone.io"],
+      "deployment_variants": [
+        {"id": "pinecone-serverless", "aliases": ["serverless"]}
+      ]
+    },
+    {
+      "adapter_id": "qdrant",
+      "engine": "qdrant",
+      "engine_aliases": [],
+      "adapter_file": "vector-stores.md",
+      "semantic_source_hosts": ["qdrant.tech"],
+      "deployment_variants": [
+        {"id": "qdrant-self-managed", "aliases": ["self-managed"]},
+        {"id": "qdrant-cloud", "aliases": ["cloud"]}
+      ]
+    },
+    {
+      "adapter_id": "weaviate",
+      "engine": "weaviate",
+      "engine_aliases": [],
+      "adapter_file": "vector-stores.md",
+      "semantic_source_hosts": ["docs.weaviate.io"],
+      "deployment_variants": [
+        {"id": "weaviate-self-managed", "aliases": ["self-managed"]},
+        {"id": "weaviate-cloud", "aliases": ["cloud"]}
+      ]
+    },
+    {
+      "adapter_id": "milvus",
+      "engine": "milvus",
+      "engine_aliases": [],
+      "adapter_file": "vector-stores.md",
+      "semantic_source_hosts": ["milvus.io"],
+      "deployment_variants": [
+        {"id": "milvus-self-managed", "aliases": ["self-managed"]},
+        {"id": "zilliz-cloud", "aliases": ["cloud"]}
+      ]
+    },
+    {
+      "adapter_id": "snowflake",
+      "engine": "snowflake",
+      "engine_aliases": [],
+      "adapter_file": "warehouses.md",
+      "semantic_source_hosts": ["docs.snowflake.com"],
+      "deployment_variants": [
+        {"id": "snowflake-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "bigquery",
+      "engine": "bigquery",
+      "engine_aliases": ["big-query"],
+      "adapter_file": "warehouses.md",
+      "semantic_source_hosts": ["cloud.google.com"],
+      "deployment_variants": [
+        {"id": "bigquery-managed", "aliases": []}
+      ]
+    },
+    {
+      "adapter_id": "redshift",
+      "engine": "redshift",
+      "engine_aliases": ["amazon-redshift"],
+      "adapter_file": "warehouses.md",
+      "semantic_source_hosts": ["docs.aws.amazon.com"],
+      "deployment_variants": [
+        {"id": "redshift-provisioned", "aliases": ["provisioned"]},
+        {"id": "redshift-serverless", "aliases": ["serverless"]}
+      ]
+    },
+    {
+      "adapter_id": "databricks",
+      "engine": "databricks",
+      "engine_aliases": [],
+      "adapter_file": "warehouses.md",
+      "semantic_source_hosts": ["docs.databricks.com"],
+      "deployment_variants": [
+        {"id": "databricks-unity-catalog", "aliases": ["unity-catalog"]}
+      ]
+    }
+  ]
+}

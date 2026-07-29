@@ -1,0 +1,941 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/finding.schema.json",
+  "title": "Red Team Audit candidate finding",
+  "description": "An append-only candidate record accumulated through fan-out, triage, and proof.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "lens",
+    "topic",
+    "title",
+    "claimed_impact_severity",
+    "location",
+    "evidence",
+    "attack",
+    "impact",
+    "reachable_from",
+    "confidence",
+    "proof_plan"
+  ],
+  "properties": {
+    "candidate_id": {
+      "$ref": "#/$defs/candidateId"
+    },
+    "lens": {
+      "$ref": "#/$defs/name"
+    },
+    "topic": {
+      "$ref": "#/$defs/topic"
+    },
+    "title": {
+      "$ref": "#/$defs/nonEmptyString",
+      "maxLength": 512
+    },
+    "claimed_impact_severity": {
+      "$ref": "#/$defs/severity"
+    },
+    "location": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "pattern": "^.+:[1-9][0-9]*(?::[1-9][0-9]*)?$"
+      }
+    },
+    "cwe": {
+      "type": "string",
+      "pattern": "^CWE-[1-9][0-9]*$"
+    },
+    "evidence": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "source_anchors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/sourceAnchor"
+      }
+    },
+    "attack": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "impact": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "reachable_from": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "contingent_fact": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "contingent_query": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "confidence": {
+      "enum": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "proof_plan": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "store_context": {
+      "$ref": "#/$defs/storeContext"
+    },
+    "principal_path": {
+      "$ref": "#/$defs/principalPath"
+    },
+    "enforcement_plane": {
+      "enum": [
+        "application",
+        "database",
+        "cloud",
+        "filesystem",
+        "unknown"
+      ]
+    },
+    "copy_path": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      ]
+    },
+    "semantic_sensitivity": {
+      "enum": [
+        "stable",
+        "version-sensitive",
+        "deployment-sensitive"
+      ]
+    },
+    "adapter_rule_id": {
+      "type": "string",
+      "minLength": 3,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "semantic_source": {
+      "$ref": "#/$defs/semanticSource"
+    },
+    "effective_severity": {
+      "$ref": "#/$defs/severity"
+    },
+    "triage_disposition": {
+      "enum": [
+        "queued",
+        "merged",
+        "dropped",
+        "elevated"
+      ]
+    },
+    "drop_reason": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "raised_by": {
+      "$ref": "#/$defs/name"
+    },
+    "component_finding_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/candidateId"
+      }
+    },
+    "merged_into_candidate_id": {
+      "$ref": "#/$defs/candidateId"
+    },
+    "existence_check": {
+      "$ref": "#/$defs/existenceCheck"
+    },
+    "proof_tier": {
+      "enum": [
+        "T0",
+        "T1",
+        "T2",
+        "T3"
+      ]
+    },
+    "verification_status": {
+      "enum": [
+        "CONFIRMED",
+        "NOT_REPRODUCED",
+        "INCONCLUSIVE",
+        "DISPROVED",
+        "UNPROVEN"
+      ]
+    },
+    "disproof_basis": {
+      "enum": [
+        "falsified-code-premise",
+        "validated-oracle"
+      ]
+    },
+    "artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "command": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "pre_result": {
+      "$ref": "#/$defs/preResult"
+    },
+    "post_result": {
+      "$ref": "#/$defs/postResult"
+    },
+    "reason": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "blocking_reason": {
+      "$ref": "#/$defs/nonEmptyString"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "contingent_fact"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reachable_from": {
+            "pattern": "^contingent:.+"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "contingent_query"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reachable_from": {
+            "pattern": "^contingent:.+"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reachable_from": {
+            "pattern": "^contingent:.+"
+          }
+        },
+        "required": [
+          "reachable_from"
+        ]
+      },
+      "then": {
+        "required": [
+          "contingent_fact",
+          "contingent_query"
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "effective_severity"
+            ]
+          },
+          {
+            "required": [
+              "triage_disposition"
+            ]
+          },
+          {
+            "required": [
+              "drop_reason"
+            ]
+          },
+          {
+            "required": [
+              "component_finding_ids"
+            ]
+          },
+          {
+            "required": [
+              "merged_into_candidate_id"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "effective_severity",
+          "triage_disposition"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "triage_disposition": {
+            "const": "dropped"
+          }
+        },
+        "required": [
+          "triage_disposition"
+        ]
+      },
+      "then": {
+        "required": [
+          "drop_reason"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "drop_reason"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "triage_disposition": {
+            "const": "merged"
+          }
+        },
+        "required": [
+          "triage_disposition"
+        ]
+      },
+      "then": {
+        "required": [
+          "merged_into_candidate_id"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "merged_into_candidate_id"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "triage_disposition": {
+            "const": "elevated"
+          }
+        },
+        "required": [
+          "triage_disposition"
+        ]
+      },
+      "then": {
+        "required": [
+          "raised_by"
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": [
+              "proof_tier"
+            ]
+          },
+          {
+            "required": [
+              "verification_status"
+            ]
+          },
+          {
+            "required": [
+              "artifact"
+            ]
+          },
+          {
+            "required": [
+              "command"
+            ]
+          },
+          {
+            "required": [
+              "pre_result"
+            ]
+          },
+          {
+            "required": [
+              "post_result"
+            ]
+          },
+          {
+            "required": [
+              "reason"
+            ]
+          },
+          {
+            "required": [
+              "blocking_reason"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "effective_severity",
+          "triage_disposition",
+          "existence_check",
+          "proof_tier",
+          "verification_status"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "existence_check": {
+            "properties": {
+              "status": {
+                "const": "not_located"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "existence_check"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification_status": {
+            "const": "NOT_REPRODUCED"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "proof_tier": {
+            "const": "T3"
+          }
+        },
+        "required": [
+          "proof_tier"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification_status": {
+            "const": "UNPROVEN"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "const": "CONFIRMED"
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "existence_check": {
+            "properties": {
+              "status": {
+                "const": "located"
+              }
+            }
+          },
+          "proof_tier": {
+            "enum": [
+              "T1",
+              "T2"
+            ]
+          },
+          "post_result": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            }
+          }
+        },
+        "required": [
+          "artifact",
+          "command",
+          "pre_result",
+          "post_result"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "const": "INCONCLUSIVE"
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "const": "UNPROVEN"
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
+      },
+      "then": {
+        "required": [
+          "blocking_reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification_status": {
+            "enum": [
+              "DISPROVED",
+              "NOT_REPRODUCED"
+            ]
+          }
+        },
+        "required": [
+          "verification_status"
+        ]
+      },
+      "then": {
+        "required": [
+          "reason"
+        ]
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "lens": {
+                "const": "database-and-data-stores"
+              }
+            },
+            "required": [
+              "lens"
+            ]
+          },
+          {
+            "properties": {
+              "topic": {
+                "pattern": "^(?:database(?:-|$)|db\\.)"
+              }
+            },
+            "required": [
+              "topic"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "store_context",
+          "principal_path",
+          "enforcement_plane",
+          "semantic_sensitivity"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "semantic_sensitivity": {
+            "enum": [
+              "version-sensitive",
+              "deployment-sensitive"
+            ]
+          }
+        },
+        "required": [
+          "semantic_sensitivity"
+        ]
+      },
+      "then": {
+        "required": [
+          "adapter_rule_id",
+          "semantic_source"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_context": {
+            "properties": {
+              "adapter_id": {
+                "const": "inventory-only"
+              }
+            },
+            "required": [
+              "adapter_id"
+            ]
+          }
+        },
+        "required": [
+          "store_context"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_severity": {
+            "enum": [
+              "Medium",
+              "Low",
+              "Info"
+            ]
+          },
+          "verification_status": {
+            "const": "UNPROVEN"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_context": {
+            "anyOf": [
+              {
+                "properties": {
+                  "engine_version": {
+                    "const": "unknown"
+                  }
+                },
+                "required": [
+                  "engine_version"
+                ]
+              },
+              {
+                "properties": {
+                  "deployment_variant": {
+                    "const": "unknown"
+                  }
+                },
+                "required": [
+                  "deployment_variant"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "store_context"
+        ]
+      },
+      "then": {
+        "properties": {
+          "effective_severity": {
+            "enum": [
+              "Medium",
+              "Low",
+              "Info"
+            ]
+          },
+          "verification_status": {
+            "const": "UNPROVEN"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "topic": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "candidateId": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_id",
+        "snapshot_sha256",
+        "start_byte",
+        "end_byte",
+        "excerpt_sha256"
+      ],
+      "properties": {
+        "file_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 80,
+          "pattern": "^file_[a-fA-F0-9]{64}$"
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "excerpt_sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      }
+    },
+    "severity": {
+      "enum": [
+        "Critical",
+        "High",
+        "Medium",
+        "Low",
+        "Info"
+      ]
+    },
+    "storeContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "family",
+        "engine",
+        "engine_version",
+        "deployment_variant",
+        "adapter_id",
+        "detection_evidence",
+        "confidence"
+      ],
+      "properties": {
+        "store_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "family": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "engine": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "engine_version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "deployment_variant": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "adapter_id": {
+          "$ref": "#/$defs/name"
+        },
+        "detection_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        }
+      }
+    },
+    "principalPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authenticated_principal",
+        "session_principal",
+        "effective_principal",
+        "owner_or_definer",
+        "bypass_capabilities"
+      ],
+      "properties": {
+        "authenticated_principal": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "session_principal": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "effective_principal": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "owner_or_definer": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "bypass_capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      }
+    },
+    "semanticSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "verified_on"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^\\s]+$"
+        },
+        "verified_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])$"
+        }
+      }
+    },
+    "existenceCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "method"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "located",
+            "not_located"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "observed": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      }
+    },
+    "preResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "assertion",
+        "path_reached",
+        "control"
+      ],
+      "properties": {
+        "assertion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path_reached": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "control": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "detail": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "postResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "status",
+        "regressions"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
+        "regressions": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "detail": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    }
+  }
+}
