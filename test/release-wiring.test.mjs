@@ -119,3 +119,22 @@ test('release metadata exposes the 0.7 database conformance commands', () => {
     'node scripts/run-database-docker-conformance.mjs',
   )
 })
+
+test('the v0.8 remote gateway protocol foundation is release-wired', () => {
+  for (const path of [
+    'docs/adr/0007-signed-remote-request-acceptance.md',
+    'providers/reference-remote-gateway/README.md',
+    'providers/reference-remote-gateway/gateway.mjs',
+    'schemas/remote-gateway-config.schema.json',
+    'schemas/remote-request-envelope.schema.json',
+    'schemas/remote-acceptance-envelope.schema.json',
+    'scripts/lib/remote-gateway-contracts.mjs',
+    'scripts/lib/remote-gateway-client.mjs',
+    'test/remote-gateway-contracts.test.mjs',
+  ]) {
+    assert.ok(
+      readFileSync(path).length > 0,
+      `${path} must ship with the remote gateway protocol slice`,
+    )
+  }
+})
