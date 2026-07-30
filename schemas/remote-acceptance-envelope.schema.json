@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/remote-acceptance-envelope.schema.json",
+  "title": "Red Team Audit signed remote request acceptance",
+  "description": "A gateway-signed acknowledgement that one exact request was accepted and produced one packet-bound provider result. It does not prove semantic analysis.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority",
+    "gateway",
+    "job_result",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "authority": {
+      "const": "REMOTE_REQUEST_ACCEPTED"
+    },
+    "gateway": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "request_sha256",
+        "attempt_id",
+        "attempt_nonce",
+        "accepted_at",
+        "run_id",
+        "job_id",
+        "packet_sha256",
+        "prompt_transform",
+        "upstream_request_sha256",
+        "job_result_sha256",
+        "semantic_analysis_proven",
+        "key_id",
+        "public_key_spki_base64"
+      ],
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "request_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt_nonce": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accepted_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "run_id": {
+          "$ref": "#/$defs/id"
+        },
+        "job_id": {
+          "$ref": "#/$defs/id"
+        },
+        "packet_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "prompt_transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "sha256"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "upstream_request_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "job_result_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "semantic_analysis_proven": {
+          "const": false
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        },
+        "public_key_spki_base64": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    },
+    "job_result": {
+      "$ref": "https://red-team-audit.dev/schemas/job-result.schema.json"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value_base64"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "value_base64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    }
+  }
+}

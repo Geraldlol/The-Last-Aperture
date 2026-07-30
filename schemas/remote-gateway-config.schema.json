@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/remote-gateway-config.schema.json",
+  "title": "Red Team Audit remote gateway configuration",
+  "description": "Trusted controller configuration for a credential-holding HTTPS analysis gateway. Repository content must never populate this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "gateway_url",
+    "controller_signing_private_key_path",
+    "gateway_public_key_path",
+    "tls_spki_sha256",
+    "prompt_transform",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "remote-gateway-v1"
+    },
+    "gateway_url": {
+      "type": "string",
+      "minLength": 12,
+      "maxLength": 2048,
+      "pattern": "^https://"
+    },
+    "controller_signing_private_key_path": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "gateway_public_key_path": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "tls_spki_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "prompt_transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_timeout_ms",
+        "request_ttl_ms",
+        "max_clock_skew_ms",
+        "max_request_bytes",
+        "max_response_bytes",
+        "max_artifacts",
+        "max_file_bytes",
+        "max_total_artifact_bytes"
+      ],
+      "properties": {
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        },
+        "request_ttl_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        },
+        "max_clock_skew_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        },
+        "max_request_bytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 67108864
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 16777216
+        },
+        "max_artifacts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        },
+        "max_total_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]+[\\\\/][^\\\\/]+)[^\\u0000]*$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

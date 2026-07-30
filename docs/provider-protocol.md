@@ -103,6 +103,31 @@ Coverage authority is explicit:
 Consumption is not comprehension. Zero findings is always
 `NO_FINDINGS_REPORTED`, never a clean/safe assertion.
 
+## Remote gateway protocol (v0.8 development)
+
+The `remote-gateway-v1` protocol is the next provider boundary. Its strict
+schemas, signing and verification primitives, SPKI-pinned HTTPS client, and
+replay-safe reference acceptor are implemented. Controller attempt-ledger and
+run-manifest integration is not yet enabled, so released 0.7 runs still cannot
+assign `REMOTE_REQUEST_ACCEPTED`.
+
+The controller request is canonical JSON signed with an externally held
+Ed25519 key. It binds the run, job, packet, plan, repository, policy, lens pack,
+source snapshot, control snapshot, exact sealed artifact bytes, a short
+validity window, and a configured prompt-transform digest. HTTP carries an
+RFC 9530 `Content-Digest`, uses one exact HTTPS endpoint, and permits no
+redirect or content encoding.
+
+The credential-holding gateway verifies that request and consumes its one-use
+ID before invoking an upstream provider. Its signed acceptance binds the exact
+request body digest, prompt transform, upstream request body digest, and raw
+job-result digest. The upstream API credential remains gateway-only.
+
+`REMOTE_REQUEST_ACCEPTED` proves only that the pinned gateway accepted the
+exact request. It does not prove model byte consumption, comprehension,
+semantic analysis, or finding correctness. See
+[`docs/adr/0007-signed-remote-request-acceptance.md`](adr/0007-signed-remote-request-acceptance.md).
+
 ### Lens job
 
 The packet contains:
