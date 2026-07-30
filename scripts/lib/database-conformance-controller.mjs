@@ -756,7 +756,7 @@ export async function runDatabaseConformanceBundle({
     }
     return await finalizeRun(loaded, run, results, now)
   } catch (error) {
-    return abortRun(loaded, run, error, results, now)
+    return await abortRun(loaded, run, error, results, now)
   }
   } finally {
     await releaseRunLock(lock)
