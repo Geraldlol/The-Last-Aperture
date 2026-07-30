@@ -1,0 +1,64 @@
+{
+  "_fixture": "C-042 — clean database conformance fixture; static and not deployable",
+  "lens": "database-and-data-stores",
+  "topic": "database-native-authorization-and-tenant-isolation",
+  "expected": {
+    "minimum_finding_severity": null
+  },
+  "roles": {
+    "tenant_reader": {
+      "indices": [
+        {
+          "names": [
+            "orders-*"
+          ],
+          "privileges": [
+            "read"
+          ],
+          "query": {
+            "term": {
+              "tenant_id": "tenant-a"
+            }
+          },
+          "field_security": {
+            "grant": [
+              "order_id",
+              "tenant_id",
+              "status"
+            ]
+          }
+        }
+      ]
+    },
+    "health_reader": {
+      "indices": [
+        {
+          "names": [
+            "service-health"
+          ],
+          "privileges": [
+            "read"
+          ]
+        }
+      ]
+    }
+  },
+  "users": {
+    "tenant_api": {
+      "roles": [
+        "tenant_reader",
+        "health_reader"
+      ]
+    }
+  },
+  "aliases": {
+    "tenant-a-orders": {
+      "index": "orders-2026",
+      "filter": {
+        "term": {
+          "tenant_id": "tenant-a"
+        }
+      }
+    }
+  }
+}

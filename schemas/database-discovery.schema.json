@@ -1,0 +1,536 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/database-discovery.schema.json",
+  "title": "Database discovery graph",
+  "description": "Deterministic, evidence-only Phase 0 database and data-store discovery output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "digest",
+    "limits",
+    "stats",
+    "nodes",
+    "edges",
+    "store_candidates",
+    "unresolved",
+    "gaps",
+    "path_scope"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/database-discovery"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "stats": {
+      "$ref": "#/$defs/stats"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "store_candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/storeCandidate"
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unresolved"
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gap"
+      }
+    },
+    "path_scope": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pathScope"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z]+-[a-f0-9]{20}$"
+    },
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^(?:[A-Za-z]:)?[/\\\\]"
+          },
+          {
+            "pattern": "(?:^|/)\\.\\.(?:/|$)"
+          }
+        ]
+      }
+    },
+    "stringSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_nodes",
+        "max_edges",
+        "max_rounds",
+        "max_token_fanout"
+      ],
+      "properties": {
+        "max_nodes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "max_edges": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_token_fanout": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1024
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory_entries",
+        "text_entries",
+        "evidence_paths",
+        "in_scope_paths",
+        "fixed_point_rounds",
+        "node_count",
+        "edge_count",
+        "store_candidate_count",
+        "unresolved_count",
+        "gap_count"
+      ],
+      "properties": {
+        "inventory_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "in_scope_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fixed_point_rounds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "node_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edge_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "store_candidate_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "gap_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "line",
+        "signature_id",
+        "strength"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "signature_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]+$"
+        },
+        "strength": {
+          "enum": [
+            "strong",
+            "supporting",
+            "context"
+          ]
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "kind",
+        "subtype",
+        "label",
+        "component_root",
+        "context_only",
+        "engine_candidates",
+        "engine_version_candidates",
+        "deployment_candidates",
+        "evidence"
+      ],
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "component",
+            "source",
+            "client",
+            "binding",
+            "store",
+            "principal",
+            "artifact",
+            "copy"
+          ]
+        },
+        "subtype": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]+$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "component_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context_only": {
+          "type": "boolean"
+        },
+        "engine_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "engine_version_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "deployment_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "from_node_id",
+        "to_node_id",
+        "relation",
+        "evidence"
+      ],
+      "properties": {
+        "edge_id": {
+          "$ref": "#/$defs/id"
+        },
+        "from_node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "to_node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "relation": {
+          "enum": [
+            "CONTAINS",
+            "DECLARES",
+            "EXACT_RELATIVE_IMPORT",
+            "EXACT_CONFIG_TOKEN",
+            "USES_BINDING",
+            "TARGETS_STORE",
+            "APPLIES_TO_STORE"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "storeCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "anchor_node_id",
+        "component_node_ids",
+        "node_ids",
+        "engine_candidates",
+        "engine_version_candidates",
+        "deployment_candidates",
+        "confidence",
+        "context_only",
+        "evidence_paths",
+        "scope_paths",
+        "open_reasons"
+      ],
+      "properties": {
+        "store_id": {
+          "$ref": "#/$defs/id"
+        },
+        "anchor_node_id": {
+          "$ref": "#/$defs/id"
+        },
+        "component_node_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "node_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "engine_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "engine_version_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "deployment_candidates": {
+          "$ref": "#/$defs/stringSet"
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "context_only": {
+          "const": false
+        },
+        "evidence_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
+        },
+        "scope_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/repositoryPath"
+          }
+        },
+        "open_reasons": {
+          "$ref": "#/$defs/stringSet"
+        }
+      }
+    },
+    "unresolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "type",
+        "node_ids",
+        "reasons"
+      ],
+      "properties": {
+        "observation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]+$"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "node_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "reasons": {
+          "$ref": "#/$defs/stringSet"
+        }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gap_id",
+        "code",
+        "subject",
+        "detail"
+      ],
+      "properties": {
+        "gap_id": {
+          "$ref": "#/$defs/id"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "scopeReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]+$"
+        },
+        "source_path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "signature_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]+$"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "signatures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9.-]+$"
+          }
+        }
+      }
+    },
+    "pathScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "state",
+        "context_classifications",
+        "reasons"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "state": {
+          "enum": [
+            "in-scope",
+            "context-only",
+            "out-of-scope"
+          ]
+        },
+        "context_classifications": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "documentation",
+              "test-or-fixture",
+              "generated-or-vendored"
+            ]
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scopeReason"
+          }
+        }
+      }
+    }
+  }
+}

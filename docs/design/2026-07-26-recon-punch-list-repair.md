@@ -705,7 +705,7 @@ lenses/completeness.md
 
 ### Self-check
 
-I did not eyeball this. I extracted the `owns` and `defers` blocks from all thirteen frontmatter blocks mechanically (script at `C:\Users\geral\AppData\Local\Temp\claude\C--Users-geral-Red-Team\4a1a7bdc-9412-4808-b737-3574bc6c4077\scratchpad\work\parse.ps1`, inputs `work\surviving-clean.md` â€” the surviving file with the truncated leading crypto fragment stripped â€” and `work\new-two.md` holding the two newly authored blocks) and checked the invariants by set comparison.
+I did not eyeball this. I extracted the `owns` and `defers` blocks from all thirteen frontmatter blocks mechanically (using the temporary scratchpad script `work/parse.ps1` with `work/surviving-clean.md` â€” the surviving file with the truncated leading crypto fragment stripped â€” and `work/new-two.md` holding the two newly authored blocks) and checked the invariants by set comparison.
 
 - **R1 holds.** 165 distinct slugs, and no slug appears in more than one lens's `owns`. Per-lens counts: web-and-api 33, cloud-and-iac 21, privacy-and-data-protection 20, cicd-and-supply-chain 16, salesforce-platform 16, crypto-and-key-management 14, mobile-app-security 14, llm-and-ai 12, hipaa-and-phi 10, threat-modeling 9. Sum = 165, matching the distinct count exactly, which is the same statement.
 - **R2 holds by construction.** The registry above is exactly the union of the ten `owns` lists, emitted from the same extraction, so it has no unowned entries and no missing ones.
@@ -719,7 +719,7 @@ One gap worth flagging to the parent: eleven slugs in the registry are new with 
 
 ## Invariant verification
 
-**Method.** Parsed all 13 blocks with a script rather than by eye: `owns` lists, `defers` maps, `cross_cutting`, and `activates_on` extracted from `recon/s2-surviving-frontmatter.md` (the leading truncated crypto fragment, lines 1â€“23, is correctly skipped â€” it has no `name:` key â€” and I confirmed it is byte-identical in content to the tail of the authored crypto block, which independently corroborates that reconstruction). I re-transcribed the two authored blocks, the registry, and all 158 table rows into separate files rather than reusing the prior agent's `work/` files. Scripts: `C:\Users\geral\AppData\Local\Temp\claude\C--Users-geral-Red-Team\4a1a7bdc-9412-4808-b737-3574bc6c4077\scratchpad\verify\check.js`, `near.js`, `absorb.js`.
+**Method.** Parsed all 13 blocks with a script rather than by eye: `owns` lists, `defers` maps, `cross_cutting`, and `activates_on` extracted from `recon/s2-surviving-frontmatter.md` (the leading truncated crypto fragment, lines 1â€“23, is correctly skipped â€” it has no `name:` key â€” and I confirmed it is byte-identical in content to the tail of the authored crypto block, which independently corroborates that reconstruction). I re-transcribed the two authored blocks, the registry, and all 158 table rows into separate files rather than reusing the prior agent's `work/` files. Temporary verification scripts: `verify/check.js`, `verify/near.js`, and `verify/absorb.js`.
 
 ### Violations found
 

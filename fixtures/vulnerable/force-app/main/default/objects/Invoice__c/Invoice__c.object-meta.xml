@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Supporting artifact for V-012, not a fixture of its own and not counted as one.
+
+  salesforce-platform's severity row for "@AuraEnabled on a `without sharing`
+  class returning SObjects" is conditioned on the object having record access to
+  defeat. That fact lives in object metadata, not in Apex, so without this file
+  the row cannot be graded above its fallback and the evaluation would be
+  measuring a missing artifact rather than the lens.
+
+  Private internal OWD and Private external OWD: there is record-level access
+  here, and V-012's class declaration is what steps around it.
+-->
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Invoice</label>
+    <pluralLabel>Invoices</pluralLabel>
+    <nameField>
+        <label>Invoice Number</label>
+        <type>Text</type>
+    </nameField>
+    <deploymentStatus>Deployed</deploymentStatus>
+    <sharingModel>Private</sharingModel>
+    <externalSharingModel>Private</externalSharingModel>
+</CustomObject>

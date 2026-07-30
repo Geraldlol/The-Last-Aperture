@@ -1,0 +1,96 @@
+# C-004 — clean fixture. Expected findings at Low or above: ZERO.
+#
+# NOT INSTALLED, AND CANNOT BE. GitHub Actions reads only the repository ROOT
+# `.github/workflows`; a directory of that name nested under `fixtures/` is never
+# looked at, which is why this file can carry `on: pull_request_target` safely and
+# why the vulnerable half nests its workflow the same way.
+#
+# Sweep note, measured: cicd-and-supply-chain's §0 globs are written
+# `--glob '.github/workflows/*.y*ml'`, and a glob containing `/` is anchored to the
+# search root — so run from the repository root that glob reaches only the real
+# workflow and returns exit 1 on this file. Use `--glob '**/.github/workflows/*.y*ml'`
+# to reach both halves of the corpus.
+#
+# Why this pattern-matches as vulnerable:
+#   `on: pull_request_target` plus a job holding a secret is a reflex Critical
+#   for most reviewers, and it is the single most load-bearing grep in the
+#   cicd-and-supply-chain lens. Line 46 also puts `${{ ... }}` inside a `run:`.
+#
+# Why it is not a finding:
+#   There is no `actions/checkout` step anywhere in this file, no `gh pr
+#   checkout`, no `git fetch origin pull/N/head`, no `uses: ./...` local action,
+#   and nothing installs dependencies or executes a script from the pull
+#   request's tree. Pull-request-controlled content never enters the workspace,
+#   so the privileged context has nothing untrusted to act on. Every
+#   attacker-controllable string (the PR title and body) is bound into a
+#   step-scoped `env:` and dereferenced as a quoted shell variable, never
+#   interpolated. The one `${{ }}` that does reach a shell is `github.run_id`,
+#   which is numeric.
+#
+# False-positive entries exercised:
+#   cicd-and-supply-chain (1)  `pull_request_target` in a workflow that never
+#                              checks out or executes PR-controlled content
+#   cicd-and-supply-chain (2)  `${{ }}` inside `run:` where the context is not
+#                              attacker-controlled
+#   cicd-and-supply-chain (4)  a bot-written pin of the form `@<40-hex> # v4.1.1`
+#                              read as a tag reference
+#   cicd-and-supply-chain (6)  an explicit least-privilege `permissions:` block,
+#                              so the missing-block hardening row cannot apply
+
+name: PR triage labels and welcome comment
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited]
+
+# Declared explicitly rather than relying on the repository-level token default,
+# which is not visible from a checkout and therefore cannot be assumed.
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-triage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Pinned to a commit SHA. The trailing comment is the human-readable
+      # version, not the ref — the ref is already immutable.
+      - name: Apply size and area labels
+        uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5.0.0
+        with:
+          repo-token: ${{ secrets.TRIAGE_APP_TOKEN }}
+          configuration-path: .github/labeler.yml
+          sync-labels: true
+
+      # The PR title and body are attacker-controlled. They are bound to
+      # environment variables at STEP scope and dereferenced as quoted shell
+      # variables, so the shell never parses them as syntax. `github.run_id` is
+      # a decimal integer and cannot carry a metacharacter.
+      - name: Summarise the change for the triage log
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "run ${{ github.run_id }} triaging PR #${PR_NUMBER}"
+          printf 'title: %s\n' "$PR_TITLE" | head -c 400
+          printf 'body bytes: %s\n' "$(printf '%s' "$PR_BODY" | wc -c)"
+
+      # gh talks to the API. It never reads the pull request's files, and the
+      # comment body is a fixed template with no interpolation.
+      - name: Welcome first-time contributors
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ secrets.TRIAGE_APP_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file .github/welcome-template.md

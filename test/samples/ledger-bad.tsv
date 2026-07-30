@@ -1,0 +1,4 @@
+source	destination	disposition	evidence
+references/web-and-api.md:43	web-and-api/csrf	preserved	fixture-evidence
+references/mobile.md:12	mobile-app-security/webview-bridge-trust	pending	punch-list-§1
+references/crypto-deep-dive.md:55	crypto-and-key-management/aes-nonce	corrected	punch-list-§1-item-4

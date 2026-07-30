@@ -1,0 +1,18 @@
+# Node
+node_modules/
+.audit-runs/
+**/.gradle/
+
+# Local detector experiments and generated probe output.
+/scratchpad/
+
+# Subagent-driven-development scratch: ledgers, briefs, reports, review
+# packages. Working notes for a plan in flight, not part of the record.
+.superpowers/
+
+# The pre-scrub reference sources. These are the untracked inputs Phase A
+# migrates from, and they must never enter history: they still contain
+# private-product residue and named-vendor content. The scrubbed lenses under
+# skills/ are the tracked output. The repository-root SKILL.md is now a tracked
+# compatibility pointer to the canonical skill under skills/.
+/references/

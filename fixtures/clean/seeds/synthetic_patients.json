@@ -1,0 +1,92 @@
+{
+  "_fixture": "C-019 — clean fixture. Expected findings at Low or above: ZERO.",
+  "_why_this_looks_like_a_finding": [
+    "Realistic patient demographics — names, dates of birth, medical record",
+    "numbers and ICD-10 codes — sitting in a repository. Resemblance to a real",
+    "chart is the whole point of a clinical test fixture, and it is also the",
+    "shape that gets filed as 'production ePHI in dev' at High."
+  ],
+  "_why_it_is_not_a_finding": [
+    "hipaa-and-phi's false positive 6 requires PROVENANCE EVIDENCE, not",
+    "resemblance. Synthetic data that looks like patient data is not PHI. The",
+    "provenance block below states where every row came from and what produced",
+    "it, and the three shapes that WOULD make this a finding are all absent:",
+    "there is no restore script pointed at a production snapshot, no dump taken",
+    "against a production credential, no partial-anonymization step that masks",
+    "names while leaving DOB + ZIP + admission date intact, and no crosswalk",
+    "table shipped beside the set. The generator is deterministic from the seed",
+    "recorded here, so any reviewer can regenerate the file and compare."
+  ],
+  "_false_positive_entries_exercised": [
+    "hipaa-and-phi (6) — seed files and factories containing realistic patient",
+    "records; the finding requires provenance evidence, not resemblance",
+    "privacy-and-data-protection (rejected candidate) — 'fixtures and lower",
+    "environments are out of scope' is rejected; the discriminator is provenance"
+  ],
+
+  "provenance": {
+    "origin": "generated",
+    "generator": "synthea-style open-source synthetic patient generator",
+    "generator_invocation": "generate --population 4 --seed 20260712 --state XX --module behavioral_health",
+    "seed": 20260712,
+    "generated_at": "2026-07-12T09:14:02Z",
+    "derived_from_production": false,
+    "production_snapshot_used": false,
+    "anonymization_applied": false,
+    "anonymization_note": "None applied and none needed: no row here originates from a real record, so there is nothing to de-identify and no re-identification risk to bound.",
+    "crosswalk_shipped": false,
+    "zip_precision": "none — no postal code is present in this file at all, so the DOB + ZIP + admission-date combination cannot be assembled",
+    "review": "Regenerate with the invocation above and diff. A byte-identical result is the check that this file is generator output and not a reduced extract."
+  },
+
+  "patients": [
+    {
+      "id": "8f21c0e4-6b3a-4c17-9a52-0d7e41b8c390",
+      "mrn": "SYN-100234",
+      "family_name": "Doe",
+      "given_name": "Jane",
+      "birth_date": "1980-01-01",
+      "sex": "female",
+      "conditions": [
+        { "code": "F33.1", "system": "ICD-10-CM", "onset": "2024-03-11" }
+      ],
+      "care_team": ["b2f4a1d0-1111-4a2b-8c3d-4e5f60718293"]
+    },
+    {
+      "id": "1c5d9a72-4e88-4d31-b0f6-2a9c7e3b5104",
+      "mrn": "SYN-100235",
+      "family_name": "Roe",
+      "given_name": "Samuel",
+      "birth_date": "1967-11-23",
+      "sex": "male",
+      "conditions": [
+        { "code": "F41.1", "system": "ICD-10-CM", "onset": "2023-09-02" }
+      ],
+      "care_team": ["b2f4a1d0-1111-4a2b-8c3d-4e5f60718293"]
+    },
+    {
+      "id": "5a0b7e39-c412-4f6d-8e21-93b7c5d0f48a",
+      "mrn": "SYN-100236",
+      "family_name": "Noakes",
+      "given_name": "Priya",
+      "birth_date": "1995-06-14",
+      "sex": "female",
+      "conditions": [
+        { "code": "F90.0", "system": "ICD-10-CM", "onset": "2019-01-30" }
+      ],
+      "care_team": ["c7e0b3a5-2222-4b3c-9d4e-5f6071829304"]
+    },
+    {
+      "id": "e3948b16-7d05-4a90-8c62-1fb4e70d9a35",
+      "mrn": "SYN-100237",
+      "family_name": "Okonkwo",
+      "given_name": "Daniel",
+      "birth_date": "2001-02-08",
+      "sex": "male",
+      "conditions": [
+        { "code": "F43.10", "system": "ICD-10-CM", "onset": "2025-05-19" }
+      ],
+      "care_team": ["c7e0b3a5-2222-4b3c-9d4e-5f6071829304"]
+    }
+  ]
+}

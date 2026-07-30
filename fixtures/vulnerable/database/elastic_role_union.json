@@ -1,0 +1,65 @@
+{
+  "_fixture": "V-022 — vulnerable database conformance fixture; static and not deployable",
+  "lens": "database-and-data-stores",
+  "topic": "database-native-authorization-and-tenant-isolation",
+  "expected": {
+    "severity": "High",
+    "cwe": "CWE-863"
+  },
+  "roles": {
+    "tenant_reader": {
+      "indices": [
+        {
+          "names": [
+            "orders-*"
+          ],
+          "privileges": [
+            "read"
+          ],
+          "query": {
+            "term": {
+              "tenant_id": "tenant-a"
+            }
+          },
+          "field_security": {
+            "grant": [
+              "order_id",
+              "tenant_id",
+              "status"
+            ]
+          }
+        }
+      ]
+    },
+    "support_reader": {
+      "indices": [
+        {
+          "names": [
+            "orders-*"
+          ],
+          "privileges": [
+            "read"
+          ]
+        }
+      ]
+    }
+  },
+  "users": {
+    "tenant_api": {
+      "roles": [
+        "tenant_reader",
+        "support_reader"
+      ]
+    }
+  },
+  "aliases": {
+    "tenant-a-orders": {
+      "index": "orders-2026",
+      "filter": {
+        "term": {
+          "tenant_id": "tenant-a"
+        }
+      }
+    }
+  }
+}

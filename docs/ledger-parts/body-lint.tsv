@@ -1,0 +1,2 @@
+source	destination	disposition	evidence
+docs/design/2026-07-26-red-team-audit-oss-design.md#L209	scripts/lib/registry.mjs#checkBodyClaims	moved	The spec deferred "every pair of lenses whose bodies both discuss a slug must have a defers entry" to Phase B for want of lens bodies; the bodies exist, so the rule ships in Phase A as R8 with a positional claim predicate (heading or first table cell, Does-not-own excluded), 12 tests, and zero violations on the fourteen-lens corpus proven non-vacuous by three mutation experiments on real bodies

@@ -1,0 +1,14 @@
+ARG NODE_IMAGE
+FROM ${NODE_IMAGE}
+
+ENV RTA_REFERENCE_ISOLATION_PROBES=1 \
+    RTA_CONFORMANCE_MEMORY_BYTES=67108864 \
+    RTA_CONFORMANCE_CPUS=0.5 \
+    RTA_CONFORMANCE_PIDS=32 \
+    RTA_CONFORMANCE_NOFILE=64
+
+COPY --chown=65532:65532 adapter.mjs isolation-probes.mjs /opt/red-team-audit/
+
+USER 65532:65532
+WORKDIR /work
+ENTRYPOINT ["node", "/opt/red-team-audit/adapter.mjs"]

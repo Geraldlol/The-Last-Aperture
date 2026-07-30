@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/controller-failure-envelope.schema.json",
+  "title": "Red Team Audit signed controller failure envelope",
+  "description": "A controller-observed provider failure, optionally including a partial byte-delivery receipt, bound to one durable attempt and signed with an external Ed25519 key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority",
+    "controller",
+    "failure",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "authority": {
+      "const": "CONTROLLER_OBSERVED_FAILURE"
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "attempt_nonce",
+        "lease_event_sha256",
+        "packet_sha256",
+        "source_snapshot_sha256",
+        "control_snapshot_sha256",
+        "signed_at",
+        "key_id",
+        "public_key_spki_base64",
+        "failure_sha256"
+      ],
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt_nonce": {
+          "$ref": "#/$defs/sha256"
+        },
+        "lease_event_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "packet_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "control_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        },
+        "public_key_spki_base64": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        },
+        "failure_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "partial_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "recoverable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Z][A-Z0-9_:-]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16000
+        },
+        "recoverable": {
+          "type": "boolean"
+        },
+        "stderr": {
+          "type": "string",
+          "maxLength": 16777216
+        },
+        "cleanup_error": {
+          "description": "Bounded evidence that the provider-container lifecycle could not be proven safe, including an ambiguous create outcome or unverifiable exact absence. Its presence makes the attempt nonrecoverable.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 160,
+              "pattern": "^[A-Z][A-Z0-9_:-]+$"
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16000
+            },
+            "stderr": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          }
+        },
+        "partial_receipt": {
+          "$ref": "https://red-team-audit.dev/schemas/provider-execution.schema.json#/$defs/receipt"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "cleanup_error"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recoverable": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "recoverable": {
+                "const": false
+              }
+            },
+            "required": [
+              "recoverable"
+            ]
+          },
+          "then": {
+            "required": [
+              "cleanup_error"
+            ]
+          }
+        }
+      ]
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value_base64"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "value_base64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    }
+  }
+}

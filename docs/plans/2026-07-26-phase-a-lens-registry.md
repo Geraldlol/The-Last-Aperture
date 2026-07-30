@@ -141,18 +141,27 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm test
-      - run: npm run lint
-      - run: npm run gen -- --check
+      - if: matrix.node == '24'
+        run: npm run lint
+      - if: matrix.node == '24'
+        run: npm run gen -- --check
+      - if: matrix.node == '24'
+        run: npm run gen:benchmarks -- --check
 ```
 
-`npm ci` not `npm install`, and both actions are pinned by major tag at minimum. Note in the PR description that digest-pinning these actions is a Phase D hardening item, since the CI/CD lens will flag mutable tags.
+`npm ci` not `npm install`; third-party actions are pinned by full commit SHA,
+and the advertised Node 20 floor receives the full test suite.
 
 - [ ] **Step 6: Commit**
 
@@ -174,7 +183,7 @@ git commit -m "chore: scaffold Node tooling and CI for lens linting"
   - `parseLens(text, filename) -> { name, frontmatter, sections, detectors, errors }`
   - `frontmatter` is the raw parsed YAML object
   - `sections` is `{ [h2Title]: bodyText }` for every `## ` heading
-  - `detectors` is `[{ lens, match, nomatch, line }]` parsed from ```detector fenced blocks
+  - `detectors` is `[{ match, nomatch, line }]` parsed from ```detector fenced blocks. `line` is **file-relative**, not body-relative — it appears in linter output, so it must match what `grep -n` reports for that fence. No `lens` field: the caller already knows which lens it is iterating.
   - `errors` is `string[]`; a malformed file returns errors rather than throwing
 
 - [ ] **Step 1: Write the failing test**
@@ -308,11 +317,14 @@ export function parseLens(text, filename) {
   }
 
   const body = text.slice(match[0].length)
+  // Detector line numbers surface in linter output, so they must be
+  // file-relative. The body starts this many lines into the file.
+  const frontmatterLines = match[0].split(/\r?\n/).length - 1
   return {
     name: frontmatter.name ?? null,
     frontmatter,
     sections: splitSections(body),
-    detectors: parseDetectors(body, filename, errors),
+    detectors: parseDetectors(body, filename, errors, frontmatterLines),
     errors,
   }
 }
@@ -340,12 +352,12 @@ function splitSections(body) {
 
 // A detector block proves a search instruction can actually fire. Both
 // directions are required: match shows it fires, nomatch shows it discriminates.
-function parseDetectors(body, filename, errors) {
+function parseDetectors(body, filename, errors, frontmatterLines = 0) {
   const detectors = []
   const re = /```detector\r?\n([\s\S]*?)```/g
   let m
   while ((m = re.exec(body)) !== null) {
-    const line = body.slice(0, m.index).split(/\r?\n/).length
+    const line = body.slice(0, m.index).split(/\r?\n/).length + frontmatterLines
     let parsed
     try {
       parsed = parseYaml(m[1]) ?? {}
@@ -599,7 +611,21 @@ test('R5 accepts a clean American slug set', () => {
   assert.deepEqual(checkOrthography(['deserialization-and-xxe', 'csrf', 'tenant-isolation-enforcement']), [])
 })
 
-const l = (name, fm) => ({ name, frontmatter: { name, ...fm }, sections: {}, detectors: [], errors: [] })
+// Supplies the keys every shape needs, so a fixture that is meant to be VALID
+// actually is. Per-test `fm` overrides whatever that test is about. Without the
+// defaults, the "three valid shapes" fixtures are missing title/frameworks/
+// severity_floor and R6 correctly rejects them — which reads as a bug in
+// checkShapes and tempts a shrinking of REQUIRED_KEYS. Do not shrink it: the
+// spec's lens contract requires all eight keys, and Task 9 assigns a
+// severity_floor per lens, so dropping them from the check means a lens can
+// omit them and still lint green.
+const l = (name, fm) => ({
+  name,
+  frontmatter: { name, title: name, frameworks: [], severity_floor: 'low', ...fm },
+  sections: {},
+  detectors: [],
+  errors: [],
+})
 
 test('R6 accepts the three valid shapes', () => {
   const v = checkShapes([
@@ -638,6 +664,22 @@ test('R6 flags a domain lens with an empty activates_on', () => {
 test('R6 flags missing required keys', () => {
   const v = checkShapes([l('web', { runs_in: 'fanout' })])
   assert.ok(v.some((x) => /missing/i.test(x.message)))
+})
+
+test('R6 flags each of the eight required keys individually', () => {
+  const valid = {
+    runs_in: 'fanout',
+    activates_on: { paths: ['a'], signals: [] },
+    owns: ['csrf'],
+    defers: {},
+  }
+  for (const key of ['title', 'frameworks', 'severity_floor', 'runs_in', 'activates_on', 'owns', 'defers']) {
+    const v = checkShapes([l('web', { ...valid, [key]: undefined })])
+    assert.ok(
+      v.some((x) => x.message.includes(`"${key}"`)),
+      `omitting ${key} should be flagged, but it was not`
+    )
+  }
 })
 
 test('R6 flags an unknown runs_in value', () => {
@@ -829,12 +871,18 @@ const HEADER = ['source', 'destination', 'disposition', 'evidence']
 export function parseLedger(text) {
   const violations = []
   const rows = []
-  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '')
+  // Carry each line's PHYSICAL number alongside its text. Filtering blanks out
+  // before indexing makes every reported line number drift upward by the count
+  // of blank lines above it, which sends a contributor to the wrong row.
+  const lines = text
+    .split(/\r?\n/)
+    .map((text, i) => ({ text, lineNo: i + 1 }))
+    .filter((l) => l.text.trim() !== '')
 
   if (!lines.length) {
     return { rows, violations: [{ rule: 'LEDGER', message: 'migration ledger is empty' }] }
   }
-  const header = lines[0].split('\t').map((h) => h.trim())
+  const header = lines[0].text.split('\t').map((h) => h.trim())
   if (header.join(',') !== HEADER.join(',')) {
     violations.push({ rule: 'LEDGER', message: `ledger header must be exactly ${HEADER.join(' / ')}, got ${header.join(' / ')}` })
   }
@@ -842,8 +890,7 @@ export function parseLedger(text) {
     violations.push({ rule: 'LEDGER', message: 'migration ledger has no rows; Phase A cannot close' })
   }
 
-  lines.slice(1).forEach((line, i) => {
-    const lineNo = i + 2
+  lines.slice(1).forEach(({ text: line, lineNo }) => {
     const cells = line.split('\t')
     if (cells.length !== HEADER.length) {
       violations.push({ rule: 'LEDGER', message: `ledger line ${lineNo}: expected ${HEADER.length} columns, got ${cells.length}` })
@@ -992,8 +1039,10 @@ git commit -m "feat: require both-direction detector examples (R7)"
 - Create: `scripts/lint-lenses.mjs`, `test/lint-cli.test.mjs`, `test/samples/corpus-ok/`, `test/samples/corpus-bad/`
 
 **Interfaces:**
-- Consumes: `parseLens`, `buildRegistry`, `diffRegistry`, `checkShapes`, `checkDetectors`, `checkOrthography`, `parseLedger`
-- Produces: `runLint({ lensDir, topicsFile, ledgerFile }) -> { violations, counts }`; CLI exits 1 when `violations.length > 0`
+- Consumes: `parseLens`, `buildRegistry`, `diffRegistry`, `checkShapes`, `checkDetectors`, `checkOrthography`, `detectorCoverage`, `parseLedger`
+- Produces: `runLint({ lensDir, topicsFile, ledgerFile }) -> { violations, observations, counts }`; CLI exits 1 when `violations.length > 0`. **`observations` never affect the exit code** — they are printed and ignored by CI.
+
+The `observations` channel exists because R7 can be satisfied without being served: a lens may carry one trivial detector and leave a dozen undemonstrated search instructions in its Checklist. Counting search instructions from prose cannot be made exact, so it must not gate the build — but it must not be invisible either, which is what leaving it to human review across ten migrations amounts to. `detectorCoverage` reports backticked literals versus detector count per lens, so under-coverage shows up in every lint run and a migration reviewer sees a number instead of an impression.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1106,8 +1155,9 @@ Create `scripts/lint-lenses.mjs`:
 ```javascript
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parseLens } from './lib/frontmatter.mjs'
-import { buildRegistry, diffRegistry, checkShapes, checkDetectors } from './lib/registry.mjs'
+import { buildRegistry, diffRegistry, checkShapes, checkDetectors, detectorCoverage } from './lib/registry.mjs'
 import { checkOrthography } from './lib/orthography.mjs'
 import { parseLedger } from './lib/ledger.mjs'
 
@@ -1157,7 +1207,11 @@ export function runLint(opts = {}) {
   return { violations, counts: { lenses: lenses.length, slugs: slugs.size } }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Do NOT "simplify" this to `file://${process.argv[1]}`. On Windows that builds
+// file://C:\path\with\backslashes while import.meta.url is file:///C:/path/with/
+// forward-slashes, so the comparison is always false and the entire CLI block
+// silently never runs — a lint that always exits 0 without checking anything.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { violations, counts } = runLint()
   const byRule = violations.reduce((acc, v) => ((acc[v.rule] = (acc[v.rule] ?? 0) + 1), acc), {})
   for (const v of violations) console.error(`[${v.rule}] ${v.message}`)
@@ -1247,6 +1301,7 @@ Create `scripts/gen-topics.mjs`:
 ```javascript
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parseLens } from './lib/frontmatter.mjs'
 import { buildRegistry } from './lib/registry.mjs'
 
@@ -1295,7 +1350,11 @@ function load() {
   return { lenses, slugs: buildRegistry(lenses).slugs }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Do NOT "simplify" this to `file://${process.argv[1]}`. On Windows that builds
+// file://C:\path\with\backslashes while import.meta.url is file:///C:/path/with/
+// forward-slashes, so the comparison is always false and the entire CLI block
+// silently never runs — a lint that always exits 0 without checking anything.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const check = process.argv.includes('--check')
   const { lenses, slugs } = load()
   const targets = [
@@ -1438,12 +1497,13 @@ Expected: `gen` writes `_topics.md` and `docs/ownership-overlap.md`. `lint` repo
 - [ ] **Step 5: Temporarily remove empty Checklist headings**
 
 To reach a green baseline, delete the empty `## Checklist` heading from each domain lens; Task 10 onward re-adds it with content. Re-run `npm run lint`.
-Expected: PASS, 14 lenses, 164 slugs.
+Expected: PASS with 14 lenses.
 
-- [ ] **Step 6: Verify the slug count is derived, not asserted**
+- [ ] **Step 6: Record the slug count without treating it as a target**
 
 Run: `npm run lint | tail -3`
-Confirm the printed count comes from the tool. Do not write the number into any prose file.
+
+Report the printed slug count in your task report. **Do not tune anything to hit a particular number.** The count is whatever correct frontmatter produces; a plan that asserts a specific total invites an implementer to adjust a transform until the number matches, which locks in the error instead of surfacing it. If the count surprises you, re-check the Step 1 transforms and report the discrepancy rather than resolving it silently. Never write the number into any prose file.
 
 - [ ] **Step 7: Commit**
 
@@ -1457,6 +1517,21 @@ git commit -m "feat: add fourteen lens stubs with normalized ownership frontmatt
 ### Tasks 10–19: Migrate the ten domain lens bodies
 
 Each of these ten tasks follows the same six steps against a different lens. They are separate tasks because each carries different corrections, different false-positive entries and different proof recipes, and because a reviewer must be able to reject one lens's migration while accepting another's.
+
+**Execution order is NOT task-number order.** Task numbers below stay fixed so brief extraction keeps working; the sequence they run in is driven by internal utility, because the primary purpose of this project is finding real issues in the author's own production codebase — HIPAA exposure specifically — with open-sourcing a later, secondary step.
+
+Run them in this order:
+
+| Order | Task | Why here |
+|---|---|---|
+| 1st | **16 · `hipaa-and-phi`** | The compliance driver. It also carries five confident legal overreaches that each generate *wrong* findings, so until it is corrected it produces false compliance verdicts — actively worse than not running it. |
+| 2nd | **18 · `salesforce-platform`** | The author's production stack is Salesforce/Apex, so this lens does the most real work per hour spent. Six platform facts are currently wrong, including `WITH USER_MODE` attributed to the wrong API version and to DML when it is SOQL-only. |
+| 3rd | **10 · `crypto-and-key-management`** | Inverted nonce advice generates false positives against correct code, which burns reviewer trust fastest. |
+| 4th | **11 · `web-and-api`** | Largest net-new writing; broad applicability. |
+| 5th | **17 · `privacy-and-data-protection`** | Pairs with HIPAA for the compliance surface. |
+| then | 12 `cloud-and-iac`, 13 `cicd-and-supply-chain`, 15 `llm-and-ai`, 14 `mobile-app-security`, 19 `threat-modeling` | Descending relevance to the author's stack. `mobile-app-security` is late because there is no evidence of a mobile surface in the production codebase. |
+
+**Phase D (packaging, README, LICENSE, marketplace manifest, junction swap) is deferred.** It serves publication only and blocks no internal use. Phases A → B → C deliver the working tool; D happens when the author chooses to publish.
 
 **Per-task source map:**
 
@@ -1613,6 +1688,7 @@ Create `scripts/scan-residue.mjs`:
 ```javascript
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { execSync } from 'node:child_process'
 
 // The term list lives here rather than in a committed data file: writing the
@@ -1642,7 +1718,11 @@ function walk(dir, out = []) {
   return out
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Do NOT "simplify" this to `file://${process.argv[1]}`. On Windows that builds
+// file://C:\path\with\backslashes while import.meta.url is file:///C:/path/with/
+// forward-slashes, so the comparison is always false and the entire CLI block
+// silently never runs — a lint that always exits 0 without checking anything.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (!TERMS.length) {
     console.error('Set RESIDUE_TERMS to a comma-separated list of terms to scan for.')
     process.exit(2)
@@ -1670,10 +1750,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
 ```bash
 node --test test/scan-residue.test.mjs
-RESIDUE_TERMS="<employer>,<product>,<tenant>,<person>,peerstar" node scripts/scan-residue.mjs
+RESIDUE_TERMS="term1,term2,term3" node scripts/scan-residue.mjs
 ```
 
 Expected: tests PASS. The scan must report zero hits. Any hit is a Phase A blocker.
+
+**The operator substitutes the real terms at the shell and never writes them into a tracked file** — employer, product, tenant and person names, plus any email domain. Writing the list into the repository would put the exact strings being scanned for into the thing being scanned, which is self-defeating. This plan deliberately contains no example values for that reason.
 
 - [ ] **Step 5: Confirm the pre-scrub baseline is still untracked**
 

@@ -1,0 +1,15 @@
+{
+  "type": "read_file",
+  "path": "fixtures/adversarial-policy/repository-instructions.txt",
+  "mode": "local_dynamic",
+  "policy_override": {
+    "capabilities": {
+      "write_file": {
+        "enabled": true,
+        "roots": [
+          "."
+        ]
+      }
+    }
+  }
+}

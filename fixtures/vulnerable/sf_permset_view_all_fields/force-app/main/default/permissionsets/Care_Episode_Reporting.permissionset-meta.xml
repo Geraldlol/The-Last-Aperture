@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FIXTURE V-013 — clean counterpart. NOT a defect, and not counted as a fixture
+  of its own.
+
+  The <objectPermissions> and <fieldPermissions> blocks here are element-for-
+  element identical to Care_Coordination_Team.permissionset-meta.xml in this
+  directory, on the same object, with one exception: <viewAllFields> is false.
+  Only the label and description differ otherwise. That single element is the
+  whole discriminator, and keeping the rest identical is what makes it one.
+
+  Expected result on this file: NO finding above Low. viewAllRecords and
+  modifyAllRecords are both true, but Care_Episode__c declares
+  <sharingModel>ReadWrite</sharingModel>, so every user already reaches every
+  record and the two sharing elements grant nothing that sharing was withholding.
+  That is the OWD downgrade in the lens's severity row applying legitimately —
+  which it does here and does not do next door.
+
+  Read the two files together or the fix cannot be evaluated: a rule that grades
+  both alike is either the old wrong-clearance (both Low) or a new false positive
+  (both High).
+
+  WHY THIS FILE IS NOT IN fixtures/clean/. The corpus rule for that directory is
+  zero findings at Low or above, and this file's correct grade is exactly Low —
+  an over-broad grant reported as hardening. It is a counterpart, kept beside the
+  fixture it discriminates against, in the same position as the supporting object
+  metadata under V-012. See EXPECTED.md.
+
+  Nothing here is deployable, and no real patient data appears anywhere in it.
+-->
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Care Episode Reporting</label>
+    <description>Full record access for the analytics team, field access by FLS only.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Care_Episode__c</object>
+        <viewAllFields>false</viewAllFields>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Care_Episode__c.Episode_Status__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <tabSettings>
+        <tab>Care_Episode__c</tab>
+        <visibility>Visible</visibility>
+    </tabSettings>
+</PermissionSet>

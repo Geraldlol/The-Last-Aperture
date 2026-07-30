@@ -1,0 +1,33 @@
+// C-041 — clean database conformance fixture.
+// Lens: database-and-data-stores
+// Topic: database-native-authorization-and-tenant-isolation
+// Expected findings at Low or above: zero.
+// Get, list, create, and update have operation-specific tenant conditions; the
+// update rule permits only named presentation fields and therefore cannot
+// mutate tenantId or admin.
+// STATIC ONLY: no Firebase project, CLI configuration, or deployment target.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /organizations/{organizationId}/members/{memberId} {
+      allow get: if request.auth != null
+        && resource.data.tenantId == request.auth.token.tenantId;
+
+      allow list: if request.auth != null
+        && resource.data.tenantId == request.auth.token.tenantId;
+
+      allow create: if request.auth != null
+        && request.resource.data.tenantId == request.auth.token.tenantId
+        && request.resource.data.admin == false;
+
+      allow update: if request.auth != null
+        && resource.data.tenantId == request.auth.token.tenantId
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['displayName', 'timezone']);
+
+      allow delete: if false;
+    }
+  }
+}

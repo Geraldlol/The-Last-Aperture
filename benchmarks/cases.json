@@ -1,0 +1,709 @@
+{
+  "schema_version": 1,
+  "generated_from": [
+    "fixtures/EXPECTED.md",
+    "fixtures/OWNERSHIP.tsv"
+  ],
+  "cases": [
+    {
+      "case_id": "C-001",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/jwt_kid_static_jwks.py"
+      ],
+      "manifest_fixture_label": "jwt_kid_static_jwks.py",
+      "description": "kid-injection / key-source injection"
+    },
+    {
+      "case_id": "C-002",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/crypto_util.go"
+      ],
+      "manifest_fixture_label": "crypto_util.go",
+      "description": "CWE-327 MD5 + CWE-208 timing"
+    },
+    {
+      "case_id": "C-003",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/reset_token.ts"
+      ],
+      "manifest_fixture_label": "reset_token.ts",
+      "description": "predictable reset token"
+    },
+    {
+      "case_id": "C-004",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/.github/workflows/pr_label_comment.yml"
+      ],
+      "manifest_fixture_label": ".github/workflows/pr_label_comment.yml",
+      "description": "pwn-request Critical"
+    },
+    {
+      "case_id": "C-005",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/force-app/main/default/classes/ReportColumnQuery.cls"
+      ],
+      "manifest_fixture_label": "force-app/.../ReportColumnQuery.cls",
+      "description": "SOQL injection"
+    },
+    {
+      "case_id": "C-006",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/android/app/build.gradle",
+        "clean/android/app/src/**",
+        "clean/android/babel.config.js",
+        "clean/android/metro.config.js"
+      ],
+      "manifest_fixture_label": "android/**` (7 files)",
+      "description": "trust-all TLS in a shipped app"
+    },
+    {
+      "case_id": "C-007",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/network_public_alb.tf"
+      ],
+      "manifest_fixture_label": "network_public_alb.tf",
+      "description": "SSH open to the world + exposed DB"
+    },
+    {
+      "case_id": "C-008",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/IconMessage.tsx"
+      ],
+      "manifest_fixture_label": "IconMessage.tsx",
+      "description": "XSS via model output"
+    },
+    {
+      "case_id": "C-009",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/cloud_iam_kms_s3_oac.tf"
+      ],
+      "manifest_fixture_label": "cloud_iam_kms_s3_oac.tf",
+      "description": "four separate IAM Criticals"
+    },
+    {
+      "case_id": "C-010",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/report_export.py"
+      ],
+      "manifest_fixture_label": "report_export.py",
+      "description": "f-string SQL injection"
+    },
+    {
+      "case_id": "C-011",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/PrefsParser.java"
+      ],
+      "manifest_fixture_label": "PrefsParser.java",
+      "description": "swallowed exceptions + weakened SecureRandom"
+    },
+    {
+      "case_id": "C-012",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/CbcThenHmac.java"
+      ],
+      "manifest_fixture_label": "CbcThenHmac.java",
+      "description": "hand-rolled AES-CBC"
+    },
+    {
+      "case_id": "C-013",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/tests/test_local_emulator_tls.py"
+      ],
+      "manifest_fixture_label": "tests/test_local_emulator_tls.py",
+      "description": "`verify=False` Critical"
+    },
+    {
+      "case_id": "C-014",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/egress_confined_pod.yaml"
+      ],
+      "manifest_fixture_label": "egress_confined_pod.yaml",
+      "description": "SSRF deny-list omitting loopback; container as root"
+    },
+    {
+      "case_id": "C-015",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/force-app/main/default/classes/ShippingRuleRollup.cls",
+        "clean/force-app/main/default/objects/Shipping_Zone__c/Shipping_Zone__c.object-meta.xml"
+      ],
+      "manifest_fixture_label": "force-app/.../ShippingRuleRollup.cls` + `objects/Shipping_Zone__c/…",
+      "description": "`without sharing` bypass"
+    },
+    {
+      "case_id": "C-016",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/replay_and_consent.tsx"
+      ],
+      "manifest_fixture_label": "replay_and_consent.tsx",
+      "description": "three replay SDKs + a pre-consent tag"
+    },
+    {
+      "case_id": "C-017",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/tests/checkout.spec.ts"
+      ],
+      "manifest_fixture_label": "tests/checkout.spec.ts",
+      "description": "PCI breach — three PANs"
+    },
+    {
+      "case_id": "C-018",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/chart_view.py"
+      ],
+      "manifest_fixture_label": "chart_view.py",
+      "description": "minimum-necessary + PHI-in-URL Critical"
+    },
+    {
+      "case_id": "C-019",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/seeds/synthetic_patients.json"
+      ],
+      "manifest_fixture_label": "seeds/synthetic_patients.json",
+      "description": "production ePHI in dev"
+    },
+    {
+      "case_id": "C-020",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/invoice_api.ts"
+      ],
+      "manifest_fixture_label": "invoice_api.ts",
+      "description": "seven separate web reflexes"
+    },
+    {
+      "case_id": "C-021",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/llm_support_agent.py"
+      ],
+      "manifest_fixture_label": "llm_support_agent.py",
+      "description": "prompt injection, filterless RAG, unapproved destructive tool"
+    },
+    {
+      "case_id": "C-022",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/ledger_refund.py"
+      ],
+      "manifest_fixture_label": "ledger_refund.py",
+      "description": "five business-logic defects"
+    },
+    {
+      "case_id": "C-023",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/lib_manifest/**"
+      ],
+      "manifest_fixture_label": "lib_manifest/{package.json,.npmrc}",
+      "description": "no lockfile, not using `npm ci`"
+    },
+    {
+      "case_id": "C-024",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/settings_dev.py"
+      ],
+      "manifest_fixture_label": "settings_dev.py",
+      "description": "`DEBUG = True`, `ALLOWED_HOSTS = [\"*\"]`, hardcoded key"
+    },
+    {
+      "case_id": "C-025",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/gen/**"
+      ],
+      "manifest_fixture_label": "gen/api_client.gen.ts` + `gen/.gitattributes",
+      "description": "five tells in ninety lines"
+    },
+    {
+      "case_id": "C-026",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/hs256_service_token.py"
+      ],
+      "manifest_fixture_label": "hs256_service_token.py",
+      "description": "HS256, ECB, no-nonce API, counter nonce"
+    },
+    {
+      "case_id": "C-027",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/phi_logging.py"
+      ],
+      "manifest_fixture_label": "phi_logging.py",
+      "description": "PHI in logs, telemetry capturing bodies"
+    },
+    {
+      "case_id": "C-028",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/marketing_landing.tsx"
+      ],
+      "manifest_fixture_label": "marketing_landing.tsx",
+      "description": "tracking pixel in a healthcare app"
+    },
+    {
+      "case_id": "C-029",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/retention_purge.py"
+      ],
+      "manifest_fixture_label": "retention_purge.py",
+      "description": "soft delete, no erasure"
+    },
+    {
+      "case_id": "C-030",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/android/app/build.gradle",
+        "clean/android/babel.config.js",
+        "clean/android/metro.config.js",
+        "clean/mobile_prefs.tsx"
+      ],
+      "manifest_fixture_label": "mobile_prefs.tsx",
+      "description": "`__DEV__` block, AsyncStorage, a key in config"
+    },
+    {
+      "case_id": "C-031",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/force-app/main/default/lwc/noteRecordPanel/**"
+      ],
+      "manifest_fixture_label": "force-app/.../lwc/noteRecordPanel/*",
+      "description": "no FLS check anywhere"
+    },
+    {
+      "case_id": "C-032",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/share_link.py"
+      ],
+      "manifest_fixture_label": "share_link.py",
+      "description": "\"anyone with the link can access it\""
+    },
+    {
+      "case_id": "C-033",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/ApexWebhookVerifier.cls"
+      ],
+      "manifest_fixture_label": "ApexWebhookVerifier.cls",
+      "description": "CWE-208 timing-unsafe signature comparison — the fixture intentionally omits the built-in safe-list member"
+    },
+    {
+      "case_id": "C-034",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/azure_private_endpoint.bicep"
+      ],
+      "manifest_fixture_label": "azure_private_endpoint.bicep",
+      "description": "public data plane and missing diagnostic settings"
+    },
+    {
+      "case_id": "C-035",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/telemetry_vendor_bundle/**"
+      ],
+      "manifest_fixture_label": "telemetry_vendor_bundle/**` (5 files)",
+      "description": "tracker strings on an ePHI-shaped portal"
+    },
+    {
+      "case_id": "C-036",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/agent_gated_runner.py"
+      ],
+      "manifest_fixture_label": "agent_gated_runner.py",
+      "description": "an autonomous coding agent with Edit/Write/Bash authority, untrusted ticket text interpolated into its prompt, and a `git push` in the file — the mirror of V-015"
+    },
+    {
+      "case_id": "C-037",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/sqlserver_rls_cdc_export.sql"
+      ],
+      "manifest_fixture_label": "database/sqlserver_rls_cdc_export.sql",
+      "description": "RLS on the source beside a CDC export"
+    },
+    {
+      "case_id": "C-038",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/mysql_definer_updatable_view.sql"
+      ],
+      "manifest_fixture_label": "database/mysql_definer_updatable_view.sql",
+      "description": "A writable `SQL SECURITY DEFINER` tenant view"
+    },
+    {
+      "case_id": "C-039",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/mongodb_additive_roles.json"
+      ],
+      "manifest_fixture_label": "database/mongodb_additive_roles.json",
+      "description": "A tenant-filtered view and custom role"
+    },
+    {
+      "case_id": "C-040",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/redis_broad_acl.acl"
+      ],
+      "manifest_fixture_label": "database/redis_broad_acl.acl",
+      "description": "A Redis application principal with read/write commands"
+    },
+    {
+      "case_id": "C-041",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/firestore_auth_only.rules"
+      ],
+      "manifest_fixture_label": "database/firestore_auth_only.rules",
+      "description": "Authenticated get/list/create/update rules"
+    },
+    {
+      "case_id": "C-042",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/database/elastic_role_union.json"
+      ],
+      "manifest_fixture_label": "database/elastic_role_union.json",
+      "description": "DLS/FLS plus a filtered alias and a second role"
+    },
+    {
+      "case_id": "V-001",
+      "expectation": "vulnerable",
+      "topic": "authz-object-level",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/order_notes_route.ts"
+      ],
+      "manifest_fixture_label": "vulnerable/order_notes_route.ts",
+      "lens": "web-and-api",
+      "description": "Object-level authorization missing on a mutating route (BOLA)"
+    },
+    {
+      "case_id": "V-002",
+      "expectation": "vulnerable",
+      "topic": "injection-sql-nosql-orm",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/LedgerReportDao.java"
+      ],
+      "manifest_fixture_label": "vulnerable/LedgerReportDao.java",
+      "lens": "web-and-api",
+      "description": "SQL injection — caller text concatenated into a query string"
+    },
+    {
+      "case_id": "V-003",
+      "expectation": "vulnerable",
+      "topic": "jwt-jws-and-jwks-verification",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/jwt_session_middleware.go"
+      ],
+      "manifest_fixture_label": "vulnerable/jwt_session_middleware.go",
+      "lens": "crypto-and-key-management",
+      "description": "JWT verification with no algorithm constraint"
+    },
+    {
+      "case_id": "V-004",
+      "expectation": "vulnerable",
+      "topic": "prompt-injection",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/support_triage_agent.py"
+      ],
+      "manifest_fixture_label": "vulnerable/support_triage_agent.py",
+      "lens": "llm-and-ai",
+      "description": "Indirect prompt injection into a context holding an outbound-transmit tool"
+    },
+    {
+      "case_id": "V-005",
+      "expectation": "vulnerable",
+      "topic": "symmetric-encryption-and-nonce-handling",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/SessionSealer.cs"
+      ],
+      "manifest_fixture_label": "vulnerable/SessionSealer.cs",
+      "lens": "crypto-and-key-management",
+      "description": "Unauthenticated ciphertext — nothing authenticates the encrypt/decrypt path"
+    },
+    {
+      "case_id": "V-006",
+      "expectation": "vulnerable",
+      "topic": "hardcoded-credentials-and-key-material",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/settings_signing.py"
+      ],
+      "manifest_fixture_label": "vulnerable/settings_signing.py",
+      "lens": "crypto-and-key-management",
+      "description": "Hardcoded credential — literal default applied when the variable is unset"
+    },
+    {
+      "case_id": "V-007",
+      "expectation": "vulnerable",
+      "topic": "ssrf-application-path",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/link_preview_service.js"
+      ],
+      "manifest_fixture_label": "vulnerable/link_preview_service.js",
+      "lens": "web-and-api",
+      "description": "SSRF whose destination reaches the instance-metadata service"
+    },
+    {
+      "case_id": "V-008",
+      "expectation": "vulnerable",
+      "topic": "deserialization-and-xxe",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/session_restore.rb"
+      ],
+      "manifest_fixture_label": "vulnerable/session_restore.rb",
+      "lens": "web-and-api",
+      "description": "Unsafe deserialization of request-controlled bytes"
+    },
+    {
+      "case_id": "V-009",
+      "expectation": "vulnerable",
+      "topic": "workflow-trigger-and-script-injection",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/.github/workflows/pr-preview.yml"
+      ],
+      "manifest_fixture_label": "vulnerable/.github/workflows/pr-preview.yml",
+      "lens": "cicd-and-supply-chain",
+      "description": "Privileged trigger executing pull-request-controlled content"
+    },
+    {
+      "case_id": "V-010",
+      "expectation": "vulnerable",
+      "topic": "encryption-at-rest-configuration",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/reporting_database.tf"
+      ],
+      "manifest_fixture_label": "vulnerable/reporting_database.tf",
+      "lens": "cloud-and-iac",
+      "description": "Encryption at rest explicitly disabled"
+    },
+    {
+      "case_id": "V-011",
+      "expectation": "vulnerable",
+      "topic": "mobile-local-data-storage",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/TokenStore.kt"
+      ],
+      "manifest_fixture_label": "vulnerable/TokenStore.kt",
+      "lens": "mobile-app-security",
+      "description": "Refresh token in an unencrypted local store"
+    },
+    {
+      "case_id": "V-012",
+      "expectation": "vulnerable",
+      "topic": "apex-sharing-declaration",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/force-app/**"
+      ],
+      "manifest_fixture_label": "vulnerable/force-app/main/default/classes/InvoiceExportController.cls",
+      "lens": "salesforce-platform",
+      "description": "Record-level sharing bypass at an `@AuraEnabled` entry point"
+    },
+    {
+      "case_id": "V-013",
+      "expectation": "vulnerable",
+      "topic": "permission-set-and-profile-grants",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/sf_permset_view_all_fields/**"
+      ],
+      "manifest_fixture_label": "vulnerable/sf_permset_view_all_fields/force-app/main/default/permissionsets/Care_Coordination_Team.permissionset-meta.xml",
+      "lens": "salesforce-platform",
+      "description": "FLS bypass through an over-broad declarative grant — `viewAllFields` on the object"
+    },
+    {
+      "case_id": "V-014",
+      "expectation": "vulnerable",
+      "topic": "hmac-and-constant-time-comparison",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/WebhookSignatureEquals.cls"
+      ],
+      "manifest_fixture_label": "vulnerable/WebhookSignatureEquals.cls",
+      "lens": "crypto-and-key-management",
+      "description": "Timing-unsafe comparison of an attacker-supplied webhook signature"
+    },
+    {
+      "case_id": "V-015",
+      "expectation": "vulnerable",
+      "topic": "tool-call-authority-and-mediation",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/agent_autopush_runner.py"
+      ],
+      "manifest_fixture_label": "vulnerable/agent_autopush_runner.py",
+      "lens": "llm-and-ai",
+      "description": "An autonomous agent's write-out gate is bound to one flag while a different flag combination reaches the same commit-and-push path"
+    },
+    {
+      "case_id": "V-016",
+      "expectation": "vulnerable",
+      "topic": "network-exposure-and-segmentation",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/azure_public_data_plane.bicep"
+      ],
+      "manifest_fixture_label": "vulnerable/azure_public_data_plane.bicep",
+      "lens": "cloud-and-iac",
+      "also_acceptable_topics": [
+        "control-plane-audit-logging"
+      ],
+      "description": "**Chain fixture, declared as one.** A managed data plane reachable from the public internet — `publicNetworkAccess: 'Enabled'` plus the `0.0.0.0`–`0.0.0.0` firewall sentinel — in a deployment that contains no diagnostic setting of any kind, so nothing records who used it"
+    },
+    {
+      "case_id": "V-017",
+      "expectation": "vulnerable",
+      "topic": "database-native-authorization-and-tenant-isolation",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/database/sqlserver_rls_cdc_export.sql"
+      ],
+      "manifest_fixture_label": "vulnerable/database/sqlserver_rls_cdc_export.sql",
+      "lens": "database-and-data-stores",
+      "also_acceptable_topics": [
+        "database-replication-cdc-history-and-sharing"
+      ],
+      "description": "A row-filtered source is copied into an unfiltered CDC view granted to the bulk-export principal"
+    },
+    {
+      "case_id": "V-018",
+      "expectation": "vulnerable",
+      "topic": "database-privileged-code-and-execution-context",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/database/mysql_definer_updatable_view.sql"
+      ],
+      "manifest_fixture_label": "vulnerable/database/mysql_definer_updatable_view.sql",
+      "lens": "database-and-data-stores",
+      "description": "A writable `SQL SECURITY DEFINER` tenant view omits `CHECK OPTION`, permitting writes outside its read predicate"
+    },
+    {
+      "case_id": "V-019",
+      "expectation": "vulnerable",
+      "topic": "database-native-authorization-and-tenant-isolation",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/database/mongodb_additive_roles.json"
+      ],
+      "manifest_fixture_label": "vulnerable/database/mongodb_additive_roles.json",
+      "lens": "database-and-data-stores",
+      "description": "A restricted tenant-view role is combined with a role that can read the source collection directly"
+    },
+    {
+      "case_id": "V-020",
+      "expectation": "vulnerable",
+      "topic": "database-native-authorization-and-tenant-isolation",
+      "expected_severity": "Critical",
+      "fixture_selectors": [
+        "vulnerable/database/redis_broad_acl.acl"
+      ],
+      "manifest_fixture_label": "vulnerable/database/redis_broad_acl.acl",
+      "lens": "database-and-data-stores",
+      "also_acceptable_topics": [
+        "database-resource-governance-and-availability"
+      ],
+      "description": "The unauthenticated default user and application user can access every key, channel, and command, including administration"
+    },
+    {
+      "case_id": "V-021",
+      "expectation": "vulnerable",
+      "topic": "database-native-authorization-and-tenant-isolation",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/database/firestore_auth_only.rules"
+      ],
+      "manifest_fixture_label": "vulnerable/database/firestore_auth_only.rules",
+      "lens": "database-and-data-stores",
+      "description": "Authentication alone grants get, list, create, and update while `tenantId` and `admin` remain caller-mutable"
+    },
+    {
+      "case_id": "V-022",
+      "expectation": "vulnerable",
+      "topic": "database-native-authorization-and-tenant-isolation",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/database/elastic_role_union.json"
+      ],
+      "manifest_fixture_label": "vulnerable/database/elastic_role_union.json",
+      "lens": "database-and-data-stores",
+      "description": "An unrestricted secondary role defeats DLS/FLS on the same index while a filtered alias creates a false boundary"
+    }
+  ]
+}

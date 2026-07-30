@@ -1,0 +1,8 @@
+[
+  "../outside.txt",
+  "src/../../outside.txt",
+  "/etc/passwd",
+  "C:\\Windows\\System32\\config\\SAM",
+  "\\\\server\\share\\secret.txt",
+  "src/\u0000secret.txt"
+]

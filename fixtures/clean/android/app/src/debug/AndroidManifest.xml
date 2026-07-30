@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  C-006 — clean fixture. Expected findings at Low or above: ZERO.
+
+  Why this pattern-matches as vulnerable:
+    `android:usesCleartextTraffic="true"` is a Critical-adjacent literal, and
+    every cleartext sweep in mobile-app-security hits it. The sibling
+    network_security_config.xml carries a <debug-overrides> trust anchor, which
+    is the other half of the reflex finding.
+
+  Why it is not a finding:
+    1. PATH. This manifest is in `app/src/debug/`. Gradle merges a source-set
+       manifest only into the variant that names it, so nothing here reaches the
+       release APK. The mobile lens's own proof recipe insists the merged
+       RELEASE manifest is the artifact to test, for exactly this reason.
+    2. `android:usesCleartextTraffic` is IGNORED on API 24+ whenever
+       `android:networkSecurityConfig` is also declared on the same
+       <application> — which it is, on the line below it. Even in the debug
+       variant this attribute is dead configuration.
+    3. The release variant is not debuggable (`app/build.gradle`,
+       `buildTypes { release { debuggable false } }`), so <debug-overrides> in
+       the referenced config cannot be live in a shipped build.
+
+  False-positive entries exercised:
+    mobile-app-security (5)  <debug-overrides>, `usesCleartextTraffic` beside a
+                             declared networkSecurityConfig, and the
+                             debug-source-set path — plus the precondition the
+                             entry demands, `android:debuggable` on the release
+                             variant, established in app/build.gradle
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Debug-only: the local mock API terminates plaintext HTTP on the emulator
+      host loopback (10.0.2.2). Kept as an explicit attribute so a reader of the
+      debug variant sees the intent, even though the attribute is inert next to
+      the declared network security config.
+    -->
+    <application
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config_debug" />
+
+</manifest>

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/benchmark-input.schema.json",
+  "title": "Red Team Audit benchmark evaluation input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "primary_run_id",
+    "observedFindings",
+    "repeatedRuns"
+  ],
+  "properties": {
+    "primary_run_id": {
+      "$ref": "#/$defs/runId"
+    },
+    "observedFindings": {
+      "type": "array",
+      "maxItems": 4096
+    },
+    "caseOutcomes": {
+      "type": "array",
+      "maxItems": 4096
+    },
+    "repeatedRuns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_id",
+          "findings"
+        ],
+        "properties": {
+          "run_id": {
+            "$ref": "#/$defs/runId"
+          },
+          "findings": {
+            "type": "array",
+            "maxItems": 4096
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "\\S"
+    }
+  }
+}

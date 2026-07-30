@@ -1,0 +1,11 @@
+# C-040 — clean database conformance fixture.
+# Lens: database-and-data-stores
+# Topics: database-native-authorization-and-tenant-isolation;
+#         database-resource-governance-and-availability
+# Expected findings at Low or above: zero.
+# The default user is disabled; the application user has one tenant key pattern,
+# no Pub/Sub channels, and an explicit command allowlist without admin commands.
+# STATIC ONLY: this is an ACL-shaped fixture, not a redis.conf or load command.
+
+user default reset off resetkeys resetchannels -@all
+user tenant_api reset on >REPLACE-ME-BEFORE-USE ~tenant:{tenant-a}:* resetchannels -@all +get +mget +set +del +expire

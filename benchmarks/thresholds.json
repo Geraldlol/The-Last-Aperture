@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "profile": "initial-release",
+  "description": "Development-corpus release gate. Zero tolerance for clean-case regressions, false clears, unexpected findings, and schema-invalid records; provisional capability and stability floors require repeated measurement.",
+  "requirements": [
+    {
+      "id": "minimum-case-count",
+      "metric": "counts.cases",
+      "operator": ">=",
+      "value": 64
+    },
+    {
+      "id": "minimum-vulnerable-case-count",
+      "metric": "counts.vulnerable_cases",
+      "operator": ">=",
+      "value": 22
+    },
+    {
+      "id": "minimum-clean-case-count",
+      "metric": "counts.clean_cases",
+      "operator": ">=",
+      "value": 42
+    },
+    {
+      "id": "clean-case-precision",
+      "metric": "rates.precision",
+      "operator": "==",
+      "value": 1
+    },
+    {
+      "id": "minimum-vulnerable-recall",
+      "metric": "rates.recall",
+      "operator": ">=",
+      "value": 0.8
+    },
+    {
+      "id": "minimum-vulnerable-topic-recall",
+      "metric": "rates.minimum_vulnerable_topic_recall",
+      "operator": ">=",
+      "value": 0.8
+    },
+    {
+      "id": "zero-clean-case-fpr",
+      "metric": "rates.fpr",
+      "operator": "==",
+      "value": 0
+    },
+    {
+      "id": "zero-unlisted-finding-precision-debt",
+      "metric": "rates.finding_precision",
+      "operator": "==",
+      "value": 1
+    },
+    {
+      "id": "minimum-severity-accuracy",
+      "metric": "rates.severity_accuracy",
+      "operator": ">=",
+      "value": 0.8
+    },
+    {
+      "id": "zero-false-clears",
+      "metric": "counts.false_clears",
+      "operator": "==",
+      "value": 0
+    },
+    {
+      "id": "zero-schema-invalid-records",
+      "metric": "counts.schema_invalid",
+      "operator": "==",
+      "value": 0
+    },
+    {
+      "id": "zero-unexpected-findings",
+      "metric": "counts.unexpected_findings",
+      "operator": "==",
+      "value": 0
+    },
+    {
+      "id": "zero-clean-case-findings",
+      "metric": "counts.false_positive_findings",
+      "operator": "==",
+      "value": 0
+    },
+    {
+      "id": "minimum-repeated-runs",
+      "metric": "stability.run_count",
+      "operator": ">=",
+      "value": 3
+    },
+    {
+      "id": "minimum-all-run-fingerprint-stability",
+      "metric": "stability.fingerprint_stability",
+      "operator": ">=",
+      "value": 0.75
+    },
+    {
+      "id": "minimum-mean-pairwise-jaccard",
+      "metric": "stability.mean_pairwise_jaccard",
+      "operator": ">=",
+      "value": 0.8
+    },
+    {
+      "id": "minimum-worst-pair-jaccard",
+      "metric": "stability.minimum_pairwise_jaccard",
+      "operator": ">=",
+      "value": 0.7
+    }
+  ]
+}
