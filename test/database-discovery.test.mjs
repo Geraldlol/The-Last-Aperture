@@ -169,6 +169,40 @@ test('client dependency and infrastructure API versions never become server vers
   assert.match(serialized, /"engine_version_candidates": \[\s+"16"/)
 })
 
+test('same-symbol declared resources with different engines retain distinct node identities', () => {
+  const graph = discoverDatabaseGraph([
+    text('infra/databases.tf', `
+      resource "aws_db_instance" "shared" {
+        engine = "mysql"
+        engine_version = "8.4.4"
+      }
+
+      resource "aws_db_instance" "shared" {
+        engine = "sqlserver-se"
+        engine_version = "16.00.4145.4.v1"
+      }
+    `),
+  ])
+
+  assert.equal(graph.store_candidates.length, 2)
+  assert.deepEqual(
+    graph.store_candidates.map((candidate) => ({
+      engines: candidate.engine_candidates,
+      versions: candidate.engine_version_candidates,
+    })).sort((left, right) =>
+      left.engines[0].localeCompare(right.engines[0])),
+    [
+      { engines: ['sqlserver'], versions: ['16.00.4145.4.v1'] },
+      { engines: ['mysql'], versions: ['8.4.4'] },
+    ].sort((left, right) =>
+      left.engines[0].localeCompare(right.engines[0])),
+  )
+  assert.equal(
+    new Set(graph.store_candidates.map((candidate) => candidate.anchor_node_id)).size,
+    2,
+  )
+})
+
 test('local Redis and Azure Redis resources remain separate protection domains', () => {
   const graph = discoverDatabaseGraph([
     text('scheduler-app/docker-compose.yml', `

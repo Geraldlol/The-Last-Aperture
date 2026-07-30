@@ -127,12 +127,13 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, /^red-team-audit 0\.6\.0/m)
+  assert.match(output, /^red-team-audit 0\.7\.0/m)
   assert.match(output, /red-team-audit plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)
   assert.match(output, /--max-closure-rounds <count>/)
   assert.match(output, /--require-source-closure/)
+  assert.match(output, /--database-conformance <complete-bundle>/)
   assert.match(output, /red-team-audit ingest-batch/)
   assert.match(output, /red-team-audit unlock/)
   assert.match(output, /red-team-audit attest/)

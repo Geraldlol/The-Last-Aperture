@@ -12,17 +12,32 @@ synthetic reproduction.
 
 ## Supported security boundary
 
-Version 0.6.0 supports static, read-only planning, externally produced job
+Version 0.7.0 supports static, read-only planning, externally produced job
 results, and an opt-in sealed provider runner. It never executes target code or
 grants the provider a target mount, host network, credentials, or arbitrary
 host process authority.
 
-For run schema 4, database providers contribute only shard-local store claims.
+For run schemas 4 and 5, database providers contribute only shard-local store claims.
 The controller binds each contribution to its planned job and input digest,
 rejects cross-shard evidence or profiling, and synthesizes a store profile only
 after every base fan-out job has completed. Provider semantic claims remain
 declarations; authentication and deterministic synthesis do not prove that the
 analysis was correct.
+
+Version 0.7 also provides a separate opt-in database conformance lab. It runs
+only controller-owned synthetic SQL in one digest-pinned disposable reference
+engine at a time. The container has no external network, published ports, host
+mounts, inherited proxy configuration, or target credentials; it uses a
+read-only root, non-root engine user, dropped capabilities,
+no-new-privileges, built-in seccomp, bounded tmpfs/resources/output/wall time,
+and verified exact-container removal. Docker remains a shared-kernel boundary.
+
+Lab transcripts, engine identities, scenario results, and cleanup evidence are
+content-addressed. A complete two-engine result may be copied into schema-5
+audit plans only as `CONTROLLER_OBSERVED_DISPOSABLE_ENGINE_BEHAVIOR`; it is
+`UNANCHORED` unless separately protected, fixes
+`target_deployment_proven: false`, and cannot elevate target proof, store
+coverage, or finding severity.
 
 The pure policy kernel remains an authorization decision component, not an
 isolation mechanism. The reference runner uses a local Docker/OCI boundary
@@ -83,6 +98,8 @@ when the repository may be modified by a hostile local process.
   must be handled as sensitive source archives.
 - Keep provider configuration, Docker executable, and Ed25519 private key
   outside both the target and run bundle.
+- Keep mutable database conformance bundles and their trusted configuration
+  outside the project and audited target. Use synthetic data only.
 - Keep root-manifest signing keys, verification keys, and detached attestations
   outside both the target and run bundle. Store attestations under independent
   access control if they are used as the trust anchor.

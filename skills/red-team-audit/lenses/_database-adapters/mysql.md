@@ -180,6 +180,10 @@ Compare grants and metadata after fresh install, upgrade, rollback, and restore:
 Do not infer final state from a single `GRANT`/`REVOKE` line. Resolve all
 migrations in order and distinguish MySQL from MariaDB syntax and variables.
 
+Rule anchor:
+
+- `db.migration.mysql.runtime-ddl-separation`
+
 ## Transactions, concurrency, and integrity
 
 Record storage engine for every protected table. InnoDB supplies transactions
@@ -218,6 +222,11 @@ Core MySQL has no general temporal-table authorization surface. Application
 history and audit tables are ordinary tables and require the same view/grant
 closure as current data.
 
+Rule anchors:
+
+- `db.copy.mysql.binlog-reader-boundary`
+- `db.history.mysql.application-history-closure`
+
 ## Backup and restore
 
 Map `mysqldump`, MySQL Shell dump/load, physical backup, clone plugin, provider
@@ -237,6 +246,15 @@ The restore oracle compares:
 
 Do not run a provider restore or connect to a managed instance under this skill.
 Use repository-owned local fixtures or report the path `NOT_ASSESSED`.
+
+Tenant-scoped client export must use a constrained view or routine. `FILE`,
+`SELECT ... INTO OUTFILE`, `LOAD_FILE`, dump accounts, and unrestricted base
+table reads remain separate export paths.
+
+Rule anchors:
+
+- `db.restore.mysql.dump-object-coverage`
+- `db.copy.mysql.export-boundary`
 
 ## Audit and attribution
 

@@ -37,6 +37,7 @@ const COMMON_PACKET_FIELDS = new Set([
   'owned_topics',
   'known_topics',
   'store_profiles',
+  'database_conformance',
   'findings',
   'coverage',
   'candidate_ids',

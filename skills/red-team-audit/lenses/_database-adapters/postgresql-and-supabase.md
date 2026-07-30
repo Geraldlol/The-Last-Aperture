@@ -195,6 +195,11 @@ has an exposure window when deployed non-atomically. A static migration scan
 cannot prove deployed drift; it reports configuration-as-written and lists live
 catalog comparison as unassessed.
 
+Rule anchors:
+
+- `db.migration.postgresql.new-relation-policy-drift`
+- `db.migration.postgresql.runtime-ddl-separation`
+
 ## Transactions, concurrency, and integrity
 
 Inventory primary keys, tenant-qualified unique constraints, foreign keys,
@@ -229,6 +234,15 @@ table, a temporal extension, or an audit sink is tenant-filtered. A
 replication-capable principal and a runtime principal are separate actors in the
 conformance matrix.
 
+Application history tables are ordinary relations. Their owners, grants, RLS
+state, policies, triggers, and alternate readers must be closed independently
+from the current-state table.
+
+Rule anchors:
+
+- `db.copy.postgresql.replication-policy-gap`
+- `db.history.postgresql.audit-table-closure`
+
 ## Backup and restore
 
 Identify physical backup, `pg_dump`, `pg_dumpall`, provider snapshots, PITR,
@@ -247,6 +261,16 @@ The restore oracle compares:
 
 TDE/storage encryption, snapshot sharing, retention, and key restore remain
 cloud/crypto/privacy findings.
+
+Tenant-scoped client export must execute under the tenant's effective
+principal and policy. Server-side `COPY ... TO file` and broader export roles
+are separate privileged paths; a filtered application query does not constrain
+them automatically.
+
+Rule anchors:
+
+- `db.restore.postgresql.global-principal-gap`
+- `db.copy.postgresql.export-rls-boundary`
 
 ## Audit and attribution
 
