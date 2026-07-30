@@ -15,6 +15,7 @@ import {
 } from 'node:test'
 import Ajv2020 from 'ajv/dist/2020.js'
 import {
+  databaseConformanceEvidenceSchema,
   databaseDiscoverySchema,
   findingSchema,
   runSchema,
@@ -50,6 +51,7 @@ rawSchemaAjv.addSchema(findingSchema)
 rawSchemaAjv.addSchema(storeProfileSchema)
 rawSchemaAjv.addSchema(storeContributionSchema)
 rawSchemaAjv.addSchema(databaseDiscoverySchema)
+rawSchemaAjv.addSchema(databaseConformanceEvidenceSchema)
 rawSchemaAjv.addSchema(runSchema)
 const validateRawRunSchema = rawSchemaAjv.getSchema(runSchema.$id)
 
@@ -248,8 +250,8 @@ after(async () => {
   if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true })
 })
 
-test('an untouched controller-created v4 plan satisfies the run contract', () => {
-  assert.equal(plannedRun.schema_version, '4.0.0')
+test('an untouched controller-created v5 plan satisfies the run contract', () => {
+  assert.equal(plannedRun.schema_version, '5.0.0')
   assert.ok(plannedRun.coverage.shards.length >= 2)
   assert.ok(plannedRun.database_discovery.nodes.length > 0)
 

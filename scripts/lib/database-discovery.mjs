@@ -2210,6 +2210,7 @@ function observationNodeId(record, observation) {
     observation.signatureId,
     observation.token ?? '',
     observation.symbol ?? '',
+    ...(observation.engines ?? []),
   )
 }
 
@@ -2691,13 +2692,20 @@ export function validateDatabaseDiscovery(graph) {
     if (
       Array.isArray(candidate.engine_version_candidates)
       && candidate.engine_version_candidates.length > 0
-      && (
-        anchor?.kind !== 'store'
-        || candidate.engine_version_candidates.some((version) =>
-          !anchor.engine_version_candidates?.includes(version))
-      )
     ) {
-      errors.push(`store ${candidate.store_id} has a version without declared server evidence`)
+      if (anchor?.kind !== 'store') {
+        errors.push(`store ${candidate.store_id} has a version without a declared-resource anchor`)
+      } else {
+        const unanchoredVersions = candidate.engine_version_candidates.filter((version) =>
+          !anchor.engine_version_candidates?.includes(version))
+        if (unanchoredVersions.length > 0) {
+          errors.push(
+            `store ${candidate.store_id} has server versions absent from its declared-resource anchor: ${
+              unanchoredVersions.join(', ')
+            }`,
+          )
+        }
+      }
     }
   }
   const unresolvedIds = new Set()

@@ -721,6 +721,34 @@ export function renderMarkdownReport(run) {
     }
   }
 
+  const databaseConformance = run.database_conformance
+  if (databaseConformance) {
+    lines.push(
+      '### Reference database conformance',
+      '',
+      `Source run: ${inlineCode(databaseConformance.source.run_id)}  `,
+      `Source root: ${inlineCode(databaseConformance.source.root_sha256)}  `,
+      `Root authenticity: ${inlineCode(databaseConformance.root_authenticity)}  `,
+      `Assurance: ${inlineCode(databaseConformance.assurance_scope)}  `,
+      'Target deployment proven: **no**',
+      '',
+      '> These results describe digest-pinned disposable reference engines only. They do not elevate any target finding, proof tier, verification status, store profile, or deployment-coverage claim.',
+      '',
+      '| Engine | Product/version | Result | Passing scenarios | Image |',
+      '|---|---|---|---:|---|',
+    )
+    for (const engine of databaseConformance.engines) {
+      lines.push(
+        `| ${tableCell(engine.engine_id)} | ` +
+        `${tableCell(`${engine.product} ${engine.server_version}`)} | ` +
+        `${tableCell(engine.state)} | ` +
+        `${engine.scenarios.filter(({ state }) => state === 'PASSED').length}/` +
+        `${engine.scenarios.length} | ${tableCell(engine.requested_image)} |`,
+      )
+    }
+    lines.push('')
+  }
+
   const storeProfiles = run.store_profiles ?? []
   if (
     storeProfiles.length > 0

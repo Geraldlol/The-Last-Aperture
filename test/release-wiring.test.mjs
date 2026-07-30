@@ -62,3 +62,60 @@ test('the dedicated Docker gate refuses to skip when runtime inputs are absent',
     /real-Docker conformance requires RTA_DOCKER_RUNTIME and RTA_PROVIDER_IMAGE/,
   )
 })
+
+test('CI runs the digest-pinned multi-engine database conformance gate', () => {
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+
+  assert.match(workflow, /^\s{2}database-docker-conformance:$/m)
+  assert.match(
+    workflow,
+    /docker pull postgres@sha256:[a-f0-9]{64}/,
+  )
+  assert.match(
+    workflow,
+    /docker pull mysql@sha256:[a-f0-9]{64}/,
+  )
+  assert.match(
+    workflow,
+    /RTA_DOCKER_RUNTIME: \$\{\{ steps\.database-docker\.outputs\.runtime \}\}/,
+  )
+  assert.match(workflow, /run: npm run test:database:docker/)
+})
+
+test('the database Docker gate refuses to skip without its trusted runtime', () => {
+  const env = { ...process.env }
+  delete env.RTA_DOCKER_RUNTIME
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/run-database-docker-conformance.mjs'],
+    {
+      encoding: 'utf8',
+      env,
+      shell: false,
+      windowsHide: true,
+    },
+  )
+
+  assert.equal(result.status, 1)
+  assert.match(
+    result.stderr,
+    /real database conformance requires RTA_DOCKER_RUNTIME/,
+  )
+})
+
+test('release metadata exposes the 0.7 database conformance commands', () => {
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
+
+  assert.equal(packageDocument.version, '0.7.0')
+  assert.equal(lockDocument.version, '0.7.0')
+  assert.equal(lockDocument.packages[''].version, '0.7.0')
+  assert.equal(
+    packageDocument.scripts['conformance:database'],
+    'node scripts/database-conformance.mjs',
+  )
+  assert.equal(
+    packageDocument.scripts['test:database:docker'],
+    'node scripts/run-database-docker-conformance.mjs',
+  )
+})

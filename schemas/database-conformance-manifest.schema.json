@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/database-conformance-manifest.schema.json",
+  "title": "Red Team Audit database conformance scenario manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "lab_id",
+    "assurance_scope",
+    "scenarios",
+    "engines"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "docker-database-lab-v1"
+    },
+    "lab_id": {
+      "$ref": "#/$defs/id"
+    },
+    "assurance_scope": {
+      "const": "DISPOSABLE_REFERENCE_ENGINE_BEHAVIOR_ONLY"
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "title",
+          "area"
+        ],
+        "properties": {
+          "scenario_id": {
+            "$ref": "#/$defs/id"
+          },
+          "title": {
+            "$ref": "#/$defs/text"
+          },
+          "area": {
+            "enum": [
+              "authorization",
+              "session",
+              "execution",
+              "copy",
+              "migration"
+            ]
+          }
+        }
+      }
+    },
+    "engines": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "engine_id",
+          "adapter_id",
+          "product",
+          "image",
+          "expected_server_version_pattern",
+          "scenario_rules"
+        ],
+        "properties": {
+          "engine_id": {
+            "$ref": "#/$defs/id"
+          },
+          "adapter_id": {
+            "enum": [
+              "postgresql",
+              "mysql"
+            ]
+          },
+          "product": {
+            "enum": [
+              "PostgreSQL",
+              "MySQL"
+            ]
+          },
+          "image": {
+            "$ref": "#/$defs/image"
+          },
+          "expected_server_version_pattern": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^\\^"
+          },
+          "scenario_rules": {
+            "type": "array",
+            "minItems": 8,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scenario_id",
+                "adapter_rule_ids"
+              ],
+              "properties": {
+                "scenario_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "adapter_rule_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 160,
+                    "pattern": "^db\\.[a-z0-9.-]+$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9.-]+$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 512,
+      "pattern": "^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?@sha256:[a-f0-9]{64}$"
+    }
+  }
+}

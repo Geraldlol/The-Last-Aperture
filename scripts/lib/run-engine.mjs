@@ -39,8 +39,8 @@ import {
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.6.0'
-export const RUN_SCHEMA_VERSION = '4.0.0'
+export const PLATFORM_VERSION = '0.7.0'
+export const RUN_SCHEMA_VERSION = '5.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
 function sha256(value) {
@@ -399,6 +399,7 @@ export async function createRunPlan(options) {
     maxClosureRounds = options.closureOptions?.maxRounds
       ?? options.shardPolicy?.maxRounds
       ?? DEFAULT_CLOSURE_MAX_ROUNDS,
+    databaseConformanceEvidence,
   } = options
   if (!targetRoot) throw new Error('targetRoot is required')
 
@@ -470,6 +471,9 @@ export async function createRunPlan(options) {
   const policyDigest = sha256(stableJson(effectivePolicy, 0))
   const corpusDigest = lensPack.digest
   const timestamp = normalizedTimestamp(createdAt)
+  const databaseConformance = databaseConformanceEvidence
+    ? structuredClone(databaseConformanceEvidence)
+    : null
   const providerPolicy = providerPolicyProjection(
     effectivePolicy,
     policyDigest,
@@ -491,6 +495,12 @@ export async function createRunPlan(options) {
       path: 'controls/database-discovery.json',
       bytes: Buffer.from(databaseDiscoveryContent, 'utf8'),
     },
+    ...(databaseConformance
+      ? [{
+          path: 'controls/database-conformance.json',
+          bytes: Buffer.from(stableJson(databaseConformance), 'utf8'),
+        }]
+      : []),
     ...lenses.map((lens) => ({
       path: `lenses/${lens.file}`,
       bytes: Buffer.from(lens.text, 'utf8'),
@@ -527,6 +537,13 @@ export async function createRunPlan(options) {
     lens_pack_digest: corpusDigest,
     coverage_policy: coveragePolicy,
     database_discovery_digest: databaseDiscovery.digest,
+    ...(databaseConformance
+      ? {
+          database_conformance_sha256: sha256(
+            stableJson(databaseConformance, 0),
+          ),
+        }
+      : {}),
     control_snapshot_sha256: controlSnapshotMaterial.descriptor.root_sha256,
     ...(sourceSnapshotMaterial
       ? { source_snapshot_sha256: sourceSnapshotMaterial.descriptor.root_sha256 }
@@ -565,6 +582,9 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
+    ...(databaseConformance
+      ? { database_conformance: databaseConformance }
+      : {}),
     store_contributions: [],
     store_profiles: [],
     findings: [],
@@ -586,6 +606,9 @@ export async function createRunPlan(options) {
     inventory,
     activation,
     databaseDiscovery,
+    ...(databaseConformance
+      ? { databaseConformanceEvidence: databaseConformance }
+      : {}),
     lensPack,
     sealedSnapshots: {
       control: controlSnapshot,
@@ -755,6 +778,9 @@ export async function writeRunPlanBundle(plan, outputParent) {
     const databaseDiscoveryContent = serializeDatabaseDiscovery(
       plan.databaseDiscovery ?? plan.run.database_discovery,
     )
+    const databaseConformanceContent = plan.databaseConformanceEvidence
+      ? stableJson(plan.databaseConformanceEvidence)
+      : null
     const sidecarArtifacts = plan.jobSidecars.map((sidecar) => {
       const file = `${artifactToken(sidecar.job_id)}.json`
       return {
@@ -783,6 +809,7 @@ export async function writeRunPlanBundle(plan, outputParent) {
         coverageContent,
         lensPackContent,
         databaseDiscoveryContent,
+        ...(databaseConformanceContent ? [databaseConformanceContent] : []),
         ...sidecarArtifacts.map(({ content }) => content),
         ...snapshotWrites.map(({ content }) => content),
       ],
@@ -796,6 +823,12 @@ export async function writeRunPlanBundle(plan, outputParent) {
       join(staging.path, 'database-discovery.json'),
       databaseDiscoveryContent,
     )
+    if (databaseConformanceContent) {
+      await atomicWrite(
+        join(staging.path, 'database-conformance.json'),
+        databaseConformanceContent,
+      )
+    }
     for (const name of Object.keys(plan.sealedSnapshots ?? {})) {
       const snapshotDirectory = await ensureUnlinkedDirectoryComponents(
         join(staging.path, 'snapshots', name),
@@ -820,6 +853,14 @@ export async function writeRunPlanBundle(plan, outputParent) {
         'database-discovery.json',
         databaseDiscoveryContent,
       ),
+      ...(databaseConformanceContent
+        ? {
+            database_conformance: artifact(
+              'database-conformance.json',
+              databaseConformanceContent,
+            ),
+          }
+        : {}),
     }
 
     for (const { sidecar, path, content } of sidecarArtifacts) {

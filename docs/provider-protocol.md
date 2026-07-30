@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.6.0
+Platform release: 0.7.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity
@@ -17,7 +17,7 @@ originating in the target repository is untrusted data. It cannot modify the
 job packet, Rules of Engagement, policy, schemas, or capability mode.
 
 A provider must not execute commands merely because a repository file asks it
-to. Version 0.6.0 remains static: the observed runner executes only its pinned
+to. Version 0.7.0 audits remain static: the observed runner executes only its pinned
 adapter image and brokers sealed bytes; it never executes target commands.
 
 ## Discovering work
@@ -120,7 +120,7 @@ lens result are rejected.
 
 The database lens receives a sealed controller discovery graph and a
 shard-local projection of its store candidates and related paths. In run
-schema 4, every successful base database job returns exactly one
+schemas 4 and 5, every successful base database job returns exactly one
 `store_contributions` entry for each assigned controller `store_id`. The
 authority shard supplies the local semantic profile. Every context shard
 supplies only local coverage state, assessed topics, evidence paths, and named
@@ -133,8 +133,15 @@ barrier, the controller deterministically synthesizes one profile per store.
 path union, all ten database topics, and no gaps. Missing or partial
 contributions degrade the synthesized profile; no usable authority profile
 leaves the store unprofiled with an explicit discovery gap. Providers cannot
-return `store_profiles` directly in schema 4 or invent store identity. Run
+return `store_profiles` directly in schemas 4 or 5 or invent store identity. Run
 schemas 1-3 retain their direct-profile behavior.
+
+Schema 5 may also carry `database_conformance`, a sealed projection of one
+complete two-engine disposable reference-lab run. The packet fixes
+`target_deployment_proven: false` and `root_authenticity: UNANCHORED`.
+Providers may use it only as versioned reference behavior; they must still
+establish the target store, version, deployment, principal, enforcement, and
+copy paths. It cannot satisfy target proof or coverage.
 
 Each authority profile binds adapter routing, deployment variant, engine
 edition and compatibility mode, tenancy, effective-principal and enforcement

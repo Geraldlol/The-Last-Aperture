@@ -61,3 +61,25 @@ jobs:
           RTA_DOCKER_RUNTIME: ${{ steps.docker.outputs.runtime }}
           RTA_PROVIDER_IMAGE: ${{ steps.docker.outputs.image }}
         run: npm run test:provider:docker
+
+  database-docker-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Pull exact disposable database engines
+        run: |
+          docker pull postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+          docker pull mysql@sha256:8dbcf531a03aade657e181b9cf2f1d1803ce621a1d55610cb44cb531ab7d7db6
+      - name: Resolve immutable local Docker runtime
+        id: database-docker
+        shell: bash
+        run: echo "runtime=$(realpath "$(command -v docker)")" >> "$GITHUB_OUTPUT"
+      - name: Run disposable multi-engine database conformance gate
+        env:
+          RTA_DOCKER_RUNTIME: ${{ steps.database-docker.outputs.runtime }}
+        run: npm run test:database:docker
