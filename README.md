@@ -75,7 +75,8 @@ machine-load-dependent.
 
 Requirements: Node.js 20 or newer for planning and manual `next`/`ingest`.
 Observed provider execution requires Node.js 24 or newer and a local Docker
-daemon.
+daemon. The full development test suite also requires Bash and ripgrep because
+it executes selected shell probes directly from the audit lenses.
 
 ```powershell
 npm.cmd install

@@ -16,6 +16,11 @@ test('CI pins third-party actions and exercises the advertised Node floor', () =
   assert.match(workflow, /node:\s*\['20', '24'\]/)
   assert.match(workflow, /node-version:\s*\$\{\{\s*matrix\.node\s*\}\}/)
   assert.match(workflow, /- run: npm test/)
+  const ripgrepInstall = workflow.indexOf('sudo apt-get install --yes ripgrep')
+  const testRun = workflow.indexOf('- run: npm test')
+  assert.notEqual(ripgrepInstall, -1, 'CI must install ripgrep for executable shell fixtures')
+  assert.ok(ripgrepInstall < testRun, 'CI must install ripgrep before running the test suite')
+  assert.match(workflow, /^\s+rg --version$/m)
 })
 
 test('CI runs the hostile real-Docker gate with immutable image input', () => {
