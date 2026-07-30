@@ -97,6 +97,13 @@
         "$ref": "https://red-team-audit.dev/schemas/store-profile.schema.json"
       }
     },
+    "store_contributions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "https://red-team-audit.dev/schemas/store-contribution.schema.json"
+      }
+    },
     "error": {
       "type": "object",
       "additionalProperties": false,
@@ -140,6 +147,9 @@
             "maxItems": 0
           },
           "store_profiles": {
+            "maxItems": 0
+          },
+          "store_contributions": {
             "maxItems": 0
           }
         }

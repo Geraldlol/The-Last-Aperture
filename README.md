@@ -14,8 +14,8 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.4.0 adds bounded, recursively measured coverage and controller-owned
-database discovery to the sealed provider-execution foundation:
+Version 0.6.0 adds controller-owned cross-shard database-store synthesis to the
+bounded coverage, detached root-attestation, and sealed provider foundation:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -27,7 +27,8 @@ database discovery to the sealed provider-execution foundation:
 - Controller-owned, provider-neutral database evidence graphs that close over
   clients, bindings, queries, migrations, roles, policies, privileged code,
   replication, CDC, backups, restores, exports, and snapshots.
-- JSON Schema Draft 2020-12 finding, store-profile, run, RoE, and job-result contracts.
+- JSON Schema Draft 2020-12 finding, store-profile, store-contribution, run,
+  RoE, job-result, and root-attestation contracts.
 - Accumulating candidate state with immutable claims and checked transitions.
 - Fail-closed coverage: unfinished work is never rendered as a clean audit.
 - External read/write/execute/network policy decisions.
@@ -39,10 +40,13 @@ database discovery to the sealed provider-execution foundation:
   verified effective isolation settings.
 - Controller-authored byte-delivery/challenge receipts and externally keyed
   Ed25519 execution or structured failure envelopes.
+- Detached, externally pinned Ed25519 attestations over exact terminal
+  `run.json` bytes.
 - Separate `PROVIDER_DECLARED` and `CONTROLLER_OBSERVED_CONSUMPTION` coverage
   authority in run, Markdown, lifecycle, and SARIF output.
 - Separate existence and proof transitions.
-- Per-store database adapter routing and coverage profiles.
+- Per-store database adapter routing, shard-local contributions, and
+  controller-synthesized coverage profiles.
 - Read-only audit mode and an operator abort command.
 - Markdown, JSON, and SARIF 2.1 output.
 - Separate unique-file, lens/file-obligation, conceptual-gap, and raw-gap
@@ -137,6 +141,24 @@ The final bundle contains `report.md`, `results.sarif`, hash-bound
 canonical `run.json`. `coverage-plan.json` is the immutable planning snapshot;
 it is deliberately distinct from final coverage.
 
+Anchor a terminal bundle with a signing key and output path kept outside both
+the target and bundle:
+
+```powershell
+npm.cmd run audit -- attest C:\audit-runs\<run-directory> `
+  --signing-key C:\trusted\root-private.pem `
+  --out C:\trusted\attestations\<run-id>.json
+
+npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
+  --root-attestation C:\trusted\attestations\<run-id>.json `
+  --root-public-key C:\trusted\root-public.pem
+```
+
+The detached attestation binds the exact terminal `run.json` bytes, run
+identity, state, phase, and externally pinned Ed25519 key. It is suitable for
+independent immutable storage or later transparency publication. The platform
+does not yet publish to or claim the guarantees of a transparency log.
+
 The default fan-out bound is 64 files and 4 MiB of inventoried raw bytes per
 job, with up to three closure rounds. `--max-shard-files`,
 `--max-shard-bytes`, and `--max-closure-rounds` select different controller
@@ -218,7 +240,7 @@ verified sealed shards and never reopens the live target.
 
 Provider result JSON is read through an 8 MiB bounded reader before parsing.
 The result contract additionally caps one response at 65,536 examined paths and
-4,096 findings, coverage gaps, and store profiles. Bundle artifact reads and
+4,096 findings, coverage gaps, store profiles, and store contributions. Bundle artifact reads and
 generated result/report writes reject symbolic-link or reparse-point path
 components and require canonical containment beneath the run directory. A run
 manifest or individual bundle artifact is capped at 128 MiB; integrity
@@ -335,10 +357,12 @@ was provider-declared or controller-observed byte consumption; neither is
 independent semantic proof.
 
 Historical bundles remain validatable and reportable from their own hashed
-manifests after the installed lens pack advances. Active `next`, `ingest`, and
-`finalize` operations additionally require the installed trusted pack to match
-the planned pack; old and new packs compare as explicitly non-comparable rather
-than making the baseline unreadable.
+manifests after the installed lens pack advances. Without an externally pinned
+root attestation they are explicitly `UNANCHORED`; with one, exact manifest
+replacement is detected. Active `next`, `ingest`, and `finalize` operations
+additionally require the installed trusted pack to match the planned pack; old
+and new packs compare as explicitly non-comparable rather than making the
+baseline unreadable.
 
 ## Coverage closure
 
@@ -384,7 +408,7 @@ engine, deployment, or principal semantics force the store to
 Medium. The run records coverage per store and assessed database topic; one
 declared profile cannot cross-clear another store.
 
-Before lens activation, the 0.4 controller builds a bounded, deterministic,
+Before lens activation, the controller builds a bounded, deterministic,
 secret-free database evidence graph. It follows strong manifest, import,
 connection-token, infrastructure, query, migration, principal, policy, and
 copy-artifact relationships within manifest-defined project roots. Connected
@@ -398,6 +422,14 @@ vocabulary. `ASSESSED` engine, principal, tenancy, enforcement, copy,
 availability, and assumption claims must cite controller-inventoried evidence
 paths; placeholder versions, principals, and invented semantic rule IDs fail
 validation.
+
+Run schema 4 records one authenticated contribution for every successful base
+database shard/store relationship. Only the authority shard may supply the
+local semantic profile; context shards supply local topic, evidence, and gap
+claims. At the fan-out barrier the controller deterministically synthesizes one
+profile per discovered store. It reports `ASSESSED` only when every required
+contribution closes its local paths and all ten database topics; missing or
+partial contributions preserve a gap.
 
 The next database milestone is a disposable multi-engine conformance lab for
 two-tenant authorization, pooled-session reset, direct-table bypass, views and

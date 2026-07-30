@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import Ajv2020 from 'ajv/dist/2020.js'
 import {
   findingSchema,
+  storeContributionSchema,
   storeProfileSchema,
 } from '../scripts/lib/contracts.mjs'
 
@@ -40,6 +41,7 @@ const ajv = new Ajv2020({
 })
 ajv.addSchema(findingSchema)
 const validateStoreProfile = ajv.compile(storeProfileSchema)
+const validateStoreContribution = ajv.compile(storeContributionSchema)
 
 function completeAssessedProfile() {
   const evidencePaths = ['db/policies.sql']
@@ -149,6 +151,58 @@ test('ASSESSED is a closed claim over all ten database-owned topics', () => {
   inventedTopic.assessed_topics = ['database-invented-clearance']
   inventedTopic.coverage_gaps = [{ area: 'topic', reason: 'coverage is incomplete' }]
   assertInvalid(inventedTopic, 'only database-owned registry topics are accepted')
+})
+
+test('store contributions separate authority profiles from context claims', () => {
+  const authority = {
+    store_id: 'orders-primary',
+    profile: completeAssessedProfile(),
+  }
+  assert.equal(
+    validateStoreContribution(authority),
+    true,
+    JSON.stringify(validateStoreContribution.errors, null, 2),
+  )
+
+  const context = {
+    store_id: 'orders-primary',
+    coverage_state: 'ASSESSED',
+    assessed_topics: DATABASE_TOPICS,
+    evidence_paths: ['src/runtime-config.ts'],
+    coverage_gaps: [],
+  }
+  assert.equal(validateStoreContribution(context), true)
+
+  const mixed = {
+    ...context,
+    profile: completeAssessedProfile(),
+  }
+  assert.equal(
+    validateStoreContribution(mixed),
+    false,
+    'one contribution cannot mix authority profile and context claim shapes',
+  )
+
+  const optimistic = {
+    ...context,
+    assessed_topics: DATABASE_TOPICS.slice(0, 9),
+  }
+  assert.equal(
+    validateStoreContribution(optimistic),
+    false,
+    'ASSESSED context contribution must close the full topic denominator',
+  )
+
+  const silentPartial = {
+    ...context,
+    coverage_state: 'PARTIAL',
+    assessed_topics: [],
+  }
+  assert.equal(
+    validateStoreContribution(silentPartial),
+    false,
+    'partial context contribution must preserve an explicit gap',
+  )
 })
 
 test('every store profile records the engine, tenancy, enforcement, copy, budget, and assumptions dimensions', () => {

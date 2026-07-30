@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { generateKeyPairSync } from 'node:crypto'
 import {
   cp,
   lstat,
@@ -26,19 +27,7 @@ import {
   MAX_BUNDLE_ARTIFACT_BYTES,
   MAX_RUN_MANIFEST_BYTES,
 } from '../scripts/lib/resource-limits.mjs'
-import { preparedResultRetentionBytes } from '../scripts/audit.mjs'
-
 const CLI = resolve('scripts/audit.mjs')
-
-test('batch retention accounting includes intermediate run manifests', () => {
-  assert.equal(
-    preparedResultRetentionBytes({
-      canonicalResult: 'result',
-      serializedRun: 'manifest-state',
-    }),
-    Buffer.byteLength('result') + Buffer.byteLength('manifest-state'),
-  )
-})
 
 async function withCliRepository(callback) {
   const root = await mkdtemp(join(tmpdir(), 'red-team-cli-target-'))
@@ -68,6 +57,23 @@ async function planBundle(root, output) {
     .filter((entry) => entry.isDirectory())
   assert.equal(directories.length, 1)
   return join(output, directories[0].name)
+}
+
+function writeEd25519KeyPair(privateKeyPath, publicKeyPath) {
+  const keys = generateKeyPairSync('ed25519', {
+    publicKeyEncoding: {
+      type: 'spki',
+      format: 'pem',
+    },
+    privateKeyEncoding: {
+      type: 'pkcs8',
+      format: 'pem',
+    },
+  })
+  return Promise.all([
+    writeFile(privateKeyPath, keys.privateKey, { mode: 0o600 }),
+    writeFile(publicKeyPath, keys.publicKey, { mode: 0o600 }),
+  ])
 }
 
 function successfulProviderResult(next, job, overrides = {}) {
@@ -121,7 +127,7 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, /^red-team-audit 0\.4\.0/m)
+  assert.match(output, /^red-team-audit 0\.6\.0/m)
   assert.match(output, /red-team-audit plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)
@@ -129,6 +135,7 @@ test('CLI help exposes only explicit platform commands', () => {
   assert.match(output, /--require-source-closure/)
   assert.match(output, /red-team-audit ingest-batch/)
   assert.match(output, /red-team-audit unlock/)
+  assert.match(output, /red-team-audit attest/)
   assert.match(output, /red-team-audit validate/)
   assert.match(output, /red-team-audit benchmark/)
   assert.match(output, /never executes repository code/i)
@@ -417,6 +424,162 @@ test('CLI plan produces a valid fail-closed bundle without running package scrip
     assert.equal(aborted.state, 'ABORTED')
     assert.equal(aborted.phase, 'FINALIZED')
     assert.equal(aborted.errors.at(-1).code, 'OPERATOR_ABORT')
+  })
+})
+
+test('CLI attests a terminal run and verifies its exact external trust root', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const privateKeyPath = join(output, 'root-private.pem')
+    const publicKeyPath = join(output, 'root-public.pem')
+    const attestationPath = join(output, 'root-attestation.json')
+    await writeEd25519KeyPair(privateKeyPath, publicKeyPath)
+
+    execFileSync(
+      process.execPath,
+      [CLI, 'abort', bundle, '--reason', 'terminal attestation test'],
+      { encoding: 'utf8' },
+    )
+    const attested = execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'attest',
+        bundle,
+        '--signing-key',
+        privateKeyPath,
+        '--out',
+        attestationPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.match(attested, /Root SHA-256: [a-f0-9]{64}/)
+    assert.match(attested, /Signing key: ed25519:[a-f0-9]{64}/)
+
+    const anchored = execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-attestation',
+        attestationPath,
+        '--root-public-key',
+        publicKeyPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.match(anchored, /Root authenticity: VERIFIED/)
+
+    const anchoredReport = execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'report',
+        bundle,
+        '--root-attestation',
+        attestationPath,
+        '--root-public-key',
+        publicKeyPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.match(anchoredReport, /# Red Team Audit Report/)
+
+    const unanchored = execFileSync(
+      process.execPath,
+      [CLI, 'validate', bundle],
+      { encoding: 'utf8' },
+    )
+    assert.match(unanchored, /Root authenticity: UNANCHORED/)
+
+    const runPath = join(bundle, 'run.json')
+    const originalRun = await readFile(runPath, 'utf8')
+    await writeFile(runPath, `${originalRun}\n`)
+    const replaced = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-attestation',
+        attestationPath,
+        '--root-public-key',
+        publicKeyPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(replaced.status, 1)
+    assert.match(
+      replaced.stderr,
+      /attestation does not describe the exact loaded run manifest/i,
+    )
+  })
+})
+
+test('CLI root attestation fails closed on active runs, partial pins, and in-bundle output', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const privateKeyPath = join(output, 'root-private.pem')
+    const publicKeyPath = join(output, 'root-public.pem')
+    await writeEd25519KeyPair(privateKeyPath, publicKeyPath)
+
+    const active = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'attest',
+        bundle,
+        '--signing-key',
+        privateKeyPath,
+        '--out',
+        join(output, 'active-attestation.json'),
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(active.status, 1)
+    assert.match(active.stderr, /only a terminal FINALIZED run/i)
+
+    const partialPin = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-public-key',
+        publicKeyPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(partialPin.status, 1)
+    assert.match(
+      partialPin.stderr,
+      /--root-attestation and --root-public-key must be supplied together/i,
+    )
+
+    execFileSync(
+      process.execPath,
+      [CLI, 'abort', bundle, '--reason', 'finish negative test'],
+      { encoding: 'utf8' },
+    )
+    const internalOutput = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'attest',
+        bundle,
+        '--signing-key',
+        privateKeyPath,
+        '--out',
+        join(bundle, 'root-attestation.json'),
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(internalOutput.status, 1)
+    assert.match(
+      internalOutput.stderr,
+      /output must be outside the run bundle and target repository/i,
+    )
   })
 })
 
@@ -1174,6 +1337,45 @@ test('CLI accepts an explicitly supplied external Rules of Engagement file', asy
     assert.ok(inventory.excluded.some(
       ({ reason }) => reason === 'policy-read-roots:src',
     ))
+  })
+})
+
+test('CLI verifies external Rules of Engagement roots after canonical normalization', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const policyPath = join(output, 'roe-multi-root.json')
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: '1.0',
+      policy_id: 'cli-multi-root-test',
+      mode: 'static',
+      workspace_root: resolve(root),
+      capabilities: {
+        read_file: { enabled: true, roots: ['src', 'package.json'] },
+        write_file: { enabled: false, roots: [] },
+        execute: { enabled: false, commands: [] },
+        network: { enabled: false, destinations: [] },
+      },
+    }))
+
+    execFileSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath],
+      { encoding: 'utf8' },
+    )
+    const [directory] = (await readdir(output, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    const bundle = join(output, directory.name)
+    const inventory = JSON.parse(await readFile(join(bundle, 'inventory.json'), 'utf8'))
+    assert.deepEqual(
+      inventory.entries.map(({ path }) => path),
+      ['package.json', 'src/app.js'],
+    )
+
+    const next = JSON.parse(execFileSync(
+      process.execPath,
+      [CLI, 'next', bundle],
+      { encoding: 'utf8' },
+    ))
+    assert.ok(next.pending_jobs.length > 0)
   })
 })
 

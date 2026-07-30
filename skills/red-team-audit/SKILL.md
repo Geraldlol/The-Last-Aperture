@@ -9,7 +9,7 @@ Read as an adversary; report as an evidence custodian. The controller owns
 inventory, activation, scope, job order, schemas, coverage, and terminal state.
 Lenses supply domain judgment, not an alternate workflow.
 
-Version 0.4.0 is **static and read-only**. Manual results are provider-declared;
+Version 0.6.0 is **static and read-only**. Manual results are provider-declared;
 the optional sealed runner proves byte-challenge consumption, not understanding.
 Never edit, boot, test, or network the target. A plan is not an audit result.
 Zero findings means only `NO_FINDINGS_REPORTED`.
@@ -104,12 +104,12 @@ Return Stage 1 candidates only, on lens-owned topics, with locations, evidence,
 attack, impact, reachability, confidence, and proof plan. No prose-only
 findings or patches.
 
-The database lens receives controller-discovered store candidates and a
-shard-local graph. Profile each assigned controller `store_id`; bind engine,
-deployment, principal, enforcement, tenancy, copies, availability, assumptions,
-and all ten topics to checked evidence. Unknown semantics stay `NOT_ASSESSED`
-or `PARTIAL`. Never invent identity or an `ASSESSED` profile; unprofiled
-candidates remain gaps.
+The database lens receives controller-discovered stores and a shard-local graph.
+For schema 4, contribute once per assigned `store_id`: the authority shard
+supplies the local profile; context shards supply only local topics, evidence,
+and gaps. Bind every claim to examined local evidence. The controller
+synthesizes profiles after fan-out. Unknown or missing work stays
+`NOT_ASSESSED`/`PARTIAL`; never invent identity or clearance.
 
 ### Triage
 

@@ -79,7 +79,7 @@ function normalizedExclusions(values) {
   return new Set(values.map((value) => String(value).replaceAll('\\', '/').replace(/^\.?\//, '').replace(/\/$/, '')))
 }
 
-function normalizedIncludedRoots(values) {
+export function normalizeIncludedRoots(values) {
   const normalized = values.map((value) =>
     String(value).replaceAll('\\', '/').replace(/^\.?\//, '').replace(/\/$/, '') || '.')
   for (const value of normalized) {
@@ -172,7 +172,7 @@ export async function inventoryRepository(targetRoot, options = {}) {
   const exclusions = normalizedExclusions(
     options.excludedDirectories ?? DEFAULT_EXCLUDED_DIRECTORIES,
   )
-  const includedRoots = normalizedIncludedRoots(options.includedRoots ?? ['.'])
+  const includedRoots = normalizeIncludedRoots(options.includedRoots ?? ['.'])
   const maxTextBytes = boundedInteger(
     'maxTextBytes',
     options.maxTextBytes,

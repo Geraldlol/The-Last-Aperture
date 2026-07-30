@@ -12,10 +12,17 @@ synthetic reproduction.
 
 ## Supported security boundary
 
-Version 0.4.0 supports static, read-only planning, externally produced job
+Version 0.6.0 supports static, read-only planning, externally produced job
 results, and an opt-in sealed provider runner. It never executes target code or
 grants the provider a target mount, host network, credentials, or arbitrary
 host process authority.
+
+For run schema 4, database providers contribute only shard-local store claims.
+The controller binds each contribution to its planned job and input digest,
+rejects cross-shard evidence or profiling, and synthesizes a store profile only
+after every base fan-out job has completed. Provider semantic claims remain
+declarations; authentication and deterministic synthesis do not prove that the
+analysis was correct.
 
 The pure policy kernel remains an authorization decision component, not an
 isolation mechanism. The reference runner uses a local Docker/OCI boundary
@@ -76,6 +83,9 @@ when the repository may be modified by a hostile local process.
   must be handled as sensitive source archives.
 - Keep provider configuration, Docker executable, and Ed25519 private key
   outside both the target and run bundle.
+- Keep root-manifest signing keys, verification keys, and detached attestations
+  outside both the target and run bundle. Store attestations under independent
+  access control if they are used as the trust anchor.
 - Keep bundles within the documented 128 MiB per-artifact, 16,384-artifact, and
   512 MiB aggregate verification limits; the controller reserves capacity
   before append/finalize operations.
@@ -93,12 +103,15 @@ untrusted native code. Provider names, versions, and instances remain declared
 evidence. Observed receipts prove byte challenge completion only, not semantic
 analysis. Local artifacts are write-once and SHA-256-hash-manifested by
 `run.json`; they detect accidental changes only while that manifest remains
-unchanged. An actor able to rewrite `run.json` can replace an artifact and its
-hash together, so the bundle does not claim partial-tamper detection against
-such an actor. Provider execution envelopes are Ed25519-signed, but their
-identity is strong only when the verifier pins the public key outside the
-mutable bundle. A signed root manifest or external transparency log is still
-required for whole-bundle authenticity. Bundle-path checks also fail closed on
-observed symlink/reparse components, but Node does not provide portable
-handle-relative path creation; keep the bundle on a directory that cannot be
-concurrently renamed or replaced by a hostile local process.
+unchanged. A terminal run can additionally be bound to a detached Ed25519 root
+attestation whose public key and attestation are pinned outside the mutable
+bundle. Without that pair, validation reports the root as `UNANCHORED`, and an
+actor able to rewrite `run.json` can still replace an artifact and its hash
+together. Attestation timestamps are controller clock declarations, not
+trusted timestamps, and the project does not yet claim transparency-log
+inclusion, consistency, witness, or revocation guarantees. Provider execution
+envelopes remain strong only when their receipt public key is also pinned
+externally. Bundle-path checks fail closed on observed symlink/reparse
+components, but Node does not provide portable handle-relative path creation;
+keep the bundle on a directory that cannot be concurrently renamed or replaced
+by a hostile local process.
