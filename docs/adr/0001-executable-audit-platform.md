@@ -1,7 +1,7 @@
 # ADR 0001: Executable audit platform and external safety boundary
 
 Date: 2026-07-28
-Status: Accepted; amended by ADR 0002 and ADR 0003
+Status: Accepted; amended by ADR 0002, ADR 0003, ADR 0004, and ADR 0005
 
 ## Context
 
@@ -104,11 +104,17 @@ while provider profiles and semantic assessments remain declarations. ADR 0002
 separately adds controller-observed byte consumption without treating
 consumption as comprehension.
 
+ADR 0005 supersedes direct cross-shard profile mutation for run schema 4.
+Providers append authenticated shard-local store contributions; the controller
+alone synthesizes final profiles at the fan-out barrier. Legacy run schemas
+retain their original transition contract.
+
 Local bundle artifacts are write-once and SHA-256-hash-manifested by
 `run.json`. That detects accidental artifact changes only relative to an
 unchanged manifest; an actor who can rewrite `run.json` can replace an artifact
-and its hash together. Signed manifests or an external transparency log are a
-future deployment control. Portable Node APIs also cannot make bundle writes
+and its hash together. ADR 0004 adds an optional detached Ed25519 attestation
+over exact terminal manifest bytes; unsigned roots remain explicitly
+`UNANCHORED`. Portable Node APIs also cannot make bundle writes
 handle-relative, so deployment must prevent a hostile local process from
 renaming or replacing the bundle directory during a write.
 

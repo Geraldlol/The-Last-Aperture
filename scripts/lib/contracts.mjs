@@ -20,9 +20,19 @@ import {
   filterResolvedCoverageGaps,
 } from './coverage-gaps.mjs'
 import { digestWorkScope, workShardId } from './work-shards.mjs'
+import {
+  expectedStoreContributionRelationships,
+  expectedStorePathsForJob,
+  normalizeStoreContribution,
+  synthesizeStoreProfiles,
+} from './store-synthesis.mjs'
 
 const FINDING_SCHEMA_URL = new URL('../../schemas/finding.schema.json', import.meta.url)
 const STORE_PROFILE_SCHEMA_URL = new URL('../../schemas/store-profile.schema.json', import.meta.url)
+const STORE_CONTRIBUTION_SCHEMA_URL = new URL(
+  '../../schemas/store-contribution.schema.json',
+  import.meta.url,
+)
 const RUN_SCHEMA_URL = new URL('../../schemas/run.schema.json', import.meta.url)
 const DATABASE_DISCOVERY_SCHEMA_URL = new URL(
   '../../schemas/database-discovery.schema.json',
@@ -32,6 +42,9 @@ const DATABASE_DISCOVERY_SCHEMA_URL = new URL(
 export const findingSchema = JSON.parse(readFileSync(fileURLToPath(FINDING_SCHEMA_URL), 'utf8'))
 export const storeProfileSchema = JSON.parse(
   readFileSync(fileURLToPath(STORE_PROFILE_SCHEMA_URL), 'utf8'),
+)
+export const storeContributionSchema = JSON.parse(
+  readFileSync(fileURLToPath(STORE_CONTRIBUTION_SCHEMA_URL), 'utf8'),
 )
 export const runSchema = JSON.parse(readFileSync(fileURLToPath(RUN_SCHEMA_URL), 'utf8'))
 export const databaseDiscoverySchema = JSON.parse(
@@ -48,6 +61,7 @@ const ajv = new Ajv2020({
 
 ajv.addSchema(findingSchema)
 ajv.addSchema(storeProfileSchema)
+ajv.addSchema(storeContributionSchema)
 ajv.addSchema(databaseDiscoverySchema)
 ajv.addSchema(runSchema)
 
@@ -124,6 +138,11 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
 const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
+const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0'])
+
+function modeledDatabaseRun(run) {
+  return MODELED_DATABASE_RUN_SCHEMAS.has(run?.schema_version)
+}
 const RUN_PHASE_RANK = new Map([
   ['RECON', 0],
   ['FANOUT', 1],
@@ -330,6 +349,84 @@ function detectionEvidenceIsBound(claim, declaredPaths) {
     return /^:(?:[1-9][0-9]*)(?::[1-9][0-9]*)?(?:\s|$)/.test(suffix)
       || /^(?:#|\s)/.test(suffix)
   })
+}
+
+function storeProfileCommonInvariantErrors(profile, pointer) {
+  const errors = []
+  const storeId = profile?.store_context?.store_id
+  const adapterDecision = routeDatabaseAdapter(profile?.store_context)
+  if (
+    typeof profile?.store_context?.adapter_id === 'string'
+    && profile.store_context.adapter_id !== adapterDecision.adapter_id
+  ) {
+    addError(
+      errors,
+      'DATABASE_PROFILE_ADAPTER_MISMATCH',
+      `${pointer}/store_context/adapter_id`,
+      `store profile must use routed adapter ${adapterDecision.adapter_id}`,
+      { reasons: adapterDecision.reasons },
+    )
+  }
+  if (
+    adapterDecision.selection_status !== 'SELECTED'
+    && profile?.coverage_state !== 'NOT_ASSESSED'
+  ) {
+    addError(
+      errors,
+      'DATABASE_PROFILE_ROUTE_UNASSESSED',
+      `${pointer}/coverage_state`,
+      'a store without a selected semantic adapter must be NOT_ASSESSED',
+      { reasons: adapterDecision.reasons },
+    )
+  }
+
+  const declaredEvidencePaths = new Set(profile?.evidence_paths ?? [])
+  for (const [evidenceIndex, claim] of (
+    profile?.store_context?.detection_evidence ?? []
+  ).entries()) {
+    if (!detectionEvidenceIsBound(claim, declaredEvidencePaths)) {
+      addError(
+        errors,
+        'DATABASE_PROFILE_UNBOUND_DETECTION_EVIDENCE',
+        `${pointer}/store_context/detection_evidence/${evidenceIndex}`,
+        'store detection evidence must start with a controller-checked profile evidence path',
+      )
+    }
+  }
+  for (const entry of nestedEvidencePathEntries(profile)) {
+    if (
+      !entry.pointer.startsWith('/evidence_paths/')
+      && !declaredEvidencePaths.has(entry.path)
+    ) {
+      addError(
+        errors,
+        'DATABASE_PROFILE_UNDECLARED_EVIDENCE',
+        `${pointer}${entry.pointer}`,
+        `nested evidence path ${String(entry.path)} is absent from the profile evidence denominator`,
+      )
+    }
+  }
+
+  const principalValues = [
+    profile?.principal_path?.authenticated_principal,
+    profile?.principal_path?.session_principal,
+    profile?.principal_path?.effective_principal,
+    profile?.principal_path?.owner_or_definer,
+    ...(profile?.principal_path?.bypass_capabilities ?? []),
+  ]
+  if (
+    profile?.coverage_state === 'ASSESSED'
+    && principalValues.some((value) => isUnresolvedDatabaseDescriptor(value))
+  ) {
+    addError(
+      errors,
+      'DATABASE_PROFILE_UNRESOLVED_PRINCIPAL',
+      `${pointer}/principal_path`,
+      `ASSESSED store profile ${String(storeId)} cannot retain unresolved principal semantics`,
+    )
+  }
+
+  return errors
 }
 
 function deepFreeze(value) {
@@ -1314,7 +1411,7 @@ function attemptInvariantErrors(run) {
       }
     }
     if (
-      ['2.0.0', '3.0.0'].includes(run?.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0'].includes(run?.schema_version)
       && ['SUCCEEDED', 'FAILED'].includes(job.state)
       && job.kind !== 'REPORT'
       && (hasOwn(job, 'input_sha256') || hasOwn(job, 'producer'))
@@ -2079,12 +2176,171 @@ function v3CoverageInvariantErrors(run) {
   return errors
 }
 
+function v4StoreSynthesisInvariantErrors(run) {
+  const errors = []
+  if (run.schema_version !== '4.0.0') return errors
+
+  const jobs = new Map((run.jobs ?? []).map((job) => [job.job_id, job]))
+  const relationships = expectedStoreContributionRelationships(run)
+  const relationshipByKey = new Map(relationships.map((relationship) => [
+    `${relationship.job_id}\0${relationship.store_id}`,
+    relationship,
+  ]))
+  const contributionCounts = new Map()
+
+  for (const [index, envelope] of (
+    Array.isArray(run.store_contributions) ? run.store_contributions : []
+  ).entries()) {
+    const pointer = `/store_contributions/${index}`
+    const job = jobs.get(envelope?.job_id)
+    const contribution = envelope?.contribution
+    const storeId = contribution?.store_id
+    const key = `${envelope?.job_id}\0${storeId}`
+    contributionCounts.set(key, (contributionCounts.get(key) ?? 0) + 1)
+    const relationship = relationshipByKey.get(key)
+
+    if (
+      !job
+      || job.kind !== 'LENS'
+      || job.lens !== 'database-and-data-stores'
+      || job.closure_round !== undefined
+      || !authenticatedSuccessfulV3LensJob(job)
+      || envelope.input_sha256 !== job.input_sha256
+    ) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_PROVENANCE_INVALID',
+        pointer,
+        'store contribution must bind to its authenticated successful base database job',
+      )
+    }
+    if (!relationship) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_NOT_ASSIGNED',
+        pointer,
+        `store contribution ${String(storeId)} is not assigned to job ${String(envelope?.job_id)}`,
+      )
+      continue
+    }
+    if (envelope.role !== relationship.role) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_ROLE_INVALID',
+        `${pointer}/role`,
+        'store contribution role must match controller profile authority',
+      )
+    }
+    const hasProfile = contribution?.profile !== undefined
+    if (
+      (relationship.role === 'AUTHORITY' && !hasProfile)
+      || (relationship.role === 'CONTEXT' && hasProfile)
+    ) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_PROFILE_AUTHORITY_INVALID',
+        `${pointer}/contribution`,
+        'only the authority contribution must supply the store profile',
+      )
+    }
+    if (
+      hasProfile
+      && contribution.profile?.store_context?.store_id !== storeId
+    ) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_PROFILE_STORE_MISMATCH',
+        `${pointer}/contribution/profile/store_context/store_id`,
+        'authority profile store ID must match its contribution store ID',
+      )
+    }
+    if (hasProfile) {
+      errors.push(...storeProfileCommonInvariantErrors(
+        contribution.profile,
+        `${pointer}/contribution/profile`,
+      ))
+    }
+
+    const normalized = normalizeStoreContribution(contribution)
+    const expectedPaths = expectedStorePathsForJob(run, job ?? {}, storeId)
+    const expectedSet = new Set(expectedPaths)
+    for (const [pathIndex, path] of (
+      Array.isArray(normalized?.evidence_paths)
+        ? normalized.evidence_paths
+        : []
+    ).entries()) {
+      if (!expectedSet.has(path)) {
+        addError(
+          errors,
+          'STORE_CONTRIBUTION_EVIDENCE_OUTSIDE_SHARD',
+          `${pointer}/contribution/evidence_paths/${pathIndex}`,
+          `store contribution evidence ${String(path)} is outside its assigned shard/store intersection`,
+        )
+      }
+    }
+    if (
+      normalized?.coverage_state === 'ASSESSED'
+      && expectedPaths.some(
+        (path) => !normalized.evidence_paths.includes(path),
+      )
+    ) {
+      addError(
+        errors,
+        'ASSESSED_STORE_CONTRIBUTION_SCOPE_OPEN',
+        `${pointer}/contribution`,
+        'ASSESSED contribution must evidence every discovered store path assigned to its shard',
+      )
+    }
+  }
+
+  for (const [key, count] of contributionCounts) {
+    if (count !== 1) {
+      addError(
+        errors,
+        'DUPLICATE_STORE_CONTRIBUTION',
+        '/store_contributions',
+        `store contribution ${key.replace('\0', '/')} appears ${count} times`,
+      )
+    }
+  }
+  for (const relationship of relationships) {
+    const job = jobs.get(relationship.job_id)
+    if (!authenticatedSuccessfulV3LensJob(job)) continue
+    const key = `${relationship.job_id}\0${relationship.store_id}`
+    if ((contributionCounts.get(key) ?? 0) !== 1) {
+      addError(
+        errors,
+        'SUCCESSFUL_DATABASE_JOB_CONTRIBUTION_MISSING',
+        '/store_contributions',
+        `successful database job ${relationship.job_id} must contribute exactly once for store ${relationship.store_id}`,
+      )
+    }
+  }
+
+  const synthesisMaterialized = !['RECON', 'FANOUT'].includes(run.phase)
+  const expectedProfiles = synthesisMaterialized
+    ? synthesizeStoreProfiles(run).map(({ profile }) => profile)
+    : []
+  if (!isDeepStrictEqual(run.store_profiles ?? [], expectedProfiles)) {
+    addError(
+      errors,
+      'STORE_SYNTHESIS_MISMATCH',
+      '/store_profiles',
+      synthesisMaterialized
+        ? 'schema 4 store profiles must equal controller synthesis from the immutable contribution ledger'
+        : 'schema 4 store profiles cannot materialize before the fan-out barrier',
+    )
+  }
+
+  return errors
+}
+
 function runInvariantErrors(run, { final = false } = {}) {
   const errors = []
   if (run === null || typeof run !== 'object' || Array.isArray(run)) return errors
   errors.push(...sealedSnapshotInvariantErrors(run))
   errors.push(...attemptInvariantErrors(run))
-  if (run.schema_version === '3.0.0') {
+  if (modeledDatabaseRun(run)) {
     const schemaValid = validateDatabaseDiscoverySchema(
       run.database_discovery,
     )
@@ -2112,6 +2368,7 @@ function runInvariantErrors(run, { final = false } = {}) {
       }
     }
     errors.push(...v3CoverageInvariantErrors(run))
+    errors.push(...v4StoreSynthesisInvariantErrors(run))
   }
 
   const findings = Array.isArray(run.findings) ? run.findings : []
@@ -2195,7 +2452,7 @@ function runInvariantErrors(run, { final = false } = {}) {
   storeProfiles.forEach((profile, index) => {
     const storeId = profile?.store_context?.store_id
     const discoveredStore = discoveredStores.get(storeId)
-    if (run.schema_version === '3.0.0' && !discoveredStore) {
+    if (modeledDatabaseRun(run) && !discoveredStore) {
       addError(
         errors,
         'DATABASE_PROFILE_NOT_DISCOVERED',
@@ -2204,7 +2461,7 @@ function runInvariantErrors(run, { final = false } = {}) {
       )
     }
     if (
-      run.schema_version === '3.0.0'
+      modeledDatabaseRun(run)
       && !((run.jobs ?? []).some((job) =>
         authenticatedSuccessfulV3LensJob(job)
         && job.lens === 'database-and-data-stores'
@@ -2217,44 +2474,10 @@ function runInvariantErrors(run, { final = false } = {}) {
         `store profile ${String(storeId)} is not backed by its successful profile-authority shard`,
       )
     }
-    const adapterDecision = routeDatabaseAdapter(profile?.store_context)
-    if (
-      typeof profile?.store_context?.adapter_id === 'string'
-      && profile.store_context.adapter_id !== adapterDecision.adapter_id
-    ) {
-      addError(
-        errors,
-        'DATABASE_PROFILE_ADAPTER_MISMATCH',
-        `/store_profiles/${index}/store_context/adapter_id`,
-        `store profile must use routed adapter ${adapterDecision.adapter_id}`,
-        { reasons: adapterDecision.reasons },
-      )
-    }
-    if (
-      adapterDecision.selection_status !== 'SELECTED'
-      && profile?.coverage_state !== 'NOT_ASSESSED'
-    ) {
-      addError(
-        errors,
-        'DATABASE_PROFILE_ROUTE_UNASSESSED',
-        `/store_profiles/${index}/coverage_state`,
-        'a store without a selected semantic adapter must be NOT_ASSESSED',
-        { reasons: adapterDecision.reasons },
-      )
-    }
-    const declaredEvidencePaths = new Set(profile?.evidence_paths ?? [])
-    for (const [evidenceIndex, claim] of (
-      profile?.store_context?.detection_evidence ?? []
-    ).entries()) {
-      if (!detectionEvidenceIsBound(claim, declaredEvidencePaths)) {
-        addError(
-          errors,
-          'DATABASE_PROFILE_UNBOUND_DETECTION_EVIDENCE',
-          `/store_profiles/${index}/store_context/detection_evidence/${evidenceIndex}`,
-          'store detection evidence must start with a controller-checked profile evidence path',
-        )
-      }
-    }
+    errors.push(...storeProfileCommonInvariantErrors(
+      profile,
+      `/store_profiles/${index}`,
+    ))
     for (const [evidenceIndex, path] of (profile?.evidence_paths ?? []).entries()) {
       if (!inventoryPaths.has(path)) {
         addError(
@@ -2283,19 +2506,6 @@ function runInvariantErrors(run, { final = false } = {}) {
         )
       }
     }
-    for (const entry of nestedEvidencePathEntries(profile)) {
-      if (
-        !entry.pointer.startsWith('/evidence_paths/')
-        && !declaredEvidencePaths.has(entry.path)
-      ) {
-        addError(
-          errors,
-          'DATABASE_PROFILE_UNDECLARED_EVIDENCE',
-          `/store_profiles/${index}${entry.pointer}`,
-          `nested evidence path ${String(entry.path)} is absent from the profile evidence denominator`,
-        )
-      }
-    }
     if (typeof storeId !== 'string') return
     if (byStoreId.has(storeId)) {
       addError(
@@ -2315,7 +2525,7 @@ function runInvariantErrors(run, { final = false } = {}) {
       && job.state === 'SUCCEEDED',
   )
   if (
-    run.schema_version !== '3.0.0'
+    !modeledDatabaseRun(run)
     && databaseJobSucceeded
     && (run.activated_lenses ?? []).includes('database-and-data-stores')
     && storeProfiles.length === 0
@@ -2991,7 +3201,7 @@ function runTransitionErrors(previous, next) {
       (stage === 1 && next.phase === 'FANOUT')
       || (stage === 2 && next.phase === 'TRIAGE')
       || (
-        next.schema_version === '3.0.0'
+        modeledDatabaseRun(next)
         && next.phase === 'COMPLETENESS'
         && [1, 2].includes(stage)
       )
@@ -3105,7 +3315,7 @@ function runTransitionErrors(previous, next) {
       (event) => event?.job_id === jobId,
     )
     if (
-      ['2.0.0', '3.0.0'].includes(next.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0'].includes(next.schema_version)
       && priorJob.state === 'RUNNING'
       && nextJob.state === 'PENDING'
     ) {
@@ -3393,7 +3603,18 @@ function runTransitionErrors(previous, next) {
       && gap.area.startsWith('store:')
       && addedStoreIds.has(gap.area.slice('store:'.length))
     )
-    if (!gap || (!lensFileResolution && !storeResolution)) {
+    const synthesisResolution = (
+      next.schema_version === '4.0.0'
+      && previous.phase === 'FANOUT'
+      && next.phase === 'TRIAGE'
+      && typeof gap?.area === 'string'
+      && gap.area.startsWith('store:')
+      && addedStoreIds.has(gap.area.slice('store:'.length))
+    )
+    if (
+      !gap
+      || (!lensFileResolution && !storeResolution && !synthesisResolution)
+    ) {
       addError(
         errors,
         'COVERAGE_GAP_RESOLUTION_NOT_JOB_BACKED',
@@ -3485,7 +3706,7 @@ function runTransitionErrors(previous, next) {
       nextJob.lens,
       {
         job: nextJob,
-        scope: next.schema_version === '3.0.0'
+        scope: modeledDatabaseRun(next)
           ? v3LensJobScope(previousCoverage, priorJob)
           : null,
       },
@@ -3496,13 +3717,13 @@ function runTransitionErrors(previous, next) {
     const priorPaths = new Set(
       previousLensRows.get(nextJob.lens)?.examined_paths ?? [],
     )
-    const scope = next.schema_version === '3.0.0'
+    const scope = modeledDatabaseRun(next)
       ? v3LensJobScope(previousCoverage, priorJob)
       : null
     for (const path of nextLensRows.get(nextJob.lens)?.examined_paths ?? []) {
       if (
         !priorPaths.has(path)
-        && (next.schema_version !== '3.0.0' || scope?.has(path))
+        && (!modeledDatabaseRun(next) || scope?.has(path))
       ) {
         successfullyExaminedByLensJob.add(path)
       }
@@ -3545,7 +3766,7 @@ function runTransitionErrors(previous, next) {
         (
           priorRow.status === 'NOT_ASSESSED'
           || (
-            next.schema_version === '3.0.0'
+            modeledDatabaseRun(next)
             && ['FAILED', 'RAN'].includes(priorRow.status)
           )
         )
@@ -3571,7 +3792,7 @@ function runTransitionErrors(previous, next) {
     } else if (
       !isDeepStrictEqual(priorRow.reason, nextRow.reason)
       && !(
-        next.schema_version === '3.0.0'
+        modeledDatabaseRun(next)
         && (
           jobTransitionForLens(lens, undefined, nextRow.status === 'FAILED'
             ? 'FAILED'
@@ -3620,7 +3841,7 @@ function runTransitionErrors(previous, next) {
           '/coverage/lenses',
           `new examined paths for lens ${lens} require its exact LENS job to succeed in the same transition`,
         )
-      } else if (next.schema_version === '3.0.0') {
+      } else if (modeledDatabaseRun(next)) {
         if (completion.scope === null) {
           addError(
             errors,
@@ -3650,7 +3871,7 @@ function runTransitionErrors(previous, next) {
         errors,
         'EXAMINED_COVERAGE_NOT_JOB_BACKED',
         '/coverage/examined',
-        next.schema_version === '3.0.0'
+        modeledDatabaseRun(next)
           ? `new examined path ${path} requires the exact successful scoped LENS result in the same transition`
           : `new examined path ${path} requires a successful LENS job in the same transition`,
       )
@@ -3676,7 +3897,7 @@ function runTransitionErrors(previous, next) {
     const expectedIds = [...(nextJob.candidate_ids ?? [])].sort()
     const changedIds = [...changedFindingIds].sort()
     const closureLensReplay = (
-      next.schema_version === '3.0.0'
+      modeledDatabaseRun(next)
       && nextJob.state === 'SUCCEEDED'
       && nextJob.kind === 'LENS'
       && Number.isInteger(nextJob.closure_round)
@@ -3734,12 +3955,58 @@ function runTransitionErrors(previous, next) {
     }
   }
 
+  const priorContributionCount = Array.isArray(previous.store_contributions)
+    ? previous.store_contributions.length
+    : 0
+  const nextContributions = Array.isArray(next.store_contributions)
+    ? next.store_contributions
+    : []
+  const addedContributions = nextContributions.slice(priorContributionCount)
+  if (addedContributions.length > 0) {
+    const databaseCompletion = completedProviderJobs.length === 1
+      ? completedProviderJobs[0].nextJob
+      : null
+    if (
+      next.schema_version !== '4.0.0'
+      || databaseCompletion?.kind !== 'LENS'
+      || databaseCompletion?.lens !== 'database-and-data-stores'
+      || databaseCompletion?.closure_round !== undefined
+      || databaseCompletion?.state !== 'SUCCEEDED'
+      || addedContributions.some((envelope) =>
+        envelope.job_id !== databaseCompletion.job_id
+        || envelope.input_sha256 !== databaseCompletion.input_sha256)
+    ) {
+      addError(
+        errors,
+        'STORE_CONTRIBUTION_DELTA_NOT_JOB_BOUND',
+        '/store_contributions',
+        'store contributions may be appended only by their one successful schema 4 base database result',
+      )
+    }
+  }
+
   const priorProfileCount = Array.isArray(previous.store_profiles)
     ? previous.store_profiles.length
     : 0
   const nextProfiles = Array.isArray(next.store_profiles) ? next.store_profiles : []
   const addedProfiles = nextProfiles.slice(priorProfileCount)
   if (addedProfiles.length > 0) {
+    if (next.schema_version === '4.0.0') {
+      const expectedProfiles = synthesizeStoreProfiles(next)
+        .map(({ profile }) => profile)
+      if (
+        previous.phase !== 'FANOUT'
+        || next.phase !== 'TRIAGE'
+        || !isDeepStrictEqual(nextProfiles, expectedProfiles)
+      ) {
+        addError(
+          errors,
+          'STORE_PROFILE_DELTA_NOT_SYNTHESIZED',
+          '/store_profiles',
+          'schema 4 profiles may be appended only as exact controller synthesis at the fan-out barrier',
+        )
+      }
+    } else {
     const databaseCompletion = completedProviderJobs.length === 1
       ? completedProviderJobs[0].nextJob
       : null
@@ -3767,7 +4034,7 @@ function runTransitionErrors(previous, next) {
       )
       for (const profile of addedProfiles) {
         if (
-          next.schema_version === '3.0.0'
+          modeledDatabaseRun(next)
           && !authorizedStoreIds.has(profile.store_context?.store_id)
         ) {
           addError(
@@ -3789,9 +4056,10 @@ function runTransitionErrors(previous, next) {
         }
       }
     }
+    }
   }
 
-  for (const field of ['errors', 'store_profiles']) {
+  for (const field of ['errors', 'store_contributions', 'store_profiles']) {
     const priorItems = Array.isArray(previous[field]) ? previous[field] : []
     const nextItems = Array.isArray(next[field]) ? next[field] : []
     if (!priorItems.every((item, index) => isDeepStrictEqual(item, nextItems[index]))) {

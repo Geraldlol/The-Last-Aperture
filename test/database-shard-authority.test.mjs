@@ -14,6 +14,7 @@ import {
 } from 'node:test'
 
 import {
+  advanceRun,
   applyJobResult,
   beginJob,
   prepareJobStart,
@@ -23,6 +24,7 @@ import {
   validateRunTransition,
 } from '../scripts/lib/contracts.mjs'
 import { createRunPlan } from '../scripts/lib/run-engine.mjs'
+import { synthesizeStoreProfiles } from '../scripts/lib/store-synthesis.mjs'
 
 const PACKET_SHA256 = 'a'.repeat(64)
 const DATABASE_TOPICS = [
@@ -109,7 +111,45 @@ function inventoryOnlyProfile(storeId, evidencePath) {
   }
 }
 
-function providerResult(run, jobId, evidencePath, profile) {
+function contextContribution(storeId, evidencePath, coverageState = 'NOT_ASSESSED') {
+  return {
+    store_id: storeId,
+    coverage_state: coverageState,
+    assessed_topics: coverageState === 'ASSESSED' ? DATABASE_TOPICS : [],
+    evidence_paths: [evidencePath],
+    coverage_gaps: coverageState === 'ASSESSED'
+      ? []
+      : [{
+          area: 'shard-local store semantics',
+          reason: 'This shard contribution remains unassessed.',
+        }],
+  }
+}
+
+function providerResult(
+  run,
+  jobId,
+  evidencePath,
+  profile,
+  explicitContribution,
+) {
+  const sidecar = plan.jobSidecars.find(
+    ({ job_id: candidateJobId }) => candidateJobId === jobId,
+  )
+  const storeId = sidecar?.database_store_ids?.[0]
+  const isAuthority = sidecar?.profile_authority_store_ids?.includes(storeId)
+  const contribution = explicitContribution ?? (
+    storeId === undefined
+      ? undefined
+      : isAuthority
+        ? {
+            store_id: storeId,
+            profile: profile ?? inventoryOnlyProfile(storeId, evidencePath),
+          }
+        : profile
+          ? { store_id: storeId, profile }
+          : contextContribution(storeId, evidencePath)
+  )
   return {
     schema_version: '1.0.0',
     run_id: run.run_id,
@@ -124,7 +164,7 @@ function providerResult(run, jobId, evidencePath, profile) {
     examined_files: [evidencePath],
     findings: [],
     coverage_gaps: [],
-    store_profiles: profile ? [profile] : [],
+    store_contributions: contribution ? [contribution] : [],
   }
 }
 
@@ -330,7 +370,7 @@ test('a related database shard cannot profile a store owned by its home shard', 
         expectedPacketSha256: PACKET_SHA256,
       },
     ),
-    /store profile .* is not assigned to this database shard/,
+    /context contribution .* cannot supply or rewrite a store profile/,
   )
 })
 
@@ -434,27 +474,10 @@ test('context shards wait for the base authority job to terminate', () => {
   )
 })
 
-test('a home shard may record partial coverage but cannot clear a cross-shard store', () => {
+test('an authority shard records a local contribution without materializing a profile early', () => {
   const { home, storeId } = homeAndRelated()
   const evidencePath = home.scoped_files[0]
   let run = beginJob(plan.run, home.job_id)
-
-  assert.throws(
-    () => applyJobResult(
-      run,
-      providerResult(
-        run,
-        home.job_id,
-        evidencePath,
-        postgresProfile(storeId, evidencePath, 'ASSESSED'),
-      ),
-      {
-        sidecar: home,
-        expectedPacketSha256: PACKET_SHA256,
-      },
-    ),
-    /cannot be ASSESSED from a shard that does not contain its complete discovered scope/,
-  )
 
   run = applyJobResult(
     run,
@@ -462,15 +485,19 @@ test('a home shard may record partial coverage but cannot clear a cross-shard st
       run,
       home.job_id,
       evidencePath,
-      postgresProfile(storeId, evidencePath, 'PARTIAL'),
+      postgresProfile(storeId, evidencePath, 'ASSESSED'),
     ),
     {
       sidecar: home,
       expectedPacketSha256: PACKET_SHA256,
     },
   )
-  assert.equal(run.store_profiles.length, 1)
-  assert.equal(run.store_profiles[0].coverage_state, 'PARTIAL')
+  assert.equal(run.store_profiles.length, 0)
+  assert.equal(run.store_contributions.length, 1)
+  assert.equal(
+    run.store_contributions[0].contribution.profile.coverage_state,
+    'ASSESSED',
+  )
 })
 
 test('the transition contract rejects a profile appended by a related shard', () => {
@@ -506,5 +533,204 @@ test('the transition contract rejects a profile appended by a related shard', ()
   const validation = validateRunTransition(previous, next)
   const codes = new Set(validation.errors.map(({ code }) => code))
   assert.equal(validation.valid, false)
-  assert.ok(codes.has('STORE_PROFILE_NOT_JOB_AUTHORIZED'))
+  assert.ok(codes.has('STORE_PROFILE_DELTA_NOT_SYNTHESIZED'))
+})
+
+test('controller synthesis closes a cross-shard store only after every authenticated contribution', () => {
+  const { home, storeId } = homeAndRelated()
+  const databaseSidecars = initialDatabaseSidecars().filter(
+    (sidecar) => sidecar.database_store_ids?.includes(storeId),
+  )
+  let run = structuredClone(plan.run)
+  for (const job of run.jobs) {
+    if (
+      job.kind === 'LENS'
+      && job.closure_round === undefined
+      && job.lens !== 'database-and-data-stores'
+    ) {
+      job.state = 'SKIPPED'
+      job.reason = 'test isolates database synthesis'
+    }
+  }
+
+  const ordered = [
+    home,
+    ...databaseSidecars.filter(({ job_id: jobId }) => jobId !== home.job_id),
+  ]
+  for (const sidecar of ordered) {
+    const evidencePath = sidecar.scoped_files[0]
+    run = beginJob(run, sidecar.job_id)
+    const contribution = sidecar.profile_authority_store_ids.includes(storeId)
+      ? {
+          store_id: storeId,
+          profile: postgresProfile(storeId, evidencePath, 'ASSESSED'),
+        }
+      : contextContribution(storeId, evidencePath, 'ASSESSED')
+    run = applyJobResult(
+      run,
+      providerResult(
+        run,
+        sidecar.job_id,
+        evidencePath,
+        undefined,
+        contribution,
+      ),
+      {
+        sidecar,
+        expectedPacketSha256: PACKET_SHA256,
+      },
+    )
+  }
+
+  const reversed = structuredClone(run)
+  reversed.store_contributions.reverse()
+  assert.deepEqual(
+    synthesizeStoreProfiles(run),
+    synthesizeStoreProfiles(reversed),
+  )
+  const advanced = advanceRun(run)
+  assert.equal(advanced.advanced, true)
+  assert.equal(advanced.run.phase, 'TRIAGE')
+  assert.equal(advanced.run.store_profiles.length, 1)
+  assert.equal(advanced.run.store_profiles[0].coverage_state, 'ASSESSED')
+  assert.deepEqual(
+    advanced.run.store_profiles[0].evidence_paths,
+    plan.run.database_discovery.store_candidates
+      .find(({ store_id: candidateId }) => candidateId === storeId)
+      .scope_paths,
+  )
+})
+
+test('one partial context contribution conservatively degrades synthesized coverage', () => {
+  const { home, storeId } = homeAndRelated()
+  const databaseSidecars = initialDatabaseSidecars().filter(
+    (sidecar) => sidecar.database_store_ids?.includes(storeId),
+  )
+  let run = structuredClone(plan.run)
+  for (const job of run.jobs) {
+    if (
+      job.kind === 'LENS'
+      && job.closure_round === undefined
+      && job.lens !== 'database-and-data-stores'
+    ) {
+      job.state = 'SKIPPED'
+      job.reason = 'test isolates database synthesis'
+    }
+  }
+
+  const contexts = databaseSidecars.filter(
+    ({ job_id: jobId }) => jobId !== home.job_id,
+  )
+  for (const [index, sidecar] of [home, ...contexts].entries()) {
+    const evidencePath = sidecar.scoped_files[0]
+    run = beginJob(run, sidecar.job_id)
+    const contribution = sidecar.job_id === home.job_id
+      ? {
+          store_id: storeId,
+          profile: postgresProfile(storeId, evidencePath, 'ASSESSED'),
+        }
+      : contextContribution(
+          storeId,
+          evidencePath,
+          index === 1 ? 'PARTIAL' : 'ASSESSED',
+        )
+    run = applyJobResult(
+      run,
+      providerResult(
+        run,
+        sidecar.job_id,
+        evidencePath,
+        undefined,
+        contribution,
+      ),
+      {
+        sidecar,
+        expectedPacketSha256: PACKET_SHA256,
+      },
+    )
+  }
+
+  const advanced = advanceRun(run).run
+  assert.equal(advanced.store_profiles[0].coverage_state, 'PARTIAL')
+  assert.ok(advanced.store_profiles[0].coverage_gaps.some(
+    ({ area }) => area === 'shard-local store semantics',
+  ))
+})
+
+test('forged contribution provenance and evidence fail standalone validation', () => {
+  const { home, storeId } = homeAndRelated()
+  const evidencePath = home.scoped_files[0]
+  let run = beginJob(plan.run, home.job_id)
+  run = applyJobResult(
+    run,
+    providerResult(
+      run,
+      home.job_id,
+      evidencePath,
+      postgresProfile(storeId, evidencePath, 'ASSESSED'),
+    ),
+    {
+      sidecar: home,
+      expectedPacketSha256: PACKET_SHA256,
+    },
+  )
+
+  const forgedDigest = structuredClone(run)
+  forgedDigest.store_contributions[0].input_sha256 = 'b'.repeat(64)
+  assert.ok(validateRun(forgedDigest).errors.some(
+    ({ code }) => code === 'STORE_CONTRIBUTION_PROVENANCE_INVALID',
+  ))
+
+  const forgedEvidence = structuredClone(run)
+  forgedEvidence.store_contributions[0]
+    .contribution.profile.evidence_paths = ['src/runtime-config.ts']
+  assert.ok(validateRun(forgedEvidence).errors.some(
+    ({ code }) => code === 'STORE_CONTRIBUTION_EVIDENCE_OUTSIDE_SHARD',
+  ))
+
+  const forgedDetectionBinding = structuredClone(run)
+  forgedDetectionBinding.store_contributions[0]
+    .contribution.profile.store_context.detection_evidence = [
+      `${evidencePath}: missing line binding`,
+    ]
+  assert.ok(validateRun(forgedDetectionBinding).errors.some(
+    ({ code }) => code === 'DATABASE_PROFILE_UNBOUND_DETECTION_EVIDENCE',
+  ))
+
+  const forgedAdapter = structuredClone(run)
+  forgedAdapter.store_contributions[0]
+    .contribution.profile.store_context.adapter_id = 'inventory-only'
+  assert.ok(validateRun(forgedAdapter).errors.some(
+    ({ code }) => code === 'DATABASE_PROFILE_ROUTE_UNASSESSED',
+  ))
+})
+
+test('legacy schema 3 retains direct home-shard profile behavior', () => {
+  const { home, storeId } = homeAndRelated()
+  const evidencePath = home.scoped_files[0]
+  const legacy = structuredClone(plan.run)
+  legacy.schema_version = '3.0.0'
+  delete legacy.store_contributions
+  let run = beginJob(legacy, home.job_id)
+  run = applyJobResult(
+    run,
+    {
+      ...providerResult(
+        run,
+        home.job_id,
+        evidencePath,
+        postgresProfile(storeId, evidencePath, 'PARTIAL'),
+      ),
+      store_profiles: [
+        postgresProfile(storeId, evidencePath, 'PARTIAL'),
+      ],
+      store_contributions: [],
+    },
+    {
+      sidecar: home,
+      expectedPacketSha256: PACKET_SHA256,
+    },
+  )
+  assert.equal(run.store_profiles.length, 1)
+  assert.equal(run.store_profiles[0].coverage_state, 'PARTIAL')
 })

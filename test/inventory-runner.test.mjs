@@ -14,6 +14,7 @@ import {
   DEFAULT_INVENTORY_LIMITS,
   classifyInventoryEntry,
   inventoryRepository,
+  normalizeIncludedRoots,
   serializeInventory,
 } from '../scripts/lib/inventory.mjs'
 import { discoverDatabaseGraph } from '../scripts/lib/database-discovery.mjs'
@@ -72,6 +73,22 @@ test('signal activation respects identifier boundaries without weakening literal
     true,
   )
   assert.equal(signalActivatorMatches('@RestController', '@RestController\nclass Api {}'), true)
+  assert.equal(
+    signalActivatorMatches('node:crypto', "import { sign } from 'node:crypto'"),
+    true,
+  )
+  assert.equal(
+    signalActivatorMatches('Ed25519', '"algorithm": "Ed25519"'),
+    true,
+  )
+})
+
+test('included roots canonicalize order, duplicates and redundant descendants', () => {
+  assert.deepEqual(
+    normalizeIncludedRoots(['src/security', 'package.json', 'src', './src', 'docs\\adr']),
+    ['package.json', 'src', 'docs/adr'],
+  )
+  assert.deepEqual(normalizeIncludedRoots(['src', '.']), ['.'])
 })
 
 test('inventory includes hidden files, excludes configured dependency trees and hashes inputs', async () => {

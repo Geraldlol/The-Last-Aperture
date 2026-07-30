@@ -30,10 +30,17 @@ import {
   finalizeRun,
   inferFindingStage,
   isExactStageOneReplay,
+  storeContributionSchema,
   storeProfileSchema,
 } from './contracts.mjs'
 import { renderMarkdownReport, renderSarif } from './report.mjs'
 import { stableJson } from './run-engine.mjs'
+import {
+  DATABASE_TOPIC_IDS,
+  expectedStorePathsForJob,
+  normalizeStoreContribution,
+  synthesizeStoreProfiles,
+} from './store-synthesis.mjs'
 
 const JOB_RESULT_SCHEMA_URL = new URL('../../schemas/job-result.schema.json', import.meta.url)
 export const jobResultSchema = JSON.parse(
@@ -49,6 +56,7 @@ const ajv = new Ajv2020({
 })
 ajv.addSchema(findingSchema)
 ajv.addSchema(storeProfileSchema)
+ajv.addSchema(storeContributionSchema)
 ajv.addSchema(jobResultSchema)
 const validateJobResultSchema = ajv.getSchema(jobResultSchema.$id)
 
@@ -481,8 +489,153 @@ function unresolvedPrincipal(profile) {
     isUnresolvedDatabaseDescriptor(value))
 }
 
+function applyStoreContributions(run, job, jobResult, options = {}) {
+  const contributions = jobResult.store_contributions ?? []
+  if (run.schema_version !== '4.0.0') {
+    if (contributions.length > 0) {
+      throw resultError(
+        'store_contributions require a run schema 4 database job',
+      )
+    }
+    return
+  }
+  if ((jobResult.store_profiles ?? []).length > 0) {
+    throw resultError(
+      'run schema 4 providers return store_contributions, not store_profiles',
+    )
+  }
+  const isBaseDatabaseJob = (
+    job.kind === 'LENS'
+    && job.lens === 'database-and-data-stores'
+    && job.closure_round === undefined
+  )
+  if (!isBaseDatabaseJob) {
+    if (contributions.length > 0) {
+      throw resultError(
+        'only a base database-and-data-stores job may return store_contributions',
+      )
+    }
+    return
+  }
+  if (jobResult.state !== 'SUCCEEDED') return
+
+  const expectedStoreIds = job.database_store_ids ?? []
+  const contributionStoreIds = contributions.map(
+    ({ store_id: storeId }) => storeId,
+  )
+  if (
+    contributionStoreIds.length !== expectedStoreIds.length
+    || new Set(contributionStoreIds).size !== contributionStoreIds.length
+    || expectedStoreIds.some((storeId) => !contributionStoreIds.includes(storeId))
+  ) {
+    throw resultError(
+      `successful database job ${job.job_id} must contribute exactly once for every assigned store`,
+    )
+  }
+
+  const examined = new Set(jobResult.examined_files)
+  const scoped = new Set(options.sidecar?.scoped_files ?? [])
+  const ownedTopics = new Set(options.sidecar?.owned_topics ?? [])
+  const authority = new Set(job.profile_authority_store_ids ?? [])
+  const discovered = new Set(
+    (run.database_discovery?.store_candidates ?? [])
+      .map(({ store_id: storeId }) => storeId),
+  )
+  const existing = new Set((run.store_contributions ?? []).map((envelope) =>
+    `${envelope.job_id}\0${envelope.contribution.store_id}`))
+  run.store_contributions ??= []
+
+  for (const contribution of contributions) {
+    const storeId = contribution.store_id
+    if (!discovered.has(storeId)) {
+      throw resultError(
+        `store contribution ${storeId} is absent from controller discovery`,
+      )
+    }
+    const role = authority.has(storeId) ? 'AUTHORITY' : 'CONTEXT'
+    if (role === 'AUTHORITY' && contribution.profile === undefined) {
+      throw resultError(
+        `authority contribution ${storeId} must supply its local store profile`,
+      )
+    }
+    if (role === 'CONTEXT' && contribution.profile !== undefined) {
+      throw resultError(
+        `context contribution ${storeId} cannot supply or rewrite a store profile`,
+      )
+    }
+    if (
+      contribution.profile
+      && contribution.profile.store_context.store_id !== storeId
+    ) {
+      throw resultError(
+        `authority contribution ${storeId} profile store ID does not match`,
+      )
+    }
+
+    const normalized = normalizeStoreContribution(contribution)
+    const expectedPaths = expectedStorePathsForJob(run, job, storeId)
+    const expectedPathSet = new Set(expectedPaths)
+    for (const path of normalized.evidence_paths) {
+      if (
+        !expectedPathSet.has(path)
+        || !examined.has(path)
+        || !scoped.has(path)
+      ) {
+        throw resultError(
+          `store contribution ${storeId} cites unexamined or out-of-scope evidence ${path}`,
+        )
+      }
+    }
+    for (const topic of normalized.assessed_topics) {
+      if (!ownedTopics.has(topic)) {
+        throw resultError(
+          `store contribution ${storeId} claims unowned database topic ${topic}`,
+        )
+      }
+    }
+    if (
+      normalized.coverage_state === 'ASSESSED'
+      && (
+        normalized.coverage_gaps.length > 0
+        || DATABASE_TOPIC_IDS.some(
+          (topic) => !normalized.assessed_topics.includes(topic),
+        )
+        || expectedPaths.some(
+          (path) => !normalized.evidence_paths.includes(path),
+        )
+      )
+    ) {
+      throw resultError(
+        `ASSESSED store contribution ${storeId} must close every assigned path and database topic without gaps`,
+      )
+    }
+
+    const identity = `${job.job_id}\0${storeId}`
+    if (existing.has(identity)) {
+      throw resultError(
+        `duplicate or replayed store contribution ${job.job_id}/${storeId}`,
+      )
+    }
+    existing.add(identity)
+    run.store_contributions.push({
+      job_id: job.job_id,
+      input_sha256: jobResult.input_sha256,
+      role,
+      contribution,
+    })
+  }
+}
+
 function applyStoreProfiles(run, job, jobResult, options = {}) {
   const profiles = jobResult.store_profiles ?? []
+  if (run.schema_version === '4.0.0') {
+    if (profiles.length > 0) {
+      throw resultError(
+        'run schema 4 providers cannot append store_profiles directly',
+      )
+    }
+    return
+  }
   if (profiles.length > 0 && (
     job.kind !== 'LENS'
     || job.lens !== 'database-and-data-stores'
@@ -634,9 +787,14 @@ function applyStoreProfiles(run, job, jobResult, options = {}) {
 
 function ensureDatabaseProfileBinding(run, finding) {
   if (!isDatabaseFinding(finding)) return
+  const storeId = finding.store_context?.store_id
   const profile = (run.store_profiles ?? []).find(
     (entry) => entry.store_context.store_id === finding.store_context?.store_id,
-  )
+  ) ?? (run.store_contributions ?? [])
+    .find((envelope) =>
+      envelope.role === 'AUTHORITY'
+      && envelope.contribution?.store_id === storeId)
+    ?.contribution?.profile
   if (!profile) {
     throw resultError(
       `database finding ${finding.candidate_id} references an unprofiled store`,
@@ -676,7 +834,7 @@ function applyFindings(run, job, findings, options = {}) {
       ensureTopicAuthority(job, finding, options.sidecar, { originating: true })
       if (existingIndex !== undefined) {
         const isClosureRetry = (
-          run.schema_version === '3.0.0'
+          ['3.0.0', '4.0.0'].includes(run.schema_version)
           && Number.isInteger(job.closure_round)
           && job.closure_round > 0
         )
@@ -919,6 +1077,9 @@ export function applyJobResult(run, jobResult, options = {}) {
   }
 
   ensureExaminedScope(next, job, options.sidecar, jobResult)
+  applyStoreContributions(next, job, jobResult, {
+    sidecar: options.sidecar,
+  })
   applyStoreProfiles(next, job, jobResult, {
     sidecar: options.sidecar,
   })
@@ -1274,6 +1435,33 @@ function advanceClosureRound(run) {
   return true
 }
 
+function materializeStoreSynthesis(run) {
+  if (run.schema_version !== '4.0.0') return
+  if ((run.store_profiles ?? []).length > 0) {
+    throw resultError(
+      'schema 4 store synthesis cannot rewrite an existing profile',
+    )
+  }
+  const synthesized = synthesizeStoreProfiles(run)
+  run.store_profiles = synthesized.map(({ profile }) => profile)
+  const resolved = new Set(run.coverage.resolved_gap_ids ?? [])
+  for (const { store_id: storeId, profile } of synthesized) {
+    for (const gap of profile.coverage_gaps) {
+      run.coverage.gaps.push({
+        area: `store:${storeId}:${gap.area}`,
+        reason: gap.reason,
+      })
+    }
+    for (const gap of run.coverage.gaps ?? []) {
+      if (gap.area === `store:${storeId}`) {
+        resolved.add(exactCoverageGapId(gap))
+      }
+    }
+  }
+  run.coverage.resolved_gap_ids = [...resolved]
+    .sort((left, right) => left.localeCompare(right, 'en'))
+}
+
 export function advanceRun(run) {
   const next = clone(run)
   if (next.state !== 'RUNNING') {
@@ -1299,6 +1487,7 @@ export function advanceRun(run) {
       .every(({ state }) => TERMINAL_JOB_STATES.has(state))) {
       return { advanced: false, run }
     }
+    materializeStoreSynthesis(next)
     next.coverage.lenses = finalizedFanoutLensRows(next)
     next.phase = 'TRIAGE'
   } else if (next.phase === 'TRIAGE') {

@@ -31,7 +31,8 @@
       "enum": [
         "1.0.0",
         "2.0.0",
-        "3.0.0"
+        "3.0.0",
+        "4.0.0"
       ]
     },
     "run_id": {
@@ -119,6 +120,13 @@
         "$ref": "https://red-team-audit.dev/schemas/store-profile.schema.json"
       }
     },
+    "store_contributions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/storeContributionEnvelope"
+      }
+    },
     "database_discovery": {
       "$ref": "#/$defs/databaseDiscovery"
     },
@@ -161,7 +169,8 @@
           "schema_version": {
             "enum": [
               "2.0.0",
-              "3.0.0"
+              "3.0.0",
+              "4.0.0"
             ]
           }
         },
@@ -180,7 +189,10 @@
       "if": {
         "properties": {
           "schema_version": {
-            "const": "3.0.0"
+            "enum": [
+              "3.0.0",
+              "4.0.0"
+            ]
           }
         },
         "required": [
@@ -213,6 +225,23 @@
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "4.0.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "store_contributions"
+        ]
       }
     },
     {
@@ -1105,6 +1134,36 @@
     "coverageGapId": {
       "type": "string",
       "pattern": "^coverage-gap:sha256:[a-f0-9]{64}$"
+    },
+    "storeContributionEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "input_sha256",
+        "role",
+        "contribution"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "role": {
+          "enum": [
+            "AUTHORITY",
+            "CONTEXT"
+          ]
+        },
+        "contribution": {
+          "$ref": "https://red-team-audit.dev/schemas/store-contribution.schema.json"
+        }
+      }
     },
     "databaseDiscovery": {
       "$ref": "https://red-team-audit.dev/schemas/database-discovery.schema.json"

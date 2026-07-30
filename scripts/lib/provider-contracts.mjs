@@ -5,6 +5,10 @@ import Ajv2020 from 'ajv/dist/2020.js'
 
 const FINDING_SCHEMA_URL = new URL('../../schemas/finding.schema.json', import.meta.url)
 const STORE_PROFILE_SCHEMA_URL = new URL('../../schemas/store-profile.schema.json', import.meta.url)
+const STORE_CONTRIBUTION_SCHEMA_URL = new URL(
+  '../../schemas/store-contribution.schema.json',
+  import.meta.url,
+)
 const JOB_RESULT_SCHEMA_URL = new URL('../../schemas/job-result.schema.json', import.meta.url)
 const PROVIDER_CONFIG_SCHEMA_URL = new URL(
   '../../schemas/provider-config.schema.json',
@@ -29,6 +33,7 @@ function loadJson(url) {
 
 const findingSchema = loadJson(FINDING_SCHEMA_URL)
 const storeProfileSchema = loadJson(STORE_PROFILE_SCHEMA_URL)
+const storeContributionSchema = loadJson(STORE_CONTRIBUTION_SCHEMA_URL)
 export const jobResultSchema = loadJson(JOB_RESULT_SCHEMA_URL)
 export const providerConfigSchema = loadJson(PROVIDER_CONFIG_SCHEMA_URL)
 export const providerExecutionSchema = loadJson(PROVIDER_EXECUTION_SCHEMA_URL)
@@ -50,6 +55,7 @@ const ajv = new Ajv2020({
 for (const schema of [
   findingSchema,
   storeProfileSchema,
+  storeContributionSchema,
   jobResultSchema,
   providerConfigSchema,
   providerExecutionSchema,

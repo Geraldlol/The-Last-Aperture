@@ -160,8 +160,8 @@ export function appendAttemptEvent(run, eventInput) {
 
 export function leaseProviderAttempt(run, jobId, metadata) {
   assertValidRun(run)
-  if (!['2.0.0', '3.0.0'].includes(run.schema_version)) {
-    throw new Error('Observed provider attempts require a v2 or v3 run')
+  if (!['2.0.0', '3.0.0', '4.0.0'].includes(run.schema_version)) {
+    throw new Error('Observed provider attempts require a v2, v3, or v4 run')
   }
   if (!run.source_snapshot || !run.control_snapshot) {
     throw new Error('Observed provider attempts require sealed source and control snapshots')

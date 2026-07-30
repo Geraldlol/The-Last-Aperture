@@ -122,12 +122,16 @@ function fakeExecution({
         version: '1.0.0',
         instance_id: 'fixture:provider-1',
       },
-      state: 'SUCCEEDED',
+      state: resultOverrides.state ?? 'SUCCEEDED',
       examined_files: artifacts
         .filter(({ kind }) => kind === 'FILE')
         .map(({ logical_name: logicalName }) => logicalName),
       findings: resultOverrides.findings ?? [],
       coverage_gaps: resultOverrides.coverage_gaps ?? [],
+      ...(resultOverrides.error ? { error: resultOverrides.error } : {}),
+      ...(resultOverrides.store_contributions
+        ? { store_contributions: resultOverrides.store_contributions }
+        : {}),
     },
     receipt: {
       schema_version: '1.0.0',
@@ -552,7 +556,19 @@ test('observed database work cannot omit the sealed discovery control', {
           providerRunner: async (options) => {
             observedDatabase =
               options.packet.lens === 'database-and-data-stores'
-            return fakeExecution(options)
+            return fakeExecution(
+              options,
+              observedDatabase
+                ? {
+                    state: 'FAILED',
+                    error: {
+                      code: 'FIXTURE_SEMANTIC_REVIEW_UNAVAILABLE',
+                      message: 'This control-consumption fixture does not assess database semantics.',
+                      recoverable: false,
+                    },
+                  }
+                : {},
+            )
           },
         },
       )

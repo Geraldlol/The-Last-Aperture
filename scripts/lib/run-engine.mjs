@@ -37,9 +37,10 @@ import {
   buildRetryJobTemplate,
   validateWorkShardLimits,
 } from './work-shards.mjs'
+import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.4.0'
-export const RUN_SCHEMA_VERSION = '3.0.0'
+export const PLATFORM_VERSION = '0.6.0'
+export const RUN_SCHEMA_VERSION = '4.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
 function sha256(value) {
@@ -450,6 +451,22 @@ export async function createRunPlan(options) {
     coveragePolicy.max_requeue_rounds,
   )
   const plannedJobs = [...activation.jobs, ...templateJobs]
+  const requiredStoreContributions = activation.jobs
+    .filter((job) =>
+      job.lens === 'database-and-data-stores'
+      && (job.kind === undefined || job.kind === 'LENS')
+      && job.closure_round === undefined)
+    .reduce(
+      (total, job) =>
+        total + (job.database_discovery?.related_store_ids?.length ?? 0),
+      0,
+    )
+  if (requiredStoreContributions > MAX_STORE_CONTRIBUTIONS) {
+    throw new RangeError(
+      `database plan requires ${requiredStoreContributions} shard/store ` +
+      `contributions, exceeding the bounded limit of ${MAX_STORE_CONTRIBUTIONS}`,
+    )
+  }
   const policyDigest = sha256(stableJson(effectivePolicy, 0))
   const corpusDigest = lensPack.digest
   const timestamp = normalizedTimestamp(createdAt)
@@ -548,6 +565,7 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
+    store_contributions: [],
     store_profiles: [],
     findings: [],
     errors: inventoryErrors(inventory),
