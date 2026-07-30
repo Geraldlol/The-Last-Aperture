@@ -1,0 +1,63 @@
+name: lint-lenses
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install shell-fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+          rg --version
+      - run: npm ci
+      - run: npm test
+      - if: matrix.node == '24'
+        run: npm run lint
+      - if: matrix.node == '24'
+        run: npm run gen -- --check
+      - if: matrix.node == '24'
+        run: npm run gen:benchmarks -- --check
+
+  provider-docker-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Build digest-pinned hostile conformance peer
+        run: >-
+          docker build --pull=true
+          --file providers/reference-byte-consumer/Dockerfile.conformance
+          --build-arg
+          NODE_IMAGE=node:22-bookworm@sha256:c601a46abb4d2ab80a9dc3da208d50d1122642d53f17a101926ace71e5a9bf1c
+          --tag red-team-audit-reference-byte-consumer:conformance
+          providers/reference-byte-consumer
+      - name: Resolve immutable runtime and image identities
+        id: docker
+        shell: bash
+        run: |
+          echo "runtime=$(realpath "$(command -v docker)")" >> "$GITHUB_OUTPUT"
+          echo "image=$(docker image inspect --format '{{.Id}}' red-team-audit-reference-byte-consumer:conformance)" >> "$GITHUB_OUTPUT"
+      - name: Run real-Docker containment, broker, and cleanup gate
+        env:
+          RTA_DOCKER_RUNTIME: ${{ steps.docker.outputs.runtime }}
+          RTA_PROVIDER_IMAGE: ${{ steps.docker.outputs.image }}
+        run: npm run test:provider:docker

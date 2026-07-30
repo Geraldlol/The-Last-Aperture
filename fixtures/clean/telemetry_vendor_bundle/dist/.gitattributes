@@ -1,0 +1,21 @@
+# C-035 (part 3 of 5) — clean fixture support file.
+#
+# A directory-scoped .gitattributes, which git applies to this directory and
+# below. It exists so the claim part 2 makes about being build output is checkable
+# with a command instead of read off a comment:
+#
+#   git check-attr linguist-generated linguist-vendored -- \
+#     fixtures/clean/telemetry_vendor_bundle/dist/assets/vendor.9f3c1a2b.min.js
+#
+# hipaa-and-phi false positive 7 turns on exactly this question — is the tracker
+# string in first-party source or in build output — and its failure mode is an
+# auditor who cannot tell and files anyway. So the fixture supplies three
+# independent answers: the banner in part 2, the `dist/assets/*.min.js` path, and
+# this attribute. The repository-wide `.gitattributes` marks all of `fixtures/**`
+# vendored for a different reason (keeping the corpus out of language statistics),
+# and that would be a weak leg to rest on here, so the attribute is restated
+# locally and scoped to the bundle.
+
+*.min.js linguist-generated=true
+*.min.js linguist-vendored=true
+*.min.js -diff

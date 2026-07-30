@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/provider-config.schema.json",
+  "title": "Red Team Audit provider execution configuration",
+  "description": "Trusted controller configuration for an immutable Docker stdio provider. Repository content must never populate this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "runtime_path",
+    "image",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "docker-stdio-v1"
+    },
+    "runtime_path": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 512,
+      "pattern": "^(?:sha256:[a-f0-9]{64}|[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?::[0-9]{1,5})?(?:/[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)*@sha256:[a-f0-9]{64})$"
+    },
+    "receipt_signing_private_key_path": {
+      "description": "Optional path to an external Ed25519 private key. The integration layer, not the provider runner, owns key loading and signing.",
+      "$ref": "#/$defs/absolutePath"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_time_ms",
+        "docker_command_timeout_ms",
+        "idle_timeout_ms",
+        "delivery_timeout_ms",
+        "max_deliveries",
+        "max_file_bytes",
+        "max_total_delivery_bytes",
+        "max_stdout_bytes",
+        "max_stderr_bytes",
+        "max_frame_bytes",
+        "memory_bytes",
+        "cpus",
+        "pids",
+        "nofile",
+        "tmpfs_bytes"
+      ],
+      "properties": {
+        "wall_time_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 3600000
+        },
+        "docker_command_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 120000
+        },
+        "idle_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        },
+        "delivery_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        },
+        "max_deliveries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "max_file_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864
+        },
+        "max_total_delivery_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        },
+        "max_stdout_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 134217728
+        },
+        "max_stderr_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 16777216
+        },
+        "max_frame_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 100663296
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 67108864,
+          "maximum": 17179869184
+        },
+        "cpus": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 16
+        },
+        "pids": {
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 1024
+        },
+        "nofile": {
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 4096
+        },
+        "tmpfs_bytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 1073741824
+        }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]+[\\\\/][^\\\\/]+)[^\\u0000]*$"
+    }
+  }
+}

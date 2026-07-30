@@ -1,0 +1,11 @@
+# V-020 — vulnerable database conformance fixture.
+# Lens: database-and-data-stores
+# Topics: database-native-authorization-and-tenant-isolation;
+#         database-resource-governance-and-availability
+# Expected: Critical, CWE-732
+# Bug class: the unauthenticated default user and the application user both have
+# every key, channel, and command, including administrative commands.
+# STATIC ONLY: this is an ACL-shaped fixture, not a redis.conf or load command.
+
+user default on nopass ~* &* +@all
+user tenant_api reset on >REPLACE-ME-BEFORE-USE ~* &* +@all

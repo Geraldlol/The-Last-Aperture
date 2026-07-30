@@ -1,0 +1,52 @@
+<!--
+  C-031 (part 2 of 2) — clean fixture. Expected findings at Low or above: ZERO.
+
+  The template half. Two things to read:
+
+    * The data path is `lightning-record-edit-form`, so object permissions, FLS and
+      sharing are enforced server-side by the UI API. There is no Apex in this
+      bundle at all — no `@AuraEnabled` import, no `lightning/apex` wire — so there
+      is no place a `Security.stripInaccessible()` or an `isAccessible()` check
+      could be added, and the absence of one is not a gap.
+
+    * Every `lightning-input-field` below is a field the author intends editable by
+      anyone whose FLS permits it. `Internal_Risk_Note__c` is bound nowhere, and it
+      is not merely hidden with CSS or a `if:false` — markup-level hiding would be
+      cosmetic, which is the one real finding on this pattern.
+
+  There is no `lwc:dom="manual"`, no `aura:unescapedHtml`, no `escape="false"` and
+  no `innerHTML` assignment anywhere in this bundle, so the platform's own escaping
+  is the only output path.
+-->
+<template>
+    <lightning-card title="Field note" icon-name="standard:note">
+        <template if:true={error}>
+            <p class="slds-p-horizontal_small slds-text-color_error">
+                This note could not be loaded.
+            </p>
+        </template>
+
+        <template if:true={note}>
+            <div class="slds-p-horizontal_small">
+                <lightning-record-edit-form
+                    record-id={recordId}
+                    object-api-name="Field_Note__c"
+                    onsuccess={handleStatusChange}
+                >
+                    <lightning-messages></lightning-messages>
+
+                    <lightning-input-field field-name="Name"></lightning-input-field>
+                    <lightning-input-field field-name="Summary__c"></lightning-input-field>
+                    <lightning-input-field field-name="Status__c"></lightning-input-field>
+
+                    <lightning-button
+                        variant="brand"
+                        type="submit"
+                        name="save"
+                        label="Save"
+                    ></lightning-button>
+                </lightning-record-edit-form>
+            </div>
+        </template>
+    </lightning-card>
+</template>

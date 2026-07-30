@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FIXTURE V-013 — vulnerable half.
+
+  Lens:     salesforce-platform
+  Topic:    permission-set-and-profile-grants
+  Severity: High
+  CWE:      CWE-732 (incorrect permission assignment for a critical resource)
+
+  ONE defect: <viewAllFields>true</viewAllFields> on an object, which grants read
+  on EVERY field of that object and therefore bypasses field-level security.
+
+  This is the shape the lens's severity row used to grade Low. The row required a
+  <sharingModel> of Private, Read or ControlledByParent and downgraded to Low on
+  ReadWrite, reasoning that "every user already has it and the grant adds
+  nothing". That reasoning is about SHARING. Care_Episode__c below is declared
+  ReadWrite, so every user does already have every record — and no OWD at any
+  value hands a user a field their profile cannot read. viewAllFields does. The
+  downgrade therefore priced an FLS bypass at zero.
+
+  Note what is deliberately ABSENT: this permission set contains no
+  <fieldPermissions> entry for Clinical_Note__c. Under FLS its holders could not
+  read that field. viewAllFields is the only reason they can, which is why an
+  audit that establishes field readability from <fieldPermissions> alone reads
+  this file as granting nothing.
+
+  DO NOT EDIT to add a <fieldPermissions> block for Clinical_Note__c. The absence
+  is the fixture: adding one would make the field readable by an ordinary grant
+  and destroy the discriminator against Care_Episode_Reporting in this directory.
+
+  Nothing here is deployable: no package.xml, no sfdx-project.json, no license
+  assignment, no real org, no real patient data. Every label and API name was
+  written for this corpus.
+-->
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Care Coordination Team</label>
+    <description>Broadly assigned to every coordinator, scheduler and intake clerk.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Care_Episode__c</object>
+        <viewAllFields>true</viewAllFields>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Care_Episode__c.Episode_Status__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <tabSettings>
+        <tab>Care_Episode__c</tab>
+        <visibility>Visible</visibility>
+    </tabSettings>
+</PermissionSet>

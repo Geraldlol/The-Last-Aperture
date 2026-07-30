@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  C-006 (release half) — clean fixture. Expected findings at Low or above: ZERO.
+
+  This is the config the release variant resolves, and it is the strict one:
+  cleartext refused everywhere, system trust anchors only, no <debug-overrides>
+  element at all. It is included in the fixture so a reader comparing the debug
+  and release source sets can see that the relaxation is confined to one of them.
+
+  There is no <pin-set> here, and its absence is not a finding: absent
+  certificate pinning is hardening, not a vulnerability, and the platform trust
+  store plus this config's exclusion of user-added CAs (the default for
+  targetSdk >= 24) already defeats passive and opportunistic interception.
+
+  False-positive entries exercised:
+    mobile-app-security (6)  missing certificate pinning is hardening, capped in
+                             this lens's own Low/Medium band and not a defect
+-->
+<network-security-config>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+</network-security-config>

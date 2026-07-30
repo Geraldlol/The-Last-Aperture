@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  C-015 (part 2 of 2) — clean fixture. Expected findings at Low or above: ZERO.
+
+  This file is the discriminator for `ShippingRuleRollup.cls`. salesforce-platform's
+  false positive 2 refuses to clear a `without sharing` class on the keyword alone:
+  it requires the object's org-wide default to be ESTABLISHED, and for a custom
+  object that means reading <sharingModel> and <externalSharingModel> out of the
+  object metadata rather than recording the OWD as unknown.
+
+  Both are ReadWrite. Sharing restricts nothing on this object, for internal or
+  external users, so `with sharing` and `without sharing` select the same rows and
+  the declaration on the Apex class is inert.
+
+  Why that is the right OWD for this object and not itself a finding: a shipping
+  zone is a rate-card reference row — a carrier code, a postcode range and a
+  price. It holds no person, no account relationship and no regulated field. The
+  object is written only by the rollup and by an admin-owned data load, and it is
+  read by every quoting path in the org, which is exactly the population a Public
+  Read/Write reference table is for.
+-->
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <label>Shipping Zone</label>
+    <pluralLabel>Shipping Zones</pluralLabel>
+    <nameField>
+        <label>Zone Name</label>
+        <type>Text</type>
+    </nameField>
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Carrier rate-card reference data. No personal or regulated fields.</description>
+
+    <!-- The two lines false positive 2 requires an auditor to read. -->
+    <sharingModel>ReadWrite</sharingModel>
+    <externalSharingModel>ReadWrite</externalSharingModel>
+
+    <enableActivities>false</enableActivities>
+    <enableFeeds>false</enableFeeds>
+    <enableHistory>false</enableHistory>
+    <enableReports>true</enableReports>
+    <enableSharing>false</enableSharing>
+    <enableStreamingApi>false</enableStreamingApi>
+</CustomObject>

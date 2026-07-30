@@ -1,0 +1,45 @@
+{
+  "_fixture": "C-039 — clean database conformance fixture; static and not deployable",
+  "lens": "database-and-data-stores",
+  "topic": "database-native-authorization-and-tenant-isolation",
+  "expected": {
+    "minimum_finding_severity": null
+  },
+  "views": [
+    {
+      "name": "tenant_a_orders",
+      "source": "orders",
+      "pipeline": [
+        {
+          "$match": {
+            "tenantId": "tenant-a"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "tenant_view_reader",
+      "privileges": [
+        {
+          "resource": {
+            "db": "shop",
+            "collection": "tenant_a_orders"
+          },
+          "actions": [
+            "find"
+          ]
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "name": "tenant_api",
+      "roles": [
+        "tenant_view_reader"
+      ]
+    }
+  ]
+}

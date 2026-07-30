@@ -1,0 +1,1593 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/run.schema.json",
+  "title": "Red Team Audit run manifest",
+  "description": "The provenance, declared capability, accumulated findings, and coverage denominator for one audit run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "state",
+    "phase",
+    "capability_mode",
+    "created_at",
+    "tool",
+    "plan_digest",
+    "repository",
+    "policy_digest",
+    "lens_pack_digest",
+    "scope",
+    "activated_lenses",
+    "jobs",
+    "coverage",
+    "store_profiles",
+    "findings",
+    "errors",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "1.0.0",
+        "2.0.0",
+        "3.0.0"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "state": {
+      "enum": [
+        "PLANNED",
+        "RUNNING",
+        "COMPLETED",
+        "COMPLETE_WITH_GAPS",
+        "ABORTED",
+        "FAILED"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "RECON",
+        "FANOUT",
+        "TRIAGE",
+        "PROOF",
+        "PATCH",
+        "REPORT",
+        "COMPLETENESS",
+        "FINALIZED"
+      ]
+    },
+    "capability_mode": {
+      "enum": [
+        "STATIC",
+        "TEST_EXECUTION",
+        "LOCAL_DYNAMIC"
+      ]
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "tool": {
+      "$ref": "#/$defs/tool"
+    },
+    "plan_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "policy_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "lens_pack_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "repository": {
+      "$ref": "#/$defs/repository"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "activated_lenses": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/name"
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/job"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "https://red-team-audit.dev/schemas/finding.schema.json"
+      }
+    },
+    "store_profiles": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "https://red-team-audit.dev/schemas/store-profile.schema.json"
+      }
+    },
+    "database_discovery": {
+      "$ref": "#/$defs/databaseDiscovery"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/runError"
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "source_snapshot": {
+      "$ref": "#/$defs/sealedSnapshot"
+    },
+    "control_snapshot": {
+      "$ref": "#/$defs/sealedSnapshot"
+    },
+    "attempt_events": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": {
+        "$ref": "#/$defs/attemptEvent"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "2.0.0",
+              "3.0.0"
+            ]
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "attempt_events",
+          "control_snapshot"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "3.0.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "database_discovery"
+        ],
+        "properties": {
+          "coverage": {
+            "required": [
+              "model_version",
+              "policy",
+              "inventory_records",
+              "denominators",
+              "shards",
+              "closure",
+              "resolved_gap_ids"
+            ],
+            "properties": {
+              "lenses": {
+                "items": {
+                  "required": [
+                    "applicable_paths"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "COMPLETED",
+              "COMPLETE_WITH_GAPS",
+              "ABORTED",
+              "FAILED"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "phase": {
+            "const": "FINALIZED"
+          }
+        },
+        "required": [
+          "completed_at"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "ABORTED",
+              "FAILED"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "errors": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "sealedSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "index_artifact_key",
+        "root_sha256",
+        "available_files",
+        "available_bytes"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "SOURCE",
+            "CONTROL"
+          ]
+        },
+        "index_artifact_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "root_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "available_files": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "available_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456
+        }
+      }
+    },
+    "attemptEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "attempt_id",
+        "job_id",
+        "event",
+        "occurred_at",
+        "previous_event_sha256",
+        "event_sha256"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "attempt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "event": {
+          "enum": [
+            "LEASED",
+            "STARTED",
+            "FAILED",
+            "RESULT_CAPTURED",
+            "VALIDATED",
+            "COMMITTED"
+          ]
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "previous_event_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "nonce": {
+          "$ref": "#/$defs/sha256"
+        },
+        "packet_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "repository_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "lens_pack_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "provider_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sandbox_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "control_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "wall_clock_ms",
+            "max_requests",
+            "max_bytes"
+          ],
+          "properties": {
+            "wall_clock_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 3600000
+            },
+            "max_requests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            }
+          }
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "container_name": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9_.-]+$"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "recoverable": {
+          "type": "boolean"
+        },
+        "execution_artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "execution_artifact_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "failure_artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "failure_artifact_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "partial_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "event": {
+                "const": "LEASED"
+              }
+            },
+            "required": [
+              "event"
+            ]
+          },
+          "then": {
+            "required": [
+              "nonce",
+              "packet_sha256",
+              "plan_sha256",
+              "repository_tree_sha256",
+              "lens_pack_sha256",
+              "policy_sha256",
+              "provider_config_sha256",
+              "sandbox_policy_sha256",
+              "source_snapshot_sha256",
+              "control_snapshot_sha256",
+              "budgets",
+              "expires_at",
+              "container_name"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event": {
+                "const": "FAILED"
+              }
+            },
+            "required": [
+              "event"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason",
+              "recoverable"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "event": {
+                "enum": [
+                  "RESULT_CAPTURED",
+                  "VALIDATED",
+                  "COMMITTED"
+                ]
+              }
+            },
+            "required": [
+              "event"
+            ]
+          },
+          "then": {
+            "required": [
+              "execution_artifact_key",
+              "execution_artifact_sha256",
+              "receipt_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "failure_artifact_key"
+                ]
+              },
+              {
+                "required": [
+                  "failure_artifact_sha256"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "const": "FAILED"
+              }
+            },
+            "required": [
+              "event",
+              "failure_artifact_key",
+              "failure_artifact_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "partial_receipt_sha256"
+            ]
+          },
+          "then": {
+            "required": [
+              "failure_artifact_key",
+              "failure_artifact_sha256"
+            ]
+          }
+        }
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "corpus_sha256"
+      ],
+      "properties": {
+        "name": {
+          "const": "red-team-audit"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+        },
+        "corpus_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "tree_digest",
+        "dirty"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "revision": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "tree_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dirty": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "const": "unknown"
+            }
+          ]
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included_paths",
+        "excluded_paths"
+      ],
+      "properties": {
+        "included_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "excluded_paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "reason": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            }
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventory",
+        "examined",
+        "unexamined",
+        "lenses",
+        "gaps"
+      ],
+      "properties": {
+        "model_version": {
+          "const": "2.0.0"
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "require_source_closure",
+            "max_shard_files",
+            "max_shard_bytes",
+            "max_requeue_rounds"
+          ],
+          "properties": {
+            "require_source_closure": {
+              "type": "boolean"
+            },
+            "max_shard_files": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "max_shard_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 536870912
+            },
+            "max_requeue_rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            }
+          }
+        },
+        "denominators": {
+          "$ref": "#/$defs/coverageDenominators"
+        },
+        "inventory": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "examined": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "unexamined": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "reason": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "kind": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "category": {
+                "$ref": "#/$defs/inventoryCategory"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        "lenses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "lens",
+              "status",
+              "examined_paths"
+            ],
+            "properties": {
+              "lens": {
+                "$ref": "#/$defs/name"
+              },
+              "status": {
+                "enum": [
+                  "RAN",
+                  "NOT_TRIGGERED",
+                  "NOT_ASSESSED",
+                  "FAILED"
+                ]
+              },
+              "examined_paths": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/nonEmptyString"
+                }
+              },
+              "applicable_paths": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/nonEmptyString"
+                }
+              },
+              "reason": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "status": {
+                      "enum": [
+                        "NOT_TRIGGERED",
+                        "NOT_ASSESSED",
+                        "FAILED"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "reason"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "area",
+              "reason"
+            ],
+            "properties": {
+              "area": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "reason": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "gap_id": {
+                "$ref": "#/$defs/coverageGapId"
+              },
+              "kind": {
+                "const": "LENS_FILE"
+              },
+              "lens": {
+                "$ref": "#/$defs/name"
+              },
+              "path": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "then": {
+                  "required": [
+                    "gap_id",
+                    "lens",
+                    "path"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "inventory_records": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/inventoryRecord"
+          }
+        },
+        "shards": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/workShard"
+          }
+        },
+        "closure": {
+          "$ref": "#/$defs/coverageClosure"
+        },
+        "resolved_gap_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 1000000,
+          "items": {
+            "$ref": "#/$defs/coverageGapId"
+          }
+        }
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "kind",
+        "state"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "kind": {
+          "enum": [
+            "RECON",
+            "LENS",
+            "TRIAGE",
+            "PROOF",
+            "PATCH",
+            "REPORT",
+            "COMPLETENESS"
+          ]
+        },
+        "lens": {
+          "$ref": "#/$defs/name"
+        },
+        "state": {
+          "enum": [
+            "DORMANT",
+            "PENDING",
+            "RUNNING",
+            "SUCCEEDED",
+            "SKIPPED",
+            "FAILED"
+          ]
+        },
+        "candidate_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 6,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+          }
+        },
+        "input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "producer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "instance_id"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "version": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "instance_id": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 160,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+            }
+          }
+        },
+        "coverage_authority": {
+          "enum": [
+            "PROVIDER_DECLARED",
+            "CONTROLLER_OBSERVED_CONSUMPTION"
+          ]
+        },
+        "attempt_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "execution_artifact_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "shard": {
+          "$ref": "#/$defs/workShardMetadata"
+        },
+        "closure_round": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "parent_job_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "database_store_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "profile_authority_store_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "LENS"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "lens"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "SKIPPED",
+                  "FAILED"
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
+    },
+    "inventoryCategory": {
+      "enum": [
+        "canonical-source",
+        "generated-code",
+        "tests",
+        "docs",
+        "binaries"
+      ]
+    },
+    "coverageClass": {
+      "enum": [
+        "CANONICAL_SOURCE",
+        "GENERATED_CODE",
+        "TEST",
+        "DOCUMENTATION",
+        "BINARY"
+      ]
+    },
+    "coverageGapId": {
+      "type": "string",
+      "pattern": "^coverage-gap:sha256:[a-f0-9]{64}$"
+    },
+    "databaseDiscovery": {
+      "$ref": "https://red-team-audit.dev/schemas/database-discovery.schema.json"
+    },
+    "inventoryRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size",
+        "kind",
+        "coverage_class",
+        "classification_reason",
+        "category"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "kind": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "coverage_class": {
+          "$ref": "#/$defs/coverageClass"
+        },
+        "classification_reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "category": {
+          "$ref": "#/$defs/inventoryCategory"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "coverageFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "coverageDenominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "files_total",
+        "bytes_total",
+        "files_examined",
+        "bytes_examined",
+        "files_unexamined",
+        "bytes_unexamined",
+        "paths",
+        "files"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/coverageClass"
+        },
+        "files_total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "bytes_total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "files_examined": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "bytes_examined": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "files_unexamined": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "bytes_unexamined": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "files": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/coverageFile"
+          }
+        }
+      }
+    },
+    "coverageDenominators": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverageDenominator"
+            },
+            {
+              "properties": {
+                "class": {
+                  "const": "CANONICAL_SOURCE"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverageDenominator"
+            },
+            {
+              "properties": {
+                "class": {
+                  "const": "GENERATED_CODE"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverageDenominator"
+            },
+            {
+              "properties": {
+                "class": {
+                  "const": "TEST"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverageDenominator"
+            },
+            {
+              "properties": {
+                "class": {
+                  "const": "DOCUMENTATION"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/coverageDenominator"
+            },
+            {
+              "properties": {
+                "class": {
+                  "const": "BINARY"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "workShardMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shard_id",
+        "index",
+        "count",
+        "file_count",
+        "byte_count",
+        "max_files",
+        "max_bytes",
+        "scope_sha256"
+      ],
+      "properties": {
+        "shard_id": {
+          "type": "string",
+          "pattern": "^shard-[0-9]{4}-[a-f0-9]{12}$"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "max_files": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 536870912
+        },
+        "scope_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "workShard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "lens",
+        "scoped_files",
+        "shard"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "lens": {
+          "$ref": "#/$defs/name"
+        },
+        "scoped_files": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 100000,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "shard": {
+          "$ref": "#/$defs/workShardMetadata"
+        }
+      }
+    },
+    "coverageClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_source_closure",
+        "max_rounds",
+        "round",
+        "status",
+        "history"
+      ],
+      "properties": {
+        "required_source_closure": {
+          "type": "boolean"
+        },
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "MEASURING",
+            "REQUEUED",
+            "CONVERGED",
+            "BUDGET_EXHAUSTED",
+            "UNMEASURED"
+          ]
+        },
+        "applicable_lens_file_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "examined_lens_file_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "uncovered_lens_file_pairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "uncovered_shards": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "job_id",
+              "lens",
+              "shard_id"
+            ],
+            "properties": {
+              "job_id": {
+                "$ref": "#/$defs/nonEmptyString"
+              },
+              "lens": {
+                "$ref": "#/$defs/name"
+              },
+              "shard_id": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            }
+          }
+        },
+        "measurement_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "history": {
+          "type": "array",
+          "maxItems": 33,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "round",
+              "status",
+              "applicable_lens_file_pairs",
+              "examined_lens_file_pairs",
+              "uncovered_lens_file_pairs",
+              "uncovered_shards",
+              "measurement_sha256"
+            ],
+            "properties": {
+              "round": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 32
+              },
+              "status": {
+                "enum": [
+                  "REQUEUED",
+                  "CONVERGED",
+                  "BUDGET_EXHAUSTED",
+                  "UNMEASURED"
+                ]
+              },
+              "applicable_lens_file_pairs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "examined_lens_file_pairs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "uncovered_lens_file_pairs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000000
+              },
+              "uncovered_shards": {
+                "type": "array",
+                "maxItems": 100000,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "job_id",
+                    "lens",
+                    "shard_id"
+                  ],
+                  "properties": {
+                    "job_id": {
+                      "$ref": "#/$defs/nonEmptyString"
+                    },
+                    "lens": {
+                      "$ref": "#/$defs/name"
+                    },
+                    "shard_id": {
+                      "$ref": "#/$defs/nonEmptyString"
+                    }
+                  }
+                }
+              },
+              "measurement_sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      }
+    },
+    "runError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error_id",
+        "phase",
+        "code",
+        "message",
+        "recoverable"
+      ],
+      "properties": {
+        "error_id": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "phase": {
+          "enum": [
+            "RECON",
+            "FANOUT",
+            "TRIAGE",
+            "PROOF",
+            "PATCH",
+            "REPORT",
+            "COMPLETENESS",
+            "FINALIZED"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "message": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "recoverable": {
+          "type": "boolean"
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    }
+  }
+}

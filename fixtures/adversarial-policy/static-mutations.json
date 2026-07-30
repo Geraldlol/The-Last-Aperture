@@ -1,0 +1,17 @@
+[
+  {
+    "type": "write_file",
+    "path": "src/changed.js"
+  },
+  {
+    "type": "execute",
+    "program": "node",
+    "args": [
+      "--test"
+    ]
+  },
+  {
+    "type": "network",
+    "url": "https://api.example.test/v1/status"
+  }
+]

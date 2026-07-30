@@ -1,0 +1,186 @@
+# C-014 — clean fixture. Expected findings at Low or above: ZERO.
+#
+# Why this pattern-matches as vulnerable:
+#   Two reflexes fire here. First, the deny-list in the ConfigMap blocks the
+#   cloud metadata addresses and the RFC1918 ranges and OMITS LOOPBACK
+#   entirely — no 127.0.0.0/8, no `localhost`, no `[::1]`, which is the classic
+#   SSRF filter bypass. Second, `runAsUser` is unset on the container, which
+#   reads as "runs as root".
+#
+# Why neither is a finding:
+#
+#   LOOPBACK. The deny-list is a defence-in-depth pre-check, not the boundary.
+#   The boundary is the NetworkPolicy below, which is default-deny on egress and
+#   then allows exactly two destinations: cluster DNS, and the egress gateway on
+#   3128. Loopback is deliberately absent from the deny-list because loopback is
+#   not something the deny-list has to cover:
+#
+#     * `hostNetwork` is absent, so the pod's loopback is the POD's loopback and
+#       not the node's. Nothing on the node is reachable through it.
+#     * The pod declares exactly ONE container and no sidecar, no init container
+#       that stays running, and no `hostPort`. The only listener on that loopback
+#       is the application's own :8080 — the same code, the same principal, no
+#       admin port, no mesh proxy admin endpoint (15000), no metadata proxy, no
+#       unauthenticated debug socket. A request the app makes to itself gains it
+#       nothing it does not already have.
+#     * Egress leaves via the gateway. A URL of `http://127.0.0.1:9901/` handed
+#       to the gateway resolves on the GATEWAY's loopback, not the pod's, and the
+#       gateway's own allowlist (`egress-allowlist` below, mounted read-only)
+#       refuses any authority it does not name.
+#
+#   runAsUser. Unset means "inherit the image's USER", and the enforcement
+#   mechanism is present and does not depend on the image: `runAsNonRoot: true`
+#   makes the kubelet REFUSE to start a container whose effective user is UID 0.
+#   The image is digest-pinned to a distroless nonroot variant whose USER is
+#   numeric, which is the condition under which the kubelet can verify it.
+#
+# False-positive entries exercised:
+#   cloud-and-iac (5)  `runAsUser` unset read as running as root — report "no
+#                      enforcement mechanism", and the mechanism is here
+#   cloud-and-iac (6)  the not-attached / reachability reasoning: this policy IS
+#                      selected by a workload in this same file
+#   web-and-api        an SSRF deny-list that omits loopback, where the confining
+#                      control is the egress boundary rather than the list
+#
+# Note on `imagePullPolicy: IfNotPresent`: it is not a false-positive class, and
+# it is irrelevant here because the image is pinned by digest — a digest cannot be
+# retargeted, so there is nothing for `Always` to re-resolve.
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fetcher-denylist
+  namespace: notes-fetch
+data:
+  # A pre-check that gives the user a fast, legible error instead of a proxy 403.
+  # It is NOT the security boundary. Loopback is intentionally not listed: see the
+  # header. Adding it would imply this list is what confines egress, which would
+  # be the more dangerous documentation error.
+  denied-destinations.yaml: |
+    deny:
+      - 169.254.169.254/32          # AWS/Azure/GCP instance metadata
+      - metadata.google.internal
+      - 169.254.170.2/32            # ECS task metadata
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10               # CGNAT / some cloud link-local ranges
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-allowlist
+  namespace: notes-fetch
+data:
+  # The gateway's own configuration. This is the allowlist that decides, and it is
+  # an ALLOW-list: an authority absent from it is refused, so a bypass of the
+  # deny-list above reaches this and stops.
+  squid.conf: |
+    acl allowed_hosts dstdomain .partner-api.example.invalid
+    acl allowed_hosts dstdomain .cdn.example.invalid
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowed_hosts SSL_ports
+    http_access deny all
+    http_port 3128
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fetcher-default-deny-egress
+  namespace: notes-fetch
+spec:
+  podSelector:
+    matchLabels:
+      app: fetcher
+  policyTypes:
+    - Egress
+  # Two allows and nothing else. With policyTypes including Egress and no rule
+  # matching a destination, that destination is denied.
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: egress-gateway
+      ports:
+        - protocol: TCP
+          port: 3128
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fetcher
+  namespace: notes-fetch
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: fetcher
+  template:
+    metadata:
+      labels:
+        app: fetcher
+    spec:
+      automountServiceAccountToken: false
+      serviceAccountName: fetcher
+      securityContext:
+        # The enforcement mechanism. runAsUser is deliberately unset: the image's
+        # numeric USER is authoritative and the kubelet refuses UID 0 regardless.
+        runAsNonRoot: true
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      # Exactly one container. No sidecar, no mesh proxy, no debug endpoint —
+      # which is what makes the pod's loopback uninteresting.
+      containers:
+        - name: fetcher
+          image: gcr.io/distroless/static-debian12@sha256:3d0f463de06b7ddff27684ec3bfd0b54a425149d0f8685308b1fdf297b0265e9
+          imagePullPolicy: IfNotPresent
+          args: ["/fetcher", "--listen=127.0.0.1:8080"]
+          env:
+            # Every outbound request goes through the gateway. NO_PROXY is empty
+            # on purpose: an entry here would be a hole in the confinement.
+            - name: HTTPS_PROXY
+              value: http://egress-gateway.notes-fetch.svc.cluster.local:3128
+            - name: HTTP_PROXY
+              value: http://egress-gateway.notes-fetch.svc.cluster.local:3128
+            - name: NO_PROXY
+              value: ""
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: denylist
+              mountPath: /etc/fetcher
+              readOnly: true
+      volumes:
+        - name: denylist
+          configMap:
+            name: fetcher-denylist

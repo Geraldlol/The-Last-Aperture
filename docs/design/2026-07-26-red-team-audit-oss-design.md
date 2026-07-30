@@ -1,13 +1,17 @@
 # red-team-audit: enhancement and open-source release
 
 **Date:** 2026-07-26
-**Status:** Approved design, pending implementation plan
+**Status:** Historical; superseded by ADR 0001, ADR 0002, and ADR 0003
 **License target:** MIT
 **Companions:**
 - `2026-07-26-recon-punch-list.md` — a 22-agent recon pass over the existing reference files and the external facts they cite. Carries the per-lens correction list, seed content for the new lens sections, the verified packaging schema, and the fixture proposal.
 - `2026-07-26-recon-punch-list-repair.md` — the complete topic-ownership assignment (165 slugs, 350 deferrals, 13 frontmatter blocks, the overlap resolution table) plus an adversarial invariant verification that found fifteen defects invisible to the originally specified lint rules.
 
-This spec records decisions; the companions record the evidence behind them.
+This spec records the original pre-controller design and is retained as
+historical context. The accepted ADRs and current release documentation govern
+the implemented platform where this document differs, including sealed
+provider execution, bounded whole-shard coverage closure, typed denominators,
+and controller-owned database discovery.
 
 ## 1. Purpose
 
@@ -167,7 +171,11 @@ Fixed body skeleton, so a lens can be handed to a subagent verbatim with no wrap
 
 `Known false positives` and `Proof recipes` are new content and are the two sections that carry the enhancement. The first is where precision comes from; the second is what makes the proof phase tractable inside a domain.
 
-`severity_floor` sets the lowest severity this lens may report on its own. A lens with `severity_floor: medium` drops its own Lows before triage, which suppresses domain noise without hiding anything that matters. Chain elevation in phase 2 overrides the floor, since a suppressed Low that participates in a chain is reported as part of that chain.
+`severity_floor` is **presentational, not a filter**. It sets where a lens's findings sit in the report's ordering; it never prevents a finding from being generated, deduplicated, or recorded. The default is `info`, meaning nothing is dropped before triage.
+
+This is deliberate and it is a change from an earlier draft where the floor suppressed a lens's own Lows pre-triage. Suppression before triage is unsafe for two reasons. A Low that would participate in a chain has to survive long enough for `attack-chaining` to see it, and phase 2 is where chains are found — so a pre-triage filter silently removes the raw material for the highest-severity findings the pipeline can produce. And a suppressed finding is invisible to the `Coverage` block, which makes the report's completeness claim false.
+
+**Detection posture: maximise recall, tier the presentation.** Generate every finding a lens can justify; never drop one to keep the report tidy. The report leads with proof-backed Critical and High findings, carries Mediums beneath them, and puts Lows and Infos in an appendix rather than the narrative. Nothing is suppressed and nothing is drowned. Volume is a presentation problem and gets a presentation fix; silence is a correctness problem and has no fix, because nobody can review a finding that was never written down.
 
 ### 4.3 Topic ownership, and enforcing it
 
@@ -297,6 +305,8 @@ Strict order, because later steps depend on earlier ones:
 
 **The proof queue is built from `claimed_impact_severity`, not from `effective_severity`.** Every candidate whose claimed impact is High or Critical is enqueued, including those triage capped to Medium for unknown reachability.
 
+**Mediums are enqueued too, when a T1 proof is available.** The author's direction is that suspicions are welcome in the report *provided they get proven* — which puts the pressure on proving more, not on reporting louder. Once the project's test runner is up for the Criticals, each additional repo-local test is marginal cost, so a Medium carrying an executable `proof_plan` gets an attempt rather than shipping as an assertion. Ordering is by `claimed_impact_severity`, and Critical/High attempts are mandatory while Medium attempts are best-effort: if the budget or the harness runs out, the unattempted Mediums are named in `Coverage` as unattempted, never quietly downgraded.
+
 Ordering the other way round deadlocks, and the earlier draft of this spec did exactly that: triage capped unknown-reachability findings to Medium, proof only accepted Critical and High, so the findings whose reachability most needed resolving were the precise set that could never reach the phase that resolves it. A capped finding stayed capped forever, and the cap looked like a considered severity judgement rather than an artifact of queue ordering.
 
 The final severity is therefore computed **after** proof, not before it:
@@ -317,9 +327,11 @@ Today's output format, plus a mandatory `## Coverage` block stating: which lense
 
 Silent truncation reads as complete coverage. If 60% of the repository was examined, the report says 60%.
 
-### Phase 6: Completeness critic
+### Phase 6: Completeness critic — loops until dry
 
-A final pass over the finished report asking what was never examined: a lens that should have activated and did not, an entry point with no findings and no explanation, a data store nobody looked at. Output either loops back into a second fan-out or is written into `Coverage` as a stated gap.
+A final pass over the finished report asking what was never examined: a lens that should have activated and did not, an entry point with no findings and no explanation, a data store nobody looked at.
+
+**It loops rather than running once.** Each round that names an unexamined area feeds a further scoped fan-out over that area, and the loop ends when a round surfaces nothing new — not after a fixed number of passes. A counter stops at an arbitrary point; the tail of a finding list is where the non-obvious bugs live, and a single pass systematically misses it. Whatever the loop cannot resolve is written into `Coverage` as a stated gap, never as silence.
 
 ### Degradation
 
@@ -340,6 +352,19 @@ Three overlays on one pipeline, replacing today's three parallel structures:
 - **Threat model** — input is architecture rather than code, so file-scoped fan-out is skipped and `threat-modeling` runs against the described system.
 
 Auto-trigger behaviour on commit and deploy language is carried over unchanged.
+
+### Citation discipline in compliance mode
+
+**A finding is a HIPAA finding only if it maps to an actual HIPAA requirement.** Everything else is a security finding, reported as one. The recon pass found five confident legal overreaches in the existing lens, each generating a wrong finding, which for a team using this to gauge real exposure is worse than not running it — a false compliance verdict is acted on.
+
+Four rules, binding on `hipaa-and-phi` and `privacy-and-data-protection`:
+
+1. **Every compliance claim cites a specific provision, and the citation must be correct.** "This violates HIPAA" is not a finding. `§164.312(a)(1)` with the access-control requirement stated is.
+2. **Required and Addressable are not the same thing.** §164.306(d) makes several §164.312 implementation specifications *addressable*: the obligation is to assess whether the safeguard is reasonable and appropriate, implement it if so, and otherwise document why not and adopt an equivalent measure. Encryption at rest is addressable, not mandated. So an unencrypted-PHI-column finding is a **risk-analysis and documentation** finding, not a violation, and reporting it as a violation is exactly the overreach this rule exists to stop. Every citation states which kind it is.
+3. **§164.312 technical safeguards apply to ePHI only.** The lens does not activate on paper, fax or oral-PHI-only surfaces; those route to the Privacy Rule and §164.310. Declared in the lens's `Scope` under "does not own".
+4. **Three categories, never conflated:** a genuine regulatory requirement; a security practice the regulation does not mandate; general hygiene. A finding in the second or third category is reported at its security severity with no compliance citation attached. Borrowing regulatory weight for a finding that has not earned it is the fastest way to make the whole report untrustworthy.
+
+The same discipline applies to GDPR, PCI DSS and CCPA citations in `privacy-and-data-protection` — a named article or requirement number, correct, with mandate strength stated.
 
 ## 6. Proof tiers and safety rails
 
