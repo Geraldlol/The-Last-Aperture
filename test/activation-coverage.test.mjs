@@ -319,7 +319,7 @@ const CONTRACT = {
     ],
   },
   'crypto-and-key-management': {
-    hash: 'dd0e691948ec91fa',
+    hash: 'ae4cd336ed410abf',
     families: [
       family(
         'primitive-umbrellas',
@@ -328,7 +328,7 @@ const CONTRACT = {
         'legacy-hash-and-cipher-primitives',
         'Construction and misuse checks exist, but the composite activators span uneven language support; the Scala branch is NOT ASSESSED',
         '0,1,3,6',
-        '0-3,6,7',
+        '0-3,6,7,9,10',
       ),
       family(
         'apex-primitives',
@@ -1201,10 +1201,10 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
   const typedActivationEntries = lenses.flatMap(({ lens }) => ['paths', 'signals'].flatMap((kind) =>
     (lens.frontmatter.activates_on?.[kind] ?? [])
       .map((scalar, index) => `${lens.name}\0${kind}\0${index}\0${scalar}`)))
-  assert.equal(typedActivationEntries.length, 944, 'the exact contract must own all 944 typed activation entries')
+  assert.equal(typedActivationEntries.length, 946, 'the exact contract must own all 946 typed activation entries')
   assert.equal(
     new Set(typedActivationEntries).size,
-    944,
+    946,
     'lens + kind + index + scalar activation identities must remain unique',
   )
   const lensQualifiedRawScalars = lenses.flatMap(({ lens }) => [
@@ -1213,7 +1213,7 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
   ].map((scalar) => `${lens.name}\0${scalar}`))
   assert.equal(
     new Set(lensQualifiedRawScalars).size,
-    943,
+    945,
     'raw scalar duplication drifted; audit repeated text separately from typed ownership',
   )
 

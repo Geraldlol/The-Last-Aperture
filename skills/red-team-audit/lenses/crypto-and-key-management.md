@@ -25,6 +25,8 @@ activates_on:
     - 'dotnet/php/ruby/rust: System.Security.Cryptography, Aes.Create(), RandomNumberGenerator, Rfc2898DeriveBytes, ServerCertificateValidationCallback, openssl_encrypt, password_hash, hash_equals, firebase/php-jwt, OpenSSL::Cipher, ActiveSupport::MessageEncryptor, ring, aes-gcm, rustls, jsonwebtoken'
     - 'misuse idioms: MODE_ECB, "AES/ECB/PKCS5Padding", "AES/CBC/PKCS5Padding" hand-rolled with separate HMAC, new IvParameterSpec(new byte[16]), InsecureSkipVerify: true, verify=False, rejectUnauthorized: false, NODE_TLS_REJECT_UNAUTHORIZED=0, alg":"none", options={"verify_signature": False}, jwt.decode() without verify, .setSeed(, Math.random(), random.random(), md5(/sha1( near password, base64 key literals in constants files'
     - 'protocol/asset signals: X-Signature / X-Hub-Signature / Stripe-Signature style webhook headers, ecrecover / secp256k1 / low-s, /.well-known/jwks.json, SAMLResponse, InResponseTo, KeyInfo, argon2id$ / $2b$ / pbkdf2_sha256$ hash prefixes in fixtures or migrations'
+    - 'node:crypto'
+    - 'Ed25519'
 owns:
   - tls-and-certificate-validation
   - jwt-jws-and-jwks-verification

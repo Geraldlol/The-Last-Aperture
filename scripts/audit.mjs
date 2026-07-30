@@ -33,7 +33,6 @@ import { fileURLToPath } from 'node:url'
 import {
   assertValidRun,
   assertValidRunTransition,
-  assertValidRunTransitionSemantics,
   finalizeFinding,
   parseContractTimestamp,
   validateRun,
@@ -82,9 +81,12 @@ import {
   beginJob,
   buildFinalizedRun,
   compareTriageJobs,
-  prepareJobStart,
 } from './lib/job-protocol.mjs'
-import { inventoryRepository, serializeInventory } from './lib/inventory.mjs'
+import {
+  inventoryRepository,
+  normalizeIncludedRoots,
+  serializeInventory,
+} from './lib/inventory.mjs'
 import { normalizePolicy } from './lib/policy.mjs'
 import { renderMarkdownReport, renderSarif } from './lib/report.mjs'
 import {
@@ -108,6 +110,10 @@ import {
   readSealedSnapshotFile,
   verifySealedSnapshot,
 } from './lib/sealed-snapshot.mjs'
+import {
+  createRootAttestation,
+  verifyRootAttestation,
+} from './lib/root-attestation.mjs'
 import {
   assertValidControllerFailureEnvelope,
   assertValidControllerExecutionEnvelope,
@@ -145,6 +151,7 @@ const MAX_LOCK_BYTES = 16 * 1024
 const MAX_BENCHMARK_INPUT_BYTES = 16 * 1024 * 1024
 const MAX_BENCHMARK_CASES_BYTES = 8 * 1024 * 1024
 const MAX_BENCHMARK_THRESHOLDS_BYTES = 1024 * 1024
+const MAX_ROOT_ATTESTATION_BYTES = 64 * 1024
 const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
@@ -152,7 +159,7 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.4.0
+const HELP = `red-team-audit 0.6.0
 
 Usage:
   red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
@@ -163,8 +170,9 @@ Usage:
   red-team-audit finalize <run.json|bundle-directory>
   red-team-audit abort <run.json|bundle-directory> --reason <text>
   red-team-audit unlock <run.json|bundle-directory>
-  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>]
+  red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
+  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
+  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
   red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>]
   red-team-audit benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
 
@@ -226,9 +234,22 @@ const COMMAND_ARGUMENTS = {
   finalize: { positionals: 1, options: {} },
   abort: { positionals: 1, options: { reason: 'value' } },
   unlock: { positionals: 1, options: {} },
+  attest: {
+    positionals: 1,
+    options: {
+      'signing-key': 'value',
+      out: 'value',
+      'receipt-public-key': 'value',
+    },
+  },
   validate: {
     positionals: 1,
-    options: { json: 'flag', 'receipt-public-key': 'value' },
+    options: {
+      json: 'flag',
+      'receipt-public-key': 'value',
+      'root-attestation': 'value',
+      'root-public-key': 'value',
+    },
   },
   report: {
     positionals: 1,
@@ -236,6 +257,8 @@ const COMMAND_ARGUMENTS = {
       out: 'value',
       sarif: 'value',
       'receipt-public-key': 'value',
+      'root-attestation': 'value',
+      'root-public-key': 'value',
     },
   },
   compare: { positionals: 2, options: { out: 'value' } },
@@ -795,7 +818,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
   const projection = {
     inventory: coverage?.inventory,
   }
-  if (schemaVersion !== '3.0.0') return projection
+  if (!['3.0.0', '4.0.0'].includes(schemaVersion)) return projection
   return {
     model_version: coverage?.model_version,
     policy: coverage?.policy,
@@ -835,7 +858,7 @@ function assertImmutableCoveragePlan(
       'planned coverage artifact is not the immutable initial coverage snapshot',
     )
   }
-  if (run.schema_version !== '3.0.0') return
+  if (!['3.0.0', '4.0.0'].includes(run.schema_version)) return
 
   const expectedRecords = inventoryCoverageRecords(snapshot.entries)
   const expectedDenominators = buildCategoryDenominators(expectedRecords)
@@ -936,7 +959,7 @@ function assertSidecarJobIdentity(
     lens: job.lens,
     repository_root: run.repository.root,
     ...(
-      run.schema_version === '3.0.0' || requireProtocolFields
+      ['3.0.0', '4.0.0'].includes(run.schema_version) || requireProtocolFields
         ? {
             schema_version: run.schema_version,
             phase: job.closure_round !== undefined
@@ -979,7 +1002,7 @@ function assertSidecarJobIdentity(
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
-  if (run.schema_version === '3.0.0') {
+  if (['3.0.0', '4.0.0'].includes(run.schema_version)) {
     const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
@@ -1437,12 +1460,15 @@ export async function verifyControlBundle(
     throw new Error('policy artifact does not match the run provenance')
   }
   if (policy.mode !== 'static' || run.capability_mode !== 'STATIC') {
-    throw new Error('0.4.0 can dispatch and ingest only STATIC runs')
+    throw new Error('0.6.0 can dispatch and ingest only STATIC runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
     : []
-  if (stableJson(snapshot.limits?.includedRoots ?? ['.']) !== stableJson(policyRoots)) {
+  if (
+    stableJson(normalizeIncludedRoots(snapshot.limits?.includedRoots ?? ['.']))
+    !== stableJson(normalizeIncludedRoots(policyRoots))
+  ) {
     throw new Error('inventory read roots do not match the Rules of Engagement')
   }
 
@@ -1460,7 +1486,7 @@ export async function verifyControlBundle(
     expectedInventory,
   )
   let databaseDiscoveryCommitted
-  if (run.schema_version === '3.0.0') {
+  if (['3.0.0', '4.0.0'].includes(run.schema_version)) {
     databaseDiscoveryCommitted = await readVerifiedArtifact(
       directory,
       run,
@@ -1586,7 +1612,7 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
-      ...(run.schema_version === '3.0.0'
+      ...(['3.0.0', '4.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
         : []),
       ...lensPack.files
@@ -1780,7 +1806,7 @@ export async function verifyControlBundle(
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
-    ...(run.schema_version === '3.0.0'
+    ...(['3.0.0', '4.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
@@ -1907,6 +1933,27 @@ async function loadJobSidecar(directory, run, job) {
   return sidecar
 }
 
+function storeProfilesForPacket(run, storeIds) {
+  const byStoreId = new Map()
+  for (const profile of run.store_profiles ?? []) {
+    if (storeIds.has(profile.store_context.store_id)) {
+      byStoreId.set(profile.store_context.store_id, profile)
+    }
+  }
+  for (const envelope of run.store_contributions ?? []) {
+    const profile = envelope.role === 'AUTHORITY'
+      ? envelope.contribution?.profile
+      : undefined
+    const storeId = profile?.store_context?.store_id
+    if (storeIds.has(storeId) && !byStoreId.has(storeId)) {
+      byStoreId.set(storeId, profile)
+    }
+  }
+  return [...storeIds]
+    .map((storeId) => byStoreId.get(storeId))
+    .filter(Boolean)
+}
+
 function nextJobPacket(run, job, sidecar) {
   const base = {
     schema_version: '1.0.0',
@@ -1927,10 +1974,7 @@ function nextJobPacket(run, job, sidecar) {
       ...base,
       ...(job.lens === 'database-and-data-stores'
         ? {
-            store_profiles: (run.store_profiles ?? []).filter(
-              (profile) =>
-                storeIds.has(profile.store_context.store_id),
-            ),
+            store_profiles: storeProfilesForPacket(run, storeIds),
           }
         : {}),
     }
@@ -2190,6 +2234,112 @@ async function loadPinnedReceiptPublicKeyId(pathValue, bundleDirectory, reposito
     throw new Error('controller receipt public key path changed while it was being read')
   }
   return controllerPublicKeyId(keyBytes)
+}
+
+async function loadExternalTrustFile(
+  pathValue,
+  label,
+  loaded,
+  maxBytes,
+) {
+  const externalPath = await canonicalUnlinkedFile(pathValue, `${label} path`)
+  if (
+    pathWithin(resolve(loaded.directory), externalPath)
+    || pathWithin(resolve(loaded.run.repository.root), externalPath)
+  ) {
+    throw new Error(
+      `${label} must be pinned outside the run bundle and target repository`,
+    )
+  }
+  const bytes = await readBoundedFile(externalPath, maxBytes, label)
+  const pathAfterRead = await canonicalUnlinkedFile(pathValue, `${label} path`)
+  if (pathAfterRead !== externalPath) {
+    throw new Error(`${label} path changed while it was being read`)
+  }
+  return {
+    bytes,
+    path: externalPath,
+  }
+}
+
+async function verifyPinnedRootAttestation(loaded, options) {
+  const attestationPath = options['root-attestation']
+  const publicKeyPath = options['root-public-key']
+  const hasAttestation = typeof attestationPath === 'string'
+  const hasPublicKey = typeof publicKeyPath === 'string'
+  if (hasAttestation !== hasPublicKey) {
+    throw new Error(
+      '--root-attestation and --root-public-key must be supplied together',
+    )
+  }
+  if (!hasAttestation) {
+    return {
+      status: 'UNANCHORED',
+      message:
+        'run.json is valid only relative to its own unsigned artifact manifest',
+    }
+  }
+  const [attestationFile, publicKeyFile] = await Promise.all([
+    loadExternalTrustFile(
+      attestationPath,
+      'root manifest attestation',
+      loaded,
+      MAX_ROOT_ATTESTATION_BYTES,
+    ),
+    loadExternalTrustFile(
+      publicKeyPath,
+      'root manifest public key',
+      loaded,
+      MAX_SIGNING_KEY_BYTES,
+    ),
+  ])
+  let attestation
+  try {
+    attestation = JSON.parse(attestationFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in ${attestationFile.path}: ${error.message}`,
+    )
+  }
+  return verifyRootAttestation({
+    attestation,
+    run: loaded.run,
+    runSha256: loaded.sourceDigest,
+    publicKeyBytes: publicKeyFile.bytes,
+  })
+}
+
+async function rootAttestationOutputPath(pathValue, loaded) {
+  if (typeof pathValue !== 'string') {
+    throw new Error('--out is required to write a root manifest attestation')
+  }
+  const absolutePath = resolve(pathValue)
+  let canonicalParent
+  try {
+    canonicalParent = await realpath(dirname(absolutePath))
+  } catch (error) {
+    throw new Error(
+      `cannot prepare root manifest attestation output ${absolutePath}: ${error.message}`,
+    )
+  }
+  const outputPath = join(canonicalParent, basename(absolutePath))
+  if (
+    pathWithin(resolve(loaded.directory), outputPath)
+    || pathWithin(resolve(loaded.run.repository.root), outputPath)
+  ) {
+    throw new Error(
+      'root manifest attestation output must be outside the run bundle and target repository',
+    )
+  }
+  try {
+    await lstat(outputPath)
+  } catch (error) {
+    if (error.code === 'ENOENT') return outputPath
+    throw new Error(
+      `cannot inspect root manifest attestation output ${outputPath}: ${error.message}`,
+    )
+  }
+  throw new Error(`root manifest attestation output already exists: ${outputPath}`)
 }
 
 function createControllerExecutionEnvelope(execution, attempt, signingKey) {
@@ -2671,7 +2821,7 @@ async function planCommand(positionals, options) {
     })
     if (policy.mode !== 'static') {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.4.0',
+        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.6.0',
       )
     }
   }
@@ -2734,11 +2884,60 @@ async function planCommand(positionals, options) {
   }
 }
 
+async function attestCommand(positionals, options) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  if (
+    !['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED']
+      .includes(loaded.run.state)
+    || loaded.run.phase !== 'FINALIZED'
+  ) {
+    throw new Error(
+      'only a terminal FINALIZED run can receive a root manifest attestation',
+    )
+  }
+  const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+    ? await loadPinnedReceiptPublicKeyId(
+        options['receipt-public-key'],
+        loaded.directory,
+        loaded.run.repository.root,
+      )
+    : undefined
+  await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  if (typeof options['signing-key'] !== 'string') {
+    throw new Error('--signing-key is required to attest a run manifest')
+  }
+  const signingKey = await loadExternalTrustFile(
+    options['signing-key'],
+    'root manifest signing key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  const outputPath = await rootAttestationOutputPath(options.out, loaded)
+  const attestation = createRootAttestation({
+    run: loaded.run,
+    runSha256: loaded.sourceDigest,
+    privateKeyBytes: signingKey.bytes,
+  })
+  await durableCreate(outputPath, stableJson(attestation))
+  console.log(`Attested ${loaded.run.run_id}`)
+  console.log(`Root SHA-256: ${loaded.sourceDigest}`)
+  console.log(`Signing key: ${attestation.signing.key_id}`)
+  console.log(`Attestation: ${outputPath}`)
+}
+
 async function validateCommand(positionals, options) {
-  const { path, directory, run } = await loadRun(requirePositional(positionals, 0, 'run'))
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  const {
+    path,
+    directory,
+    run,
+  } = loaded
   const result = validateRun(run)
+  let rootAuthenticity
   if (result.valid) {
     try {
+      rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
       const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
         ? await loadPinnedReceiptPublicKeyId(
             options['receipt-public-key'],
@@ -2756,8 +2955,22 @@ async function validateCommand(positionals, options) {
       })
     }
   }
-  if (options.json) process.stdout.write(stableJson({ path, ...result }))
-  else if (result.valid) console.log(`VALID: ${path}`)
+  if (options.json) {
+    process.stdout.write(stableJson({
+      path,
+      ...result,
+      ...(rootAuthenticity ? { root_authenticity: rootAuthenticity } : {}),
+    }))
+  } else if (result.valid) {
+    console.log(`VALID: ${path}`)
+    if (rootAuthenticity.status === 'VERIFIED') {
+      console.log(
+        `Root authenticity: VERIFIED (${rootAuthenticity.key_id})`,
+      )
+    } else {
+      console.log('Root authenticity: UNANCHORED')
+    }
+  }
   else {
     console.error(`INVALID: ${path}`)
     for (const error of result.errors) {
@@ -3222,7 +3435,7 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
     ?? cleanupDockerProviderContainer
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (!['2.0.0', '3.0.0'].includes(loaded.run.schema_version)
+  if (!['2.0.0', '3.0.0', '4.0.0'].includes(loaded.run.schema_version)
     || !loaded.run.source_snapshot) {
     throw new Error(
       'run-provider requires a runner-ready v2 bundle created with plan --seal-source',
@@ -3520,11 +3733,6 @@ async function prepareOneResult(
   loaded,
   resultPath,
   artifactCapacity,
-  {
-    advance = true,
-    deferTransitionValidation = false,
-    serializeRun = true,
-  } = {},
 ) {
   const jobResult = await readJson(resultPath, {
     maxBytes: MAX_PROVIDER_RESULT_BYTES,
@@ -3551,13 +3759,8 @@ async function prepareOneResult(
     throw new Error(`job result ${job.job_id} must identify its producer`)
   }
   const started = job.state === 'PENDING'
-    ? (deferTransitionValidation
-        ? prepareJobStart(loaded.run, job.job_id)
-        : beginJob(loaded.run, job.job_id))
+    ? beginJob(loaded.run, job.job_id)
     : loaded.run
-  if (deferTransitionValidation && started !== loaded.run) {
-    assertValidRunTransitionSemantics(loaded.run, started)
-  }
   const canonicalResult = stableJson(jobResult)
   const resultRelativePath = `results/${artifactToken(job.job_id)}.json`
   const applied = applyJobResult(started, jobResult, {
@@ -3567,14 +3770,10 @@ async function prepareOneResult(
       path: resultRelativePath,
       sha256: sha256(canonicalResult),
     },
-    deferTransitionValidation,
   })
-  if (deferTransitionValidation) {
-    assertValidRunTransitionSemantics(started, applied)
-  }
-  const advanced = advance ? advanceUntilBlocked(applied) : applied
-  const serializedRun = serializeRun ? stableJson(advanced) : undefined
-  if (serializedRun !== undefined) assertRunManifestSize(serializedRun)
+  const advanced = advanceUntilBlocked(applied)
+  const serializedRun = stableJson(advanced)
+  assertRunManifestSize(serializedRun)
   const nextArtifactCapacity = reserveBundleArtifactCapacity(
     artifactCapacity,
     canonicalResult,
@@ -3599,39 +3798,6 @@ function logAcceptedResult(prepared) {
   console.log(`Accepted ${prepared.jobId}: ${prepared.jobState}`)
   console.log(`Run: ${prepared.runState}/${prepared.runPhase}`)
   console.log(`Pending jobs: ${prepared.pendingCount}`)
-}
-
-export function preparedResultRetentionBytes(prepared) {
-  return Buffer.byteLength(prepared.canonicalResult)
-    + Buffer.byteLength(prepared.serializedRun ?? '')
-}
-
-async function commitPreparedResults(loaded, preparedResults, workingRun) {
-  if (preparedResults.length === 0) return
-
-  const advanced = advanceUntilBlocked(workingRun)
-  const serializedRun = stableJson(advanced)
-  assertRunManifestSize(serializedRun)
-  for (const prepared of preparedResults) {
-    await writeOnceBundleArtifact(
-      loaded.directory,
-      prepared.resultRelativePath,
-      prepared.canonicalResult,
-    )
-  }
-  await persistRun(
-    loaded.path,
-    advanced,
-    loaded.sourceDigest,
-  )
-  loaded.run = advanced
-  loaded.sourceDigest = sha256(serializedRun)
-  const finalPrepared = preparedResults.at(-1)
-  finalPrepared.runState = advanced.state
-  finalPrepared.runPhase = advanced.phase
-  finalPrepared.pendingCount = advanced.jobs
-    .filter(({ state }) => state === 'PENDING').length
-  for (const prepared of preparedResults) logAcceptedResult(prepared)
 }
 
 async function ingestOneResult(loaded, resultPath, artifactCapacity) {
@@ -3661,64 +3827,18 @@ async function ingestBatchCommand(positionals) {
   assertValidRun(loaded.run)
   const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
   const resultPaths = positionals.slice(1).map((path) => resolve(path))
-  const maxPreparedResults = 512
-  const maxPreparedBytes = 64 * 1024 * 1024
   let artifactCapacity = control.artifactCapacity
   let accepted = 0
-  let preparedBytes = 0
-  let preparedResults = []
-  let workingRun = loaded.run
-
-  const commitPrepared = async () => {
-    await commitPreparedResults(loaded, preparedResults, workingRun)
-    accepted += preparedResults.length
-    preparedResults = []
-    preparedBytes = 0
-    workingRun = loaded.run
-  }
 
   for (const [index, resultPath] of resultPaths.entries()) {
     try {
-      const prepared = await prepareOneResult(
-        {
-          ...loaded,
-          run: workingRun,
-        },
+      artifactCapacity = await ingestOneResult(
+        loaded,
         resultPath,
         artifactCapacity,
-        {
-          advance: false,
-          deferTransitionValidation: true,
-          serializeRun: false,
-        },
       )
-      artifactCapacity = prepared.nextArtifactCapacity
-      const {
-        advanced,
-        serializedRun,
-        ...preparedRecord
-      } = prepared
-      preparedResults.push(preparedRecord)
-      preparedBytes += preparedResultRetentionBytes(preparedRecord)
-      workingRun = advanced
-      if (
-        preparedResults.length >= maxPreparedResults
-        || preparedBytes >= maxPreparedBytes
-      ) {
-        await commitPrepared()
-      }
+      accepted += 1
     } catch (error) {
-      if (preparedResults.length > 0) {
-        try {
-          await commitPrepared()
-        } catch (commitError) {
-          throw new AggregateError(
-            [error, commitError],
-            `ingest-batch could not durably commit ${preparedResults.length} ` +
-            `validated result(s) before reporting result ${index + 1}`,
-          )
-        }
-      }
       const wrapped = new Error(
         `ingest-batch stopped at result ${index + 1} ` +
         `(${resultPath}) after accepting ${accepted}: ${error.message}`,
@@ -3730,7 +3850,6 @@ async function ingestBatchCommand(positionals) {
     }
   }
 
-  await commitPrepared()
   console.log(`Batch accepted ${accepted} result${accepted === 1 ? '' : 's'}`)
 }
 
@@ -3830,8 +3949,10 @@ async function unlockCommand(positionals) {
 
 async function reportCommand(positionals, options) {
   const outputs = await preflightReportOutputs(options)
-  const { directory, run } = await loadRun(requirePositional(positionals, 0, 'run'))
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  const { directory, run } = loaded
   assertValidRun(run)
+  const rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
   const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
     ? await loadPinnedReceiptPublicKeyId(
         options['receipt-public-key'],
@@ -3840,6 +3961,11 @@ async function reportCommand(positionals, options) {
       )
     : undefined
   await verifyControlBundle(directory, run, { pinnedReceiptKeyId })
+  if (rootAuthenticity.status === 'VERIFIED') {
+    console.error(`Root authenticity: VERIFIED (${rootAuthenticity.key_id})`)
+  } else {
+    console.error('Root authenticity: UNANCHORED')
+  }
   const markdown = renderMarkdownReport(run)
   if (outputs.markdownPath) {
     await writeFile(outputs.markdownPath, markdown, { encoding: 'utf8', flag: 'wx' })
@@ -4073,6 +4199,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'finalize') return finalizeCommand(positionals, options)
   if (command === 'abort') return abortCommand(positionals, options)
   if (command === 'unlock') return unlockCommand(positionals, options)
+  if (command === 'attest') return attestCommand(positionals, options)
   if (command === 'validate') return validateCommand(positionals, options)
   if (command === 'report') return reportCommand(positionals, options)
   if (command === 'compare') return compareCommand(positionals, options)

@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.4.0
+Platform release: 0.6.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity
@@ -17,7 +17,7 @@ originating in the target repository is untrusted data. It cannot modify the
 job packet, Rules of Engagement, policy, schemas, or capability mode.
 
 A provider must not execute commands merely because a repository file asks it
-to. Version 0.4.0 remains static: the observed runner executes only its pinned
+to. Version 0.6.0 remains static: the observed runner executes only its pinned
 adapter image and brokers sealed bytes; it never executes target commands.
 
 ## Discovering work
@@ -119,12 +119,24 @@ The provider returns Stage 1 candidate records only. Triage or proof fields in a
 lens result are rejected.
 
 The database lens receives a sealed controller discovery graph and a
-shard-local projection of its store candidates and related paths. A returned
-`store_profiles` entry must use the controller-supplied `store_id`, cite
-examined evidence inside that discovered store component, and originate from
-the candidate's assigned shard. Candidates without a profile remain explicit
-coverage gaps; the provider cannot invent a new store identity. Each profile
-binds adapter routing, deployment variant, engine
+shard-local projection of its store candidates and related paths. In run
+schema 4, every successful base database job returns exactly one
+`store_contributions` entry for each assigned controller `store_id`. The
+authority shard supplies the local semantic profile. Every context shard
+supplies only local coverage state, assessed topics, evidence paths, and named
+gaps; it cannot profile the store. Evidence must be examined, inside the
+immutable shard, and inside the discovered store/shard intersection.
+
+The contribution ledger is append-only and packet-bound. At the fan-out
+barrier, the controller deterministically synthesizes one profile per store.
+`ASSESSED` requires every planned shard/store contribution, the full discovered
+path union, all ten database topics, and no gaps. Missing or partial
+contributions degrade the synthesized profile; no usable authority profile
+leaves the store unprofiled with an explicit discovery gap. Providers cannot
+return `store_profiles` directly in schema 4 or invent store identity. Run
+schemas 1-3 retain their direct-profile behavior.
+
+Each authority profile binds adapter routing, deployment variant, engine
 edition and compatibility mode, tenancy, effective-principal and enforcement
 paths, evidence files, copy/artifact closure, availability budget, assumptions,
 assessed topics, and an explicit `ASSESSED`, `PARTIAL`, or `NOT_ASSESSED`
@@ -281,9 +293,10 @@ a later result. A failed required triage or proof job terminates the run as
 `FAILED`; the controller does not invent a disposition or proof result to make
 the run reportable.
 
-Database candidate discovery and its graph scope are controller-owned.
-Provider store profiles, semantic assessments, and provider-authored coverage
-gaps remain provider claims. Manual `examined_files` is also a provider claim.
+Database candidate discovery, graph scope, contribution provenance, and final
+profile synthesis are controller-owned. Provider profiles, shard-local semantic
+assessments, and provider-authored coverage gaps remain provider claims. Manual
+`examined_files` is also a provider claim.
 In observed mode, examined paths are limited to controller-verifiable
 complete-byte consumption; that still does not prove correct reasoning.
 
@@ -332,7 +345,7 @@ a finding look stronger or cleaner.
    plan digest, and repository snapshot.
 4. Requires the result's packet digest and declared producer identity.
 5. Validates examined paths against inventory and lens scope.
-6. Validates topic authority, store profiles, every finding, and every
+6. Validates topic authority, store contributions and profiles, every finding, and every
    transition.
 7. Records the normalized result and SHA-256 hash.
 8. Updates coverage and job state with an atomic compare-and-swap.

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/root-attestation.schema.json",
+  "title": "Red Team Audit root manifest attestation",
+  "description": "A detached Ed25519 signature over the exact bytes and terminal identity of one run.json manifest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "signed_at",
+    "run",
+    "signing",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/root-manifest-attestation"
+    },
+    "signed_at": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "schema_version",
+        "state",
+        "phase",
+        "sha256"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "schema_version": {
+          "enum": [
+            "1.0.0",
+            "2.0.0",
+            "3.0.0",
+            "4.0.0"
+          ]
+        },
+        "state": {
+          "enum": [
+            "COMPLETED",
+            "COMPLETE_WITH_GAPS",
+            "ABORTED",
+            "FAILED"
+          ]
+        },
+        "phase": {
+          "const": "FINALIZED"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 88,
+      "maxLength": 88,
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  }
+}

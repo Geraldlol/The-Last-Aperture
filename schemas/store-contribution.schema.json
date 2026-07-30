@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/store-contribution.schema.json",
+  "title": "Red Team Audit shard-local store contribution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "store_id"
+  ],
+  "properties": {
+    "store_id": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "coverage_state": {
+      "enum": [
+        "ASSESSED",
+        "PARTIAL",
+        "NOT_ASSESSED"
+      ]
+    },
+    "assessed_topics": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/databaseTopic"
+      }
+    },
+    "evidence_paths": {
+      "type": "array",
+      "maxItems": 65536,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      }
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/coverageGap"
+      }
+    },
+    "profile": {
+      "$ref": "https://red-team-audit.dev/schemas/store-profile.schema.json"
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "profile"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "coverage_state"
+            ]
+          },
+          {
+            "required": [
+              "assessed_topics"
+            ]
+          },
+          {
+            "required": [
+              "evidence_paths"
+            ]
+          },
+          {
+            "required": [
+              "coverage_gaps"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "coverage_state",
+        "assessed_topics",
+        "evidence_paths",
+        "coverage_gaps"
+      ],
+      "not": {
+        "required": [
+          "profile"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "coverage_state": {
+                "const": "ASSESSED"
+              }
+            },
+            "required": [
+              "coverage_state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "assessed_topics": {
+                "minItems": 10,
+                "maxItems": 10
+              },
+              "coverage_gaps": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "coverage_gaps": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "coverageGap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "area",
+        "reason"
+      ],
+      "properties": {
+        "area": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "databaseTopic": {
+      "enum": [
+        "database-audit-identity-and-coverage",
+        "database-backup-restore-and-clone-security",
+        "database-integrity-transactions-and-concurrency",
+        "database-lifecycle-and-copy-propagation",
+        "database-migration-security-drift",
+        "database-native-authorization-and-tenant-isolation",
+        "database-principal-and-role-boundaries",
+        "database-privileged-code-and-execution-context",
+        "database-replication-cdc-history-and-sharing",
+        "database-resource-governance-and-availability"
+      ]
+    }
+  }
+}
