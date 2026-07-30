@@ -32,7 +32,8 @@
         "1.0.0",
         "2.0.0",
         "3.0.0",
-        "4.0.0"
+        "4.0.0",
+        "5.0.0"
       ]
     },
     "run_id": {
@@ -130,6 +131,9 @@
     "database_discovery": {
       "$ref": "#/$defs/databaseDiscovery"
     },
+    "database_conformance": {
+      "$ref": "https://red-team-audit.dev/schemas/database-conformance-evidence.schema.json"
+    },
     "coverage": {
       "$ref": "#/$defs/coverage"
     },
@@ -170,7 +174,8 @@
             "enum": [
               "2.0.0",
               "3.0.0",
-              "4.0.0"
+              "4.0.0",
+              "5.0.0"
             ]
           }
         },
@@ -191,7 +196,8 @@
           "schema_version": {
             "enum": [
               "3.0.0",
-              "4.0.0"
+              "4.0.0",
+              "5.0.0"
             ]
           }
         },
@@ -231,7 +237,10 @@
       "if": {
         "properties": {
           "schema_version": {
-            "const": "4.0.0"
+            "enum": [
+              "4.0.0",
+              "5.0.0"
+            ]
           }
         },
         "required": [
@@ -242,6 +251,20 @@
         "required": [
           "store_contributions"
         ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "database_conformance"
+        ]
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "const": "5.0.0"
+          }
+        }
       }
     },
     {

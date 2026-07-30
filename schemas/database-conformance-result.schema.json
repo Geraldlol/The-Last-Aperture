@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/database-conformance-result.schema.json",
+  "title": "Controller-observed disposable database engine conformance result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "assurance_scope",
+    "target_deployment_proven",
+    "run_id",
+    "engine_id",
+    "adapter_id",
+    "state",
+    "started_at",
+    "completed_at",
+    "backend",
+    "server",
+    "scenarios",
+    "transcript",
+    "transcript_sha256",
+    "cleanup",
+    "gaps"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "docker-database-lab-v1"
+    },
+    "assurance_scope": {
+      "const": "CONTROLLER_OBSERVED_DISPOSABLE_ENGINE_BEHAVIOR"
+    },
+    "target_deployment_proven": {
+      "const": false
+    },
+    "run_id": {
+      "$ref": "#/$defs/runId"
+    },
+    "engine_id": {
+      "$ref": "#/$defs/id"
+    },
+    "adapter_id": {
+      "enum": [
+        "postgresql",
+        "mysql"
+      ]
+    },
+    "state": {
+      "enum": [
+        "PASSED",
+        "FAILED",
+        "COMPLETE_WITH_GAPS"
+      ]
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "context",
+        "runtime_version",
+        "requested_image",
+        "image_id",
+        "repo_digests",
+        "platform",
+        "container_name",
+        "container_id",
+        "security_profile"
+      ],
+      "properties": {
+        "type": {
+          "const": "OCI_DOCKER"
+        },
+        "context": {
+          "const": "default"
+        },
+        "runtime_version": {
+          "$ref": "#/$defs/text"
+        },
+        "requested_image": {
+          "$ref": "#/$defs/image"
+        },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "repo_digests": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/image"
+          }
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "os",
+            "architecture"
+          ],
+          "properties": {
+            "os": {
+              "const": "linux"
+            },
+            "architecture": {
+              "enum": [
+                "amd64",
+                "arm64"
+              ]
+            }
+          }
+        },
+        "container_name": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9_.-]+$"
+        },
+        "container_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "security_profile": {
+          "const": "database-lab-v1"
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "version"
+      ],
+      "properties": {
+        "product": {
+          "enum": [
+            "PostgreSQL",
+            "MySQL"
+          ]
+        },
+        "version": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "state",
+          "adapter_rule_ids",
+          "checks"
+        ],
+        "properties": {
+          "scenario_id": {
+            "$ref": "#/$defs/id"
+          },
+          "state": {
+            "enum": [
+              "PASSED",
+              "FAILED",
+              "NOT_ASSESSED"
+            ]
+          },
+          "adapter_rule_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 160,
+              "pattern": "^db\\.[a-z0-9.-]+$"
+            }
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "check_id",
+                "state",
+                "observation",
+                "evidence_sha256"
+              ],
+              "properties": {
+                "check_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "state": {
+                  "enum": [
+                    "PASSED",
+                    "FAILED",
+                    "NOT_ASSESSED"
+                  ]
+                },
+                "observation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048,
+                  "pattern": "\\S"
+                },
+                "evidence_sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "transcript_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "transcript": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "code",
+          "stdout",
+          "stderr"
+        ],
+        "properties": {
+          "step": {
+            "$ref": "#/$defs/id"
+          },
+          "code": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 255
+          },
+          "stdout": {
+            "type": "string",
+            "maxLength": 8388608
+          },
+          "stderr": {
+            "type": "string",
+            "maxLength": 8388608
+          }
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempted",
+        "container_absent",
+        "verified_at"
+      ],
+      "properties": {
+        "attempted": {
+          "const": true
+        },
+        "container_absent": {
+          "type": "boolean"
+        },
+        "verified_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "area",
+          "reason"
+        ],
+        "properties": {
+          "area": {
+            "$ref": "#/$defs/text"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[a-z0-9][a-z0-9._:-]+$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 160,
+      "pattern": "^db-lab:[0-9TZ.:-]+:[a-f0-9]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 512,
+      "pattern": "^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?@sha256:[a-f0-9]{64}$"
+    }
+  }
+}

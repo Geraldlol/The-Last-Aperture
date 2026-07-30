@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/database-conformance-run.schema.json",
+  "title": "Red Team Audit disposable database conformance run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "tool",
+    "run_id",
+    "state",
+    "capability_mode",
+    "assurance_scope",
+    "created_at",
+    "manifest",
+    "requested_engine_ids",
+    "results",
+    "artifacts",
+    "gaps"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "docker-database-lab-v1"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "red-team-audit-database-conformance"
+        },
+        "version": {
+          "const": "0.7.0"
+        }
+      }
+    },
+    "run_id": {
+      "$ref": "#/$defs/runId"
+    },
+    "state": {
+      "enum": [
+        "PLANNED",
+        "RUNNING",
+        "COMPLETE",
+        "COMPLETE_WITH_GAPS",
+        "FAILED",
+        "ABORTED"
+      ]
+    },
+    "capability_mode": {
+      "const": "LOCAL_DYNAMIC"
+    },
+    "assurance_scope": {
+      "const": "DISPOSABLE_REFERENCE_ENGINE_BEHAVIOR_ONLY"
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "manifest": {
+      "$ref": "#/$defs/artifact"
+    },
+    "requested_engine_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "postgresql-18.4",
+          "mysql-8.4.10"
+        ]
+      }
+    },
+    "results": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "engine_id",
+          "state",
+          "artifact"
+        ],
+        "properties": {
+          "engine_id": {
+            "enum": [
+              "postgresql-18.4",
+              "mysql-8.4.10"
+            ]
+          },
+          "state": {
+            "enum": [
+              "PASSED",
+              "FAILED",
+              "COMPLETE_WITH_GAPS"
+            ]
+          },
+          "artifact": {
+            "$ref": "#/$defs/artifact"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "root_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "area",
+          "reason"
+        ],
+        "properties": {
+          "area": {
+            "$ref": "#/$defs/text"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 160,
+      "pattern": "^db-lab:[0-9TZ.:-]+:[a-f0-9]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![A-Za-z]:|/|.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        }
+      }
+    }
+  }
+}

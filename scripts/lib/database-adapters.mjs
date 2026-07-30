@@ -701,6 +701,12 @@ export function getDatabaseAdapterDefinition(adapterId) {
   return defaultIndex.byAdapter.get(normalized) ?? null
 }
 
+export function getDatabaseAdapterRuleIds(adapterId) {
+  const normalized = normalizeProfileValue(adapterId)
+  const metadata = adapterDocumentMetadataById.get(normalized)
+  return Object.freeze(metadata ? [...metadata.ruleIds].sort() : [])
+}
+
 function semanticError(code, field, detail) {
   return { code, field, detail }
 }

@@ -9,10 +9,13 @@ Read as an adversary; report as an evidence custodian. The controller owns
 inventory, activation, scope, job order, schemas, coverage, and terminal state.
 Lenses supply domain judgment, not an alternate workflow.
 
-Version 0.6.0 is **static and read-only**. Manual results are provider-declared;
+Version 0.7.0 audits are **static and read-only**. Manual results are provider-declared;
 the optional sealed runner proves byte-challenge consumption, not understanding.
 Never edit, boot, test, or network the target. A plan is not an audit result.
 Zero findings means only `NO_FINDINGS_REPORTED`.
+
+Database conformance is a separate opt-in lab. Run it only when explicitly
+requested. Attached results are context, never target proof or coverage.
 
 ## Choose the path
 
@@ -105,7 +108,7 @@ attack, impact, reachability, confidence, and proof plan. No prose-only
 findings or patches.
 
 The database lens receives controller-discovered stores and a shard-local graph.
-For schema 4, contribute once per assigned `store_id`: the authority shard
+For schemas 4 and 5, contribute once per assigned `store_id`: the authority shard
 supplies the local profile; context shards supply only local topics, evidence,
 and gaps. Bind every claim to examined local evidence. The controller
 synthesizes profiles after fan-out. Unknown or missing work stays

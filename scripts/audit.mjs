@@ -128,6 +128,7 @@ import {
   sanitizeProviderPacket,
 } from './lib/provider-runner.mjs'
 import { buildRetryJobTemplate } from './lib/work-shards.mjs'
+import { loadDatabaseConformanceEvidence } from './lib/database-conformance-controller.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
@@ -159,10 +160,10 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.6.0
+const HELP = `red-team-audit 0.7.0
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   red-team-audit next <run.json|bundle-directory>
   red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
   red-team-audit ingest <run.json|bundle-directory> <job-result.json>
@@ -218,6 +219,7 @@ const COMMAND_ARGUMENTS = {
     options: {
       out: 'value',
       roe: 'value',
+      'database-conformance': 'value',
       'max-text-bytes': 'value',
       'max-shard-files': 'value',
       'max-shard-bytes': 'value',
@@ -818,7 +820,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
   const projection = {
     inventory: coverage?.inventory,
   }
-  if (!['3.0.0', '4.0.0'].includes(schemaVersion)) return projection
+  if (!['3.0.0', '4.0.0', '5.0.0'].includes(schemaVersion)) return projection
   return {
     model_version: coverage?.model_version,
     policy: coverage?.policy,
@@ -858,7 +860,7 @@ function assertImmutableCoveragePlan(
       'planned coverage artifact is not the immutable initial coverage snapshot',
     )
   }
-  if (!['3.0.0', '4.0.0'].includes(run.schema_version)) return
+  if (!['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) return
 
   const expectedRecords = inventoryCoverageRecords(snapshot.entries)
   const expectedDenominators = buildCategoryDenominators(expectedRecords)
@@ -959,7 +961,7 @@ function assertSidecarJobIdentity(
     lens: job.lens,
     repository_root: run.repository.root,
     ...(
-      ['3.0.0', '4.0.0'].includes(run.schema_version) || requireProtocolFields
+      ['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version) || requireProtocolFields
         ? {
             schema_version: run.schema_version,
             phase: job.closure_round !== undefined
@@ -1002,7 +1004,7 @@ function assertSidecarJobIdentity(
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
-  if (['3.0.0', '4.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
     const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
@@ -1460,7 +1462,7 @@ export async function verifyControlBundle(
     throw new Error('policy artifact does not match the run provenance')
   }
   if (policy.mode !== 'static' || run.capability_mode !== 'STATIC') {
-    throw new Error('0.6.0 can dispatch and ingest only STATIC runs')
+    throw new Error('0.7.0 can dispatch and ingest only STATIC runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1486,7 +1488,8 @@ export async function verifyControlBundle(
     expectedInventory,
   )
   let databaseDiscoveryCommitted
-  if (['3.0.0', '4.0.0'].includes(run.schema_version)) {
+  let databaseConformanceCommitted
+  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
     databaseDiscoveryCommitted = await readVerifiedArtifact(
       directory,
       run,
@@ -1506,6 +1509,24 @@ export async function verifyControlBundle(
     ) {
       throw new Error('database discovery artifact does not match the canonical run graph')
     }
+  }
+  if (run.database_conformance) {
+    databaseConformanceCommitted = await readVerifiedArtifact(
+      directory,
+      run,
+      'database_conformance',
+      'database-conformance.json',
+    )
+    const databaseConformance = parseVerifiedJson(databaseConformanceCommitted)
+    if (stableJson(databaseConformance) !== stableJson(run.database_conformance)) {
+      throw new Error(
+        'database conformance artifact does not match the canonical run evidence',
+      )
+    }
+  } else if (run.artifacts?.database_conformance) {
+    throw new Error(
+      'database conformance artifact exists without canonical run evidence',
+    )
   }
   if (run.artifacts?.coverage) {
     const finalCoverageCommitted = await readVerifiedArtifact(
@@ -1612,8 +1633,11 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
-      ...(['3.0.0', '4.0.0'].includes(run.schema_version)
+      ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
+        : []),
+      ...(run.database_conformance
+        ? [['controls/database-conformance.json', run.artifacts.database_conformance]]
         : []),
       ...lensPack.files
         .filter(({ path }) =>
@@ -1636,6 +1660,8 @@ export async function verifyControlBundle(
               ? lensPackCommitted.content.length
               : path === 'controls/database-discovery.json'
                 ? databaseDiscoveryCommitted.content.length
+              : path === 'controls/database-conformance.json'
+                ? databaseConformanceCommitted.content.length
               : expected.size
         )
       ) {
@@ -1780,6 +1806,12 @@ export async function verifyControlBundle(
       ...(observedSidecar?.lens === 'database-and-data-stores'
         ? ['controls/database-discovery.json']
         : []),
+      ...(
+        observedSidecar?.lens === 'database-and-data-stores'
+        && run.database_conformance
+          ? ['controls/database-conformance.json']
+          : []
+      ),
       ...(observedSidecar?.lens_file
         ? [`lenses/${observedSidecar.lens_file}`]
         : []),
@@ -1806,10 +1838,17 @@ export async function verifyControlBundle(
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
-    ...(['3.0.0', '4.0.0'].includes(run.schema_version)
+    ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
+          ...(run.database_conformance
+            ? {
+                database_conformance_sha256: sha256(
+                  stableJson(run.database_conformance, 0),
+                ),
+              }
+            : {}),
         }
       : {}),
     control_snapshot_sha256: run.control_snapshot?.root_sha256,
@@ -1975,6 +2014,9 @@ function nextJobPacket(run, job, sidecar) {
       ...(job.lens === 'database-and-data-stores'
         ? {
             store_profiles: storeProfilesForPacket(run, storeIds),
+            ...(run.database_conformance
+              ? { database_conformance: run.database_conformance }
+              : {}),
           }
         : {}),
     }
@@ -2092,6 +2134,12 @@ function observedProviderArtifactDescriptors(run, job, sidecar, control) {
     ...(sidecar?.lens === 'database-and-data-stores'
       ? ['controls/database-discovery.json']
       : []),
+    ...(
+      sidecar?.lens === 'database-and-data-stores'
+      && run.database_conformance
+        ? ['controls/database-conformance.json']
+        : []
+    ),
     ...(sidecar?.lens_file ? [`lenses/${sidecar.lens_file}`] : []),
   ])
   for (const path of [...selectedControlPaths].sort(
@@ -2821,8 +2869,28 @@ async function planCommand(positionals, options) {
     })
     if (policy.mode !== 'static') {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.6.0',
+        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.7.0',
       )
+    }
+  }
+  let databaseConformanceEvidence
+  if (typeof options['database-conformance'] === 'string') {
+    const conformanceArgument = resolve(options['database-conformance'])
+    const conformanceBefore = await realpath(conformanceArgument)
+    if (pathWithin(targetRoot, conformanceBefore)) {
+      throw new Error(
+        'database conformance evidence must be supplied from outside the untrusted target repository',
+      )
+    }
+    databaseConformanceEvidence = await loadDatabaseConformanceEvidence(
+      conformanceBefore,
+    )
+    const conformanceAfter = await realpath(conformanceArgument)
+    if (
+      conformanceAfter !== conformanceBefore
+      || pathWithin(targetRoot, conformanceAfter)
+    ) {
+      throw new Error('database conformance evidence path changed while it was read')
     }
   }
   const maxTextBytes = positiveInteger(options['max-text-bytes'], '--max-text-bytes')
@@ -2842,6 +2910,7 @@ async function planCommand(positionals, options) {
     targetRoot,
     lensDirectory: DEFAULT_LENS_DIRECTORY,
     policy,
+    databaseConformanceEvidence,
     sealSource,
     ...(maxTextBytes === undefined ? {} : { inventoryOptions: { maxTextBytes } }),
     shardOptions: {
@@ -3435,7 +3504,7 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
     ?? cleanupDockerProviderContainer
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (!['2.0.0', '3.0.0', '4.0.0'].includes(loaded.run.schema_version)
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(loaded.run.schema_version)
     || !loaded.run.source_snapshot) {
     throw new Error(
       'run-provider requires a runner-ready v2 bundle created with plan --seal-source',

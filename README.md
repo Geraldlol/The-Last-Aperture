@@ -14,8 +14,9 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.6.0 adds controller-owned cross-shard database-store synthesis to the
-bounded coverage, detached root-attestation, and sealed provider foundation:
+Version 0.7.0 adds an opt-in, disposable multi-engine database conformance lab
+to the bounded coverage, detached root-attestation, sealed provider, and
+controller-owned store-synthesis foundation:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -47,6 +48,14 @@ bounded coverage, detached root-attestation, and sealed provider foundation:
 - Separate existence and proof transitions.
 - Per-store database adapter routing, shard-local contributions, and
   controller-synthesized coverage profiles.
+- A standalone digest-pinned PostgreSQL 18.4/MySQL 8.4.10 conformance lab with
+  eight authorization, session, stored-code, copy, backup, export, and
+  migration-role scenarios.
+- Content-addressed engine results with checkable transcripts, exact image and
+  server identities, hard resource/wall-time bounds, stale-lock recovery, and
+  verified container teardown.
+- Optional schema-5 audit attachment of a complete reference-lab result,
+  explicitly labeled `UNANCHORED` and `target_deployment_proven: false`.
 - Read-only audit mode and an operator abort command.
 - Markdown, JSON, and SARIF 2.1 output.
 - Separate unique-file, lens/file-obligation, conceptual-gap, and raw-gap
@@ -54,10 +63,14 @@ bounded coverage, detached root-attestation, and sealed provider foundation:
 - Baseline comparison that distinguishes `fixed` from `not-observed`.
 - TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
 
-The dynamic T1/T2 proof broker is not enabled. Static mode does not execute
+The general dynamic T1/T2 target proof broker is not enabled. Static mode does not execute
 target code, follow target symlinks, or make network calls. The reference
 provider boundary runs a separately supplied, trusted adapter image against
 brokered sealed data; it does not mount or execute the target.
+
+The standalone database lab is separate opt-in `LOCAL_DYNAMIC` execution of
+controller-owned synthetic SQL. It never reads the audited target or target
+credentials, and its reference-engine results never prove a target deployment.
 
 Inventory is fail-closed and resource-bounded. Regular files are opened with
 no-follow semantics where Node exposes them, verified with `fstat`, read and
@@ -90,6 +103,39 @@ npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --require-so
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
+
+### Disposable database conformance
+
+The lab requires a trusted absolute Docker CLI path, a local Docker daemon, and
+the two exact manifest images already present. Plan bundles outside the project
+and audited target:
+
+```powershell
+npm.cmd run conformance:database -- plan C:\database-lab-runs\run-001
+npm.cmd run conformance:database -- run C:\database-lab-runs\run-001 C:\trusted\database-lab-config.json
+npm.cmd run conformance:database -- validate C:\database-lab-runs\run-001
+```
+
+The trusted configuration must satisfy
+[`schemas/database-conformance-config.schema.json`](schemas/database-conformance-config.schema.json),
+name an absolute Docker executable, set
+`acknowledge_local_dynamic: true`, and provide bounded limits. If a controller
+process dies, `conformance:database -- unlock <bundle>` removes only a parsed
+dead-PID lock; the next run inspects and recovers only containers bearing the
+exact run/engine labels.
+
+A fully passing two-engine result can be attached as reference context when a
+new static audit is planned:
+
+```powershell
+npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
+  --database-conformance C:\database-lab-runs\run-001
+```
+
+The controller copies and hashes a bounded evidence projection into the audit
+bundle and seals it for database-lens jobs. Reports keep it in a separate
+reference section. It does not change store coverage, finding proof tier,
+verification status, or target deployment claims.
 
 ### Install the development checkout as a Codex skill
 
@@ -423,7 +469,7 @@ availability, and assumption claims must cite controller-inventoried evidence
 paths; placeholder versions, principals, and invented semantic rule IDs fail
 validation.
 
-Run schema 4 records one authenticated contribution for every successful base
+Run schemas 4 and 5 record one authenticated contribution for every successful base
 database shard/store relationship. Only the authority shard may supply the
 local semantic profile; context shards supply local topic, evidence, and gap
 claims. At the fan-out barrier the controller deterministically synthesizes one
@@ -431,10 +477,11 @@ profile per discovered store. It reports `ASSESSED` only when every required
 contribution closes its local paths and all ten database topics; missing or
 partial contributions preserve a gap.
 
-The next database milestone is a disposable multi-engine conformance lab for
-two-tenant authorization, pooled-session reset, direct-table bypass, views and
-stored code, CDC/history, backups, exports, and migration/runtime role
-separation.
+Version 0.7 ships the disposable multi-engine matrix for two-tenant
+authorization, pooled-session reset, direct-table bypass, views and stored
+code, CDC/history, backups, exports, and migration/runtime role separation.
+The next database expansion is additional versioned engines and managed-service
+variants after the v1 result and lifecycle contracts have operational history.
 
 ## Project boundaries
 

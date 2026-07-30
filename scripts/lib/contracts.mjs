@@ -26,6 +26,7 @@ import {
   normalizeStoreContribution,
   synthesizeStoreProfiles,
 } from './store-synthesis.mjs'
+import { validateDatabaseConformanceEvidence } from './database-conformance-contracts.mjs'
 
 const FINDING_SCHEMA_URL = new URL('../../schemas/finding.schema.json', import.meta.url)
 const STORE_PROFILE_SCHEMA_URL = new URL('../../schemas/store-profile.schema.json', import.meta.url)
@@ -36,6 +37,10 @@ const STORE_CONTRIBUTION_SCHEMA_URL = new URL(
 const RUN_SCHEMA_URL = new URL('../../schemas/run.schema.json', import.meta.url)
 const DATABASE_DISCOVERY_SCHEMA_URL = new URL(
   '../../schemas/database-discovery.schema.json',
+  import.meta.url,
+)
+const DATABASE_CONFORMANCE_EVIDENCE_SCHEMA_URL = new URL(
+  '../../schemas/database-conformance-evidence.schema.json',
   import.meta.url,
 )
 
@@ -50,6 +55,9 @@ export const runSchema = JSON.parse(readFileSync(fileURLToPath(RUN_SCHEMA_URL), 
 export const databaseDiscoverySchema = JSON.parse(
   readFileSync(fileURLToPath(DATABASE_DISCOVERY_SCHEMA_URL), 'utf8'),
 )
+export const databaseConformanceEvidenceSchema = JSON.parse(
+  readFileSync(fileURLToPath(DATABASE_CONFORMANCE_EVIDENCE_SCHEMA_URL), 'utf8'),
+)
 
 const ajv = new Ajv2020({
   allErrors: true,
@@ -63,6 +71,7 @@ ajv.addSchema(findingSchema)
 ajv.addSchema(storeProfileSchema)
 ajv.addSchema(storeContributionSchema)
 ajv.addSchema(databaseDiscoverySchema)
+ajv.addSchema(databaseConformanceEvidenceSchema)
 ajv.addSchema(runSchema)
 
 const validateFindingSchema = ajv.getSchema(findingSchema.$id)
@@ -138,7 +147,7 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
 const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
-const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0'])
+const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0'])
 
 function modeledDatabaseRun(run) {
   return MODELED_DATABASE_RUN_SCHEMAS.has(run?.schema_version)
@@ -1411,7 +1420,7 @@ function attemptInvariantErrors(run) {
       }
     }
     if (
-      ['2.0.0', '3.0.0', '4.0.0'].includes(run?.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(run?.schema_version)
       && ['SUCCEEDED', 'FAILED'].includes(job.state)
       && job.kind !== 'REPORT'
       && (hasOwn(job, 'input_sha256') || hasOwn(job, 'producer'))
@@ -2178,7 +2187,7 @@ function v3CoverageInvariantErrors(run) {
 
 function v4StoreSynthesisInvariantErrors(run) {
   const errors = []
-  if (run.schema_version !== '4.0.0') return errors
+  if (!['4.0.0', '5.0.0'].includes(run.schema_version)) return errors
 
   const jobs = new Map((run.jobs ?? []).map((job) => [job.job_id, job]))
   const relationships = expectedStoreContributionRelationships(run)
@@ -2327,8 +2336,8 @@ function v4StoreSynthesisInvariantErrors(run) {
       'STORE_SYNTHESIS_MISMATCH',
       '/store_profiles',
       synthesisMaterialized
-        ? 'schema 4 store profiles must equal controller synthesis from the immutable contribution ledger'
-        : 'schema 4 store profiles cannot materialize before the fan-out barrier',
+        ? 'schema 4/5 store profiles must equal controller synthesis from the immutable contribution ledger'
+        : 'schema 4/5 store profiles cannot materialize before the fan-out barrier',
     )
   }
 
@@ -2340,6 +2349,20 @@ function runInvariantErrors(run, { final = false } = {}) {
   if (run === null || typeof run !== 'object' || Array.isArray(run)) return errors
   errors.push(...sealedSnapshotInvariantErrors(run))
   errors.push(...attemptInvariantErrors(run))
+  if (run.database_conformance !== undefined) {
+    const conformance = validateDatabaseConformanceEvidence(
+      run.database_conformance,
+    )
+    for (const error of conformance.errors) {
+      addError(
+        errors,
+        error.code ?? 'DATABASE_CONFORMANCE_EVIDENCE_INVALID',
+        `/database_conformance${error.instancePath === '/' ? '' : error.instancePath}`,
+        error.message,
+        error.params,
+      )
+    }
+  }
   if (modeledDatabaseRun(run)) {
     const schemaValid = validateDatabaseDiscoverySchema(
       run.database_discovery,
@@ -3133,6 +3156,7 @@ function runTransitionErrors(previous, next) {
     'source_snapshot',
     'control_snapshot',
     'database_discovery',
+    'database_conformance',
   ]
   for (const field of immutableFields) {
     if (hasOwn(previous, field) && !isDeepStrictEqual(previous[field], next[field])) {
@@ -3315,7 +3339,7 @@ function runTransitionErrors(previous, next) {
       (event) => event?.job_id === jobId,
     )
     if (
-      ['2.0.0', '3.0.0', '4.0.0'].includes(next.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(next.schema_version)
       && priorJob.state === 'RUNNING'
       && nextJob.state === 'PENDING'
     ) {
@@ -3604,7 +3628,7 @@ function runTransitionErrors(previous, next) {
       && addedStoreIds.has(gap.area.slice('store:'.length))
     )
     const synthesisResolution = (
-      next.schema_version === '4.0.0'
+      ['4.0.0', '5.0.0'].includes(next.schema_version)
       && previous.phase === 'FANOUT'
       && next.phase === 'TRIAGE'
       && typeof gap?.area === 'string'
@@ -3967,7 +3991,7 @@ function runTransitionErrors(previous, next) {
       ? completedProviderJobs[0].nextJob
       : null
     if (
-      next.schema_version !== '4.0.0'
+      !['4.0.0', '5.0.0'].includes(next.schema_version)
       || databaseCompletion?.kind !== 'LENS'
       || databaseCompletion?.lens !== 'database-and-data-stores'
       || databaseCompletion?.closure_round !== undefined
@@ -3980,7 +4004,7 @@ function runTransitionErrors(previous, next) {
         errors,
         'STORE_CONTRIBUTION_DELTA_NOT_JOB_BOUND',
         '/store_contributions',
-        'store contributions may be appended only by their one successful schema 4 base database result',
+        'store contributions may be appended only by their one successful schema 4/5 base database result',
       )
     }
   }
@@ -3991,7 +4015,7 @@ function runTransitionErrors(previous, next) {
   const nextProfiles = Array.isArray(next.store_profiles) ? next.store_profiles : []
   const addedProfiles = nextProfiles.slice(priorProfileCount)
   if (addedProfiles.length > 0) {
-    if (next.schema_version === '4.0.0') {
+    if (['4.0.0', '5.0.0'].includes(next.schema_version)) {
       const expectedProfiles = synthesizeStoreProfiles(next)
         .map(({ profile }) => profile)
       if (
@@ -4003,7 +4027,7 @@ function runTransitionErrors(previous, next) {
           errors,
           'STORE_PROFILE_DELTA_NOT_SYNTHESIZED',
           '/store_profiles',
-          'schema 4 profiles may be appended only as exact controller synthesis at the fan-out barrier',
+          'schema 4/5 profiles may be appended only as exact controller synthesis at the fan-out barrier',
         )
       }
     } else {

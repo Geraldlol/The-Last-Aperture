@@ -1,0 +1,172 @@
+{
+  "schema_version": "1.0.0",
+  "protocol": "docker-database-lab-v1",
+  "lab_id": "database-multi-engine-v1",
+  "assurance_scope": "DISPOSABLE_REFERENCE_ENGINE_BEHAVIOR_ONLY",
+  "scenarios": [
+    {
+      "scenario_id": "two-tenant-authorization",
+      "title": "Two authenticated tenants cannot read or write each other's canaries",
+      "area": "authorization"
+    },
+    {
+      "scenario_id": "pooled-session-reset",
+      "title": "A reused session cannot retain the prior tenant authority",
+      "area": "session"
+    },
+    {
+      "scenario_id": "direct-table-bypass",
+      "title": "Runtime principals cannot bypass the intended record boundary through base tables",
+      "area": "authorization"
+    },
+    {
+      "scenario_id": "views-and-stored-code",
+      "title": "Views and stored code preserve deliberate invoker and definer boundaries",
+      "area": "execution"
+    },
+    {
+      "scenario_id": "cdc-and-history",
+      "title": "Change streams and history copies have explicit independent reader boundaries",
+      "area": "copy"
+    },
+    {
+      "scenario_id": "backup",
+      "title": "A bounded backup preserves required security objects and both tenant canaries",
+      "area": "copy"
+    },
+    {
+      "scenario_id": "export",
+      "title": "Tenant exports remain tenant-scoped and unrestricted server-side export is denied",
+      "area": "copy"
+    },
+    {
+      "scenario_id": "migration-runtime-role-separation",
+      "title": "The runtime principal cannot exercise migration DDL authority",
+      "area": "migration"
+    }
+  ],
+  "engines": [
+    {
+      "engine_id": "postgresql-18.4",
+      "adapter_id": "postgresql",
+      "product": "PostgreSQL",
+      "image": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "expected_server_version_pattern": "^18\\.4(?:\\s|$)",
+      "scenario_rules": [
+        {
+          "scenario_id": "two-tenant-authorization",
+          "adapter_rule_ids": [
+            "db.authorization.postgresql.rls-policy-completeness"
+          ]
+        },
+        {
+          "scenario_id": "pooled-session-reset",
+          "adapter_rule_ids": [
+            "db.authorization.postgresql.tenant-context-lifecycle"
+          ]
+        },
+        {
+          "scenario_id": "direct-table-bypass",
+          "adapter_rule_ids": [
+            "db.authorization.postgresql.rls-bypass"
+          ]
+        },
+        {
+          "scenario_id": "views-and-stored-code",
+          "adapter_rule_ids": [
+            "db.authorization.postgresql.routine-execute-grants",
+            "db.execution.postgresql.security-definer-authority",
+            "db.execution.postgresql.security-definer-search-path"
+          ]
+        },
+        {
+          "scenario_id": "cdc-and-history",
+          "adapter_rule_ids": [
+            "db.copy.postgresql.replication-policy-gap",
+            "db.history.postgresql.audit-table-closure"
+          ]
+        },
+        {
+          "scenario_id": "backup",
+          "adapter_rule_ids": [
+            "db.restore.postgresql.global-principal-gap"
+          ]
+        },
+        {
+          "scenario_id": "export",
+          "adapter_rule_ids": [
+            "db.copy.postgresql.export-rls-boundary"
+          ]
+        },
+        {
+          "scenario_id": "migration-runtime-role-separation",
+          "adapter_rule_ids": [
+            "db.migration.postgresql.new-relation-policy-drift",
+            "db.migration.postgresql.runtime-ddl-separation"
+          ]
+        }
+      ]
+    },
+    {
+      "engine_id": "mysql-8.4.10",
+      "adapter_id": "mysql",
+      "product": "MySQL",
+      "image": "mysql@sha256:8dbcf531a03aade657e181b9cf2f1d1803ce621a1d55610cb44cb531ab7d7db6",
+      "expected_server_version_pattern": "^8\\.4\\.10(?:\\s|$)",
+      "scenario_rules": [
+        {
+          "scenario_id": "two-tenant-authorization",
+          "adapter_rule_ids": [
+            "db.authorization.mysql.no-native-row-policy",
+            "db.authorization.mysql.view-base-table-closure",
+            "db.authorization.mysql.view-write-check"
+          ]
+        },
+        {
+          "scenario_id": "pooled-session-reset",
+          "adapter_rule_ids": [
+            "db.authorization.mysql.caller-mutable-tenant-context"
+          ]
+        },
+        {
+          "scenario_id": "direct-table-bypass",
+          "adapter_rule_ids": [
+            "db.authorization.mysql.view-base-table-closure"
+          ]
+        },
+        {
+          "scenario_id": "views-and-stored-code",
+          "adapter_rule_ids": [
+            "db.execution.mysql.definer-context",
+            "db.execution.mysql.trigger-event-definer"
+          ]
+        },
+        {
+          "scenario_id": "cdc-and-history",
+          "adapter_rule_ids": [
+            "db.copy.mysql.binlog-reader-boundary",
+            "db.history.mysql.application-history-closure"
+          ]
+        },
+        {
+          "scenario_id": "backup",
+          "adapter_rule_ids": [
+            "db.restore.mysql.dump-object-coverage"
+          ]
+        },
+        {
+          "scenario_id": "export",
+          "adapter_rule_ids": [
+            "db.copy.mysql.export-boundary"
+          ]
+        },
+        {
+          "scenario_id": "migration-runtime-role-separation",
+          "adapter_rule_ids": [
+            "db.migration.mysql.runtime-ddl-separation"
+          ]
+        }
+      ]
+    }
+  ]
+}
