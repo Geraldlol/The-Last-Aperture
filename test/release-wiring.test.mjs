@@ -103,13 +103,13 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.7 database conformance commands', () => {
+test('release metadata exposes the 0.8 controller and database conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
-  assert.equal(packageDocument.version, '0.7.0')
-  assert.equal(lockDocument.version, '0.7.0')
-  assert.equal(lockDocument.packages[''].version, '0.7.0')
+  assert.equal(packageDocument.version, '0.8.0')
+  assert.equal(lockDocument.version, '0.8.0')
+  assert.equal(lockDocument.packages[''].version, '0.8.0')
   assert.equal(
     packageDocument.scripts['conformance:database'],
     'node scripts/database-conformance.mjs',
@@ -118,11 +118,16 @@ test('release metadata exposes the 0.7 database conformance commands', () => {
     packageDocument.scripts['test:database:docker'],
     'node scripts/run-database-docker-conformance.mjs',
   )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>/,
+  )
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {
   for (const path of [
     'docs/adr/0007-signed-remote-request-acceptance.md',
+    'docs/adr/0008-remote-attempt-ledger-integration.md',
     'providers/reference-remote-gateway/README.md',
     'providers/reference-remote-gateway/gateway.mjs',
     'schemas/remote-gateway-config.schema.json',
@@ -131,6 +136,7 @@ test('the v0.8 remote gateway protocol foundation is release-wired', () => {
     'scripts/lib/remote-gateway-contracts.mjs',
     'scripts/lib/remote-gateway-client.mjs',
     'test/remote-gateway-contracts.test.mjs',
+    'test/remote-cli-integration.test.mjs',
   ]) {
     assert.ok(
       readFileSync(path).length > 0,

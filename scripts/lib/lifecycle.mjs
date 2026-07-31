@@ -277,6 +277,9 @@ function coverageAuthorityForFinding(run, finding) {
   if (job?.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION') {
     return 'CONTROLLER_OBSERVED_CONSUMPTION'
   }
+  if (job?.coverage_authority === 'REMOTE_REQUEST_ACCEPTED') {
+    return 'REMOTE_REQUEST_ACCEPTED'
+  }
   return 'PROVIDER_DECLARED'
 }
 
@@ -395,13 +398,16 @@ export function compareRuns(baseline, current) {
       && resolutionAuthorities[0] === 'CONTROLLER_OBSERVED_CONSUMPTION'
       ? 'controller-observed byte consumption; not comprehension or independent proof'
       : resolutionAuthorities.length === 1
+        && resolutionAuthorities[0] === 'REMOTE_REQUEST_ACCEPTED'
+        ? 'pinned remote gateway request acceptance; not comprehension or independent proof'
+      : resolutionAuthorities.length === 1
         && resolutionAuthorities[0] === 'PROVIDER_DECLARED'
         ? 'provider-declared lens, file, and store coverage; not an independent controller read receipt'
         : resolutionAuthorities.length === 1
           ? 'no current successful lens coverage authority; no resolution claim is supported'
           : resolutionAuthorities.includes('NO_CURRENT_COVERAGE_AUTHORITY')
             ? 'mixed current coverage authority with at least one finding lacking successful lens coverage; no unsupported resolution claim is implied'
-            : 'mixed provider-declared and controller-observed byte consumption; neither is independent proof'
+            : 'mixed provider-declared and authenticated execution authorities; none is independent proof'
   return {
     baseline_run_id: baseline.run_id,
     current_run_id: current.run_id,

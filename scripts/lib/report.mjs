@@ -446,6 +446,10 @@ export function renderMarkdownReport(run) {
       ({ coverage_authority: authority }) =>
         authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
     ).length,
+    REMOTE_REQUEST_ACCEPTED: producedJobs.filter(
+      ({ coverage_authority: authority }) =>
+        authority === 'REMOTE_REQUEST_ACCEPTED',
+    ).length,
   }
   const lensAuthority = new Map()
   for (const job of producedJobs.filter(
@@ -484,7 +488,7 @@ export function renderMarkdownReport(run) {
   }
   if (['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)) {
     lines.push(
-      '> Coverage authority is recorded per job. CONTROLLER_OBSERVED_CONSUMPTION proves the adapter completed a challenge over exact sealed bytes; it does not prove comprehension or correct analysis. PROVIDER_DECLARED remains an unauthenticated provider claim. Neither is an independent security clearance.',
+      '> Coverage authority is recorded per job. CONTROLLER_OBSERVED_CONSUMPTION proves the local adapter completed a challenge over exact sealed bytes. REMOTE_REQUEST_ACCEPTED proves the pinned gateway accepted one exact signed request. Neither proves comprehension or correct analysis. PROVIDER_DECLARED remains an unauthenticated provider claim. None is an independent security clearance.',
       '',
     )
   }
@@ -588,7 +592,8 @@ export function renderMarkdownReport(run) {
     `Raw open gap records: ${coverageSummary.raw_open_gap_records}  `,
     `Resolved historical gap records: ${coverageSummary.resolved_gap_records}  `,
     `Provider-declared jobs: ${authorityCounts.PROVIDER_DECLARED}  `,
-    `Controller-observed consumption jobs: ${authorityCounts.CONTROLLER_OBSERVED_CONSUMPTION}`,
+    `Controller-observed consumption jobs: ${authorityCounts.CONTROLLER_OBSERVED_CONSUMPTION}  `,
+    `Remote request accepted jobs: ${authorityCounts.REMOTE_REQUEST_ACCEPTED}`,
     '',
   )
 
@@ -1060,6 +1065,10 @@ export function renderSarif(run, options = {}) {
           controller_observed_consumption_jobs: producedJobs.filter(
             ({ coverage_authority: authority }) =>
               authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
+          ).length,
+          remote_request_accepted_jobs: producedJobs.filter(
+            ({ coverage_authority: authority }) =>
+              authority === 'REMOTE_REQUEST_ACCEPTED',
           ).length,
           findings_state: findings.length === 0
             ? 'NO_FINDINGS_REPORTED'

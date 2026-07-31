@@ -253,7 +253,7 @@ test('a complete two-engine run writes durable results, report, and root manifes
     auditPlan,
     join(parent, 'audit-runs'),
   )
-  assert.equal(auditPlan.run.schema_version, '5.0.0')
+  assert.equal(auditPlan.run.schema_version, '6.0.0')
   assert.deepEqual(auditPlan.run.database_conformance, evidence)
   assert.equal(
     JSON.parse(await readFile(

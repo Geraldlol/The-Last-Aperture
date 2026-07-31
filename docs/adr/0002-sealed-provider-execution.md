@@ -127,8 +127,8 @@ Reports and machine output keep these statements separate:
 - `CONTROLLER_DELIVERED`: controller sent the complete sealed bytes.
 - `CONTROLLER_OBSERVED_CONSUMPTION`: the adapter produced the byte challenge
   response for the complete sealed bytes.
-- `REMOTE_REQUEST_ACCEPTED`: a future trusted gateway accepted a particular
-  request digest.
+- `REMOTE_REQUEST_ACCEPTED`: reserved here for a trusted gateway accepting a
+  particular request digest; implemented later by ADR 0007 and ADR 0008.
 - `INDEPENDENTLY_PROVEN`: a separate proof oracle established the claim.
 
 Consumption is not comprehension. None of the first four states means the

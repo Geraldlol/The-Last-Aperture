@@ -29,6 +29,7 @@ export const ACTION_TYPES = Object.freeze([
 
 export const POLICY_MODES = Object.freeze([
   'static',
+  'remote_static',
   'test',
   'local_dynamic',
 ])
@@ -407,6 +408,20 @@ function buildNormalizedPolicy(rawPolicy, options) {
       'static mode permits read_file only',
     )
   }
+  if (
+    raw.mode === 'remote_static'
+    && (
+      capabilities.write_file.enabled
+      || capabilities.execute.enabled
+      || !capabilities.network.enabled
+    )
+  ) {
+    issue(
+      'capabilities',
+      'REMOTE_STATIC_MODE_CONTRADICTION',
+      'remote_static mode requires network and permits neither write_file nor execute',
+    )
+  }
 
   return {
     schema_version: '1.0',
@@ -686,6 +701,16 @@ export function authorizeAction(policy, action) {
       action.type,
       'STATIC_MODE_READ_ONLY',
       'static mode permits read_file actions only',
+    )
+  }
+  if (
+    policy.mode === 'remote_static'
+    && !['read_file', 'network'].includes(action.type)
+  ) {
+    return deny(
+      action.type,
+      'REMOTE_STATIC_MODE_READ_NETWORK_ONLY',
+      'remote_static mode permits only read_file and network actions',
     )
   }
 

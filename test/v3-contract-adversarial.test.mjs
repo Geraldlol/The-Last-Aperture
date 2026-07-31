@@ -250,8 +250,8 @@ after(async () => {
   if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true })
 })
 
-test('an untouched controller-created v5 plan satisfies the run contract', () => {
-  assert.equal(plannedRun.schema_version, '5.0.0')
+test('an untouched controller-created v6 plan satisfies the run contract', () => {
+  assert.equal(plannedRun.schema_version, '6.0.0')
   assert.ok(plannedRun.coverage.shards.length >= 2)
   assert.ok(plannedRun.database_discovery.nodes.length > 0)
 

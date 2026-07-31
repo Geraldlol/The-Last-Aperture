@@ -30,6 +30,7 @@
     "mode": {
       "enum": [
         "static",
+        "remote_static",
         "test",
         "local_dynamic"
       ]
@@ -66,6 +67,51 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "remote_static"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "write_file": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              },
+              "execute": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              },
+              "network": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "if": {
         "properties": {

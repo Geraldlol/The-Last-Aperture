@@ -199,6 +199,38 @@ test('lifecycle summary preserves mixed declared and observed authority', () => 
   assert.match(comparison.resolution_authority, /mixed provider-declared/i)
 })
 
+test('remote acceptance remains a distinct lifecycle and report authority', () => {
+  const baseline = run()
+  const current = run({
+    run_id: 'run:test:remote-authority',
+    findings: [],
+    jobs: [{
+      job_id: 'lens:web-and-api',
+      kind: 'LENS',
+      lens: 'web-and-api',
+      state: 'SUCCEEDED',
+      coverage_authority: 'REMOTE_REQUEST_ACCEPTED',
+      producer: {
+        name: 'remote-fixture',
+        version: '1.0.0',
+        instance_id: 'remote:fixture',
+      },
+    }],
+  })
+  const comparison = compareRuns(baseline, current)
+  assert.equal(
+    comparison.results[0].resolution_authority,
+    'REMOTE_REQUEST_ACCEPTED',
+  )
+  assert.match(
+    comparison.resolution_authority,
+    /remote gateway request acceptance/i,
+  )
+  const report = renderMarkdownReport(current)
+  assert.match(report, /Remote request accepted jobs: 1/)
+  assert.match(report, /REMOTE_REQUEST_ACCEPTED proves the pinned gateway/i)
+})
+
 test('attributable coverage gaps veto only the resolutions they can affect', () => {
   const baseline = run()
   const affected = run({

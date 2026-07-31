@@ -1,5 +1,7 @@
 import { createHash, X509Certificate } from 'node:crypto'
+import { lookup as dnsLookup } from 'node:dns'
 import { request as httpsRequest } from 'node:https'
+import { BlockList, isIP } from 'node:net'
 import { checkServerIdentity } from 'node:tls'
 
 import {
@@ -19,6 +21,96 @@ function sha256(value) {
 function headerValue(headers, name) {
   const value = headers?.[name] ?? headers?.[name.toLowerCase()]
   return Array.isArray(value) ? value[0] : value
+}
+
+const NON_PUBLIC_REMOTE_IPV4_ADDRESSES = new BlockList()
+for (const [address, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+]) {
+  NON_PUBLIC_REMOTE_IPV4_ADDRESSES.addSubnet(address, prefix, 'ipv4')
+}
+const NON_PUBLIC_REMOTE_IPV6_ADDRESSES = new BlockList()
+for (const [address, prefix] of [
+  ['::', 128],
+  ['::1', 128],
+  ['::ffff:0:0', 96],
+  ['64:ff9b::', 96],
+  ['64:ff9b:1::', 48],
+  ['100::', 64],
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
+  ['5f00::', 16],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['ff00::', 8],
+]) {
+  NON_PUBLIC_REMOTE_IPV6_ADDRESSES.addSubnet(address, prefix, 'ipv6')
+}
+
+export function isPublicRemoteAddress(address) {
+  const family = isIP(address)
+  if (family === 0) return false
+  return family === 4
+    ? !NON_PUBLIC_REMOTE_IPV4_ADDRESSES.check(address, 'ipv4')
+    : !NON_PUBLIC_REMOTE_IPV6_ADDRESSES.check(address, 'ipv6')
+}
+
+export function createRemoteGatewayLookup(lookup = dnsLookup) {
+  if (typeof lookup !== 'function') {
+    throw new TypeError('remote gateway DNS lookup must be a function')
+  }
+  return (hostname, options, callback) => {
+    const requestedFamily = typeof options === 'number'
+      ? options
+      : (options?.family ?? 0)
+    let settled = false
+    const finish = (...values) => {
+      if (settled) return
+      settled = true
+      callback(...values)
+    }
+    try {
+      lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
+        if (error) {
+          finish(error)
+          return
+        }
+        const candidates = Array.isArray(addresses)
+          ? addresses.filter(({ address, family }) =>
+              (requestedFamily === 0 || requestedFamily === family)
+              && family === isIP(address)
+              && isPublicRemoteAddress(address))
+          : []
+        if (candidates.length === 0) {
+          const scopeError = new Error(
+            `remote gateway DNS for ${hostname} returned no permitted public address`,
+          )
+          scopeError.code = 'REMOTE_GATEWAY_DNS_SCOPE_DENIED'
+          finish(scopeError)
+          return
+        }
+        finish(null, candidates[0].address, candidates[0].family)
+      })
+    } catch (error) {
+      finish(error)
+    }
+  }
 }
 
 function pinnedServerIdentity(expectedSpkiSha256) {
@@ -60,6 +152,8 @@ export function httpsRemoteGatewayTransport({
       agent: false,
       headers,
       checkServerIdentity: pinnedServerIdentity(config.tls_spki_sha256),
+      lookup: createRemoteGatewayLookup(),
+      autoSelectFamily: false,
       timeout: config.limits.request_timeout_ms,
     })
     request.once('timeout', () => {

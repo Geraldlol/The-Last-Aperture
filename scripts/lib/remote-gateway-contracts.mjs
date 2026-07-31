@@ -277,7 +277,9 @@ export function parseRemotePrivateKey(keyBytes) {
 
 export function parseRemotePublicKey(keyBytes) {
   try {
-    return keyIdentity(createPublicKey(keyBytes))
+    return keyIdentity(
+      keyBytes?.type === 'public' ? keyBytes : createPublicKey(keyBytes),
+    )
   } catch (error) {
     if (error instanceof RemoteGatewayContractError) throw error
     throw new RemoteGatewayContractError(
@@ -908,6 +910,7 @@ export function verifyRemoteAcceptanceEnvelope({
     upstream_request_sha256: envelope.gateway.upstream_request_sha256,
     accepted_at: envelope.gateway.accepted_at,
     job_result: structuredClone(envelope.job_result),
+    acceptance_envelope: structuredClone(envelope),
   }
 }
 

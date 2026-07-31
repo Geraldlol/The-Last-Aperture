@@ -6,7 +6,9 @@ owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
 and stores they examined. The optional sealed runner can prove that its adapter
 completed a byte challenge over exact planned bytes, but cannot prove the
-provider understood or analyzed those bytes correctly.
+provider understood or analyzed those bytes correctly. The optional remote
+gateway path proves that an externally pinned gateway accepted one exact
+signed request; that acceptance is not proof of model comprehension.
 
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
@@ -14,9 +16,9 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.7.0 adds an opt-in, disposable multi-engine database conformance lab
-to the bounded coverage, detached root-attestation, sealed provider, and
-controller-owned store-synthesis foundation:
+Version 0.8.0 adds signed remote-gateway execution and durable remote attempt
+evidence to the bounded coverage, detached root-attestation, sealed provider,
+database conformance, and controller-owned store-synthesis foundation:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -43,8 +45,15 @@ controller-owned store-synthesis foundation:
   Ed25519 execution or structured failure envelopes.
 - Detached, externally pinned Ed25519 attestations over exact terminal
   `run.json` bytes.
-- Separate `PROVIDER_DECLARED` and `CONTROLLER_OBSERVED_CONSUMPTION` coverage
-  authority in run, Markdown, lifecycle, and SARIF output.
+- Separate `PROVIDER_DECLARED`, `CONTROLLER_OBSERVED_CONSUMPTION`, and
+  `REMOTE_REQUEST_ACCEPTED` coverage authority in run, Markdown, lifecycle,
+  and SARIF output.
+- A `remote_static` Rules of Engagement mode that allows one exact
+  policy-authorized HTTPS gateway while keeping provider packets read-only and
+  credential-free.
+- Canonical Ed25519 remote requests, SPKI-pinned HTTPS, RFC 9530 content
+  digests, one-use request IDs, signed gateway acceptance receipts, and
+  hash-chained schema-v6 attempt recovery.
 - Separate existence and proof transitions.
 - Per-store database adapter routing, shard-local contributions, and
   controller-synthesized coverage profiles.
@@ -54,7 +63,7 @@ controller-owned store-synthesis foundation:
 - Content-addressed engine results with checkable transcripts, exact image and
   server identities, hard resource/wall-time bounds, stale-lock recovery, and
   verified container teardown.
-- Optional schema-5 audit attachment of a complete reference-lab result,
+- Optional schema-5/6 audit attachment of a complete reference-lab result,
   explicitly labeled `UNANCHORED` and `target_deployment_proven: false`.
 - Read-only audit mode and an operator abort command.
 - Markdown, JSON, and SARIF 2.1 output.
@@ -63,10 +72,13 @@ controller-owned store-synthesis foundation:
 - Baseline comparison that distinguishes `fixed` from `not-observed`.
 - TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
 
-The general dynamic T1/T2 target proof broker is not enabled. Static mode does not execute
-target code, follow target symlinks, or make network calls. The reference
-provider boundary runs a separately supplied, trusted adapter image against
-brokered sealed data; it does not mount or execute the target.
+The general dynamic T1/T2 target proof broker is not enabled. Local static mode
+does not execute target code, follow target symlinks, or make network calls.
+`remote_static` permits only the configured gateway request authorized by the
+external policy; it does not grant network authority to repository content or
+the provider packet. The local provider boundary runs a separately supplied,
+trusted adapter image against brokered sealed data; it does not mount or
+execute the target.
 
 The standalone database lab is separate opt-in `LOCAL_DYNAMIC` execution of
 controller-owned synthetic SQL. It never reads the audited target or target
@@ -232,6 +244,38 @@ stderr, and any partial receipt without receiving coverage authority. Failed
 attempts remain in the hash-chained event history. See
 [`docs/provider-protocol.md`](docs/provider-protocol.md) and
 [`schemas/provider-config.schema.json`](schemas/provider-config.schema.json).
+
+### Signed remote gateway execution
+
+Remote execution requires an external `remote_static` Rules of Engagement
+policy whose network allowlist contains the exact gateway endpoint:
+
+```powershell
+npm.cmd run audit -- plan C:\path\to\repository `
+  --out C:\audit-runs `
+  --roe C:\trusted\remote-static-roe.json `
+  --seal-source
+
+npm.cmd run audit -- run-remote `
+  C:\audit-runs\<run-directory> `
+  C:\trusted\remote-gateway-config.json
+```
+
+The controller persists the exact canonical signed request and a schema-v6
+lease before network I/O. The HTTPS client permits no redirect, pins one
+validated public DNS answer for the connection, pins the
+certificate SPKI and gateway Ed25519 key, verifies the response content digest,
+and records the signed acceptance before committing the job result.
+
+An expired or ambiguous attempt is retained as a recoverable failure. Its
+request ID is never reused; retry creates a new attempt and signed request.
+Configuration, endpoint, transform, or key rotation inside one run is rejected.
+Source bytes leave the local machine only on this explicitly authorized path.
+`REMOTE_REQUEST_ACCEPTED` proves request acceptance, not provider
+comprehension, semantic correctness, or independent proof.
+
+See [`docs/adr/0008-remote-attempt-ledger-integration.md`](docs/adr/0008-remote-attempt-ledger-integration.md)
+and [`schemas/remote-gateway-config.schema.json`](schemas/remote-gateway-config.schema.json).
 
 For historical verification, pin the controller identity with an Ed25519 public
 key kept outside both target and bundle:

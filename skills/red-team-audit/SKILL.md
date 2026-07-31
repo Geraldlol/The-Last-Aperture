@@ -9,23 +9,22 @@ Read as an adversary; report as an evidence custodian. The controller owns
 inventory, activation, scope, job order, schemas, coverage, and terminal state.
 Lenses supply domain judgment, not an alternate workflow.
 
-Version 0.7.0 audits are **static and read-only**. Manual results are provider-declared;
-the optional sealed runner proves byte-challenge consumption, not understanding.
+Version 0.8.0 audits are static and read-only. Manual results are provider-declared.
+Local sealed execution proves byte consumption; remote execution proves signed
+request acceptance. Neither proves understanding.
 Never edit, boot, test, or network the target. A plan is not an audit result.
 Zero findings means only `NO_FINDINGS_REPORTED`.
 
-Database conformance is a separate opt-in lab. Run it only when explicitly
-requested. Attached results are context, never target proof or coverage.
+Database conformance is opt-in only. Its results are context, never target
+proof or coverage.
 
 ## Choose the path
 
 - **Repository audit** - use the control-plane workflow below.
 - **HIPAA / PHI** - use the same workflow; a requested HIPAA lens that did not
   activate is a coverage gap, never clearance.
-- **Threat model without a repository** - use
-  `lenses/threat-modeling.md` as advisory analysis only. Label it outside the
-  executable audit protocol and do not claim repository coverage or a clean
-  result.
+- **Threat model without a repository** - use `lenses/threat-modeling.md` as
+  advisory analysis outside this protocol; claim no repository coverage.
 
 Ask before planning if scope or authorization is unclear. Keep a custom bundle
 outside the target.
@@ -50,8 +49,9 @@ lenses, shards, store candidates, and gaps before any finding.
 proof-wave, or closure packets. Process each separately. Concurrency changes
 time, never packets or stage order; never combine results.
 
-If the user supplied a trusted Docker adapter, plan with `--seal-source` and use
-`run-provider <bundle> <external-config>` instead; never improvise a sandbox.
+Trusted execution requires `--seal-source`: use `run-provider` for an external
+Docker config, or `run-remote` for an external gateway config plus an external
+`remote_static` RoE. Never improvise a sandbox or network path.
 
 For each packet:
 

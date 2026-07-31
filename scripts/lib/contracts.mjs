@@ -147,7 +147,7 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
 const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
-const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0'])
+const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0', '6.0.0'])
 
 function modeledDatabaseRun(run) {
   return MODELED_DATABASE_RUN_SCHEMAS.has(run?.schema_version)
@@ -1053,6 +1053,7 @@ function attemptInvariantErrors(run) {
   const attempts = new Map()
   const activeByJob = new Map()
   const latestAttemptByJob = new Map()
+  const remoteRequestIds = new Set()
   let previousHash = null
   let previousOccurredAt = parseContractTimestamp(run?.created_at)
 
@@ -1272,6 +1273,41 @@ function attemptInvariantErrors(run) {
           'attempt expiry must be a valid time after the lease time',
         )
       }
+      if (run?.schema_version === '6.0.0' && event?.backend === undefined) {
+        addError(
+          errors,
+          'ATTEMPT_BACKEND_MISSING',
+          `${pointer}/backend`,
+          'v6 attempt leases must declare their execution backend',
+        )
+      }
+      if (event?.backend === 'REMOTE_GATEWAY') {
+        if (remoteRequestIds.has(event.request_id)) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_REUSED',
+            `${pointer}/request_id`,
+            'remote request identifiers are one-use within a run',
+          )
+        }
+        remoteRequestIds.add(event.request_id)
+        const requestArtifact = run?.artifacts?.[event.request_artifact_key]
+        if (!requestArtifact) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_ARTIFACT_MISSING',
+            `${pointer}/request_artifact_key`,
+            'remote attempt lease references an absent signed request artifact',
+          )
+        } else if (requestArtifact.sha256 !== event.request_artifact_sha256) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_ARTIFACT_MISMATCH',
+            `${pointer}/request_artifact_sha256`,
+            'remote request artifact digest differs from its lease',
+          )
+        }
+      }
     }
   })
 
@@ -1352,13 +1388,17 @@ function attemptInvariantErrors(run) {
         }
       }
     }
-    if (job.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION') {
+    if ([
+      'CONTROLLER_OBSERVED_CONSUMPTION',
+      'REMOTE_REQUEST_ACCEPTED',
+    ].includes(job.coverage_authority)) {
+      const remoteAuthority = job.coverage_authority === 'REMOTE_REQUEST_ACCEPTED'
       if (!['SUCCEEDED', 'FAILED'].includes(job.state)) {
         addError(
           errors,
           'OBSERVED_COVERAGE_JOB_NOT_TERMINAL',
           `${pointer}/state`,
-          'controller-observed coverage is assigned only when an attempt commits',
+          'authenticated coverage is assigned only when an attempt commits',
         )
       }
       for (const field of provenanceFields) {
@@ -1367,7 +1407,7 @@ function attemptInvariantErrors(run) {
             errors,
             'OBSERVED_COVERAGE_PROVENANCE_MISSING',
             `${pointer}/${field}`,
-            `controller-observed coverage requires ${field}`,
+            `authenticated coverage requires ${field}`,
           )
         }
       }
@@ -1382,9 +1422,21 @@ function attemptInvariantErrors(run) {
           errors,
           'OBSERVED_COVERAGE_ATTEMPT_MISSING',
           `${pointer}/attempt_id`,
-          'controller-observed coverage requires the matching committed attempt',
+          'authenticated coverage requires the matching committed attempt',
         )
       } else {
+        if (
+          remoteAuthority
+            ? attempt.lease?.backend !== 'REMOTE_GATEWAY'
+            : attempt.lease?.backend === 'REMOTE_GATEWAY'
+        ) {
+          addError(
+            errors,
+            'COVERAGE_AUTHORITY_BACKEND_MISMATCH',
+            `${pointer}/coverage_authority`,
+            'coverage authority must match the committed attempt backend',
+          )
+        }
         if (attempt.receipt_sha256 !== job.receipt_sha256) {
           addError(
             errors,
@@ -1415,12 +1467,12 @@ function attemptInvariantErrors(run) {
           errors,
           'OBSERVED_COVERAGE_ARTIFACT_MISSING',
           `${pointer}/execution_artifact_key`,
-          'controller-observed coverage references an absent execution artifact',
+          'authenticated coverage references an absent execution artifact',
         )
       }
     }
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(run?.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run?.schema_version)
       && ['SUCCEEDED', 'FAILED'].includes(job.state)
       && job.kind !== 'REPORT'
       && (hasOwn(job, 'input_sha256') || hasOwn(job, 'producer'))
@@ -1516,6 +1568,7 @@ function authenticatedSuccessfulV3LensJob(job) {
     && [
       'PROVIDER_DECLARED',
       'CONTROLLER_OBSERVED_CONSUMPTION',
+      'REMOTE_REQUEST_ACCEPTED',
     ].includes(job.coverage_authority)
   )
 }
@@ -2187,7 +2240,7 @@ function v3CoverageInvariantErrors(run) {
 
 function v4StoreSynthesisInvariantErrors(run) {
   const errors = []
-  if (!['4.0.0', '5.0.0'].includes(run.schema_version)) return errors
+  if (!['4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) return errors
 
   const jobs = new Map((run.jobs ?? []).map((job) => [job.job_id, job]))
   const relationships = expectedStoreContributionRelationships(run)
@@ -3339,7 +3392,7 @@ function runTransitionErrors(previous, next) {
       (event) => event?.job_id === jobId,
     )
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(next.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
       && priorJob.state === 'RUNNING'
       && nextJob.state === 'PENDING'
     ) {
@@ -3359,7 +3412,10 @@ function runTransitionErrors(previous, next) {
     if (
       priorJob.state === 'RUNNING'
       && ['SUCCEEDED', 'FAILED'].includes(nextJob.state)
-      && nextJob.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION'
+      && [
+        'CONTROLLER_OBSERVED_CONSUMPTION',
+        'REMOTE_REQUEST_ACCEPTED',
+      ].includes(nextJob.coverage_authority)
       && (
         matchingEvents.length !== 1
         || matchingEvents[0]?.event !== 'COMMITTED'
@@ -3403,7 +3459,10 @@ function runTransitionErrors(previous, next) {
     if (event?.event === 'COMMITTED' && !(
       priorJob?.state === 'RUNNING'
       && ['SUCCEEDED', 'FAILED'].includes(nextJob?.state)
-      && nextJob?.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION'
+      && [
+        'CONTROLLER_OBSERVED_CONSUMPTION',
+        'REMOTE_REQUEST_ACCEPTED',
+      ].includes(nextJob?.coverage_authority)
       && nextJob?.attempt_id === event?.attempt_id
     )) {
       addError(
@@ -3628,7 +3687,7 @@ function runTransitionErrors(previous, next) {
       && addedStoreIds.has(gap.area.slice('store:'.length))
     )
     const synthesisResolution = (
-      ['4.0.0', '5.0.0'].includes(next.schema_version)
+      ['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
       && previous.phase === 'FANOUT'
       && next.phase === 'TRIAGE'
       && typeof gap?.area === 'string'
@@ -3991,7 +4050,7 @@ function runTransitionErrors(previous, next) {
       ? completedProviderJobs[0].nextJob
       : null
     if (
-      !['4.0.0', '5.0.0'].includes(next.schema_version)
+      !['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
       || databaseCompletion?.kind !== 'LENS'
       || databaseCompletion?.lens !== 'database-and-data-stores'
       || databaseCompletion?.closure_round !== undefined
@@ -4015,7 +4074,7 @@ function runTransitionErrors(previous, next) {
   const nextProfiles = Array.isArray(next.store_profiles) ? next.store_profiles : []
   const addedProfiles = nextProfiles.slice(priorProfileCount)
   if (addedProfiles.length > 0) {
-    if (['4.0.0', '5.0.0'].includes(next.schema_version)) {
+    if (['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)) {
       const expectedProfiles = synthesizeStoreProfiles(next)
         .map(({ profile }) => profile)
       if (

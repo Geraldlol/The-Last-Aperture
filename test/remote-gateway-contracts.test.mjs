@@ -12,7 +12,11 @@ import {
   validateRemoteRequestEnvelope,
   verifyRemoteRequestEnvelope,
 } from '../scripts/lib/remote-gateway-contracts.mjs'
-import { submitRemoteGatewayRequest } from '../scripts/lib/remote-gateway-client.mjs'
+import {
+  createRemoteGatewayLookup,
+  isPublicRemoteAddress,
+  submitRemoteGatewayRequest,
+} from '../scripts/lib/remote-gateway-client.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
 
 const SHA_A = 'a'.repeat(64)
@@ -451,5 +455,62 @@ test('content digest rejects a transformed request or response body', () => {
       Buffer.from('{"exact":false}\n', 'utf8'),
     ),
     RemoteGatewayContractError,
+  )
+})
+
+test('remote gateway DNS pins one validated public address and rejects local scope', async () => {
+  for (const address of [
+    '0.0.0.0',
+    '10.0.0.1',
+    '100.64.0.1',
+    '127.0.0.1',
+    '169.254.169.254',
+    '172.16.0.1',
+    '192.168.0.1',
+    '198.18.0.1',
+    '::1',
+    '::ffff:127.0.0.1',
+    '64:ff9b::7f00:1',
+    'fc00::1',
+    'fe80::1',
+  ]) {
+    assert.equal(isPublicRemoteAddress(address), false, address)
+  }
+  assert.equal(isPublicRemoteAddress('93.184.216.34'), true)
+  assert.equal(isPublicRemoteAddress('2606:4700:4700::1111'), true)
+  assert.equal(isPublicRemoteAddress('not-an-address'), false)
+
+  let lookupOptions
+  const lookup = createRemoteGatewayLookup((hostname, options, callback) => {
+    assert.equal(hostname, 'gateway.example')
+    lookupOptions = options
+    callback(null, [
+      { address: '127.0.0.1', family: 4 },
+      { address: '93.184.216.34', family: 4 },
+    ])
+  })
+  const selected = await new Promise((resolve, reject) => {
+    lookup('gateway.example', { family: 4 }, (error, address, family) => {
+      if (error) reject(error)
+      else resolve({ address, family })
+    })
+  })
+  assert.deepEqual(lookupOptions, { all: true, verbatim: true })
+  assert.deepEqual(selected, { address: '93.184.216.34', family: 4 })
+
+  const privateLookup = createRemoteGatewayLookup((_hostname, _options, callback) => {
+    callback(null, [
+      { address: '127.0.0.1', family: 4 },
+      { address: 'fe80::1', family: 6 },
+    ])
+  })
+  await assert.rejects(
+    () => new Promise((resolve, reject) => {
+      privateLookup('gateway.example', { family: 0 }, (error, address, family) => {
+        if (error) reject(error)
+        else resolve({ address, family })
+      })
+    }),
+    (error) => error?.code === 'REMOTE_GATEWAY_DNS_SCOPE_DENIED',
   )
 })

@@ -39,8 +39,8 @@ import {
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.7.0'
-export const RUN_SCHEMA_VERSION = '5.0.0'
+export const PLATFORM_VERSION = '0.8.0'
+export const RUN_SCHEMA_VERSION = '6.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
 function sha256(value) {
@@ -69,13 +69,21 @@ export function providerPolicyProjection(policy, policyDigest) {
   ) {
     throw new TypeError('provider policy projection requires a policy and SHA-256 digest')
   }
+  const remoteStatic = policy.mode === 'remote_static'
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/provider-policy-projection',
     controller_policy_sha256: policyDigest,
     policy_id: policy.policy_id,
-    mode: policy.mode,
-    capabilities: structuredClone(policy.capabilities),
+    mode: remoteStatic ? 'static' : policy.mode,
+    capabilities: remoteStatic
+      ? {
+          read_file: structuredClone(policy.capabilities.read_file),
+          write_file: { enabled: false, roots: [] },
+          execute: { enabled: false, commands: [] },
+          network: { enabled: false, destinations: [] },
+        }
+      : structuredClone(policy.capabilities),
   }
 }
 
@@ -525,7 +533,7 @@ export async function createRunPlan(options) {
   )
   const planMaterial = {
     schema_version: RUN_SCHEMA_VERSION,
-    capability_mode: effectivePolicy.mode === 'static'
+    capability_mode: ['static', 'remote_static'].includes(effectivePolicy.mode)
       ? 'STATIC'
       : effectivePolicy.mode === 'test'
         ? 'TEST_EXECUTION'

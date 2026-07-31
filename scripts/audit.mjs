@@ -4,6 +4,7 @@ import {
   createHash,
   createPrivateKey,
   createPublicKey,
+  randomBytes,
   randomUUID,
   sign as signBytes,
   verify as verifyBytes,
@@ -45,6 +46,7 @@ import {
   findActiveAttempt,
   findProviderAttempt,
   leaseProviderAttempt,
+  leaseRemoteAttempt,
   markProviderAttemptStarted,
   recordProviderResultCaptured,
   recordProviderResultValidated,
@@ -87,7 +89,7 @@ import {
   normalizeIncludedRoots,
   serializeInventory,
 } from './lib/inventory.mjs'
-import { normalizePolicy } from './lib/policy.mjs'
+import { authorizeAction, normalizePolicy } from './lib/policy.mjs'
 import { renderMarkdownReport, renderSarif } from './lib/report.mjs'
 import {
   assertBundleArtifactSize,
@@ -129,6 +131,17 @@ import {
 } from './lib/provider-runner.mjs'
 import { buildRetryJobTemplate } from './lib/work-shards.mjs'
 import { loadDatabaseConformanceEvidence } from './lib/database-conformance-controller.mjs'
+import {
+  assertValidRemoteGatewayConfig,
+  createRemoteRequestEnvelope,
+  parseRemotePrivateKey,
+  parseRemotePublicKey,
+  verifyRemoteAcceptanceEnvelope,
+  verifyRemoteRequestEnvelope,
+} from './lib/remote-gateway-contracts.mjs'
+import {
+  submitRemoteGatewayRequest,
+} from './lib/remote-gateway-client.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
@@ -146,6 +159,7 @@ const NONRECOVERABLE_PROVIDER_CLEANUP_CODES = new Set([
 ])
 const MAX_PROVIDER_RESULT_BYTES = 8 * 1024 * 1024
 const MAX_PROVIDER_CONFIG_BYTES = 1024 * 1024
+const MAX_REMOTE_GATEWAY_CONFIG_BYTES = 1024 * 1024
 const MAX_SIGNING_KEY_BYTES = 64 * 1024
 const MAX_POLICY_BYTES = 1024 * 1024
 const MAX_LOCK_BYTES = 16 * 1024
@@ -160,12 +174,13 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.7.0
+const HELP = `red-team-audit 0.8.0
 
 Usage:
   red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   red-team-audit next <run.json|bundle-directory>
   red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
+  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>
   red-team-audit ingest <run.json|bundle-directory> <job-result.json>
   red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
   red-team-audit finalize <run.json|bundle-directory>
@@ -231,6 +246,7 @@ const COMMAND_ARGUMENTS = {
   },
   next: { positionals: 1, options: {} },
   'run-provider': { positionals: 2, options: {} },
+  'run-remote': { positionals: 2, options: {} },
   ingest: { positionals: 2, options: {} },
   'ingest-batch': { minPositionals: 2, options: {} },
   finalize: { positionals: 1, options: {} },
@@ -820,7 +836,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
   const projection = {
     inventory: coverage?.inventory,
   }
-  if (!['3.0.0', '4.0.0', '5.0.0'].includes(schemaVersion)) return projection
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(schemaVersion)) return projection
   return {
     model_version: coverage?.model_version,
     policy: coverage?.policy,
@@ -860,7 +876,7 @@ function assertImmutableCoveragePlan(
       'planned coverage artifact is not the immutable initial coverage snapshot',
     )
   }
-  if (!['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) return
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) return
 
   const expectedRecords = inventoryCoverageRecords(snapshot.entries)
   const expectedDenominators = buildCategoryDenominators(expectedRecords)
@@ -961,7 +977,7 @@ function assertSidecarJobIdentity(
     lens: job.lens,
     repository_root: run.repository.root,
     ...(
-      ['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version) || requireProtocolFields
+      ['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version) || requireProtocolFields
         ? {
             schema_version: run.schema_version,
             phase: job.closure_round !== undefined
@@ -1004,7 +1020,7 @@ function assertSidecarJobIdentity(
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
-  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
     const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
@@ -1461,8 +1477,11 @@ export async function verifyControlBundle(
   ) {
     throw new Error('policy artifact does not match the run provenance')
   }
-  if (policy.mode !== 'static' || run.capability_mode !== 'STATIC') {
-    throw new Error('0.7.0 can dispatch and ingest only STATIC runs')
+  if (
+    !['static', 'remote_static'].includes(policy.mode)
+    || run.capability_mode !== 'STATIC'
+  ) {
+    throw new Error('0.8.0 can dispatch and ingest only STATIC runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1489,7 +1508,7 @@ export async function verifyControlBundle(
   )
   let databaseDiscoveryCommitted
   let databaseConformanceCommitted
-  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
     databaseDiscoveryCommitted = await readVerifiedArtifact(
       directory,
       run,
@@ -1633,7 +1652,7 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
-      ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
+      ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
         : []),
       ...(run.database_conformance
@@ -1716,6 +1735,7 @@ export async function verifyControlBundle(
     throw new Error('activated lens set does not match the hashed job plan')
   }
   const verifiedExecutionEnvelopes = new Map()
+  const verifiedRemoteAcceptances = new Map()
   let evidenceKeyId = pinnedReceiptKeyId
   const attempts = (run.attempt_events ?? [])
     .filter(({ event }) => event === 'LEASED')
@@ -1740,16 +1760,55 @@ export async function verifyControlBundle(
         },
       },
     )
-    if (attempt.execution_artifact_key !== undefined) {
-      const envelope = await readAttemptEnvelope(
+    if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+      const request = await readRemoteRequestArtifact(
         { directory, run },
         attempt,
-        evidenceKeyId,
       )
-      evidenceKeyId ??= envelope.controller.key_id
-      verifiedExecutionEnvelopes.set(attempt.attempt_id, envelope)
+      const actualArtifacts = new Map(request.envelope.artifacts.map(
+        (artifact) => [artifact.artifact_id, artifact],
+      ))
+      if (actualArtifacts.size !== expectedArtifacts.size) {
+        throw new Error(
+          `remote request ${attempt.lease.request_id} does not contain the exact planned artifact set`,
+        )
+      }
+      for (const [artifactId, expected] of expectedArtifacts) {
+        const actual = actualArtifacts.get(artifactId)
+        if (
+          !actual
+          || actual.kind !== expected.artifact_kind
+          || actual.logical_name !== expected.logical_name
+          || actual.sha256 !== expected.expected_sha256
+          || actual.size !== expected.size
+        ) {
+          throw new Error(
+            `remote request ${attempt.lease.request_id} artifact ${artifactId} differs from the sealed plan`,
+          )
+        }
+      }
+    }
+    if (attempt.execution_artifact_key !== undefined) {
+      if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+        const acceptance = await readRemoteAcceptanceArtifact(
+          { directory, run },
+          attempt,
+        )
+        verifiedRemoteAcceptances.set(attempt.attempt_id, acceptance)
+      } else {
+        const envelope = await readAttemptEnvelope(
+          { directory, run },
+          attempt,
+          evidenceKeyId,
+        )
+        evidenceKeyId ??= envelope.controller.key_id
+        verifiedExecutionEnvelopes.set(attempt.attempt_id, envelope)
+      }
     }
     if (attempt.failure_artifact_key !== undefined) {
+      if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+        throw new Error('remote gateway attempts cannot use container failure envelopes')
+      }
       const envelope = await readAttemptFailureEnvelope(
         { directory, run },
         attempt,
@@ -1832,13 +1891,54 @@ export async function verifyControlBundle(
       )
     }
   }
+  for (const job of run.jobs.filter(
+    ({ coverage_authority: authority }) =>
+      authority === 'REMOTE_REQUEST_ACCEPTED',
+  )) {
+    const attempt = findProviderAttempt(run, job.attempt_id)
+    const acceptance = verifiedRemoteAcceptances.get(attempt.attempt_id)
+    if (!acceptance) {
+      throw new Error(
+        `remote job ${job.job_id} has no verified gateway acceptance`,
+      )
+    }
+    const result = acceptance.envelope.job_result
+    if (
+      result.job_id !== job.job_id
+      || result.state !== job.state
+      || result.input_sha256.toLowerCase() !== job.input_sha256.toLowerCase()
+      || stableJson(result.producer) !== stableJson(job.producer)
+      || attempt.execution_artifact_sha256 !== job.receipt_sha256
+    ) {
+      throw new Error(`remote acceptance does not match job ${job.job_id}`)
+    }
+    const resultCandidateIds = result.findings
+      .map(({ candidate_id: candidateId }) => candidateId)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+    const jobCandidateIds = [...(job.candidate_ids ?? [])]
+      .sort((left, right) => left.localeCompare(right, 'en'))
+    if (stableJson(resultCandidateIds) !== stableJson(jobCandidateIds)) {
+      throw new Error(`remote acceptance findings do not match job ${job.job_id}`)
+    }
+    assertObservedResultReflectedInRun(run, job, result)
+    if (sourceSnapshot) {
+      await assertRemoteSourceAnchors(
+        directory,
+        run,
+        job,
+        acceptance.request,
+        result,
+        sourceSnapshot,
+      )
+    }
+  }
   const planMaterial = {
     schema_version: run.schema_version,
     capability_mode: run.capability_mode,
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
-    ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
+    ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
@@ -2726,21 +2826,15 @@ function assertControllerFailureEnvelope(
   return envelope
 }
 
-async function assertObservedSourceAnchors(
+async function assertBoundSourceAnchors(
   directory,
   run,
   job,
-  execution,
+  result,
   sourceIndex,
+  authorizedFileIds,
+  authorityLabel,
 ) {
-  const result = execution.job_result
-  const consumedIds = new Set(
-    execution.receipt.deliveries
-      .filter((delivery) =>
-        delivery.artifact_kind === 'FILE'
-        && delivery.events?.[1]?.state === 'CONSUMED')
-      .map(({ artifact_id: artifactId }) => artifactId),
-  )
   const examinedPaths = new Set(result.examined_files)
   const sourceById = new Map(sourceIndex.files.map((file) => [file.file_id, file]))
   const cachedBytes = new Map()
@@ -2754,7 +2848,7 @@ async function assertObservedSourceAnchors(
       )
     ) {
       throw new Error(
-        `observed finding ${finding.candidate_id} requires a controller-verifiable source anchor`,
+        `${authorityLabel} finding ${finding.candidate_id} requires a controller-verifiable source anchor`,
       )
     }
     for (const anchor of finding.source_anchors ?? []) {
@@ -2763,7 +2857,7 @@ async function assertObservedSourceAnchors(
         !file
         || file.availability !== 'AVAILABLE'
         || anchor.snapshot_sha256 !== run.source_snapshot.root_sha256
-        || !consumedIds.has(anchor.file_id)
+        || !authorizedFileIds.has(anchor.file_id)
         || !examinedPaths.has(file.path)
         || !Number.isSafeInteger(anchor.start_byte)
         || !Number.isSafeInteger(anchor.end_byte)
@@ -2795,6 +2889,55 @@ async function assertObservedSourceAnchors(
       }
     }
   }
+}
+
+async function assertObservedSourceAnchors(
+  directory,
+  run,
+  job,
+  execution,
+  sourceIndex,
+) {
+  const consumedIds = new Set(
+    execution.receipt.deliveries
+      .filter((delivery) =>
+        delivery.artifact_kind === 'FILE'
+        && delivery.events?.[1]?.state === 'CONSUMED')
+      .map(({ artifact_id: artifactId }) => artifactId),
+  )
+  return assertBoundSourceAnchors(
+    directory,
+    run,
+    job,
+    execution.job_result,
+    sourceIndex,
+    consumedIds,
+    'observed',
+  )
+}
+
+async function assertRemoteSourceAnchors(
+  directory,
+  run,
+  job,
+  requestEnvelope,
+  result,
+  sourceIndex,
+) {
+  const suppliedIds = new Set(
+    requestEnvelope.artifacts
+      .filter(({ kind }) => kind === 'FILE')
+      .map(({ artifact_id: artifactId }) => artifactId),
+  )
+  return assertBoundSourceAnchors(
+    directory,
+    run,
+    job,
+    result,
+    sourceIndex,
+    suppliedIds,
+    'remote',
+  )
 }
 
 function assertRequiredControlConsumption(execution, artifacts) {
@@ -2867,9 +3010,14 @@ async function planCommand(positionals, options) {
       workspaceRoot: targetRoot,
       policySource: 'external',
     })
-    if (policy.mode !== 'static') {
+    if (!['static', 'remote_static'].includes(policy.mode)) {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.7.0',
+        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.8.0',
+      )
+    }
+    if (policy.mode === 'remote_static' && !sealSource) {
+      throw new Error(
+        'remote_static Rules of Engagement require --seal-source so the controller can bind exact outbound bytes',
       )
     }
   }
@@ -3231,6 +3379,54 @@ async function loadTrustedProviderConfiguration(pathValue, loaded) {
   }
 }
 
+async function loadTrustedRemoteGatewayConfiguration(pathValue, loaded) {
+  const configFile = await loadExternalTrustFile(
+    pathValue,
+    'remote gateway configuration',
+    loaded,
+    MAX_REMOTE_GATEWAY_CONFIG_BYTES,
+  )
+  let document
+  try {
+    document = JSON.parse(configFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in remote gateway configuration ${configFile.path}: ${error.message}`,
+    )
+  }
+  assertValidRemoteGatewayConfig(document)
+  const config = structuredClone(document)
+  const controllerKeyFile = await loadExternalTrustFile(
+    config.controller_signing_private_key_path,
+    'remote controller signing key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  const gatewayKeyFile = await loadExternalTrustFile(
+    config.gateway_public_key_path,
+    'remote gateway public key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  config.controller_signing_private_key_path = controllerKeyFile.path
+  config.gateway_public_key_path = gatewayKeyFile.path
+  const controllerKey = parseRemotePrivateKey(controllerKeyFile.bytes)
+  const gatewayKey = parseRemotePublicKey(gatewayKeyFile.bytes)
+  assertValidRemoteGatewayConfig(config)
+  return {
+    config,
+    controllerKeyBytes: controllerKeyFile.bytes,
+    gatewayKeyBytes: gatewayKeyFile.bytes,
+    controllerKey,
+    gatewayKey,
+    configSha256: sha256(stableJson({
+      remote_gateway_config: config,
+      controller_key_id: controllerKey.keyId,
+      gateway_key_id: gatewayKey.keyId,
+    }, 0)),
+  }
+}
+
 async function persistLoadedRun(loaded, next) {
   await persistRun(loaded.path, next, loaded.sourceDigest)
   loaded.run = next
@@ -3265,6 +3461,128 @@ async function readAttemptEnvelope(loaded, attempt, pinnedKeyId) {
     throw new Error('execution envelope digest differs from its captured attempt')
   }
   return envelope
+}
+
+function embeddedRemotePublicKey(spkiBase64, label) {
+  try {
+    const spki = Buffer.from(spkiBase64, 'base64')
+    if (spki.toString('base64') !== spkiBase64) {
+      throw new Error('non-canonical base64')
+    }
+    return createPublicKey({ key: spki, type: 'spki', format: 'der' })
+  } catch (error) {
+    throw new Error(`${label} embedded public key is invalid: ${error.message}`)
+  }
+}
+
+async function readRemoteRequestArtifact(loaded, attempt) {
+  const artifact = loaded.run.artifacts?.[attempt.lease.request_artifact_key]
+  if (!artifact) {
+    throw new Error(`remote attempt ${attempt.attempt_id} request artifact is missing`)
+  }
+  const committed = await readVerifiedArtifact(
+    loaded.directory,
+    loaded.run,
+    attempt.lease.request_artifact_key,
+    artifact.path.replaceAll('\\', '/'),
+  )
+  if (
+    sha256(committed.content) !== attempt.lease.request_artifact_sha256
+    || artifact.sha256 !== attempt.lease.request_artifact_sha256
+  ) {
+    throw new Error('remote request artifact digest differs from its lease')
+  }
+  let envelope
+  try {
+    envelope = JSON.parse(committed.text)
+  } catch (error) {
+    throw new Error(`remote request envelope JSON is invalid: ${error.message}`)
+  }
+  if (stableJson(envelope, 0) !== committed.text) {
+    throw new Error('remote request artifact must retain exact canonical JSON bytes')
+  }
+  const controllerKey = embeddedRemotePublicKey(
+    envelope.controller?.public_key_spki_base64,
+    'remote request',
+  )
+  const verified = verifyRemoteRequestEnvelope({
+    envelope,
+    publicKeyBytes: controllerKey,
+    expectedPromptTransform: envelope.controller?.prompt_transform,
+    now: envelope.controller?.created_at,
+  })
+  if (
+    verified.key_id !== attempt.lease.controller_key_id
+    || envelope.controller.request_id !== attempt.lease.request_id
+    || envelope.controller.attempt_id !== attempt.attempt_id
+    || envelope.controller.attempt_nonce !== attempt.lease.nonce
+    || envelope.controller.run_id !== loaded.run.run_id
+    || envelope.controller.job_id !== attempt.job_id
+    || envelope.controller.packet_sha256 !== attempt.lease.packet_sha256
+  ) {
+    throw new Error('remote request artifact does not bind its attempt lease')
+  }
+  return {
+    envelope,
+    bytes: committed.content,
+  }
+}
+
+async function readRemoteAcceptanceArtifact(
+  loaded,
+  attempt,
+  {
+    gatewayPublicKeyBytes = undefined,
+    expectedPromptTransform = undefined,
+  } = {},
+) {
+  const request = await readRemoteRequestArtifact(loaded, attempt)
+  const artifact = loaded.run.artifacts?.[attempt.execution_artifact_key]
+  if (!artifact) {
+    throw new Error(`remote attempt ${attempt.attempt_id} acceptance artifact is missing`)
+  }
+  const committed = await readVerifiedArtifact(
+    loaded.directory,
+    loaded.run,
+    attempt.execution_artifact_key,
+    artifact.path.replaceAll('\\', '/'),
+  )
+  if (
+    sha256(committed.content) !== attempt.execution_artifact_sha256
+    || attempt.receipt_sha256 !== attempt.execution_artifact_sha256
+  ) {
+    throw new Error('remote acceptance artifact digest differs from its captured attempt')
+  }
+  let envelope
+  try {
+    envelope = JSON.parse(committed.text)
+  } catch (error) {
+    throw new Error(`remote acceptance envelope JSON is invalid: ${error.message}`)
+  }
+  if (stableJson(envelope, 0) !== committed.text) {
+    throw new Error('remote acceptance artifact must retain exact canonical JSON bytes')
+  }
+  const pinnedGatewayKey = gatewayPublicKeyBytes ?? embeddedRemotePublicKey(
+    envelope.gateway?.public_key_spki_base64,
+    'remote acceptance',
+  )
+  const verified = verifyRemoteAcceptanceEnvelope({
+    envelope,
+    requestEnvelope: request.envelope,
+    requestBytes: request.bytes,
+    gatewayPublicKeyBytes: pinnedGatewayKey,
+    expectedPromptTransform:
+      expectedPromptTransform ?? request.envelope.controller.prompt_transform,
+    now: envelope.gateway?.accepted_at,
+  })
+  if (verified.gateway_key_id !== attempt.lease.gateway_key_id) {
+    throw new Error('remote acceptance key differs from its pinned attempt lease')
+  }
+  return {
+    request: request.envelope,
+    envelope,
+    verified,
+  }
 }
 
 async function readAttemptFailureEnvelope(
@@ -3473,6 +3791,422 @@ async function completeObservedAttempt(loaded, control, attempt, signingKey) {
   return advanced
 }
 
+function remoteProviderLimits(config) {
+  return {
+    limits: {
+      max_deliveries: config.limits.max_artifacts,
+      max_file_bytes: config.limits.max_file_bytes,
+      max_total_delivery_bytes: config.limits.max_total_artifact_bytes,
+    },
+  }
+}
+
+function remoteDispatchPacket(run, job, sidecar, artifacts) {
+  const base = observedDispatchPacket(run, job, sidecar)
+  const { packet_sha256: _packetSha256, ...unsigned } = base
+  unsigned.scoped_files = artifacts
+    .filter(({ kind }) => kind === 'FILE')
+    .map(({ logical_name: logicalName }) => logicalName)
+    .sort((left, right) => left.localeCompare(right, 'en'))
+  return {
+    ...unsigned,
+    packet_sha256: sha256(stableJson(unsigned, 0)),
+  }
+}
+
+function assertRemoteGatewayAuthorized(control, trusted) {
+  if (control.policy.mode !== 'remote_static') {
+    throw new Error(
+      'run-remote requires an externally supplied remote_static Rules of Engagement policy',
+    )
+  }
+  const policy = normalizePolicy(control.policy, {
+    workspaceRoot: control.policy.workspace_root,
+    policySource: 'external',
+  })
+  const decision = authorizeAction(policy, {
+    type: 'network',
+    url: trusted.config.gateway_url,
+    redirects: [],
+  })
+  if (!decision.allowed) {
+    const message = decision.reasons
+      .map(({ code, message: reason }) => `${code}: ${reason}`)
+      .join('; ')
+    throw new Error(`remote gateway is not authorized by the run policy: ${message}`)
+  }
+  const configuredUrl = new URL(trusted.config.gateway_url).href
+  if (
+    decision.normalized_action?.url !== configuredUrl
+    || decision.normalized_action?.redirects?.length !== 0
+  ) {
+    throw new Error('remote gateway policy decision does not bind the exact configured endpoint')
+  }
+}
+
+function assertAttemptUsesTrustedRemoteConfiguration(attempt, trusted) {
+  if (
+    attempt.lease.backend !== 'REMOTE_GATEWAY'
+    || attempt.lease.remote_gateway_config_sha256 !== trusted.configSha256
+    || attempt.lease.controller_key_id !== trusted.controllerKey.keyId
+    || attempt.lease.gateway_key_id !== trusted.gatewayKey.keyId
+  ) {
+    throw new Error(
+      `attempt ${attempt.attempt_id} was leased with different remote gateway trust material`,
+    )
+  }
+}
+
+async function failRemoteAttempt({
+  loaded,
+  attemptId,
+  error,
+  reasonPrefix,
+  occurredAt = undefined,
+}) {
+  const message = error?.message ?? String(error)
+  const failed = failProviderAttempt(loaded.run, attemptId, {
+    reason: `${reasonPrefix}: ${message}`.slice(0, 16_000),
+    recoverable: true,
+    ...(occurredAt === undefined ? {} : { occurred_at: occurredAt }),
+  })
+  await persistLoadedRun(loaded, failed)
+  return failed
+}
+
+async function completeRemoteAttempt(loaded, control, attempt, trusted) {
+  assertAttemptUsesTrustedRemoteConfiguration(attempt, trusted)
+  const job = loaded.run.jobs.find(({ job_id: jobId }) => jobId === attempt.job_id)
+  if (!job) throw new Error(`remote attempt job ${attempt.job_id} no longer exists`)
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const requestArtifact = await readRemoteRequestArtifact(loaded, attempt)
+  const packet = remoteDispatchPacket(
+    loaded.run,
+    job,
+    sidecar,
+    requestArtifact.envelope.artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      logical_name: artifact.logical_name,
+    })),
+  )
+  if (packet.packet_sha256 !== attempt.lease.packet_sha256) {
+    throw new Error('active remote attempt packet no longer matches the controller plan')
+  }
+  let active = attempt
+  let acceptance = await readRemoteAcceptanceArtifact(
+    loaded,
+    active,
+    {
+      gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+      expectedPromptTransform: trusted.config.prompt_transform,
+    },
+  )
+  await assertRemoteSourceAnchors(
+    loaded.directory,
+    loaded.run,
+    job,
+    acceptance.request,
+    acceptance.envelope.job_result,
+    control.sealedSnapshots.source,
+  )
+  if (active.state === 'RESULT_CAPTURED') {
+    const validated = recordProviderResultValidated(
+      loaded.run,
+      active.attempt_id,
+    )
+    await persistLoadedRun(loaded, validated)
+    active = findActiveAttempt(loaded.run, job.job_id)
+    acceptance = await readRemoteAcceptanceArtifact(
+      loaded,
+      active,
+      {
+        gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+        expectedPromptTransform: trusted.config.prompt_transform,
+      },
+    )
+  }
+  if (active.state !== 'VALIDATED') {
+    throw new Error(`remote attempt ${active.attempt_id} cannot commit from ${active.state}`)
+  }
+  const applied = applyJobResult(
+    loaded.run,
+    acceptance.envelope.job_result,
+    {
+      expectedPacketSha256: packet.packet_sha256,
+      sidecar,
+      commitObservedAttempt: (previous, candidate) =>
+        commitProviderAttempt(previous, candidate, active.attempt_id),
+    },
+  )
+  const advanced = advanceUntilBlocked(applied)
+  await persistLoadedRun(loaded, advanced)
+  console.log(`Remote ${job.job_id}: ${acceptance.envelope.job_result.state}`)
+  console.log(`Attempt: ${active.attempt_id}`)
+  console.log('Coverage authority: REMOTE_REQUEST_ACCEPTED')
+  console.log(`Run: ${advanced.state}/${advanced.phase}`)
+  return advanced
+}
+
+export async function runRemoteCommand(positionals, _options = {}, dependencies = {}) {
+  const currentInstant = () => {
+    const value = dependencies.now?.() ?? new Date()
+    const date = value instanceof Date ? value : new Date(value)
+    if (!Number.isFinite(date.getTime())) {
+      throw new Error('run-remote clock returned an invalid instant')
+    }
+    return date
+  }
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  if (loaded.run.schema_version !== '6.0.0' || !loaded.run.source_snapshot) {
+    throw new Error(
+      'run-remote requires a runner-ready v6 bundle created with remote_static Rules of Engagement and --seal-source',
+    )
+  }
+  const trusted = await loadTrustedRemoteGatewayConfiguration(
+    requirePositional(positionals, 1, 'remote gateway configuration'),
+    loaded,
+  )
+  const control = await verifyControlBundle(
+    loaded.directory,
+    loaded.run,
+    { requireCurrentLensPack: true },
+  )
+  assertRemoteGatewayAuthorized(control, trusted)
+  for (const event of loaded.run.attempt_events ?? []) {
+    if (event.event !== 'LEASED' || event.backend !== 'REMOTE_GATEWAY') continue
+    if (
+      event.remote_gateway_config_sha256 !== trusted.configSha256
+      || event.controller_key_id !== trusted.controllerKey.keyId
+      || event.gateway_key_id !== trusted.gatewayKey.keyId
+    ) {
+      throw new Error(
+        'remote gateway configuration or key identity differs from existing run evidence; key and endpoint rotation require a new run',
+      )
+    }
+  }
+
+  const activeValue = findActiveAttempt(loaded.run)
+  const activeAttempts = activeValue === null ? [] : activeValue
+  if (activeAttempts.length > 1) {
+    throw new Error('run-remote refuses a run with more than one active attempt')
+  }
+  if (activeAttempts.length === 1) {
+    const active = activeAttempts[0]
+    if (active.lease.backend !== 'REMOTE_GATEWAY') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the sealed-container backend; use run-provider`,
+      )
+    }
+    assertAttemptUsesTrustedRemoteConfiguration(active, trusted)
+    const recovery = classifyProviderAttemptRecovery(
+      loaded.run,
+      active.attempt_id,
+      { now: currentInstant() },
+    )
+    if (['RESULT_CAPTURED', 'VALIDATED'].includes(active.state)) {
+      try {
+        return await completeRemoteAttempt(loaded, control, active, trusted)
+      } catch (error) {
+        await failRemoteAttempt({
+          loaded,
+          attemptId: active.attempt_id,
+          error,
+          reasonPrefix: 'captured remote result could not commit',
+          occurredAt: currentInstant().toISOString(),
+        })
+        throw error
+      }
+    }
+    if (recovery.status === 'ACTIVE_UNEXPIRED') {
+      throw new Error(
+        `remote attempt ${active.attempt_id} is active until ${recovery.expires_at}; refusing to replay its one-use request`,
+      )
+    }
+    if (recovery.status !== 'ACTIVE_EXPIRED') {
+      throw new Error(
+        `remote attempt ${active.attempt_id} cannot be recovered from ${recovery.status}`,
+      )
+    }
+    const expiryError = new Error(
+      `attempt lease expired at ${recovery.expires_at}; the prior remote outcome is ambiguous and request ${active.lease.request_id} will not be reused`,
+    )
+    expiryError.code = 'REMOTE_ATTEMPT_EXPIRED'
+    await failRemoteAttempt({
+      loaded,
+      attemptId: active.attempt_id,
+      error: expiryError,
+      reasonPrefix: 'remote attempt expired',
+      occurredAt: recovery.observed_at,
+    })
+  }
+
+  const [job] = pendingJobsForCurrentPhase(loaded.run)
+  if (!job) throw new Error('run has no provider job ready for remote execution')
+  if (job.kind === 'REPORT' || job.kind === 'PATCH') {
+    throw new Error(`job ${job.job_id} is controller-owned and cannot run remotely`)
+  }
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const artifacts = await observedProviderArtifacts(
+    loaded.directory,
+    loaded.run,
+    job,
+    sidecar,
+    control,
+    remoteProviderLimits(trusted.config),
+  )
+  const packet = remoteDispatchPacket(loaded.run, job, sidecar, artifacts)
+  const attemptId = `attempt:${randomUUID()}`
+  const requestId = `remote:${randomUUID()}`
+  const nonce = randomBytes(32).toString('hex')
+  const createdAt = currentInstant()
+  const requestEnvelope = createRemoteRequestEnvelope({
+    provenance: {
+      run_id: loaded.run.run_id,
+      job_id: job.job_id,
+      plan_sha256: loaded.run.plan_digest,
+      repository_tree_sha256: loaded.run.repository.tree_digest,
+      lens_pack_sha256: loaded.run.lens_pack_digest,
+      policy_sha256: loaded.run.policy_digest,
+      source_snapshot_sha256: loaded.run.source_snapshot.root_sha256,
+      control_snapshot_sha256: loaded.run.control_snapshot.root_sha256,
+    },
+    packet,
+    artifacts,
+    promptTransform: trusted.config.prompt_transform,
+    privateKeyBytes: trusted.controllerKeyBytes,
+    attemptId,
+    requestId,
+    nonce,
+    createdAt,
+    ttlMs: trusted.config.limits.request_ttl_ms,
+  })
+  const requestContent = stableJson(requestEnvelope, 0)
+  assertBundleArtifactSize(requestContent, 'remote request envelope')
+  reserveBundleArtifactCapacity(
+    control.artifactCapacity,
+    requestContent,
+    'remote request envelope',
+  )
+  const requestArtifactKey = `request_${artifactKeyToken(attemptId).toLowerCase()}`
+  const requestArtifactPath = `requests/${artifactToken(attemptId)}.json`
+  await writeOnceBundleArtifact(
+    loaded.directory,
+    requestArtifactPath,
+    requestContent,
+  )
+  const leased = leaseRemoteAttempt(loaded.run, job.job_id, {
+    attempt_id: attemptId,
+    nonce,
+    packet_sha256: packet.packet_sha256,
+    remote_gateway_config_sha256: trusted.configSha256,
+    controller_key_id: trusted.controllerKey.keyId,
+    gateway_key_id: trusted.gatewayKey.keyId,
+    request_id: requestId,
+    request_artifact_key: requestArtifactKey,
+    request_artifact: {
+      path: requestArtifactPath,
+      sha256: sha256(requestContent),
+    },
+    occurred_at: requestEnvelope.controller.created_at,
+    expires_at: requestEnvelope.controller.expires_at,
+    budgets: {
+      wall_clock_ms: trusted.config.limits.request_timeout_ms,
+      max_requests: 1,
+      max_bytes: (
+        trusted.config.limits.max_request_bytes
+        + trusted.config.limits.max_response_bytes
+      ),
+    },
+  })
+  if (typeof dependencies.beforeLeasePersist === 'function') {
+    await dependencies.beforeLeasePersist({
+      attempt_id: attemptId,
+      job_id: job.job_id,
+    })
+  }
+  await persistLoadedRun(loaded, leased)
+  if (typeof dependencies.afterLeasePersist === 'function') {
+    await dependencies.afterLeasePersist({
+      attempt_id: attemptId,
+      job_id: job.job_id,
+    })
+  }
+  const started = markProviderAttemptStarted(loaded.run, attemptId, {
+    occurred_at: requestEnvelope.controller.created_at,
+  })
+  await persistLoadedRun(loaded, started)
+
+  let accepted
+  try {
+    const submit = dependencies.submitRemoteGatewayRequest
+      ?? submitRemoteGatewayRequest
+    accepted = await submit({
+      config: trusted.config,
+      requestEnvelope,
+      gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+      ...(dependencies.transport === undefined
+        ? {}
+        : { transport: dependencies.transport }),
+      now: currentInstant(),
+    })
+  } catch (error) {
+    await failRemoteAttempt({
+      loaded,
+      attemptId,
+      error,
+      reasonPrefix: 'remote gateway request failed',
+      occurredAt: currentInstant().toISOString(),
+    })
+    throw error
+  }
+
+  try {
+    const acceptanceContent = stableJson(accepted.acceptance_envelope, 0)
+    assertBundleArtifactSize(acceptanceContent, 'remote acceptance envelope')
+    reserveBundleArtifactCapacity(
+      control.artifactCapacity,
+      acceptanceContent,
+      'remote acceptance envelope',
+    )
+    const artifactKey = `execution_${artifactKeyToken(attemptId).toLowerCase()}`
+    const artifactPath = `executions/${artifactToken(attemptId)}.json`
+    await writeOnceBundleArtifact(
+      loaded.directory,
+      artifactPath,
+      acceptanceContent,
+    )
+    const acceptanceSha256 = sha256(acceptanceContent)
+    const captured = recordProviderResultCaptured(loaded.run, attemptId, {
+      execution_artifact_key: artifactKey,
+      execution_artifact: {
+        path: artifactPath,
+        sha256: acceptanceSha256,
+      },
+      receipt_sha256: acceptanceSha256,
+    })
+    await persistLoadedRun(loaded, captured)
+    return await completeRemoteAttempt(
+      loaded,
+      control,
+      findActiveAttempt(loaded.run, job.job_id),
+      trusted,
+    )
+  } catch (error) {
+    const active = findActiveAttempt(loaded.run, job.job_id)
+    if (active?.attempt_id === attemptId) {
+      await failRemoteAttempt({
+        loaded,
+        attemptId,
+        error,
+        reasonPrefix: 'remote result capture or commit failed',
+        occurredAt: currentInstant().toISOString(),
+      })
+    }
+    throw error
+  }
+}
+
 function providerSandboxPolicySha256(config, containerName) {
   return sha256(stableJson({
     backend: 'OCI_DOCKER',
@@ -3504,7 +4238,7 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
     ?? cleanupDockerProviderContainer
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(loaded.run.schema_version)
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(loaded.run.schema_version)
     || !loaded.run.source_snapshot) {
     throw new Error(
       'run-provider requires a runner-ready v2 bundle created with plan --seal-source',
@@ -3522,6 +4256,9 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
       pinnedReceiptKeyId: trusted.signingKey.keyId,
     },
   )
+  if (control.policy.mode !== 'static') {
+    throw new Error('run-provider accepts only static Rules of Engagement; use run-remote for remote_static runs')
+  }
   if (
     control.evidenceKeyId !== undefined
     && control.evidenceKeyId !== trusted.signingKey.keyId
@@ -3539,6 +4276,11 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
   }
   if (activeAttempts.length === 1) {
     const active = activeAttempts[0]
+    if (active.lease.backend === 'REMOTE_GATEWAY') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the remote gateway backend; use run-remote`,
+      )
+    }
     const recovery = classifyProviderAttemptRecovery(
       loaded.run,
       active.attempt_id,
@@ -4263,6 +5005,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'plan') return planCommand(positionals, options)
   if (command === 'next') return nextCommand(positionals, options)
   if (command === 'run-provider') return runProviderCommand(positionals, options)
+  if (command === 'run-remote') return runRemoteCommand(positionals, options)
   if (command === 'ingest') return ingestCommand(positionals, options)
   if (command === 'ingest-batch') return ingestBatchCommand(positionals, options)
   if (command === 'finalize') return finalizeCommand(positionals, options)

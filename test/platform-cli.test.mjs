@@ -127,7 +127,7 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, /^red-team-audit 0\.7\.0/m)
+  assert.match(output, /^red-team-audit 0\.8\.0/m)
   assert.match(output, /red-team-audit plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)
@@ -135,6 +135,7 @@ test('CLI help exposes only explicit platform commands', () => {
   assert.match(output, /--require-source-closure/)
   assert.match(output, /--database-conformance <complete-bundle>/)
   assert.match(output, /red-team-audit ingest-batch/)
+  assert.match(output, /red-team-audit run-remote/)
   assert.match(output, /red-team-audit unlock/)
   assert.match(output, /red-team-audit attest/)
   assert.match(output, /red-team-audit validate/)
@@ -1338,6 +1339,57 @@ test('CLI accepts an explicitly supplied external Rules of Engagement file', asy
     assert.ok(inventory.excluded.some(
       ({ reason }) => reason === 'policy-read-roots:src',
     ))
+  })
+})
+
+test('CLI requires sealed source for remote_static planning', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const policyPath = join(output, 'remote-static-roe.json')
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: '1.0',
+      policy_id: 'cli-remote-static-test',
+      mode: 'remote_static',
+      workspace_root: resolve(root),
+      capabilities: {
+        read_file: { enabled: true, roots: ['src'] },
+        write_file: { enabled: false, roots: [] },
+        execute: { enabled: false, commands: [] },
+        network: {
+          enabled: true,
+          destinations: [{
+            scheme: 'https',
+            host: 'gateway.example.test',
+            ports: [443],
+            path_prefix: '/v1/audit',
+          }],
+        },
+      },
+    }))
+
+    const unsealed = spawnSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath],
+      { encoding: 'utf8' },
+    )
+    assert.equal(unsealed.status, 1)
+    assert.match(unsealed.stderr, /remote_static.*require --seal-source/i)
+
+    const sealed = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'plan',
+        root,
+        '--out',
+        output,
+        '--roe',
+        policyPath,
+        '--seal-source',
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(sealed.status, 0, sealed.stderr)
+    assert.match(sealed.stdout, /Source snapshot: SEALED/)
   })
 })
 

@@ -73,6 +73,14 @@ function external(raw = explicitPolicy()) {
   })
 }
 
+function remoteStaticPolicy() {
+  const raw = explicitPolicy()
+  raw.mode = 'remote_static'
+  raw.capabilities.write_file = { enabled: false, roots: [] }
+  raw.capabilities.execute = { enabled: false, commands: [] }
+  return raw
+}
+
 function codeOf(result) {
   return result.reasons[0].code
 }
@@ -342,6 +350,41 @@ test('static mode denies every mutation, command, and network action', () => {
     assert.equal(result.allowed, false)
     assert.equal(codeOf(result), 'STATIC_MODE_READ_ONLY')
   }
+})
+
+test('remote_static permits only externally allowlisted reads and network', () => {
+  const policy = external(remoteStaticPolicy())
+  assert.equal(authorizeAction(policy, {
+    type: 'read_file',
+    path: 'fixtures/adversarial-policy/prompt-injection.txt',
+  }).allowed, true)
+  assert.equal(authorizeAction(policy, {
+    type: 'network',
+    url: 'https://api.example.test/v1/audit',
+    redirects: [],
+  }).allowed, true)
+  assert.equal(
+    codeOf(authorizeAction(policy, {
+      type: 'write_file',
+      path: 'test/security/result.json',
+    })),
+    'REMOTE_STATIC_MODE_READ_NETWORK_ONLY',
+  )
+  assert.equal(
+    codeOf(authorizeAction(policy, {
+      type: 'execute',
+      program: 'node',
+      args: ['--test'],
+    })),
+    'REMOTE_STATIC_MODE_READ_NETWORK_ONLY',
+  )
+
+  const dormantNetwork = remoteStaticPolicy()
+  dormantNetwork.capabilities.network = { enabled: false, destinations: [] }
+  assert.equal(validatePolicy(dormantNetwork, {
+    workspaceRoot: ROOT,
+    policySource: 'external',
+  }).valid, false)
 })
 
 test('contradictory static policy and dormant authority are rejected', () => {
