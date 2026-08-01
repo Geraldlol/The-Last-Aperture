@@ -182,25 +182,65 @@ The matching contradiction check goes in `normalizePolicy` beside the existing
 two, so the rule holds for a policy constructed in code as well as one loaded
 from disk.
 
-### 5. Evidence shape
+### 5. Evidence shape, and why a proof carries a patch
 
-A `T1` result updates its finding with:
+`CONFIRMED` is not a statement that a bug exists. The schema's tenth conditional
+requires, when `verification_status` is `CONFIRMED`: `existence_check.status`
+`located`, `proof_tier` in `{T1, T2}`, all four of `artifact`, `command`,
+`pre_result`, `post_result`, and `post_result.status` equal to `passed`.
 
-- `proof_tier: 'T1'`;
-- `verification_status`: `CONFIRMED` when both directions assert,
-  `NOT_REPRODUCED` when the vulnerable fixture does not fire, `INCONCLUSIVE`
-  when the command could not complete — including the rail-5 missing-credential
-  case, with `blocking_reason` naming it;
-- `command`: the exact program and arguments executed;
-- `artifact`: the authored proof files, SHA-256-manifested into the bundle to
-  satisfy `UNBOUND_PROOF_ARTIFACT`;
-- `pre_result`: the vulnerable-fixture observation, with counts;
-- `post_result`: the clean-fixture observation, with counts.
+And the two results are not two directions of one assertion. They are two
+moments:
 
-The detector-and-fixture-pair runner asserts `detect(vulnerable).length == 1`
-and `detect(clean).length == 0` — counts rather than booleans, so a rule
-matching twice is distinguishable from one matching once. Those two counts are
-exactly `pre_result` and `post_result`.
+```
+pre_result   required: assertion, path_reached, control
+post_result  required: status ∈ {passed, failed}, regressions
+```
+
+`control` is the two-subject canary; `regressions` only means something once
+something changed. `pre_result` is the bug demonstrated, `post_result` is the
+suite green after a fix. **A finding cannot reach `CONFIRMED` without a
+candidate fix that works and regresses nothing.**
+
+That is the right requirement and this design adopts it rather than working
+around it. `run-proof` performs the whole cycle inside the disposable mirror:
+
+1. demonstrate the bug against the unmodified mirror — `pre_result`;
+2. apply the authored candidate patch to the mirror;
+3. re-run the proof command and the project's own suite — `post_result`;
+4. destroy the mirror.
+
+The real target is never written to at any point, so this needs no authorization
+beyond the RoE's `execute` grant. The `PATCH` phase stays stubbed as
+`patch:read-only / SKIPPED`, because that phase is about applying a fix to the
+target itself, which remains out of scope.
+
+The consequence is worth stating positively: a `CONFIRMED` finding ships with a
+patch demonstrated to fix the bug and to break nothing else. That is a work
+order rather than a report line.
+
+Statuses:
+
+- `CONFIRMED` — bug demonstrated, patch applied, suite passed, no regressions;
+- `NOT_REPRODUCED` — the demonstration did not fire against the unmodified
+  mirror, with `reason`;
+- `DISPROVED` — the demonstration asserts the behaviour is already correct, with
+  `reason`;
+- `INCONCLUSIVE` — the command could not complete, including the rail-5
+  missing-credential case, with `reason`;
+- `UNPROVEN` — a demonstration exists but no candidate patch was authored, with
+  `blocking_reason`. This is the honest resting state for a finding proven to
+  exist and not yet fixed, and it caps at Medium.
+
+That last row matters: demonstrating a bug without fixing it is a legitimate and
+common outcome, and it does not reach Critical. The ceiling lifts for findings
+that come with a working fix.
+
+The detector-and-fixture-pair runner's two counts —
+`detect(vulnerable).length == 1` and `detect(clean).length == 0` — both belong
+to the demonstration and are recorded in `pre_result.assertion` and
+`pre_result.detail`. `pre_result.control` names the clean fixture, which is
+exactly the control the field is for.
 
 ### 6. Rule 6 downgrades without a VCS
 
@@ -246,6 +286,13 @@ cleanliness.
   mirror survives.
 - A pair fixture where the detector fires on both vulnerable and clean yields
   `NOT_REPRODUCED`, not `CONFIRMED`.
+- A proof with a demonstration and no candidate patch yields `UNPROVEN` with a
+  `blocking_reason`, and its effective severity caps at Medium.
+- A candidate patch that fixes the bug but fails the project's suite yields
+  `post_result.status: failed`, which the schema forbids pairing with
+  `CONFIRMED` — assert the finding does not reach Critical.
+- The target tree digest is unchanged after a full demonstrate-patch-rerun
+  cycle, proving the patch touched only the mirror.
 - A `T1` finding with concrete reachability reaches Critical; the same finding
   at `T0` caps at Medium.
 - A `T1` claim in a `STATIC` run is rejected by `CAPABILITY_TIER_BYPASS`.
