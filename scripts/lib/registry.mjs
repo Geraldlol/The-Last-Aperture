@@ -1,4 +1,5 @@
 import { stripFencedBlocks } from './frontmatter.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 
 // Ownership model. Pure functions over parsed lenses — no file I/O, so the
 // rules are testable against synthetic lens sets rather than the real corpus.
@@ -77,10 +78,17 @@ const REQUIRED_KEYS = ['name', 'title', 'runs_in', 'activates_on', 'owns', 'defe
 // one flag was carrying two facts: when a lens runs, and whether it owns territory.
 export function checkShapes(lenses) {
   const violations = []
+  const seen = new Set()
   for (const l of lenses) {
     const fm = l.frontmatter
     const name = fm.name ?? l.name ?? '<unnamed>'
     const push = (message) => violations.push({ rule: 'R6', slug: null, lenses: [name], message })
+
+    // Two lenses sharing a name collapse into one identity: R1 reports a slug
+    // "owned by both foo and foo", R3 deferral targets stop resolving to one
+    // lens, and checkBodyClaims' byName map keeps only the last of them.
+    if (seen.has(name)) push(`${name}: duplicate lens name; lens names must be unique`)
+    seen.add(name)
 
     for (const key of REQUIRED_KEYS) {
       if (fm[key] === undefined) push(`${name}: missing required frontmatter key "${key}"`)
@@ -275,6 +283,6 @@ export function detectorCoverage(lenses) {
   }
 
   // Sort by lens name for deterministic output
-  results.sort((a, b) => a.lens.localeCompare(b.lens))
+  results.sort((a, b) => compareCanonicalStrings(a.lens, b.lens))
   return results
 }

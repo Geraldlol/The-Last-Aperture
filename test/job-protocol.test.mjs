@@ -6,8 +6,7 @@ import {
   assertValidJobResult,
   beginJob,
   buildFinalizedRun,
-  compareProofJobs,
-  selectNextProofJob,
+  createProofJobComparator,
   validateJobResult,
 } from '../scripts/lib/job-protocol.mjs'
 import { pendingJobsForCurrentPhase } from '../scripts/audit.mjs'
@@ -516,7 +515,92 @@ test('proof priority promotes every component of a high-impact attack chain', ()
     job_id: 'proof-existence:standalone:high',
     candidate_ids: ['standalone:high'],
   }
-  assert.ok(compareProofJobs(run, component, standalone) < 0)
+  assert.ok(createProofJobComparator(run)(component, standalone) < 0)
+})
+
+test('a reachability-capped Critical outranks an ordinary High in the proof queue', () => {
+  const run = {
+    findings: [
+      triaged({
+        candidate_id: 'authz-object-level:ordinary-high',
+        claimed_impact_severity: 'High',
+        effective_severity: 'High',
+      }),
+      triaged({
+        candidate_id: 'authz-object-level:capped-critical',
+        claimed_impact_severity: 'Critical',
+        effective_severity: 'Medium',
+        reachable_from: 'unknown',
+      }),
+      triaged({
+        candidate_id: 'authz-object-level:contingent-critical',
+        claimed_impact_severity: 'Critical',
+        effective_severity: 'Medium',
+        reachable_from: 'contingent:POST /api/exports',
+        contingent_fact: 'the guest permission set is assigned to at least one user',
+        contingent_query: 'SELECT COUNT(*) FROM PermissionSetAssignment WHERE PermissionSetId = :id',
+      }),
+    ],
+  }
+  const compare = createProofJobComparator(run)
+  const ordered = run.findings
+    .map(({ candidate_id: candidateId }) => ({
+      job_id: `proof-existence:${candidateId}`,
+      candidate_ids: [candidateId],
+    }))
+    .sort(compare)
+
+  assert.deepEqual(
+    ordered.map(({ candidate_ids: candidateIds }) => candidateIds[0]),
+    [
+      'authz-object-level:contingent-critical',
+      'authz-object-level:capped-critical',
+      'authz-object-level:ordinary-high',
+    ],
+    'claimed Critical outranks claimed High even when the reachability gate capped it to Medium',
+  )
+})
+
+test('the dispatched proof queue puts a reachability-capped Critical ahead of an ordinary High', () => {
+  const cappedCritical = {
+    candidate_id: 'authz-object-level:zz-capped-critical',
+    claimed_impact_severity: 'Critical',
+    reachable_from: 'unknown',
+    title: 'Unreachable-path candidate whose claimed impact is Critical',
+  }
+  const ordinaryHigh = {
+    candidate_id: 'authz-object-level:aa-ordinary-high',
+    claimed_impact_severity: 'High',
+    title: 'Traced candidate whose claimed impact is High',
+  }
+  const stageOneFindings = [cappedCritical, ordinaryHigh].map((overrides) =>
+    stageOne(overrides))
+
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: stageOneFindings,
+  }), { sidecar: lensSidecar })
+  ;({ run } = advanceRun(run))
+  run = beginJob(run, 'triage:business-logic')
+  run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
+    findings: stageOneFindings.map((finding) => ({
+      ...finding,
+      effective_severity: finding.reachable_from === 'unknown' ? 'Medium' : 'High',
+      triage_disposition: 'queued',
+    })),
+  }))
+  ;({ run } = advanceRun(run))
+
+  assert.equal(validateRun(run).valid, true)
+  assert.deepEqual(
+    pendingJobsForCurrentPhase(run).map(({ job_id: jobId }) => jobId),
+    [
+      'proof-existence:authz-object-level:zz-capped-critical',
+      'proof-existence:authz-object-level:aa-ordinary-high',
+    ],
+    'an operator stopping early under budget must reach the capped Critical first',
+  )
 })
 
 test('proof selection indexes 4,096 findings once and preserves deterministic priority', () => {
@@ -556,8 +640,8 @@ test('proof selection indexes 4,096 findings once and preserves deterministic pr
     }))
     .reverse()
 
-  const selected = selectNextProofJob({ findings }, jobs)
-  assert.equal(selected.candidate_ids[0], 'component:4095')
+  const ordered = jobs.sort(createProofJobComparator({ findings }))
+  assert.equal(ordered[0].candidate_ids[0], 'component:4095')
   assert.equal(iterations, 1)
 })
 

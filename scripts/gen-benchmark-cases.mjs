@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { isMainModule } from './lib/main-module.mjs'
+import { compareCanonicalStrings } from './lib/canonical-order.mjs'
 
 const MANIFEST = 'fixtures/EXPECTED.md'
 const OWNERSHIP = 'fixtures/OWNERSHIP.tsv'
@@ -109,7 +110,7 @@ export function extractBenchmarkCases(manifest, ownership) {
     }
   }
 
-  cases.sort((left, right) => left.case_id.localeCompare(right.case_id, 'en'))
+  cases.sort((left, right) => compareCanonicalStrings(left.case_id, right.case_id))
   const ids = cases.map(({ case_id }) => case_id)
   if (new Set(ids).size !== ids.length) throw new Error('benchmark manifest contains duplicate case IDs')
   const vulnerable = cases.filter(({ expectation }) => expectation === 'vulnerable')

@@ -69,7 +69,7 @@
       "$ref": "#/$defs/nonEmptyString"
     },
     "reachable_from": {
-      "$ref": "#/$defs/nonEmptyString"
+      "$ref": "#/$defs/reachableFrom"
     },
     "contingent_fact": {
       "$ref": "#/$defs/nonEmptyString"
@@ -694,6 +694,106 @@
       "maxLength": 16384,
       "pattern": "\\S"
     },
+    "reachableFrom": {
+      "$comment": "Three values only: an entry point name, contingent:<entry point name>, or the literal unknown. A near-miss spelling must be rejected here rather than silently bypassing the reachability cap and the contingency disclosure.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        {
+          "oneOf": [
+            {
+              "const": "unknown"
+            },
+            {
+              "pattern": "^contingent:\\s*\\S"
+            },
+            {
+              "pattern": "^(?![Cc][Oo][Nn][Tt][Ii][Nn][Gg][Ee][Nn][Tt])(?![Uu][Nn][Kk][Nn][Oo][Ww][Nn])\\S"
+            }
+          ]
+        }
+      ]
+    },
+    "boundedEvidenceScalar": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 8192
+        },
+        {
+          "type": [
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      ]
+    },
+    "boundedEvidenceValueDepth3": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/boundedEvidenceScalar"
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/boundedEvidenceScalar"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/boundedEvidenceScalar"
+          }
+        }
+      ]
+    },
+    "boundedEvidenceValueDepth2": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/boundedEvidenceScalar"
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/boundedEvidenceValueDepth3"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/boundedEvidenceValueDepth3"
+          }
+        }
+      ]
+    },
+    "boundedEvidenceValue": {
+      "$comment": "Provider-supplied proof state is persisted into the hashed and attested manifest, so it is bounded in breadth and in depth. Unbounded nesting also reaches deepFreeze, cloneJson and isDeepStrictEqual as unguarded recursion.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/boundedEvidenceScalar"
+        },
+        {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/boundedEvidenceValueDepth2"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "$ref": "#/$defs/boundedEvidenceValueDepth2"
+          }
+        }
+      ]
+    },
     "name": {
       "type": "string",
       "minLength": 1,
@@ -894,7 +994,10 @@
     },
     "preResult": {
       "type": "object",
-      "additionalProperties": true,
+      "maxProperties": 64,
+      "additionalProperties": {
+        "$ref": "#/$defs/boundedEvidenceValue"
+      },
       "required": [
         "assertion",
         "path_reached",
@@ -917,7 +1020,10 @@
     },
     "postResult": {
       "type": "object",
-      "additionalProperties": true,
+      "maxProperties": 64,
+      "additionalProperties": {
+        "$ref": "#/$defs/boundedEvidenceValue"
+      },
       "required": [
         "status",
         "regressions"

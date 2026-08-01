@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 
 export const DEFAULT_COVERAGE_GAP_EXAMPLE_LIMIT = 20
 export const MAX_COVERAGE_GAP_EXAMPLE_LIMIT = 100
@@ -143,7 +144,7 @@ function canonicalRecordKey(gap) {
 
 function preferredRecord(current, candidate) {
   if (current === undefined) return candidate
-  return canonicalRecordKey(candidate).localeCompare(canonicalRecordKey(current), 'en') < 0
+  return compareCanonicalStrings(canonicalRecordKey(candidate), canonicalRecordKey(current)) < 0
     ? candidate
     : current
 }
@@ -230,7 +231,7 @@ export function projectCoverageGaps(
 
   const examples = [...openConcepts.values()]
     .sort((left, right) =>
-      canonicalRecordKey(left).localeCompare(canonicalRecordKey(right), 'en'))
+      compareCanonicalStrings(canonicalRecordKey(left), canonicalRecordKey(right)))
     .slice(0, limit)
     .map(renderedExample)
 

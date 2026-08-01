@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, readdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import { parseLens } from './frontmatter.mjs'
 import {
   DEFAULT_WORK_SHARD_LIMITS,
@@ -12,7 +13,9 @@ function sha256(value) {
 }
 
 function expandBraceAlternations(pattern) {
-  const match = /\{([^{}]*,[^{}]*)\}/.exec(pattern)
+  // A one-alternative brace must expand like every other brace. Leaving `{ts}`
+  // literal made the lens match nothing and report as legitimately inapplicable.
+  const match = /\{([^{}]*)\}/.exec(pattern)
   if (!match) return [pattern]
   return match[1].split(',').flatMap((alternative) => expandBraceAlternations(
     `${pattern.slice(0, match.index)}${alternative}${pattern.slice(match.index + match[0].length)}`,
@@ -41,7 +44,7 @@ function globRegex(pattern) {
       source += '[^/]'
       continue
     }
-    source += /[\\^$+.[\]()|]/.test(character) ? `\\${character}` : character
+    source += /[\\^$+.[\]()|{}]/.test(character) ? `\\${character}` : character
   }
   return new RegExp(`${source}$`)
 }
@@ -100,7 +103,7 @@ export function signalActivatorMatches(signal, content) {
 export async function loadLenses(lensDirectory) {
   const files = (await readdir(lensDirectory))
     .filter((file) => file.endsWith('.md') && !file.startsWith('_'))
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort(compareCanonicalStrings)
   const lenses = []
 
   for (const file of files) {
@@ -126,7 +129,7 @@ export async function digestLensPack(lensDirectory) {
   const files = []
   async function visit(directory) {
     const entries = (await readdir(directory, { withFileTypes: true }))
-      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left.name, right.name))
     for (const entry of entries) {
       const path = join(directory, entry.name)
       if (entry.isSymbolicLink() || (await lstat(path)).isSymbolicLink()) {
@@ -145,7 +148,7 @@ export async function digestLensPack(lensDirectory) {
     }
   }
   await visit(root)
-  files.sort((left, right) => left.path.localeCompare(right.path, 'en'))
+  files.sort((left, right) => compareCanonicalStrings(left.path, right.path))
   return {
     schema_version: 1,
     files,
@@ -176,7 +179,7 @@ function matchLens(lens, inventory) {
     })
   }
 
-  return [...matches.values()].sort((left, right) => left.path.localeCompare(right.path, 'en'))
+  return [...matches.values()].sort((left, right) => compareCanonicalStrings(left.path, right.path))
 }
 
 function augmentDatabaseMatches(matches, inventory, databaseDiscovery) {
@@ -196,7 +199,7 @@ function augmentDatabaseMatches(matches, inventory, databaseDiscovery) {
     })
   }
   return [...augmented.values()]
-    .sort((left, right) => left.path.localeCompare(right.path, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left.path, right.path))
 }
 
 export function databaseDiscoveryProjection(databaseDiscovery, scopedFiles) {
@@ -272,13 +275,13 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
   }
   const knownTopics = [...new Set(lenses.flatMap(
     (lens) => lens.frontmatter.owns ?? [],
-  ))].sort((left, right) => left.localeCompare(right, 'en'))
+  ))].sort(compareCanonicalStrings)
 
   for (const lens of lenses) {
     const frontmatter = lens.frontmatter
     const topicAuthority = {
       owned_topics: [...(frontmatter.owns ?? [])]
-        .sort((left, right) => left.localeCompare(right, 'en')),
+        .sort(compareCanonicalStrings),
       known_topics: knownTopics,
     }
     if (frontmatter.runs_in === 'triage') {
@@ -348,9 +351,9 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
   }
 
   jobs.sort((left, right) => {
-    const phase = left.phase.localeCompare(right.phase, 'en')
+    const phase = compareCanonicalStrings(left.phase, right.phase)
     return phase
-      || left.lens.localeCompare(right.lens, 'en')
+      || compareCanonicalStrings(left.lens, right.lens)
       || (left.shard?.index ?? 0) - (right.shard?.index ?? 0)
   })
 
@@ -381,10 +384,10 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
     configured_exclusions: inventory.excluded,
     inventory_errors: inventory.errors,
     assignments: [...domainAssignments.entries()]
-      .sort(([left], [right]) => left.localeCompare(right, 'en'))
+      .sort(([left], [right]) => compareCanonicalStrings(left, right))
       .map(([path, assignedLenses]) => ({
         path,
-        lenses: assignedLenses.sort((left, right) => left.localeCompare(right, 'en')),
+        lenses: assignedLenses.sort(compareCanonicalStrings),
       })),
   }
 

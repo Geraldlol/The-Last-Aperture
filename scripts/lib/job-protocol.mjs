@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { artifactKeyToken } from './artifact-names.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import {
   isUnresolvedDatabaseDescriptor,
   routeDatabaseAdapter,
@@ -85,25 +86,34 @@ const PROOF_SEVERITY_ORDER = new Map([
 export function compareTriageJobs(left, right) {
   const leftRank = TRIAGE_LENS_ORDER.get(left.lens) ?? 50
   const rightRank = TRIAGE_LENS_ORDER.get(right.lens) ?? 50
-  return leftRank - rightRank || left.job_id.localeCompare(right.job_id, 'en')
+  return leftRank - rightRank || compareCanonicalStrings(left.job_id, right.job_id)
 }
 
 function proofReachabilityRank(finding) {
-  if (finding?.reachable_from === 'unknown') return 2
-  if (finding?.reachable_from?.startsWith('contingent:')) return 1
+  const reachability = finding?.reachable_from
+  if (typeof reachability !== 'string') return 0
+  if (/^\s*unknown/i.test(reachability)) return 2
+  if (/^\s*contingent/i.test(reachability)) return 1
   return 0
+}
+
+function proofQueueSeverity(finding) {
+  // The queue is ordered by claimed impact so the reachability cap cannot
+  // deprioritise the findings a proof would resolve. effective_severity may
+  // exceed the claim only for an attributed elevation, so the stronger of the
+  // two is never a capped value.
+  return betterProofSeverity(
+    finding?.claimed_impact_severity,
+    finding?.effective_severity,
+  )
 }
 
 function compareFindingsForProof(left, right) {
   return (
-    (PROOF_SEVERITY_ORDER.get(
-      left.effective_severity ?? left.claimed_impact_severity,
-    ) ?? 99)
-      - (PROOF_SEVERITY_ORDER.get(
-        right.effective_severity ?? right.claimed_impact_severity,
-      ) ?? 99)
+    (PROOF_SEVERITY_ORDER.get(proofQueueSeverity(left)) ?? 99)
+      - (PROOF_SEVERITY_ORDER.get(proofQueueSeverity(right)) ?? 99)
     || proofReachabilityRank(left) - proofReachabilityRank(right)
-    || left.candidate_id.localeCompare(right.candidate_id, 'en')
+    || compareCanonicalStrings(left.candidate_id, right.candidate_id)
   )
 }
 
@@ -120,7 +130,7 @@ function proofPriorityIndex(run) {
   const severityByCandidate = new Map()
   for (const finding of run.findings ?? []) {
     byId.set(finding.candidate_id, finding)
-    const ownSeverity = finding.effective_severity ?? finding.claimed_impact_severity
+    const ownSeverity = proofQueueSeverity(finding)
     severityByCandidate.set(
       finding.candidate_id,
       betterProofSeverity(
@@ -155,28 +165,14 @@ export function createProofJobComparator(run) {
     const finding = byId.get(candidateId) ?? { candidate_id: candidateId }
     return {
       ...finding,
-      effective_severity: severityByCandidate.get(candidateId)
-        ?? finding.effective_severity,
+      claimed_impact_severity: severityByCandidate.get(candidateId)
+        ?? finding.claimed_impact_severity,
     }
   }
   return (left, right) => compareFindingsForProof(
     prioritizedFinding(left),
     prioritizedFinding(right),
   )
-}
-
-export function compareProofJobs(run, left, right) {
-  return createProofJobComparator(run)(left, right)
-}
-
-export function selectNextProofJob(run, jobs) {
-  if (!Array.isArray(jobs) || jobs.length === 0) return undefined
-  const compare = createProofJobComparator(run)
-  let selected = jobs[0]
-  for (let index = 1; index < jobs.length; index += 1) {
-    if (compare(jobs[index], selected) < 0) selected = jobs[index]
-  }
-  return selected
 }
 
 function proofOperation(job) {
@@ -782,7 +778,7 @@ function applyStoreProfiles(run, job, jobResult, options = {}) {
     }
   }
   run.coverage.resolved_gap_ids = [...resolved]
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
 }
 
 function ensureDatabaseProfileBinding(run, finding) {
@@ -963,9 +959,16 @@ function applyFindings(run, job, findings, options = {}) {
 
 function updateCoverage(run, job, sidecar, jobResult) {
   const modeled = isModeledCoverage(run.coverage)
-  const gapKeys = new Set(run.coverage.gaps.map(exactCoverageGapId))
+  const gapKey = (gap) => {
+    try {
+      return exactCoverageGapId(gap)
+    } catch (error) {
+      throw resultError(`coverage gap identity is invalid: ${error.message}`)
+    }
+  }
+  const gapKeys = new Set(run.coverage.gaps.map((gap) => gapKey(gap)))
   const appendGap = (gap) => {
-    const key = exactCoverageGapId(gap)
+    const key = gapKey(gap)
     if (gapKeys.has(key)) return
     gapKeys.add(key)
     run.coverage.gaps.push(gap)
@@ -977,7 +980,7 @@ function updateCoverage(run, job, sidecar, jobResult) {
     if (jobResult.state === 'SUCCEEDED') {
       for (const path of jobResult.examined_files) examined.add(path)
       run.coverage.examined = [...examined]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       run.coverage.unexamined = run.coverage.unexamined.filter(
         ({ path }) => !examined.has(path),
       )
@@ -1008,7 +1011,7 @@ function updateCoverage(run, job, sidecar, jobResult) {
         if (gapKeys.has(gap.gap_id)) resolved.add(gap.gap_id)
       }
       run.coverage.resolved_gap_ids = [...resolved]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       refreshCategoryDenominators(run.coverage)
     }
   }
@@ -1022,7 +1025,7 @@ function updateCoverage(run, job, sidecar, jobResult) {
         for (const path of jobResult.examined_files) examinedPaths.add(path)
       }
       row.examined_paths = [...examinedPaths]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       if (!modeled) {
         row.status = jobResult.state === 'SUCCEEDED' ? 'RAN' : 'FAILED'
         if (jobResult.state === 'FAILED') row.reason = jobResult.error.message
@@ -1145,28 +1148,28 @@ function jobsTerminal(run, kind) {
   return jobsOf(run, kind).every((job) => TERMINAL_JOB_STATES.has(job.state))
 }
 
-function proofExistenceJobs(findings) {
+function proofExistenceJobs(run, findings) {
   return findings
     .filter((finding) => ACTIVE_FINDING_DISPOSITIONS.has(finding.triage_disposition))
-    .sort(compareFindingsForProof)
     .map((finding) => ({
       job_id: `proof-existence:${finding.candidate_id}`,
       kind: 'PROOF',
       state: 'PENDING',
       candidate_ids: [finding.candidate_id],
     }))
+    .sort(createProofJobComparator(run))
 }
 
-function proofVerificationJobs(findings) {
+function proofVerificationJobs(run, findings) {
   return findings
     .filter((finding) => ACTIVE_FINDING_DISPOSITIONS.has(finding.triage_disposition))
-    .sort(compareFindingsForProof)
     .map((finding) => ({
       job_id: `proof-verification:${finding.candidate_id}`,
       kind: 'PROOF',
       state: 'PENDING',
       candidate_ids: [finding.candidate_id],
     }))
+    .sort(createProofJobComparator(run))
 }
 
 function uniqueErrorId(run, base) {
@@ -1382,7 +1385,7 @@ function advanceClosureRound(run) {
     'proof-existence:',
   )
   if (missingExistence.length > 0) {
-    run.jobs.push(...proofExistenceJobs(missingExistence).map((job) => ({
+    run.jobs.push(...proofExistenceJobs(run, missingExistence).map((job) => ({
       ...job,
       closure_round: round,
     })))
@@ -1402,7 +1405,7 @@ function advanceClosureRound(run) {
     'proof-verification:',
   )
   if (missingVerification.length > 0) {
-    run.jobs.push(...proofVerificationJobs(missingVerification).map((job) => ({
+    run.jobs.push(...proofVerificationJobs(run, missingVerification).map((job) => ({
       ...job,
       closure_round: round,
     })))
@@ -1459,7 +1462,7 @@ function materializeStoreSynthesis(run) {
     }
   }
   run.coverage.resolved_gap_ids = [...resolved]
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
 }
 
 export function advanceRun(run) {
@@ -1503,7 +1506,7 @@ export function advanceRun(run) {
         `triage completed without dispositions for: ${untriaged.join(', ')}`,
       )
     }
-    next.jobs.push(...proofExistenceJobs(next.findings))
+    next.jobs.push(...proofExistenceJobs(next, next.findings))
     next.phase = 'PROOF'
   } else if (next.phase === 'PROOF') {
     const existenceJobs = jobsOf(next, 'PROOF').filter(
@@ -1516,7 +1519,7 @@ export function advanceRun(run) {
       return { advanced: false, run }
     }
     if (verificationJobs.length === 0 && existenceJobs.length > 0) {
-      next.jobs.push(...proofVerificationJobs(next.findings))
+      next.jobs.push(...proofVerificationJobs(next, next.findings))
     } else {
       if (!verificationJobs.every(({ state }) => TERMINAL_JOB_STATES.has(state))) {
         return { advanced: false, run }

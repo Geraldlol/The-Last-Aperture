@@ -1,16 +1,13 @@
 import {
   COVERAGE_CLASSES,
   applicableLensFilePairs,
+  sourceClosureGaps,
   uncoveredLensFilePairs,
 } from './coverage-model.mjs'
 import {
   filterResolvedCoverageGaps,
   projectCoverageGaps,
 } from './coverage-gaps.mjs'
-
-function compareText(left, right) {
-  return left.localeCompare(right, 'en')
-}
 
 function modeledCoverage(coverage) {
   return (
@@ -36,35 +33,17 @@ function coverageClass(row) {
   }[row?.category]
 }
 
-function canonicalSourcePaths(coverage) {
-  const fromDenominator = (coverage.denominators ?? [])
-    .filter((row) => coverageClass(row) === COVERAGE_CLASSES.CANONICAL_SOURCE)
-    .flatMap((row) => (
-      Array.isArray(row.paths)
-        ? row.paths
-        : Array.isArray(row.files)
-          ? row.files.map(({ path }) => path)
-          : []
-    ))
-  if (fromDenominator.length > 0) return new Set(fromDenominator)
-  return new Set(
-    (coverage.inventory_records ?? [])
-      .filter((record) =>
-        record.coverage_class === COVERAGE_CLASSES.CANONICAL_SOURCE
-        || record.category === 'canonical-source')
-      .map(({ path }) => path),
-  )
-}
-
 export function finalizedFanoutLensRows(run) {
   const coverage = run?.coverage
-  if (!modeledCoverage(coverage)) return coverage?.lenses ?? []
-  return (coverage.lenses ?? []).map((row) => {
+  return (coverage?.lenses ?? []).map((row) => {
     const lensJobs = (run.jobs ?? []).filter(
       (job) => job.kind === 'LENS' && job.lens === row.lens,
     )
     if (
-      lensJobs.length === 0
+      // A row that declares no lens/file obligations is a legacy row whose
+      // status is authored by the ingest path, not reconciled here.
+      !Array.isArray(row.applicable_paths)
+      || lensJobs.length === 0
       || row.status === 'NOT_TRIGGERED'
       || !lensJobs.some(({ state }) => state !== 'SKIPPED' && state !== 'DORMANT')
     ) {
@@ -96,35 +75,6 @@ export function finalizedFanoutLensRows(run) {
       ),
     }
   })
-}
-
-export function sourceClosureGaps(coverage) {
-  if (!modeledCoverage(coverage)) return []
-  const canonical = canonicalSourcePaths(coverage)
-  const examined = new Set(coverage.examined ?? [])
-  const gaps = [...canonical]
-    .filter((path) => !examined.has(path))
-    .sort(compareText)
-    .map((path) => ({
-      kind: 'CANONICAL_SOURCE_FILE',
-      path,
-    }))
-
-  for (const row of coverage.lenses ?? []) {
-    const lensExamined = new Set(row.examined_paths ?? [])
-    for (const path of row.applicable_paths ?? []) {
-      if (canonical.has(path) && !lensExamined.has(path)) {
-        gaps.push({
-          kind: 'CANONICAL_SOURCE_LENS_FILE',
-          lens: row.lens,
-          path,
-        })
-      }
-    }
-  }
-  return gaps.sort((left, right) =>
-    compareText(left.path, right.path)
-    || compareText(left.lens ?? '', right.lens ?? ''))
 }
 
 export function coverageMetrics(coverage) {
@@ -203,4 +153,4 @@ export function isModeledCoverage(coverage) {
   return modeledCoverage(coverage)
 }
 
-export { applicableLensFilePairs, uncoveredLensFilePairs }
+export { applicableLensFilePairs, sourceClosureGaps, uncoveredLensFilePairs }

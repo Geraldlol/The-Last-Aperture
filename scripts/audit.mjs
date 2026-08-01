@@ -39,6 +39,7 @@ import {
   validateRun,
 } from './lib/contracts.mjs'
 import { isMainModule } from './lib/main-module.mjs'
+import { compareCanonicalStrings } from './lib/canonical-order.mjs'
 import {
   classifyProviderAttemptRecovery,
   commitProviderAttempt,
@@ -142,6 +143,21 @@ import {
 import {
   submitRemoteGatewayRequest,
 } from './lib/remote-gateway-client.mjs'
+import {
+  assertValidTransparencyLogConfig,
+  createTransparencyConsistencyRequest,
+  createTransparencyPublishRequest,
+  parseTransparencyPublicKey,
+  projectTransparencySignedCheckpoint,
+  verifyTransparencyInclusion,
+} from './lib/transparency-log-contracts.mjs'
+import {
+  submitTransparencyConsistencyRequest,
+  submitTransparencyLogEntry,
+} from './lib/transparency-log-client.mjs'
+import {
+  openTransparencyCheckpointJournal,
+} from './lib/transparency-checkpoint-journal.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
@@ -167,6 +183,11 @@ const MAX_BENCHMARK_INPUT_BYTES = 16 * 1024 * 1024
 const MAX_BENCHMARK_CASES_BYTES = 8 * 1024 * 1024
 const MAX_BENCHMARK_THRESHOLDS_BYTES = 1024 * 1024
 const MAX_ROOT_ATTESTATION_BYTES = 64 * 1024
+const MAX_TRANSPARENCY_LOG_CONFIG_BYTES = 64 * 1024
+const MAX_TRANSPARENCY_RECEIPT_BYTES = 1024 * 1024
+// Offline verification cannot read the log configuration, so it allows the
+// largest skew any valid transparency-log-config.schema.json could configure.
+const MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS = 300_000
 const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
@@ -174,7 +195,7 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.8.0
+const HELP = `red-team-audit 0.10.0
 
 Usage:
   red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
@@ -187,9 +208,10 @@ Usage:
   red-team-audit abort <run.json|bundle-directory> --reason <text>
   red-team-audit unlock <run.json|bundle-directory>
   red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
-  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
-  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>]
+  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]
+  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
   red-team-audit benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
 
 Safety:
@@ -260,6 +282,17 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
     },
   },
+  publish: {
+    positionals: 2,
+    options: {
+      out: 'value',
+      'receipt-public-key': 'value',
+      'root-attestation': 'value',
+      'root-public-key': 'value',
+      'transparency-checkpoint-journal': 'value',
+      'initialize-transparency-checkpoint-journal': 'flag',
+    },
+  },
   validate: {
     positionals: 1,
     options: {
@@ -267,6 +300,10 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
       'root-attestation': 'value',
       'root-public-key': 'value',
+      'transparency-receipt': 'value',
+      'transparency-log-public-key': 'value',
+      'transparency-log-origin': 'value',
+      'transparency-checkpoint-journal': 'value',
     },
   },
   report: {
@@ -277,9 +314,16 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
       'root-attestation': 'value',
       'root-public-key': 'value',
+      'transparency-receipt': 'value',
+      'transparency-log-public-key': 'value',
+      'transparency-log-origin': 'value',
+      'transparency-checkpoint-journal': 'value',
     },
   },
-  compare: { positionals: 2, options: { out: 'value' } },
+  compare: {
+    positionals: 2,
+    options: { out: 'value', 'receipt-public-key': 'value' },
+  },
   benchmark: {
     positionals: 1,
     options: { cases: 'value', thresholds: 'value', out: 'value' },
@@ -352,16 +396,11 @@ async function readJson(path, options = {}) {
   if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 0) {
     throw new Error('JSON input reads require a non-negative maxBytes limit')
   }
-  let text
-  try {
-    text = (await readBoundedFile(
-      absolutePath,
-      options.maxBytes,
-      options.label ?? 'JSON input',
-    )).toString('utf8')
-  } catch (error) {
-    throw error
-  }
+  const text = (await readBoundedFile(
+    absolutePath,
+    options.maxBytes,
+    options.label ?? 'JSON input',
+  )).toString('utf8')
   try {
     return JSON.parse(text)
   } catch (error) {
@@ -413,7 +452,10 @@ async function readBoundedFile(path, maxBytes, label) {
     }
     return buffer
   } catch (error) {
-    throw new Error(`cannot read ${absolutePath}: ${error.message}`)
+    throw new Error(
+      `cannot read ${absolutePath}: ${error.message}`,
+      { cause: error },
+    )
   } finally {
     await handle?.close()
   }
@@ -767,7 +809,7 @@ async function releaseOwnedLock(path, token) {
   try {
     current = await readLock(path)
   } catch (error) {
-    if (error.cause?.code === 'ENOENT' || /ENOENT/.test(error.message)) return
+    if (error.cause?.code === 'ENOENT') return
     throw error
   }
   if (current.record.pid !== process.pid || current.record.token !== token) {
@@ -1386,7 +1428,7 @@ function assertObservedResultReflectedInRun(run, job, result) {
     const row = run.coverage.lenses.find(({ lens }) => lens === job.lens)
     const expectedPaths = result.state === 'SUCCEEDED'
       ? [...result.examined_files]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       : []
     const aggregatePaths = new Set(row?.examined_paths ?? [])
     if (!row || expectedPaths.some((path) => !aggregatePaths.has(path))) {
@@ -1481,7 +1523,7 @@ export async function verifyControlBundle(
     !['static', 'remote_static'].includes(policy.mode)
     || run.capability_mode !== 'STATIC'
   ) {
-    throw new Error('0.8.0 can dispatch and ingest only STATIC runs')
+    throw new Error('0.10.0 can dispatch and ingest only STATIC runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1844,9 +1886,9 @@ export async function verifyControlBundle(
     }
     const resultCandidateIds = result.findings
       .map(({ candidate_id: candidateId }) => candidateId)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     const jobCandidateIds = [...(job.candidate_ids ?? [])]
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     if (stableJson(resultCandidateIds) !== stableJson(jobCandidateIds)) {
       throw new Error(`observed execution findings do not match job ${job.job_id}`)
     }
@@ -1914,9 +1956,9 @@ export async function verifyControlBundle(
     }
     const resultCandidateIds = result.findings
       .map(({ candidate_id: candidateId }) => candidateId)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     const jobCandidateIds = [...(job.candidate_ids ?? [])]
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     if (stableJson(resultCandidateIds) !== stableJson(jobCandidateIds)) {
       throw new Error(`remote acceptance findings do not match job ${job.job_id}`)
     }
@@ -1971,11 +2013,11 @@ export async function verifyControlBundle(
     const currentLensByName = new Map(currentLenses.map((lens) => [lens.name, lens]))
     const currentKnownTopics = [...new Set(currentLenses.flatMap(
       (lens) => lens.frontmatter.owns ?? [],
-    ))].sort((left, right) => left.localeCompare(right, 'en'))
+    ))].sort((left, right) => compareCanonicalStrings(left, right))
     for (const sidecar of sidecars) {
       const currentLens = currentLensByName.get(sidecar.lens)
       const expectedOwnedTopics = [...(currentLens?.frontmatter.owns ?? [])]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       if (
         currentLens === undefined
         || sidecar.lens_file !== currentLens.file
@@ -2201,7 +2243,7 @@ function sourcePathsForObservedJob(run, job, sidecar, sourceIndex) {
         if (match && knownPaths.has(match[1])) paths.add(match[1])
       }
     }
-    return [...paths].sort((left, right) => left.localeCompare(right, 'en'))
+    return [...paths].sort((left, right) => compareCanonicalStrings(left, right))
   }
   return []
 }
@@ -2243,7 +2285,7 @@ function observedProviderArtifactDescriptors(run, job, sidecar, control) {
     ...(sidecar?.lens_file ? [`lenses/${sidecar.lens_file}`] : []),
   ])
   for (const path of [...selectedControlPaths].sort(
-    (left, right) => left.localeCompare(right, 'en'),
+    (left, right) => compareCanonicalStrings(left, right),
   )) {
     const file = controlByPath.get(path)
     if (!file || file.availability !== 'AVAILABLE') {
@@ -2410,7 +2452,49 @@ async function loadExternalTrustFile(
   }
 }
 
-async function verifyPinnedRootAttestation(loaded, options) {
+async function openExternalCheckpointJournal({
+  pathValue,
+  loaded,
+  publicKeyBytes,
+  expectedOrigin,
+  maxClockSkewMs,
+  mustExist = false,
+  dependencies = {},
+}) {
+  if (typeof pathValue !== 'string' || !isAbsolute(pathValue)) {
+    throw new Error(
+      '--transparency-checkpoint-journal must name an absolute external directory',
+    )
+  }
+  const requested = resolve(pathValue)
+  if (mustExist) {
+    try {
+      await realpath(requested)
+    } catch (error) {
+      throw new Error(
+        `cannot open transparency checkpoint journal ${requested}: ${error.message}`,
+      )
+    }
+  }
+  const openJournal = dependencies.openTransparencyCheckpointJournal
+    ?? openTransparencyCheckpointJournal
+  return openJournal({
+    directory: requested,
+    expectedOrigin,
+    publicKeyBytes,
+    maxClockSkewMs,
+    readOnly: mustExist,
+    now: () => new Date(),
+    targetDirectory: resolve(loaded.run.repository.root),
+    auditBundleDirectory: resolve(loaded.directory),
+  })
+}
+
+async function loadPinnedRootAttestation(
+  loaded,
+  options,
+  { required = false } = {},
+) {
   const attestationPath = options['root-attestation']
   const publicKeyPath = options['root-public-key']
   const hasAttestation = typeof attestationPath === 'string'
@@ -2421,10 +2505,17 @@ async function verifyPinnedRootAttestation(loaded, options) {
     )
   }
   if (!hasAttestation) {
+    if (required) {
+      throw new Error(
+        '--root-attestation and --root-public-key are required for transparency publication or verification',
+      )
+    }
     return {
-      status: 'UNANCHORED',
-      message:
-        'run.json is valid only relative to its own unsigned artifact manifest',
+      verification: {
+        status: 'UNANCHORED',
+        message:
+          'run.json is valid only relative to its own unsigned artifact manifest',
+      },
     }
   }
   const [attestationFile, publicKeyFile] = await Promise.all([
@@ -2449,17 +2540,116 @@ async function verifyPinnedRootAttestation(loaded, options) {
       `invalid JSON in ${attestationFile.path}: ${error.message}`,
     )
   }
-  return verifyRootAttestation({
+  const verification = verifyRootAttestation({
     attestation,
     run: loaded.run,
     runSha256: loaded.sourceDigest,
     publicKeyBytes: publicKeyFile.bytes,
   })
+  return {
+    attestation,
+    attestationFile,
+    publicKeyFile,
+    verification,
+  }
 }
 
-async function rootAttestationOutputPath(pathValue, loaded) {
+async function verifyPinnedRootAttestation(loaded, options) {
+  const result = await loadPinnedRootAttestation(loaded, options)
+  return result.verification
+}
+
+async function verifyPinnedTransparencyReceipt(
+  loaded,
+  options,
+  rootAttestationRecord,
+  dependencies = {},
+) {
+  const receiptPath = options['transparency-receipt']
+  const publicKeyPath = options['transparency-log-public-key']
+  const expectedOrigin = options['transparency-log-origin']
+  const hasReceipt = typeof receiptPath === 'string'
+  const hasPublicKey = typeof publicKeyPath === 'string'
+  const hasOrigin = typeof expectedOrigin === 'string'
+  const hasJournal = typeof options['transparency-checkpoint-journal'] === 'string'
+  if (new Set([hasReceipt, hasPublicKey, hasOrigin]).size !== 1) {
+    throw new Error(
+      '--transparency-receipt, --transparency-log-public-key, and --transparency-log-origin must be supplied together',
+    )
+  }
+  if (!hasReceipt) {
+    if (hasJournal) {
+      throw new Error(
+        '--transparency-checkpoint-journal requires the transparency receipt, log public key, and origin options',
+      )
+    }
+    return {
+      status: 'NOT_SUPPLIED',
+      claim: 'NO_TRANSPARENCY_INCLUSION_CLAIM',
+    }
+  }
+  if (!rootAttestationRecord?.attestation) {
+    throw new Error(
+      'transparency verification requires --root-attestation and --root-public-key',
+    )
+  }
+  const [receiptFile, logPublicKeyFile] = await Promise.all([
+    loadExternalTrustFile(
+      receiptPath,
+      'transparency inclusion receipt',
+      loaded,
+      MAX_TRANSPARENCY_RECEIPT_BYTES,
+    ),
+    loadExternalTrustFile(
+      publicKeyPath,
+      'transparency log public key',
+      loaded,
+      MAX_SIGNING_KEY_BYTES,
+    ),
+  ])
+  let receipt
+  try {
+    receipt = JSON.parse(receiptFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in ${receiptFile.path}: ${error.message}`,
+    )
+  }
+  const inclusion = verifyTransparencyInclusion({
+    receipt,
+    attestation: rootAttestationRecord.attestation,
+    publicKeyBytes: logPublicKeyFile.bytes,
+    expectedOrigin,
+    maxClockSkewMs: MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS,
+  })
+  const journalPath = options['transparency-checkpoint-journal']
+  if (journalPath === undefined) return inclusion
+  const journal = await openExternalCheckpointJournal({
+    pathValue: journalPath,
+    loaded,
+    publicKeyBytes: logPublicKeyFile.bytes,
+    expectedOrigin,
+    maxClockSkewMs: MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS,
+    mustExist: true,
+    dependencies,
+  })
+  try {
+    const continuity = await journal.continuityForCheckpoint(
+      projectTransparencySignedCheckpoint(receipt),
+    )
+    return {
+      ...inclusion,
+      consistency: continuity.consistency,
+      continuity,
+    }
+  } finally {
+    await journal.close()
+  }
+}
+
+async function externalTrustOutputPath(pathValue, loaded, label) {
   if (typeof pathValue !== 'string') {
-    throw new Error('--out is required to write a root manifest attestation')
+    throw new Error(`--out is required to write ${label}`)
   }
   const absolutePath = resolve(pathValue)
   let canonicalParent
@@ -2467,7 +2657,7 @@ async function rootAttestationOutputPath(pathValue, loaded) {
     canonicalParent = await realpath(dirname(absolutePath))
   } catch (error) {
     throw new Error(
-      `cannot prepare root manifest attestation output ${absolutePath}: ${error.message}`,
+      `cannot prepare ${label} output ${absolutePath}: ${error.message}`,
     )
   }
   const outputPath = join(canonicalParent, basename(absolutePath))
@@ -2476,7 +2666,7 @@ async function rootAttestationOutputPath(pathValue, loaded) {
     || pathWithin(resolve(loaded.run.repository.root), outputPath)
   ) {
     throw new Error(
-      'root manifest attestation output must be outside the run bundle and target repository',
+      `${label} output must be outside the run bundle and target repository`,
     )
   }
   try {
@@ -2484,10 +2674,18 @@ async function rootAttestationOutputPath(pathValue, loaded) {
   } catch (error) {
     if (error.code === 'ENOENT') return outputPath
     throw new Error(
-      `cannot inspect root manifest attestation output ${outputPath}: ${error.message}`,
+      `cannot inspect ${label} output ${outputPath}: ${error.message}`,
     )
   }
-  throw new Error(`root manifest attestation output already exists: ${outputPath}`)
+  throw new Error(`${label} output already exists: ${outputPath}`)
+}
+
+async function rootAttestationOutputPath(pathValue, loaded) {
+  return externalTrustOutputPath(
+    pathValue,
+    loaded,
+    'root manifest attestation',
+  )
 }
 
 function createControllerExecutionEnvelope(execution, attempt, signingKey) {
@@ -3012,7 +3210,7 @@ async function planCommand(positionals, options) {
     })
     if (!['static', 'remote_static'].includes(policy.mode)) {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.8.0',
+        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.10.0',
       )
     }
     if (policy.mode === 'remote_static' && !sealSource) {
@@ -3143,6 +3341,286 @@ async function attestCommand(positionals, options) {
   console.log(`Attestation: ${outputPath}`)
 }
 
+function sameTransparencyCheckpointHead(left, right) {
+  return left?.checkpoint?.origin === right?.checkpoint?.origin
+    && left?.checkpoint?.tree_size === right?.checkpoint?.tree_size
+    && left?.checkpoint?.root_hash === right?.checkpoint?.root_hash
+    && left?.checkpoint?.signing?.key_id
+      === right?.checkpoint?.signing?.key_id
+}
+
+async function requestPublishedCheckpointConsistency({
+  trusted,
+  firstCheckpoint,
+  secondCheckpoint,
+  dependencies,
+}) {
+  const requestDocument = createTransparencyConsistencyRequest({
+    firstSize: firstCheckpoint.checkpoint.tree_size,
+    secondSize: secondCheckpoint.checkpoint.tree_size,
+  })
+  const submitConsistency = dependencies.submitTransparencyConsistencyRequest
+    ?? submitTransparencyConsistencyRequest
+  return submitConsistency({
+    config: trusted.config,
+    requestDocument,
+    logPublicKeyBytes: trusted.logPublicKeyBytes,
+    expectedFirstCheckpoint: firstCheckpoint,
+    expectedSecondCheckpoint: secondCheckpoint,
+    ...(typeof dependencies.transparencyConsistencyTransport === 'function'
+      ? { transport: dependencies.transparencyConsistencyTransport }
+      : (
+          typeof dependencies.transparencyTransport === 'function'
+            ? { transport: dependencies.transparencyTransport }
+            : {}
+        )),
+  })
+}
+
+async function establishPublishedCheckpointContinuity({
+  journal,
+  trusted,
+  receipt,
+  initializeJournal,
+  dependencies,
+  republish,
+}) {
+  let currentReceipt = receipt
+  let publishedCheckpoint = projectTransparencySignedCheckpoint(currentReceipt)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await journal.load()
+    const retainedCheckpoint = snapshot.head
+    if (retainedCheckpoint === null) {
+      if (!initializeJournal) {
+        throw new Error(
+          'checkpoint journal became empty before continuity could be established',
+        )
+      }
+      await journal.advance({ checkpoint: publishedCheckpoint })
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    }
+    const retainedSize = retainedCheckpoint.checkpoint.tree_size
+    const publishedSize = publishedCheckpoint.checkpoint.tree_size
+    if (retainedSize === publishedSize) {
+      if (!sameTransparencyCheckpointHead(
+        retainedCheckpoint,
+        publishedCheckpoint,
+      )) {
+        throw new Error(
+          'published checkpoint conflicts with the externally retained root at the same tree size',
+        )
+      }
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    }
+    if (retainedSize < publishedSize) {
+      const result = await requestPublishedCheckpointConsistency({
+        trusted,
+        firstCheckpoint: retainedCheckpoint,
+        secondCheckpoint: publishedCheckpoint,
+        dependencies,
+      })
+      try {
+        await journal.advance({
+          expectedHead: retainedCheckpoint,
+          checkpoint: publishedCheckpoint,
+          consistencyProof: result.proof,
+        })
+        return {
+          receipt: currentReceipt,
+          continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+        }
+      } catch (error) {
+        if (
+          error?.code === 'TRANSPARENCY_CHECKPOINT_JOURNAL_CAS_CONFLICT'
+          && attempt < 2
+        ) {
+          continue
+        }
+        throw error
+      }
+    }
+
+    try {
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    } catch (error) {
+      if (
+        error?.code !== 'TRANSPARENCY_CHECKPOINT_JOURNAL_CHECKPOINT_ABSENT'
+      ) {
+        throw error
+      }
+      if (typeof republish !== 'function' || attempt >= 2) {
+        throw new Error(
+          'checkpoint journal is ahead of the publication receipt and no retained offline proof binds that receipt; retry publication',
+          { cause: error },
+        )
+      }
+      const replacement = await republish()
+      currentReceipt = replacement.receipt
+      publishedCheckpoint = projectTransparencySignedCheckpoint(currentReceipt)
+    }
+  }
+  throw new Error(
+    'checkpoint journal changed repeatedly while continuity was being established',
+  )
+}
+
+export async function publishTransparencyCommand(
+  positionals,
+  options,
+  dependencies = {},
+) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  const rootRecord = await loadPinnedRootAttestation(
+    loaded,
+    options,
+    { required: true },
+  )
+  const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+    ? await loadPinnedReceiptPublicKeyId(
+        options['receipt-public-key'],
+        loaded.directory,
+        loaded.run.repository.root,
+      )
+    : undefined
+  await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  const trusted = await loadTrustedTransparencyLogConfiguration(
+    requirePositional(positionals, 1, 'transparency log configuration'),
+    loaded,
+  )
+  const outputPath = await externalTrustOutputPath(
+    options.out,
+    loaded,
+    'transparency inclusion receipt',
+  )
+  const journalPath = options['transparency-checkpoint-journal']
+  const initializeJournal = options['initialize-transparency-checkpoint-journal'] === true
+  if (initializeJournal && typeof journalPath !== 'string') {
+    throw new Error(
+      '--initialize-transparency-checkpoint-journal requires --transparency-checkpoint-journal',
+    )
+  }
+  if (
+    typeof journalPath === 'string'
+    && typeof trusted.config.consistency_url !== 'string'
+  ) {
+    throw new Error(
+      'checkpoint-journal publication requires a version 1.1 transparency configuration with consistency_url',
+    )
+  }
+  if (
+    typeof journalPath === 'string'
+    && pathWithin(resolve(journalPath), outputPath)
+  ) {
+    throw new Error(
+      'transparency inclusion receipt output must be outside the checkpoint journal directory',
+    )
+  }
+  const journal = typeof journalPath === 'string'
+    ? await openExternalCheckpointJournal({
+        pathValue: journalPath,
+        loaded,
+        publicKeyBytes: trusted.logPublicKeyBytes,
+        expectedOrigin: trusted.config.log_origin,
+        maxClockSkewMs: trusted.config.limits.max_clock_skew_ms,
+        dependencies,
+      })
+    : null
+  if (journal !== null) {
+    const before = await journal.load()
+    if (before.head === null && !initializeJournal) {
+      await journal.close()
+      throw new Error(
+        'checkpoint journal is empty; repeat with --initialize-transparency-checkpoint-journal to establish an explicit baseline',
+      )
+    }
+    if (before.head !== null && initializeJournal) {
+      await journal.close()
+      throw new Error(
+        '--initialize-transparency-checkpoint-journal is valid only for an empty journal',
+      )
+    }
+  }
+  const requestDocument = createTransparencyPublishRequest(
+    rootRecord.attestation,
+  )
+  const submit = dependencies.submitTransparencyLogEntry
+    ?? submitTransparencyLogEntry
+  const submitPublication = () => submit({
+      config: trusted.config,
+      requestDocument,
+      attestation: rootRecord.attestation,
+      logPublicKeyBytes: trusted.logPublicKeyBytes,
+      ...(typeof dependencies.transparencyTransport === 'function'
+        ? { transport: dependencies.transparencyTransport }
+        : {}),
+    })
+  let publicationAttempted = false
+  try {
+    publicationAttempted = true
+    let publication = await submitPublication()
+    let continuity = null
+    if (journal !== null) {
+      const established = await establishPublishedCheckpointContinuity({
+        journal,
+        trusted,
+        receipt: publication.receipt,
+        initializeJournal,
+        dependencies,
+        republish: submitPublication,
+      })
+      publication = {
+        ...publication,
+        receipt: established.receipt,
+      }
+      continuity = established.continuity
+    }
+    const verification = verifyTransparencyInclusion({
+      receipt: publication.receipt,
+      attestation: rootRecord.attestation,
+      publicKeyBytes: trusted.logPublicKeyBytes,
+      expectedOrigin: trusted.config.log_origin,
+      maxClockSkewMs: trusted.config.limits.max_clock_skew_ms,
+    })
+    await durableCreate(outputPath, stableJson(publication.receipt))
+    console.log(`Published ${loaded.run.run_id}`)
+    console.log(`Transparency log: ${verification.origin}`)
+    console.log(
+      `Checkpoint: tree ${verification.tree_size}, leaf ${verification.leaf_index}, ${verification.root_hash}`,
+    )
+    if (continuity !== null) {
+      console.log(`Checkpoint continuity: ${continuity.consistency}`)
+    }
+    console.log(`Inclusion receipt: ${outputPath}`)
+    return {
+      outputPath,
+      receipt: publication.receipt,
+      verification,
+      ...(continuity === null ? {} : { continuity }),
+    }
+  } catch (error) {
+    if (!publicationAttempted) throw error
+    const wrapped = new Error(
+      `transparency publication may already be durable, but no verified receipt output was written: ${error.message}`,
+      { cause: error },
+    )
+    wrapped.code = error.code ?? 'TRANSPARENCY_PUBLICATION_OUTCOME_UNCERTAIN'
+    if (error.details !== undefined) wrapped.details = error.details
+    throw wrapped
+  } finally {
+    await journal?.close()
+  }
+}
+
 async function validateCommand(positionals, options) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   const {
@@ -3152,9 +3630,16 @@ async function validateCommand(positionals, options) {
   } = loaded
   const result = validateRun(run)
   let rootAuthenticity
+  let transparencyInclusion
   if (result.valid) {
     try {
-      rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
+      const rootRecord = await loadPinnedRootAttestation(loaded, options)
+      rootAuthenticity = rootRecord.verification
+      transparencyInclusion = await verifyPinnedTransparencyReceipt(
+        loaded,
+        options,
+        rootRecord,
+      )
       const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
         ? await loadPinnedReceiptPublicKeyId(
             options['receipt-public-key'],
@@ -3177,6 +3662,9 @@ async function validateCommand(positionals, options) {
       path,
       ...result,
       ...(rootAuthenticity ? { root_authenticity: rootAuthenticity } : {}),
+      ...(transparencyInclusion
+        ? { transparency_inclusion: transparencyInclusion }
+        : {}),
     }))
   } else if (result.valid) {
     console.log(`VALID: ${path}`)
@@ -3186,6 +3674,18 @@ async function validateCommand(positionals, options) {
       )
     } else {
       console.log('Root authenticity: UNANCHORED')
+    }
+    if (transparencyInclusion.status === 'VERIFIED') {
+      console.log(
+        `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
+      )
+      if (transparencyInclusion.continuity) {
+        console.log(
+          `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
+        )
+      }
+    } else {
+      console.log('Transparency inclusion: NOT SUPPLIED')
     }
   }
   else {
@@ -3424,6 +3924,39 @@ async function loadTrustedRemoteGatewayConfiguration(pathValue, loaded) {
       controller_key_id: controllerKey.keyId,
       gateway_key_id: gatewayKey.keyId,
     }, 0)),
+  }
+}
+
+async function loadTrustedTransparencyLogConfiguration(pathValue, loaded) {
+  const configFile = await loadExternalTrustFile(
+    pathValue,
+    'transparency log configuration',
+    loaded,
+    MAX_TRANSPARENCY_LOG_CONFIG_BYTES,
+  )
+  let document
+  try {
+    document = JSON.parse(configFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in transparency log configuration ${configFile.path}: ${error.message}`,
+    )
+  }
+  assertValidTransparencyLogConfig(document)
+  const config = structuredClone(document)
+  const logPublicKeyFile = await loadExternalTrustFile(
+    config.log_public_key_path,
+    'transparency log public key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  config.log_public_key_path = logPublicKeyFile.path
+  const logKey = parseTransparencyPublicKey(logPublicKeyFile.bytes)
+  assertValidTransparencyLogConfig(config)
+  return {
+    config,
+    logPublicKeyBytes: logPublicKeyFile.bytes,
+    logKey,
   }
 }
 
@@ -3807,7 +4340,7 @@ function remoteDispatchPacket(run, job, sidecar, artifacts) {
   unsigned.scoped_files = artifacts
     .filter(({ kind }) => kind === 'FILE')
     .map(({ logical_name: logicalName }) => logicalName)
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
   return {
     ...unsigned,
     packet_sha256: sha256(stableJson(unsigned, 0)),
@@ -4763,7 +5296,13 @@ async function reportCommand(positionals, options) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   const { directory, run } = loaded
   assertValidRun(run)
-  const rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
+  const rootRecord = await loadPinnedRootAttestation(loaded, options)
+  const rootAuthenticity = rootRecord.verification
+  const transparencyInclusion = await verifyPinnedTransparencyReceipt(
+    loaded,
+    options,
+    rootRecord,
+  )
   const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
     ? await loadPinnedReceiptPublicKeyId(
         options['receipt-public-key'],
@@ -4776,6 +5315,18 @@ async function reportCommand(positionals, options) {
     console.error(`Root authenticity: VERIFIED (${rootAuthenticity.key_id})`)
   } else {
     console.error('Root authenticity: UNANCHORED')
+  }
+  if (transparencyInclusion.status === 'VERIFIED') {
+    console.error(
+      `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
+    )
+    if (transparencyInclusion.continuity) {
+      console.error(
+        `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
+      )
+    }
+  } else {
+    console.error('Transparency inclusion: NOT SUPPLIED')
   }
   const markdown = renderMarkdownReport(run)
   if (outputs.markdownPath) {
@@ -4797,8 +5348,16 @@ async function compareCommand(positionals, options) {
   const current = await loadRun(requirePositional(positionals, 1, 'current run'))
   assertValidRun(baseline.run)
   assertValidRun(current.run)
-  await verifyControlBundle(baseline.directory, baseline.run)
-  await verifyControlBundle(current.directory, current.run)
+  for (const loaded of [baseline, current]) {
+    const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+      ? await loadPinnedReceiptPublicKeyId(
+          options['receipt-public-key'],
+          loaded.directory,
+          loaded.run.repository.root,
+        )
+      : undefined
+    await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  }
   const comparison = compareRuns(baseline.run, current.run)
   if (typeof options.out === 'string') {
     await writeJson(options.out, comparison)
@@ -5012,6 +5571,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'abort') return abortCommand(positionals, options)
   if (command === 'unlock') return unlockCommand(positionals, options)
   if (command === 'attest') return attestCommand(positionals, options)
+  if (command === 'publish') return publishTransparencyCommand(positionals, options)
   if (command === 'validate') return validateCommand(positionals, options)
   if (command === 'report') return reportCommand(positionals, options)
   if (command === 'compare') return compareCommand(positionals, options)
@@ -5025,7 +5585,7 @@ if (isDirectRun) {
   main().catch((error) => {
     console.error(`ERROR: ${error.message}`)
     const details = error.errors ?? error.details
-    if (details) {
+    if (Array.isArray(details)) {
       for (const issue of details) {
         console.error(`- ${issue.code ?? issue.keyword}: ${issue.instancePath || '/'} ${issue.message}`)
       }

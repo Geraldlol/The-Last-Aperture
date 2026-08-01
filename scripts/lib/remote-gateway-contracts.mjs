@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 
 import { stableJson } from './run-engine.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 
 const FINDING_SCHEMA_URL = new URL(
   '../../schemas/finding.schema.json',
@@ -436,7 +437,11 @@ function requestSemanticErrors(value) {
   const artifactIds = new Set()
   const logicalNames = new Set()
   const suppliedFiles = new Set()
-  for (const [index, artifact] of (value.artifacts ?? []).entries()) {
+  const artifacts = Array.isArray(value.artifacts) ? value.artifacts : []
+  for (const [index, artifact] of artifacts.entries()) {
+    if (artifact === null || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      continue
+    }
     const path = `/artifacts/${index}`
     if (artifactIds.has(artifact.artifact_id)) {
       errors.push(contractError(
@@ -456,18 +461,18 @@ function requestSemanticErrors(value) {
     logicalNames.add(artifact.logical_name)
     if (typeof artifact.logical_name === 'string') {
       const segments = artifact.logical_name.split('/')
-      const unsafeFileName = artifact.kind === 'FILE' && (
+      const unsafeName = (
         artifact.logical_name.startsWith('/')
         || artifact.logical_name.includes('\\')
         || /^[A-Za-z]:/.test(artifact.logical_name)
         || segments.some((segment) =>
           segment === '' || segment === '.' || segment === '..')
       )
-      if (unsafeFileName) {
+      if (unsafeName) {
         errors.push(contractError(
           'REMOTE_REQUEST_LOGICAL_NAME_UNSAFE',
           `${path}/logical_name`,
-          'FILE logical_name must be a relative POSIX path without empty, dot, or parent segments',
+          'logical_name must be a relative POSIX path without empty, dot, or parent segments',
         ))
       } else if (artifact.kind === 'FILE') {
         suppliedFiles.add(artifact.logical_name)
@@ -579,9 +584,9 @@ export function createRemoteRequestEnvelope({
   const normalizedArtifacts = (artifacts ?? [])
     .map(normalizeArtifact)
     .sort((left, right) =>
-      left.kind.localeCompare(right.kind, 'en')
-      || left.logical_name.localeCompare(right.logical_name, 'en')
-      || left.artifact_id.localeCompare(right.artifact_id, 'en'))
+      compareCanonicalStrings(left.kind, right.kind)
+      || compareCanonicalStrings(left.logical_name, right.logical_name)
+      || compareCanonicalStrings(left.artifact_id, right.artifact_id))
   const packetSha256 = requireDigest(packet?.packet_sha256, 'packet.packet_sha256')
   if (packetDigest(packet) !== packetSha256) {
     throw new RemoteGatewayContractError(

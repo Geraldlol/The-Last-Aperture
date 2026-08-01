@@ -1402,3 +1402,100 @@ test('search, graph, wide-column, warehouse, and vector clients retain engine-sp
     }
   }
 })
+
+test('an adversarial whitespace run cannot make resource-block scanning quadratic', {
+  timeout: 30_000,
+}, () => {
+  const graph = discoverDatabaseGraph([
+    text('infra/docker-compose.yml', `image:redis\n${'\n'.repeat(2 ** 20)}`),
+  ])
+
+  assert.equal(
+    graph.nodes.some((node) =>
+      node.kind === 'store' && node.engine_candidates.includes('redis')),
+    true,
+  )
+  assert.deepEqual(validateDatabaseDiscovery(graph), { valid: true, errors: [] })
+})
+
+test('a per-signature resource match cap records a gap instead of unbounded scanning', {
+  timeout: 30_000,
+}, () => {
+  const graph = discoverDatabaseGraph([
+    text('infra/docker-compose.yml', 'image:redis\n'.repeat(300)),
+  ])
+  const gap = graph.gaps.find((item) => item.code === 'resource-signature-match-cap')
+
+  assert.ok(gap, `found gaps ${graph.gaps.map((item) => item.code).join(', ')}`)
+  assert.equal(gap.subject, 'resource.container.database-image')
+  assert.equal(graph.nodes.filter((node) => node.kind === 'store').length, 256)
+  assert.deepEqual(validateDatabaseDiscovery(graph), { valid: true, errors: [] })
+})
+
+test('an unparseable package.json records a gap and a byte-order mark still parses', () => {
+  const manifest = JSON.stringify({ dependencies: { pg: '8.13.1' } }, null, 2)
+  const source = [
+    "import { Pool } from 'pg'",
+    'export const pool = new Pool({ connectionString: process.env.DATABASE_URL })',
+  ].join('\n')
+
+  const broken = discoverDatabaseGraph([
+    text('package.json', `${manifest},`),
+    text('src/db.ts', source),
+  ])
+  const gap = broken.gaps.find((item) => item.code === 'unparseable-manifest')
+  assert.ok(gap, `found gaps ${broken.gaps.map((item) => item.code).join(', ')}`)
+  assert.equal(gap.subject, 'package.json')
+  assert.equal(
+    broken.nodes.some((node) => node.subtype === 'direct-dependency'),
+    false,
+  )
+  assert.deepEqual(validateDatabaseDiscovery(broken), { valid: true, errors: [] })
+
+  const withMark = discoverDatabaseGraph([
+    text('package.json', `\uFEFF${manifest}`),
+    text('src/db.ts', source),
+  ])
+  assert.deepEqual(withMark.gaps, [])
+  assert.equal(
+    withMark.nodes.some((node) => node.subtype === 'direct-dependency'),
+    true,
+  )
+})
+
+test('binding-anchored store identity follows the canonical token, not node hash order', () => {
+  const anchored = ['a', 'c', 'e', 'h'].map((suffix) => {
+    const graph = discoverDatabaseGraph([
+      text('package.json', JSON.stringify({ dependencies: { pg: '8.13.1' } })),
+      text(`src/store-${suffix}.ts`, [
+        "import { Pool } from 'pg'",
+        'export const pool = new Pool({',
+        '  url: process.env.DATABASE_URL,',
+        '  fallback: process.env.POSTGRES_URL,',
+        '})',
+        "export const load = () => pool.query('SELECT 1')",
+      ].join('\n')),
+    ])
+    assert.equal(graph.store_candidates.length, 1)
+    const [candidate] = graph.store_candidates
+    const bindings = graph.nodes
+      .filter((node) => node.kind === 'binding')
+      .sort((left, right) => (left.node_id < right.node_id ? -1 : 1))
+    return {
+      anchor: graph.nodes
+        .find((node) => node.node_id === candidate.anchor_node_id)
+        .label,
+      lowestNodeId: bindings[0].label,
+    }
+  })
+
+  assert.deepEqual(
+    [...new Set(anchored.map(({ anchor }) => anchor))],
+    ['DATABASE_URL database binding'],
+  )
+  assert.equal(
+    anchored.some(({ anchor, lowestNodeId }) => anchor !== lowestNodeId),
+    true,
+    'the fixture no longer distinguishes canonical-token order from node hash order',
+  )
+})

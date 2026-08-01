@@ -157,6 +157,123 @@ test('lifecycle authority never invents a provider declaration for absent or fai
   }
 })
 
+test('a lens shard that failed withdraws the whole lens coverage authority', () => {
+  const shard = (index, state, authority) => ({
+    job_id: `lens:web-and-api:shard-000${index}-aaaaaaaaaaaa`,
+    kind: 'LENS',
+    lens: 'web-and-api',
+    state,
+    ...(authority ? { coverage_authority: authority } : {}),
+  })
+  const baseline = run({ findings: [] })
+  const observed = 'CONTROLLER_OBSERVED_CONSUMPTION'
+
+  for (const jobs of [
+    [shard(1, 'SUCCEEDED', observed), shard(2, 'FAILED'), shard(3, 'FAILED')],
+    [shard(1, 'FAILED'), shard(2, 'SUCCEEDED', observed), shard(3, 'SUCCEEDED', observed)],
+  ]) {
+    const comparison = compareRuns(baseline, run({
+      run_id: 'run:test:partial-shards',
+      state: 'COMPLETE_WITH_GAPS',
+      jobs,
+    }))
+    assert.equal(
+      comparison.results[0].resolution_authority,
+      'NO_CURRENT_COVERAGE_AUTHORITY',
+      'one succeeded shard cannot speak for shards that never produced',
+    )
+    assert.doesNotMatch(comparison.resolution_authority, /controller-observed byte consumption/)
+  }
+})
+
+test('lens authority is the weakest authority across every shard that ran', () => {
+  const shard = (index, authority) => ({
+    job_id: `lens:web-and-api:shard-000${index}-aaaaaaaaaaaa`,
+    kind: 'LENS',
+    lens: 'web-and-api',
+    state: 'SUCCEEDED',
+    coverage_authority: authority,
+  })
+  const baseline = run({ findings: [] })
+  const authorityFor = (jobs) => compareRuns(baseline, run({
+    run_id: 'run:test:shard-authority',
+    jobs,
+  })).results[0].resolution_authority
+
+  assert.equal(
+    authorityFor([shard(1, 'CONTROLLER_OBSERVED_CONSUMPTION'), shard(2, 'CONTROLLER_OBSERVED_CONSUMPTION')]),
+    'CONTROLLER_OBSERVED_CONSUMPTION',
+  )
+  assert.equal(
+    authorityFor([shard(1, 'REMOTE_REQUEST_ACCEPTED'), shard(2, 'REMOTE_REQUEST_ACCEPTED')]),
+    'REMOTE_REQUEST_ACCEPTED',
+  )
+  assert.equal(
+    authorityFor([shard(1, 'CONTROLLER_OBSERVED_CONSUMPTION'), shard(2, 'PROVIDER_DECLARED')]),
+    'PROVIDER_DECLARED',
+  )
+})
+
+test('dormant and skipped closure templates never withdraw a completed lens authority', () => {
+  const baseline = run({ findings: [] })
+  const comparison = compareRuns(baseline, run({
+    run_id: 'run:test:closure-templates',
+    jobs: [
+      {
+        job_id: 'lens:web-and-api:shard-0001-aaaaaaaaaaaa',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SUCCEEDED',
+        coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      },
+      {
+        job_id: 'closure:01:shard-0001-aaaaaaaaaaaa:bbbbbbbbbbbb',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SKIPPED',
+        closure_round: 1,
+      },
+      {
+        job_id: 'closure:02:shard-0001-aaaaaaaaaaaa:cccccccccccc',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'DORMANT',
+        closure_round: 2,
+      },
+    ],
+  }))
+  assert.equal(
+    comparison.results[0].resolution_authority,
+    'CONTROLLER_OBSERVED_CONSUMPTION',
+  )
+})
+
+test('resolution requires every shard of the lens, not merely one of them', () => {
+  const partial = run({
+    run_id: 'run:test:partial-resolution',
+    state: 'COMPLETE_WITH_GAPS',
+    findings: [],
+    jobs: [
+      {
+        job_id: 'lens:web-and-api:shard-0001-aaaaaaaaaaaa',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SUCCEEDED',
+        coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      },
+      {
+        job_id: 'lens:web-and-api:shard-0002-bbbbbbbbbbbb',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'FAILED',
+      },
+    ],
+  })
+  assert.equal(coverageSupportsResolution(partial, finding()), false)
+  assert.equal(compareRuns(run(), partial).counts.fixed, 0)
+  assert.equal(compareRuns(run(), partial).counts['not-observed'], 1)
+})
+
 test('lifecycle summary preserves mixed declared and observed authority', () => {
   const cryptoFinding = finding({
     candidate_id: 'cand:crypto:001',
@@ -1034,8 +1151,85 @@ test('disproved and not-reproduced candidates are preserved but not reported as 
   assert.match(report, /Withdrawn candidates/)
   assert.match(report, /DISPROVED/)
   assert.match(report, /NOT_REPRODUCED/)
-  assert.equal(sarif.runs[0].results.length, 0)
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].kind),
+    ['external', 'external'],
+  )
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].status),
+    ['accepted', 'accepted'],
+  )
+  assert.match(
+    sarif.runs[0].results[0].suppressions[0].justification,
+    /DISPROVED|NOT REPRODUCED/,
+  )
+  const properties = sarif.runs[0].invocations[0].properties
+  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 2)
+  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(properties.unverified_high_impact_claims, 2)
   assert.equal(compareRuns(run(), current).counts.unchanged, 0)
+})
+
+test('SARIF records a dropped Critical instead of emitting a clean empty result set', () => {
+  const dropped = finding({
+    candidate_id: 'cand:web:dropped',
+    claimed_impact_severity: 'Critical',
+    triage_disposition: 'dropped',
+    drop_reason: 'The cited route is unreachable in the shipped build.',
+  })
+  const merged = finding({
+    candidate_id: 'cand:web:merged',
+    claimed_impact_severity: 'Critical',
+    triage_disposition: 'merged',
+    merged_into_candidate_id: 'cand:web:dropped',
+  })
+  const sarif = renderSarif(run({ findings: [dropped, merged] }))
+  const properties = sarif.runs[0].invocations[0].properties
+
+  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 2)
+  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ properties: entry }) => entry.candidate_id),
+    ['cand:web:dropped', 'cand:web:merged'],
+  )
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ properties: entry }) => entry.triage_disposition),
+    ['dropped', 'merged'],
+  )
+  assert.equal(
+    sarif.runs[0].results[1].properties.merged_into_candidate_id,
+    'cand:web:dropped',
+  )
+  assert.match(
+    sarif.runs[0].results[0].suppressions[0].justification,
+    /DROPPED before proof: The cited route is unreachable/,
+  )
+})
+
+test('SARIF suppresses only withdrawn candidates and leaves survivors as open results', () => {
+  const survivor = finding()
+  const dropped = finding({
+    candidate_id: 'cand:web:dropped',
+    triage_disposition: 'dropped',
+    drop_reason: 'Duplicate of an accepted candidate.',
+  })
+  const sarif = renderSarif(run({ findings: [survivor, dropped] }))
+  const [first, second] = sarif.runs[0].results
+
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.equal(Object.hasOwn(first, 'suppressions'), false)
+  assert.equal(first.properties.candidate_id, 'cand:web:001')
+  assert.equal(second.suppressions.length, 1)
+  assert.equal(second.properties.candidate_id, 'cand:web:dropped')
+  assert.equal(
+    sarif.runs[0].invocations[0].properties.findings_state,
+    'FINDINGS_REPORTED',
+  )
+  assert.equal(sarif.runs[0].invocations[0].properties.withdrawn_candidates, 1)
 })
 
 test('SARIF carries stable rule IDs, locations, fingerprints and run honesty', () => {

@@ -897,7 +897,9 @@ export function renderMarkdownReport(run) {
 }
 
 function parseLocation(value) {
-  const match = /^(.*):([1-9][0-9]*)(?::([1-9][0-9]*))?$/.exec(String(value))
+  // The path is lazy so a trailing `:line:column` binds to both groups. A
+  // greedy path swallows the line and reports the column as the line.
+  const match = /^(.*?):([1-9][0-9]*)(?::([1-9][0-9]*))?$/.exec(String(value))
   if (!match) return null
   return {
     path: match[1].replaceAll('\\', '/'),
@@ -918,11 +920,16 @@ export function renderSarif(run, options = {}) {
       .filter((entry) => entry.finding !== null)
       .map((entry) => [`${entry.fingerprint}\0${entry.candidate_id}`, entry.state]),
   )
-  const findings = sortedFindings((run.findings ?? []).filter(isSurvivingFinding))
+  const allFindings = run.findings ?? []
+  const findings = sortedFindings(allFindings.filter(isSurvivingFinding))
+  const withdrawn = sortedFindings(allFindings.filter(
+    (finding) => !isSurvivingFinding(finding),
+  ))
+  const unverifiedHighImpact = allFindings.filter(isUnverifiedHighImpactClaim)
   const producedJobs = (run.jobs ?? []).filter((job) => job.producer)
   const coverageSummary = coverageProjection(run.coverage ?? {})
   const rulesByTopic = new Map()
-  for (const finding of findings) {
+  for (const finding of [...findings, ...withdrawn]) {
     if (rulesByTopic.has(finding.topic)) continue
     rulesByTopic.set(finding.topic, {
       id: finding.topic,
@@ -935,7 +942,7 @@ export function renderSarif(run, options = {}) {
     })
   }
 
-  const results = findings.map((finding) => {
+  const sarifResult = (finding) => {
     const fingerprint = findingFingerprint(finding)
     const lifecycle = lifecycleByFinding.get(`${fingerprint}\0${finding.candidate_id}`)
     const locations = (finding.location ?? [])
@@ -985,7 +992,33 @@ export function renderSarif(run, options = {}) {
         )].sort((left, right) => left.localeCompare(right, 'en')),
       },
     }
-  })
+  }
+
+  // A withdrawn candidate is a record, not an alert. SARIF suppressions are the
+  // representation that keeps it in the machine artifact CI gates on without
+  // counting it as an open result.
+  const suppressedResult = (finding) => {
+    const result = sarifResult(finding)
+    return {
+      ...result,
+      suppressions: [{
+        kind: 'external',
+        status: 'accepted',
+        justification: proofStatusDetail(finding),
+      }],
+      properties: {
+        ...result.properties,
+        triage_disposition: finding.triage_disposition ?? null,
+        merged_into_candidate_id: finding.merged_into_candidate_id ?? null,
+        drop_reason: finding.drop_reason ?? null,
+      },
+    }
+  }
+
+  const results = [
+    ...findings.map(sarifResult),
+    ...withdrawn.map(suppressedResult),
+  ]
 
   return {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
@@ -1073,6 +1106,10 @@ export function renderSarif(run, options = {}) {
           findings_state: findings.length === 0
             ? 'NO_FINDINGS_REPORTED'
             : 'FINDINGS_REPORTED',
+          withdrawn_candidates: withdrawn.length,
+          withdrawn_high_impact_candidates: withdrawn.filter((finding) =>
+            HIGH_IMPACT_SEVERITIES.has(finding.claimed_impact_severity)).length,
+          unverified_high_impact_claims: unverifiedHighImpact.length,
           data_stores: run.store_profiles?.length ?? 0,
           data_stores_not_assessed: (run.store_profiles ?? []).filter(
             ({ coverage_state: state }) => state !== 'ASSESSED',

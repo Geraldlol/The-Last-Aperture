@@ -58,6 +58,7 @@ for (const [address, prefix] of [
   ['5f00::', 16],
   ['fc00::', 7],
   ['fe80::', 10],
+  ['fec0::', 10],
   ['ff00::', 8],
 ]) {
   NON_PUBLIC_REMOTE_IPV6_ADDRESSES.addSubnet(address, prefix, 'ipv6')
@@ -69,6 +70,21 @@ export function isPublicRemoteAddress(address) {
   return family === 4
     ? !NON_PUBLIC_REMOTE_IPV4_ADDRESSES.check(address, 'ipv4')
     : !NON_PUBLIC_REMOTE_IPV6_ADDRESSES.check(address, 'ipv6')
+}
+
+export function assertPublicRemoteUrl(urlValue, label = 'remote gateway') {
+  const url = urlValue instanceof URL ? urlValue : new URL(urlValue)
+  const hostname = url.hostname.startsWith('[') && url.hostname.endsWith(']')
+    ? url.hostname.slice(1, -1)
+    : url.hostname
+  if (isIP(hostname) !== 0 && !isPublicRemoteAddress(hostname)) {
+    const error = new Error(
+      `${label} URL uses a non-public literal IP address`,
+    )
+    error.code = 'REMOTE_GATEWAY_LITERAL_IP_SCOPE_DENIED'
+    throw error
+  }
+  return url
 }
 
 export function createRemoteGatewayLookup(lookup = dnsLookup) {
@@ -113,7 +129,10 @@ export function createRemoteGatewayLookup(lookup = dnsLookup) {
   }
 }
 
-function pinnedServerIdentity(expectedSpkiSha256) {
+export function createPinnedServerIdentity(
+  expectedSpkiSha256,
+  peerLabel = 'remote gateway',
+) {
   return (hostname, certificate) => {
     const hostnameError = checkServerIdentity(hostname, certificate)
     if (hostnameError) return hostnameError
@@ -123,7 +142,7 @@ function pinnedServerIdentity(expectedSpkiSha256) {
       const actual = sha256(spki)
       if (actual !== expectedSpkiSha256) {
         const error = new Error(
-          'remote gateway TLS certificate SPKI does not match the trusted pin',
+          `${peerLabel} TLS certificate SPKI does not match the trusted pin`,
         )
         error.code = 'REMOTE_GATEWAY_TLS_PIN_MISMATCH'
         return error
@@ -131,7 +150,7 @@ function pinnedServerIdentity(expectedSpkiSha256) {
       return undefined
     } catch (error) {
       const wrapped = new Error(
-        `remote gateway TLS certificate could not be pinned: ${error.message}`,
+        `${peerLabel} TLS certificate could not be pinned: ${error.message}`,
       )
       wrapped.code = 'REMOTE_GATEWAY_TLS_PIN_INVALID'
       return wrapped
@@ -145,13 +164,13 @@ export function httpsRemoteGatewayTransport({
   headers,
 }) {
   assertValidRemoteGatewayConfig(config)
-  const url = new URL(config.gateway_url)
+  const url = assertPublicRemoteUrl(config.gateway_url)
   return new Promise((resolve, reject) => {
     const request = httpsRequest(url, {
       method: 'POST',
       agent: false,
       headers,
-      checkServerIdentity: pinnedServerIdentity(config.tls_spki_sha256),
+      checkServerIdentity: createPinnedServerIdentity(config.tls_spki_sha256),
       lookup: createRemoteGatewayLookup(),
       autoSelectFamily: false,
       timeout: config.limits.request_timeout_ms,

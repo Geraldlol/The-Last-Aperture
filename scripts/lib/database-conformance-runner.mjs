@@ -10,6 +10,7 @@ import { compareCanonicalStrings } from './canonical-order.mjs'
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/
 const CONTAINER_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{7,127}$/
+const TERMINATION_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM'])
 const PROXY_KEYS = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -119,12 +120,13 @@ export async function runDatabaseDockerCommand({
   maxOutputBytes,
   input,
   allowNonZero = false,
+  secretEnvironment,
 }) {
   const child = spawnImpl(runtimePath, args, {
     shell: false,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: sanitizedDockerEnvironment(),
+    env: { ...sanitizedDockerEnvironment(), ...secretEnvironment },
   })
   const stdout = []
   const stderr = []
@@ -257,6 +259,10 @@ function engineDefinition(engineId, manifest = databaseConformanceManifest) {
   return { ...engine, runtime }
 }
 
+function isSecretValue(value, secret) {
+  return typeof secret === 'string' && secret.length > 0 && value === secret
+}
+
 function tmpfsOption(path, size, mode = '0700') {
   return `${path}:rw,noexec,nosuid,nodev,size=${size},mode=${mode},uid=999,gid=999`
 }
@@ -334,10 +340,21 @@ export function buildDatabaseDockerCreateArgs({
     '--no-healthcheck',
     ...Object.entries(labels).map(([key, value]) => `--label=${key}=${value}`),
     ...tmpfs.map((value) => `--tmpfs=${value}`),
-    ...Object.entries(environment).map(([key, value]) => `--env=${key}=${value}`),
+    // A value-less --env delivers the secret through the child's environment;
+    // argv is world-readable through ps and /proc/<pid>/cmdline.
+    ...Object.entries(environment).map(([key, value]) =>
+      isSecretValue(value, secret) ? `--env=${key}` : `--env=${key}=${value}`),
     engine.image,
     ...definition.runtime.command,
   ]
+}
+
+export function databaseDockerCreateEnvironment({ engine, secret }) {
+  const definition = engineDefinition(engine.engine_id)
+  return Object.fromEntries(
+    Object.entries(definition.runtime.environment(secret))
+      .filter(([, value]) => isSecretValue(value, secret)),
+  )
 }
 
 export function assertSafeDatabaseImageInspection(inspection, engine) {
@@ -536,9 +553,11 @@ export function assertHardenedDatabaseContainerInspection({
 
 function canonicalEvidence(value) {
   const normalized = String(value).replaceAll(/\r\n/g, '\n').trim()
+  const observation = normalized.slice(0, 2048)
+    || 'No command output; exit status was the evidence.'
   return {
-    observation: normalized.slice(0, 2048) || 'No command output; exit status was the evidence.',
-    evidence_sha256: sha256(Buffer.from(normalized, 'utf8')),
+    observation,
+    evidence_sha256: sha256(Buffer.from(observation, 'utf8')),
   }
 }
 
@@ -631,6 +650,56 @@ async function inspectExactContainer(command, containerName) {
   )
 }
 
+function installTerminationCleanup({ cleanup, timeoutMs, onFailure }) {
+  const listeners = new Map()
+  let triggered = false
+  const release = () => {
+    for (const [signal, listener] of listeners) process.removeListener(signal, listener)
+    listeners.clear()
+  }
+  const handle = async (signal) => {
+    let failure = null
+    try {
+      const verified = await Promise.race([
+        cleanup(),
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, timeoutMs, 'UNANSWERED')
+          timer.unref?.()
+        }),
+      ])
+      if (verified === 'UNANSWERED') {
+        failure = {
+          code: 'DATABASE_CONFORMANCE_CLEANUP_TIMEOUT',
+          message: `Docker did not answer the interrupted cleanup within ${timeoutMs}ms`,
+        }
+      } else if (!verified) {
+        failure = {
+          code: 'DATABASE_CONFORMANCE_CLEANUP_UNVERIFIED',
+          message: 'Docker did not prove the exact conformance container absent',
+        }
+      }
+    } catch (error) {
+      failure = {
+        code: error?.code ?? 'DATABASE_CONFORMANCE_CLEANUP_FAILED',
+        message: error?.message ?? 'database conformance cleanup failed',
+      }
+    }
+    if (failure) onFailure(failure)
+    release()
+    process.kill(process.pid, signal)
+  }
+  for (const signal of TERMINATION_SIGNALS) {
+    const listener = () => {
+      if (triggered) return
+      triggered = true
+      void handle(signal)
+    }
+    listeners.set(signal, listener)
+    process.on(signal, listener)
+  }
+  return release
+}
+
 async function removeExactContainer({
   command,
   containerName,
@@ -719,6 +788,27 @@ export async function runDatabaseConformanceEngine({
   let scenarioExecution
   let cleanupAbsent = false
   let primaryError
+  let cleanupAttempt = null
+
+  const cleanupContainer = () => {
+    if (!imageIdentity) return Promise.resolve(true)
+    cleanupAttempt ??= removeExactContainer({
+      command: rawCommand,
+      containerName,
+      engine,
+      config,
+      runId,
+      imageId: imageIdentity.imageId,
+    })
+    return cleanupAttempt
+  }
+  const releaseTerminationCleanup = installTerminationCleanup({
+    cleanup: cleanupContainer,
+    timeoutMs: config.limits.docker_command_timeout_ms,
+    onFailure: ({ code, message }) => {
+      process.stderr.write(`${sanitizeDiagnostic(`${code}: ${message}`)}\n`)
+    },
+  })
 
   try {
     const context = await command([
@@ -781,13 +871,16 @@ export async function runDatabaseConformanceEngine({
       'DATABASE_CONFORMANCE_CONTAINER_NAME_OCCUPIED',
       'planned database conformance container name already exists',
     )
-    const created = await command(buildDatabaseDockerCreateArgs({
-      engine,
-      config,
-      runId,
-      containerName,
-      secret,
-    }))
+    const created = await command(
+      buildDatabaseDockerCreateArgs({
+        engine,
+        config,
+        runId,
+        containerName,
+        secret,
+      }),
+      { secretEnvironment: databaseDockerCreateEnvironment({ engine, secret }) },
+    )
     containerId = created.stdout.trim()
     assertion(
       SHA256_PATTERN.test(containerId),
@@ -844,14 +937,7 @@ export async function runDatabaseConformanceEngine({
   } finally {
     if (imageIdentity) {
       try {
-        cleanupAbsent = await removeExactContainer({
-          command: rawCommand,
-          containerName,
-          engine,
-          config,
-          runId,
-          imageId: imageIdentity.imageId,
-        })
+        cleanupAbsent = await cleanupContainer()
       } catch (cleanupError) {
         if (!primaryError) {
           primaryError = cleanupError instanceof DatabaseConformanceRunnerError
@@ -872,6 +958,7 @@ export async function runDatabaseConformanceEngine({
         }
       }
     }
+    releaseTerminationCleanup()
   }
 
   if (primaryError) throw primaryError

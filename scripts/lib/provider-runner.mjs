@@ -16,7 +16,9 @@ export const PROVIDER_PROTOCOL = 'docker-stdio-v1'
 export const CONSUMPTION_HMAC_DOMAIN = 'red-team-audit/provider-delivery/v1'
 
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{15,127}$/
-const CONTAINER_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{7,127}$/
+// Container names are interpolated into Docker's `name` regex filter, so the
+// charset must stay free of regex metacharacters.
+const CONTAINER_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{7,127}$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const COMMON_PACKET_FIELDS = new Set([
   'schema_version',
@@ -42,6 +44,22 @@ const COMMON_PACKET_FIELDS = new Set([
   'coverage',
   'candidate_ids',
 ])
+// Docker's default mask lists grow between daemon versions, so these assert the
+// subset whose absence is directly escape-relevant rather than exact equality.
+const MASKED_KERNEL_PATHS = [
+  '/proc/acpi',
+  '/proc/kcore',
+  '/proc/keys',
+  '/proc/scsi',
+  '/sys/firmware',
+]
+const READONLY_KERNEL_PATHS = [
+  '/proc/bus',
+  '/proc/fs',
+  '/proc/irq',
+  '/proc/sys',
+  '/proc/sysrq-trigger',
+]
 
 export class ProviderRunnerError extends Error {
   constructor(code, message, options = {}) {
@@ -195,6 +213,18 @@ function assertSafeControlName(value) {
     throw runnerError(
       'PROVIDER_ARTIFACT_INVALID',
       'CONTROL logical_name must be a bounded printable identifier',
+    )
+  }
+  if (
+    value.includes('\\')
+    || value.startsWith('/')
+    || /^[A-Za-z]:/.test(value)
+    || value.split('/').some((segment) =>
+      segment === '' || segment === '.' || segment === '..')
+  ) {
+    throw runnerError(
+      'PROVIDER_ARTIFACT_INVALID',
+      'CONTROL logical_name cannot be an absolute path or contain empty, dot, or parent segments',
     )
   }
 }
@@ -502,6 +532,55 @@ export function assertHardenedDockerInspection(inspection, config, containerName
     host.PidMode === 'private' || host.PidMode === '',
     'container PID namespace is not private',
   )
+  inspectAssertion(
+    host.UsernsMode !== 'host',
+    'container opts out of the daemon user-namespace configuration',
+  )
+  inspectAssertion(
+    host.CgroupnsMode !== 'host',
+    'container shares the host cgroup namespace',
+  )
+  inspectAssertion(emptyOrAbsent(host.Sysctls), 'container sets kernel sysctls')
+  inspectAssertion(
+    emptyOrAbsent(host.GroupAdd),
+    'container has added supplementary groups',
+  )
+  inspectAssertion(
+    host.AppArmorProfile !== 'unconfined',
+    'container runs with an unconfined AppArmor profile',
+  )
+  inspectAssertion(
+    host.Runtime === undefined
+      || host.Runtime === null
+      || host.Runtime === ''
+      || host.Runtime === 'runc',
+    'container does not use the stock runc runtime',
+  )
+  inspectAssertion(
+    host.Isolation === undefined
+      || host.Isolation === null
+      || host.Isolation === ''
+      || host.Isolation === 'default',
+    'container uses a platform isolation mode outside the hardened profile',
+  )
+  if (
+    inspection.Platform === 'linux'
+    || Array.isArray(host.MaskedPaths)
+    || Array.isArray(host.ReadonlyPaths)
+  ) {
+    const masked = new Set(Array.isArray(host.MaskedPaths) ? host.MaskedPaths : [])
+    inspectAssertion(
+      MASKED_KERNEL_PATHS.every((path) => masked.has(path)),
+      'container does not mask the escape-relevant /proc and /sys kernel surface',
+    )
+    const readOnly = new Set(
+      Array.isArray(host.ReadonlyPaths) ? host.ReadonlyPaths : [],
+    )
+    inspectAssertion(
+      READONLY_KERNEL_PATHS.every((path) => readOnly.has(path)),
+      'container does not keep the default /proc kernel paths read-only',
+    )
+  }
   inspectAssertion(host.LogConfig?.Type === 'none', 'container logging driver is not none')
   inspectAssertion(
     host.RestartPolicy?.Name === 'no',
@@ -751,6 +830,8 @@ export async function runProviderBroker(options) {
   let idleTimer
   let deliveryTimer
   let abortListener
+  // Both guards outlive this call on purpose: the caller keeps using the child
+  // stdio after the broker returns, and destroy(error) emits 'error' later.
   const readableErrorGuard = () => {}
   const writableErrorGuard = () => {}
   readable.on?.('error', readableErrorGuard)
@@ -1133,7 +1214,6 @@ export async function runProviderBroker(options) {
     clearTimeout(idleTimer)
     clearTimeout(deliveryTimer)
     if (signal && abortListener) signal.removeEventListener('abort', abortListener)
-    readable.off?.('error', readableErrorGuard)
   }
 }
 
@@ -1422,7 +1502,8 @@ function createStderrMonitor(stream, limit, abortController) {
 }
 
 function waitForChildExit(child, timeoutMs) {
-  return new Promise((resolve, reject) => {
+  let rearm = () => {}
+  const exited = new Promise((resolve, reject) => {
     let settled = false
     let timer
     const finish = (callback) => {
@@ -1431,21 +1512,29 @@ function waitForChildExit(child, timeoutMs) {
       clearTimeout(timer)
       callback()
     }
+    const arm = (limitMs) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        child.kill?.('SIGKILL')
+        finish(() => reject(runnerError(
+          'PROVIDER_DOCKER_EXIT_TIMEOUT',
+          `Docker attach process did not exit within ${limitMs}ms`,
+        )))
+      }, limitMs)
+      timer.unref?.()
+    }
+    rearm = (limitMs) => {
+      if (!settled) arm(limitMs)
+    }
     child.once('error', (error) => finish(() => reject(runnerError(
       'PROVIDER_DOCKER_SPAWN_FAILED',
       'could not attach to the provider container',
       { cause: error },
     ))))
     child.once('close', (code, signal) => finish(() => resolve({ code, signal })))
-    timer = setTimeout(() => {
-      child.kill?.('SIGKILL')
-      finish(() => reject(runnerError(
-        'PROVIDER_DOCKER_EXIT_TIMEOUT',
-        `Docker attach process did not exit within ${timeoutMs}ms`,
-      )))
-    }, timeoutMs)
-    timer.unref?.()
+    arm(timeoutMs)
   })
+  return { exited, rearm }
 }
 
 export async function cleanupDockerProviderContainer(options) {
@@ -1614,33 +1703,41 @@ export async function runDockerProvider(options) {
       config.limits.max_stderr_bytes,
       abortController,
     )
-    startExitOutcome = waitForChildExit(
+    // The provider's own work is bounded by wall_time_ms, and the broker arms
+    // that timer after this spawn, so the attach client must outlive it by one
+    // Docker command slot or our SIGKILL preempts PROVIDER_WALL_TIMEOUT.
+    const startExit = waitForChildExit(
       startChild,
-      config.limits.docker_command_timeout_ms,
-    ).then(
+      config.limits.wall_time_ms + config.limits.docker_command_timeout_ms,
+    )
+    startExitOutcome = startExit.exited.then(
       (exit) => ({ exit }),
       (error) => ({ error }),
     )
-    execution = await runProviderBroker({
-      readable: startChild.stdout,
-      writable: startChild.stdin,
-      packet,
-      artifacts,
-      config,
-      backend: {
-        type: 'OCI_DOCKER',
-        runtime_path: config.runtime_path,
-        runtime_version: runtimeVersion,
-        context: 'default',
-        image: config.image,
-        container_name: containerName,
-        container_id: createdId,
-        security_profile: 'builtin',
-      },
-      signal: abortController.signal,
-      now,
-      randomBytesImpl,
-    })
+    try {
+      execution = await runProviderBroker({
+        readable: startChild.stdout,
+        writable: startChild.stdin,
+        packet,
+        artifacts,
+        config,
+        backend: {
+          type: 'OCI_DOCKER',
+          runtime_path: config.runtime_path,
+          runtime_version: runtimeVersion,
+          context: 'default',
+          image: config.image,
+          container_name: containerName,
+          container_id: createdId,
+          security_profile: 'builtin',
+        },
+        signal: abortController.signal,
+        now,
+        randomBytesImpl,
+      })
+    } finally {
+      startExit.rearm(config.limits.docker_command_timeout_ms)
+    }
     const exitOutcome = await startExitOutcome
     startExitObserved = true
     if (exitOutcome.error) throw exitOutcome.error
@@ -1686,8 +1783,9 @@ export async function runDockerProvider(options) {
     if (startExitOutcome && !startExitObserved) {
       const exitOutcome = await startExitOutcome
       startExitObserved = true
-      if (exitOutcome.error && !primaryError) {
-        primaryError = exitOutcome.error
+      if (exitOutcome.error) {
+        if (primaryError) primaryError.exit_error = exitOutcome.error
+        else primaryError = exitOutcome.error
       }
     }
   }

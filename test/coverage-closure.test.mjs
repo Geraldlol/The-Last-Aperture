@@ -11,6 +11,11 @@ import {
   compareTriageJobs,
 } from '../scripts/lib/job-protocol.mjs'
 import { createRunPlan } from '../scripts/lib/run-engine.mjs'
+import {
+  finalizedFanoutLensRows,
+  sourceClosureGaps as closureSourceClosureGaps,
+} from '../scripts/lib/coverage-closure.mjs'
+import { sourceClosureGaps as modelSourceClosureGaps } from '../scripts/lib/coverage-model.mjs'
 
 const INPUT_SHA256 = 'a'.repeat(64)
 const CREATED_AT = new Date('2026-07-29T12:00:00.000Z')
@@ -854,4 +859,73 @@ test('legacy v2 runs retain their non-recursive completeness lifecycle', async (
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true })
   }
+})
+
+test('the contract layer and the controller share one source-closure predicate', () => {
+  assert.equal(closureSourceClosureGaps, modelSourceClosureGaps)
+})
+
+test('an unexamined canonical source file no lens claims is a source-closure gap', () => {
+  const coverage = {
+    model_version: '2.0.0',
+    policy: {},
+    denominators: [],
+    shards: [],
+    closure: { status: 'CONVERGED' },
+    inventory_records: [
+      { path: 'src/claimed.js', coverage_class: 'CANONICAL_SOURCE' },
+      { path: 'src/unclaimed.js', coverage_class: 'CANONICAL_SOURCE' },
+    ],
+    examined: ['src/claimed.js'],
+    lenses: [{
+      lens: 'web-and-api',
+      status: 'RAN',
+      applicable_paths: ['src/claimed.js'],
+      examined_paths: ['src/claimed.js'],
+    }],
+  }
+
+  assert.deepEqual(closureSourceClosureGaps(coverage), [
+    { kind: 'canonical-source-file', path: 'src/unclaimed.js' },
+  ])
+})
+
+test('source closure does not fail open on a coverage object that misses the modeled shape', () => {
+  const coverage = {
+    inventory_records: [
+      { path: 'src/unexamined.js', coverage_class: 'CANONICAL_SOURCE' },
+    ],
+    examined: [],
+    lenses: [],
+  }
+
+  assert.equal(closureSourceClosureGaps(coverage).length, 1)
+})
+
+test('terminal lens rows are reconciled from their own obligations, not the coverage duck type', () => {
+  const run = {
+    coverage: {
+      lenses: [
+        {
+          lens: 'web-and-api',
+          status: 'RAN',
+          applicable_paths: ['src/a.js', 'src/b.js'],
+          examined_paths: ['src/a.js'],
+        },
+        {
+          lens: 'legacy-lens',
+          status: 'RAN',
+          examined_paths: ['src/a.js'],
+        },
+      ],
+    },
+    jobs: [
+      { job_id: 'lens:web-and-api', kind: 'LENS', lens: 'web-and-api', state: 'SUCCEEDED' },
+      { job_id: 'lens:legacy-lens', kind: 'LENS', lens: 'legacy-lens', state: 'SUCCEEDED' },
+    ],
+  }
+
+  const rows = finalizedFanoutLensRows(run)
+  assert.equal(rows[0].status, 'NOT_ASSESSED')
+  assert.equal(rows[1].status, 'RAN')
 })

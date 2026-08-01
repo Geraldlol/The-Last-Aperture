@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import {
   isUnresolvedDatabaseDescriptor,
   routeDatabaseAdapter,
@@ -14,6 +15,7 @@ import {
   inventoryCoverageRecords,
   measureCoverageClosure,
   sourceClosureGaps,
+  uncoveredLensFilePairs,
 } from './coverage-model.mjs'
 import {
   exactCoverageGapId,
@@ -202,6 +204,26 @@ function hasOwn(object, key) {
     && Object.prototype.hasOwnProperty.call(object, key)
 }
 
+// A hand-edited run.json can hold a schema-valid gap whose identity cannot be
+// derived. Validation must reject it, not raise out of the validator, so both
+// helpers fail closed: an unidentifiable gap stays open and resolves nothing.
+function coverageGapIdOrUndefined(gap) {
+  try {
+    return exactCoverageGapId(gap)
+  } catch {
+    return undefined
+  }
+}
+
+function openCoverageGaps(coverage) {
+  const gaps = Array.isArray(coverage?.gaps) ? coverage.gaps : []
+  try {
+    return filterResolvedCoverageGaps(gaps, coverage?.resolved_gap_ids ?? [])
+  } catch {
+    return gaps
+  }
+}
+
 const CONTRACT_TIMESTAMP_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$/
 
@@ -276,7 +298,7 @@ function canonicalJson(value) {
   if (value !== null && typeof value === 'object') {
     const entries = Object.keys(value)
       .filter((key) => value[key] !== undefined)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
     return `{${entries.join(',')}}`
   }
@@ -486,6 +508,17 @@ export function isExactStageOneReplay(previous, replay) {
   return isDeepStrictEqual(expected, replay)
 }
 
+// A near-miss spelling must be read as unresolved reachability, never as a
+// named entry point: the schema rejects it, and the cap must not depend on the
+// schema having run first.
+const UNRESOLVED_REACHABILITY = /^\s*(?:unknown|contingent)/i
+const REACHABILITY_DROP_GROUNDS =
+  /\b(?:un)?reachab\w*|\bentry[ -]?points?\b|\bcallers?\b|\bcall[ -]?sites?\b|\bdead code\b|\bnever (?:called|invoked|reached)\b/i
+
+function unresolvedReachability(value) {
+  return typeof value === 'string' && UNRESOLVED_REACHABILITY.test(value)
+}
+
 function findingInvariantErrors(record) {
   const errors = []
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return errors
@@ -509,7 +542,7 @@ function findingInvariantErrors(record) {
 
   if (
     effectiveSeverity
-    && (record.reachable_from === 'unknown' || record.reachable_from?.startsWith('contingent:'))
+    && unresolvedReachability(record.reachable_from)
     && severityAbove(effectiveSeverity, 'Medium')
   ) {
     addError(
@@ -517,6 +550,23 @@ function findingInvariantErrors(record) {
       'REACHABILITY_CAP',
       '/effective_severity',
       'unknown or contingent reachability caps effective severity at Medium',
+    )
+  }
+
+  if (
+    record.triage_disposition === 'dropped'
+    && unresolvedReachability(record.reachable_from)
+    && ['Critical', 'High'].includes(claimedSeverity)
+    && (
+      typeof record.drop_reason !== 'string'
+      || REACHABILITY_DROP_GROUNDS.test(record.drop_reason)
+    )
+  ) {
+    addError(
+      errors,
+      'REACHABILITY_DROP',
+      '/drop_reason',
+      'unknown or contingent reachability is not grounds for dropping a claimed Critical or High candidate; it stays in the proof queue',
     )
   }
 
@@ -2891,16 +2941,37 @@ function runInvariantErrors(run, { final = false } = {}) {
     }
   }
 
+  if (!modeledDatabaseRun(run)) {
+    // v3 coverage invariants already report every unidentifiable gap.
+    for (const [index, gap] of (
+      Array.isArray(run.coverage?.gaps) ? run.coverage.gaps : []
+    ).entries()) {
+      try {
+        exactCoverageGapId(gap)
+      } catch (error) {
+        addError(
+          errors,
+          'COVERAGE_GAP_INVALID',
+          `/coverage/gaps/${index}`,
+          error.message,
+        )
+      }
+    }
+  }
+
   const coverageGaps = [
     ...(run.coverage?.unexamined ?? []),
-    ...filterResolvedCoverageGaps(
-      run.coverage?.gaps ?? [],
-      run.coverage?.resolved_gap_ids ?? [],
-    ),
+    ...openCoverageGaps(run.coverage),
+    ...uncoveredLensFilePairs(run.coverage ?? {}),
     ...(run.coverage?.lenses ?? []).filter((entry) => ['NOT_ASSESSED', 'FAILED'].includes(entry.status)),
     ...(run.jobs ?? []).filter((job) => job.state === 'FAILED'),
     ...(run.errors ?? []),
     ...storeProfiles.filter(({ coverage_state: state }) => state !== 'ASSESSED'),
+    ...(
+      run.coverage?.closure && run.coverage.closure.status !== 'CONVERGED'
+        ? [run.coverage.closure]
+        : []
+    ),
   ]
   if (
     ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)
@@ -3056,7 +3127,7 @@ function activeProofCandidateIds(run) {
     .filter((finding) => OPEN_DISPOSITIONS.has(finding.triage_disposition))
     .map(({ candidate_id: candidateId }) => candidateId)
     .filter((candidateId) => typeof candidateId === 'string')
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
 }
 
 function proofSchedule(run, prefix) {
@@ -3668,7 +3739,7 @@ function runTransitionErrors(previous, next) {
   )
   for (const gapId of newlyResolvedGaps) {
     const gap = nextGaps.find((candidate) =>
-      exactCoverageGapId(candidate) === gapId)
+      coverageGapIdOrUndefined(candidate) === gapId)
     const lensFileResolution = (
       gap?.kind === 'LENS_FILE'
       && completingJob?.kind === 'LENS'
@@ -4002,7 +4073,7 @@ function runTransitionErrors(previous, next) {
       : []
     const resultBoundIds = closureLensReplay
       ? [...new Set([...changedIds, ...replayIds])]
-          .sort((left, right) => left.localeCompare(right, 'en'))
+          .sort((left, right) => compareCanonicalStrings(left, right))
       : changedIds
     if (
       nextJob.state === 'SUCCEEDED'

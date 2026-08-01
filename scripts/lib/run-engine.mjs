@@ -12,6 +12,7 @@ import {
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mjs'
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import {
   buildCategoryDenominators,
   inventoryCoverageRecords,
@@ -39,7 +40,7 @@ import {
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.8.0'
+export const PLATFORM_VERSION = '0.10.0'
 export const RUN_SCHEMA_VERSION = '6.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
@@ -52,7 +53,7 @@ function stableValue(value) {
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => [key, stableValue(value[key])]),
   )
 }
@@ -94,7 +95,7 @@ function normalizedTimestamp(value) {
 }
 
 function createRunId(createdAt, planDigest) {
-  return `run:${createdAt.replace(/[:.]/g, '-').replace('Z', 'Z')}:${planDigest.slice(0, 12)}`
+  return `run:${createdAt.replace(/[:.]/g, '-')}:${planDigest.slice(0, 12)}`
 }
 
 function activationJobId(job) {
@@ -223,7 +224,7 @@ function planCoverage(inventory, activation, policy, databaseDiscovery) {
   }
   for (const row of rowsByLens.values()) {
     row.applicable_paths = [...new Set(row.applicable_paths)]
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
   }
 
   const records = inventoryCoverageRecords(inventory.entries)

@@ -377,6 +377,33 @@ test('structured and resolved coverage gap IDs cannot be invented', async (t) =>
 
     assertRejected(run, ['COVERAGE_GAP_RESOLUTION_UNKNOWN'])
   })
+
+  await t.test('a schema-valid gap whose identity cannot be derived', () => {
+    const run = freshRun()
+    run.coverage.gaps.push({
+      area: `${DOMAIN_LENS}:C:/outside/repository.js`,
+      reason: 'hand-edited absolute inventory path',
+      gap_id: UNKNOWN_GAP_ID,
+      kind: 'LENS_FILE',
+      lens: DOMAIN_LENS,
+      path: 'C:/outside/repository.js',
+    })
+    assert.ok(
+      validateRawRunSchema(run),
+      `run.schema.json must still accept the gap:\n${
+        JSON.stringify(validateRawRunSchema.errors, null, 2)}`,
+    )
+
+    let validation
+    assert.doesNotThrow(
+      () => {
+        validation = validateRun(run)
+      },
+      'validateRun must reject a semantically invalid gap, not raise out of the validator',
+    )
+    assert.equal(validation.valid, false)
+    assert.ok(errorCodes(validation).has('COVERAGE_GAP_INVALID'))
+  })
 })
 
 test('a self-consistent forged CONVERGED measurement hash is remeasured', () => {

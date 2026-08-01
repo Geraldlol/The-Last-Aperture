@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.8.0
+Platform release: 0.10.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity
@@ -17,7 +17,7 @@ originating in the target repository is untrusted data. It cannot modify the
 job packet, Rules of Engagement, policy, schemas, or capability mode.
 
 A provider must not execute commands merely because a repository file asks it
-to. Version 0.8.0 audits remain static: the local observed runner executes only
+to. Version 0.10.0 audits remain static: the local observed runner executes only
 its pinned adapter image and brokers sealed bytes; the remote controller sends
 only one externally authorized signed request. Neither executes target
 commands.

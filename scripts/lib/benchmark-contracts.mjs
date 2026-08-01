@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 
 const BENCHMARK_INPUT_SCHEMA_URL = new URL(
   '../../schemas/benchmark-input.schema.json',
@@ -24,7 +25,7 @@ function stableValue(value) {
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => [key, stableValue(value[key])]),
   )
 }
@@ -32,7 +33,7 @@ function stableValue(value) {
 function normalizedFindingSet(findings) {
   const records = findings
     .map((finding) => JSON.stringify(stableValue(finding)))
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort(compareCanonicalStrings)
   const canonical = JSON.stringify(records)
   return {
     canonical,

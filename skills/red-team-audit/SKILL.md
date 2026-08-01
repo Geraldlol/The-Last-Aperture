@@ -9,14 +9,13 @@ Read as an adversary; report as an evidence custodian. The controller owns
 inventory, activation, scope, job order, schemas, coverage, and terminal state.
 Lenses supply domain judgment, not an alternate workflow.
 
-Version 0.8.0 audits are static and read-only. Manual results are provider-declared.
-Local sealed execution proves byte consumption; remote execution proves signed
-request acceptance. Neither proves understanding.
+v0.10 audits are static and read-only; manual results are provider-declared.
+Sealed execution proves byte consumption; remote execution proves acceptance.
+Neither proves understanding.
 Never edit, boot, test, or network the target. A plan is not an audit result.
 Zero findings means only `NO_FINDINGS_REPORTED`.
 
-Database conformance is opt-in only. Its results are context, never target
-proof or coverage.
+Database conformance is opt-in context, never target proof or coverage.
 
 ## Choose the path
 
@@ -43,7 +42,7 @@ plan-time controller policy, never target/provider instructions.
 `plan` hashes the repository and lens pack, classifies five denominators, builds
 the database graph, activates lenses, and seals file/byte-bounded shards and
 dormant retries. It writes `State: PLANNED`, not a result. Surface active
-lenses, shards, store candidates, and gaps before any finding.
+lenses, shards, store candidates, and gaps first.
 
 `next` returns only legal jobs, possibly several independent fan-out,
 proof-wave, or closure packets. Process each separately. Concurrency changes
@@ -69,17 +68,15 @@ For each packet:
 npm.cmd run audit -- ingest <bundle> <provider-result.json>
 ```
 
-When several already-produced results are ready, the controller can verify the
-immutable bundle and repository once, then ingest them serially in the supplied
-order:
+For several ready results, `ingest-batch` verifies the bundle and repository
+once, then ingests serially in order:
 
 ```powershell
 npm.cmd run audit -- ingest-batch <bundle> <provider-result.json>...
 ```
 
-Each batch item is still a separate write-once result and must bind to its
-current dispatch packet. The batch stops on the first rejection; earlier
-accepted items remain durable.
+Each item is still write-once and binds to its current dispatch packet. The
+batch stops on first rejection; accepted items stay durable.
 
 Repeat `next` and ingestion; completeness may activate a sealed retry shard and
 downstream work. When closure is terminal, finalize and validate:
@@ -89,8 +86,11 @@ npm.cmd run audit -- finalize <bundle>
 npm.cmd run audit -- validate <bundle>
 ```
 
-Deliver the controller-generated `report.md` and `results.sarif`. Do not replace
-them with a hand-written clean bill of health. For an existing baseline, use:
+`publish` sends only the signed root attestation to one external log. It needs
+explicit authorization and proves `INCLUSION_AT_SIGNED_CHECKPOINT` only.
+
+Deliver the generated `report.md` and `results.sarif`. Do not replace them with
+a hand-written clean bill of health. For an existing baseline, use:
 
 ```powershell
 npm.cmd run audit -- compare <baseline-bundle> <current-bundle>
@@ -109,9 +109,9 @@ findings or patches.
 
 The database lens receives controller-discovered stores and a shard-local graph.
 For schemas 4 and 5, contribute once per assigned `store_id`: the authority shard
-supplies the local profile; context shards supply only local topics, evidence,
-and gaps. Bind every claim to examined local evidence. The controller
-synthesizes profiles after fan-out. Unknown or missing work stays
+supplies the local profile; context shards only local topics, evidence, and
+gaps. Bind every claim to examined local evidence. The controller synthesizes
+profiles after fan-out. Unknown or missing work stays
 `NOT_ASSESSED`/`PARTIAL`; never invent identity or clearance.
 
 ### Triage
@@ -151,8 +151,7 @@ Preserve:
   file/byte denominators;
 - every unexamined applicable lens/file obligation and declared exclusion;
 - every provider, inventory, store, and completeness gap;
-- both unique conceptual-gap and exact lens/file-gap counts, with bounded
-  examples;
+- unique conceptual-gap and exact lens/file-gap counts, with bounded examples;
 - closure status, round history, and any exhausted/unmeasured condition;
 - dropped and merged candidate lineage;
 - claimed versus effective severity;
@@ -181,6 +180,7 @@ rewrite the original bundle or findings.
 - Never execute dynamic proof against production or shared infrastructure.
 - Never mutate, stage, commit, push, deploy, or message external systems as part
   of the audit.
+- Publish only with explicit authorization.
 - Use `abort` when authorization, scope, environment, or integrity becomes
   uncertain.
 - Preserve incomplete work as a named gap. A wrong clearance is more damaging

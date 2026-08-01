@@ -12,7 +12,6 @@ export const DEFAULT_WORK_SHARD_LIMITS = Object.freeze({
   maxBytes: DEFAULT_WORK_SHARD_MAX_BYTES,
 })
 
-const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]+$/
 const LIMIT_KEYS = new Set(['maxFiles', 'maxBytes'])
 const RETRY_OPTION_KEYS = new Set(['parentJobId', 'lens', 'closureRound'])
