@@ -41,12 +41,22 @@ const MARKDOWN_PUNCTUATION = new Set([
   '~',
 ])
 
+// Severity and confidence are separate axes. `severityOf` is the confidence-
+// gated priority — what to act on first. `claimedSeverityOf` is how bad the
+// finding is if it is real. Reporting only the former tells a reader a claimed
+// Critical is moderate, when what is actually true is that it is unproven.
 function severityOf(finding) {
   return finding.effective_severity ?? finding.claimed_impact_severity ?? 'Info'
 }
 
+function claimedSeverityOf(finding) {
+  return finding.claimed_impact_severity ?? finding.effective_severity ?? 'Info'
+}
+
 function sortedFindings(findings) {
   return [...findings].sort((left, right) =>
+    (SEVERITY_RANK.get(claimedSeverityOf(left)) ?? 99) -
+      (SEVERITY_RANK.get(claimedSeverityOf(right)) ?? 99) ||
     (SEVERITY_RANK.get(severityOf(left)) ?? 99) -
       (SEVERITY_RANK.get(severityOf(right)) ?? 99) ||
     left.candidate_id.localeCompare(right.candidate_id, 'en'))
@@ -914,6 +924,22 @@ function sarifLevel(severity) {
   return 'note'
 }
 
+// SARIF 2.1.0 separates how bad a result is (`level`) from how urgent it is
+// (`rank`, 0-100). That is exactly the severity/confidence split, so a consumer
+// can gate on `level: error` to catch every claimed Critical, or on `rank` to
+// catch only the demonstrated ones, without the report choosing for them.
+const SARIF_RANK = new Map([
+  ['Critical', 100],
+  ['High', 80],
+  ['Medium', 50],
+  ['Low', 20],
+  ['Info', 0],
+])
+
+function sarifRank(severity) {
+  return SARIF_RANK.get(severity) ?? 0
+}
+
 export function renderSarif(run, options = {}) {
   const lifecycleByFinding = new Map(
     (options.lifecycle?.results ?? [])
@@ -961,7 +987,8 @@ export function renderSarif(run, options = {}) {
       }))
     return {
       ruleId: finding.topic,
-      level: sarifLevel(severityOf(finding)),
+      level: sarifLevel(claimedSeverityOf(finding)),
+      rank: sarifRank(severityOf(finding)),
       message: { text: `${finding.title}: ${finding.impact}` },
       locations,
       partialFingerprints: {

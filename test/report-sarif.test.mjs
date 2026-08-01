@@ -1299,3 +1299,84 @@ test('reports expose controller-owned database discovery before provider profile
   assert.equal(properties.database_discovery_unresolved, 1)
   assert.equal(properties.database_discovery_limit_gaps, 1)
 })
+
+// Severity and confidence are two axes. SARIF has a field for each: `level` is
+// how bad the finding is, `rank` is how urgent it is to act on. Collapsing both
+// into `level` reported a claimed Critical to every machine consumer as a
+// warning, which reads as "moderate" rather than as "unverified".
+
+test('SARIF level carries claimed impact, not confidence-gated priority', () => {
+  const sarif = renderSarif(run())
+  const result = sarif.runs[0].results[0]
+  assert.equal(result.properties.claimed_impact_severity, 'High')
+  assert.equal(result.properties.effective_severity, 'Medium')
+  assert.equal(
+    result.level,
+    'error',
+    'a claimed High must reach a CI gate as error even while unproven',
+  )
+})
+
+test('SARIF rank carries the confidence-gated priority', () => {
+  const result = renderSarif(run()).runs[0].results[0]
+  assert.equal(typeof result.rank, 'number')
+  assert.ok(result.rank >= 0 && result.rank <= 100, 'rank is a SARIF 0-100 score')
+  const confirmed = renderSarif(run({
+    findings: [finding({
+      claimed_impact_severity: 'High',
+      effective_severity: 'High',
+      verification_status: 'CONFIRMED',
+      proof_tier: 'T1',
+    })],
+  })).runs[0].results[0]
+  assert.ok(
+    confirmed.rank > result.rank,
+    'a demonstrated finding outranks the same claim left unproven',
+  )
+})
+
+test('an unproven Critical outranks a confirmed Medium in SARIF level', () => {
+  const critical = finding({
+    candidate_id: 'cand:web:critical',
+    claimed_impact_severity: 'Critical',
+    effective_severity: 'Medium',
+    verification_status: 'UNPROVEN',
+    proof_tier: 'T0',
+  })
+  const moderate = finding({
+    candidate_id: 'cand:web:moderate',
+    claimed_impact_severity: 'Medium',
+    effective_severity: 'Medium',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+  })
+  const results = renderSarif(run({ findings: [moderate, critical] })).runs[0].results
+  const byId = new Map(results.map((entry) => [entry.properties.candidate_id, entry]))
+  assert.equal(byId.get('cand:web:critical').level, 'error')
+  assert.equal(byId.get('cand:web:moderate').level, 'warning')
+})
+
+test('the markdown findings list sorts by claimed impact before confidence', () => {
+  // Both carry effective Medium, so the old comparator ties and falls through
+  // to candidate_id. The ids are chosen so alphabetical order is the wrong
+  // answer — otherwise this test passes without the comparator changing.
+  const critical = finding({
+    candidate_id: 'cand:web:zzz',
+    title: 'Unproven critical claim',
+    claimed_impact_severity: 'Critical',
+    effective_severity: 'Medium',
+  })
+  const moderate = finding({
+    candidate_id: 'cand:web:aaa',
+    title: 'Confirmed moderate claim',
+    claimed_impact_severity: 'Medium',
+    effective_severity: 'Medium',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+  })
+  const report = renderMarkdownReport(run({ findings: [moderate, critical] }))
+  assert.ok(
+    report.indexOf('Unproven critical claim') < report.indexOf('Confirmed moderate claim'),
+    'an unproven Critical belongs above a confirmed Medium, labelled rather than buried',
+  )
+})
