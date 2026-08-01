@@ -570,12 +570,9 @@ function findingInvariantErrors(record) {
     )
   }
 
-  // T3 was capped here because the proof broker does not exist yet, which
-  // conflates "not permitted" with "weak evidence". Availability is an RoE
-  // question; only an unanchored assertion is weak evidence.
   if (
     effectiveSeverity
-    && record.proof_tier === 'T0'
+    && ['T0', 'T3'].includes(record.proof_tier)
     && severityAbove(effectiveSeverity, 'Medium')
   ) {
     addError(
