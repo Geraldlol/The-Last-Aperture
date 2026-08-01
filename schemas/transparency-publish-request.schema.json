@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-publish-request.schema.json",
+  "title": "Red Team Audit transparency publication request",
+  "description": "Canonical exact-byte publication request for one signed root-manifest attestation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "entry"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "transparency-log-v1"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "content_sha256",
+        "content_base64"
+      ],
+      "properties": {
+        "kind": {
+          "const": "red-team-audit/root-manifest-attestation"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "content_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 262144,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

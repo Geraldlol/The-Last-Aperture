@@ -16,9 +16,10 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.8.0 adds signed remote-gateway execution and durable remote attempt
-evidence to the bounded coverage, detached root-attestation, sealed provider,
-database conformance, and controller-owned store-synthesis foundation:
+Version 0.10.0 adds externally anchored transparency-checkpoint continuity for
+signed terminal roots to the bounded coverage, detached root-attestation, sealed
+provider, remote gateway, database conformance, and controller-owned
+store-synthesis foundation:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -45,6 +46,23 @@ database conformance, and controller-owned store-synthesis foundation:
   Ed25519 execution or structured failure envelopes.
 - Detached, externally pinned Ed25519 attestations over exact terminal
   `run.json` bytes.
+- Canonical publication of only that detached attestation to one DNS-restricted,
+  TLS-SPKI-pinned HTTPS log endpoint.
+- Offline-verifiable RFC 6962-style Merkle inclusion receipts under an
+  externally pinned Ed25519 checkpoint key.
+- A separate exact HTTPS consistency endpoint with RFC 6962/9162 append-only
+  proofs between independently signed historical checkpoints.
+- An immutable, hash-chained external checkpoint journal with explicit
+  baseline initialization, compare-and-swap advancement, crash recovery, and
+  offline verification.
+- An optional reference-store high-water guard that rejects a local state
+  rollback or fork relative to a supplied external checkpoint.
+- A stateful reference HTTPS transparency log with signed immutable state,
+  exclusive local-process locking, restart recovery, durable idempotency, and
+  a dedicated real-TLS conformance gate.
+- Separate `INCLUSION_AT_SIGNED_CHECKPOINT` and conditional
+  `CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT` claims that preserve witness,
+  global non-equivocation, revocation, and trusted-time non-claims.
 - Separate `PROVIDER_DECLARED`, `CONTROLLER_OBSERVED_CONSUMPTION`, and
   `REMOTE_REQUEST_ACCEPTED` coverage authority in run, Markdown, lifecycle,
   and SARIF output.
@@ -213,9 +231,51 @@ npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
 ```
 
 The detached attestation binds the exact terminal `run.json` bytes, run
-identity, state, phase, and externally pinned Ed25519 key. It is suitable for
-independent immutable storage or later transparency publication. The platform
-does not yet publish to or claim the guarantees of a transparency log.
+identity, state, phase, and externally pinned Ed25519 key. It can optionally be
+published to a separately operated transparency log:
+
+```powershell
+npm.cmd run audit -- publish C:\audit-runs\<run-directory> `
+  C:\trusted\transparency-log-config.json `
+  --root-attestation C:\trusted\attestations\<run-id>.json `
+  --root-public-key C:\trusted\root-public.pem `
+  --transparency-checkpoint-journal C:\trusted\checkpoint-journal `
+  --initialize-transparency-checkpoint-journal `
+  --out C:\trusted\receipts\<run-id>.json
+
+npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
+  --root-attestation C:\trusted\attestations\<run-id>.json `
+  --root-public-key C:\trusted\root-public.pem `
+  --transparency-receipt C:\trusted\receipts\<run-id>.json `
+  --transparency-log-public-key C:\trusted\transparency-log-public.pem `
+  --transparency-log-origin audit-log.example/v1 `
+  --transparency-checkpoint-journal C:\trusted\checkpoint-journal
+```
+
+Publication still transmits only canonical root-attestation JSON. A verified
+receipt proves inclusion at one signed checkpoint. With a version 1.1 log
+configuration and an explicitly initialized external journal, later
+publications additionally retrieve and retain an append-only consistency proof.
+Offline validation verifies the complete retained chain without contacting the
+log. This is client-local continuity, not witness quorum, global
+non-equivocation, revocation status, or trusted time. See
+[`docs/transparency-protocol.md`](docs/transparency-protocol.md).
+
+The shipped reference implementation is a bounded conformance service, not a
+production hosted log. It requires operator-supplied TLS material, an external
+Ed25519 signing key, and a dedicated external state directory. Its signed
+local chains detect holes, truncation, replacement, and contradictory tails.
+Supplying the journal head as `trustedCheckpoint` (or canonical
+`trustedCheckpointBytes`) also prevents startup against an older or conflicting
+prefix. Without that external input, whole-directory restoration remains a
+non-claim. Composition and non-claims
+are documented in
+[`providers/reference-transparency-log/README.md`](providers/reference-transparency-log/README.md).
+Run its actual HTTPS/restart/offline-validation gate with:
+
+```powershell
+npm.cmd run test:transparency:https
+```
 
 The default fan-out bound is 64 files and 4 MiB of inventoried raw bytes per
 job, with up to three closure rounds. `--max-shard-files`,

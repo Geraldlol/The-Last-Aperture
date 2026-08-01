@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-consistency-request.schema.json",
+  "title": "Red Team Audit transparency consistency request",
+  "description": "An exact request for append-only consistency between two signed transparency-log tree sizes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "kind",
+    "first_tree_size",
+    "second_tree_size"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "protocol": {
+      "const": "transparency-log-consistency-v1"
+    },
+    "kind": {
+      "const": "red-team-audit/transparency-consistency-request"
+    },
+    "first_tree_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "second_tree_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  }
+}

@@ -18,6 +18,18 @@ import {
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { artifactKeyToken } from '../scripts/lib/artifact-names.mjs'
+import { publishTransparencyCommand } from '../scripts/audit.mjs'
+import {
+  canonicalAttestationBytes,
+  createTransparencyConsistencyProof,
+  createTransparencyInclusionReceipt,
+  projectTransparencySignedCheckpoint,
+  transparencyLeafHash,
+  transparencyNodeHash,
+} from '../scripts/lib/transparency-log-contracts.mjs'
+import {
+  openTransparencyCheckpointJournal,
+} from '../scripts/lib/transparency-checkpoint-journal.mjs'
 import {
   createRunPlan,
   writeRunPlanBundle,
@@ -127,7 +139,7 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, /^red-team-audit 0\.8\.0/m)
+  assert.match(output, /^red-team-audit 0\.10\.0/m)
   assert.match(output, /red-team-audit plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)
@@ -138,6 +150,7 @@ test('CLI help exposes only explicit platform commands', () => {
   assert.match(output, /red-team-audit run-remote/)
   assert.match(output, /red-team-audit unlock/)
   assert.match(output, /red-team-audit attest/)
+  assert.match(output, /red-team-audit publish/)
   assert.match(output, /red-team-audit validate/)
   assert.match(output, /red-team-audit benchmark/)
   assert.match(output, /never executes repository code/i)
@@ -582,6 +595,778 @@ test('CLI root attestation fails closed on active runs, partial pins, and in-bun
       internalOutput.stderr,
       /output must be outside the run bundle and target repository/i,
     )
+  })
+})
+
+async function pathExists(path) {
+  try {
+    await lstat(path)
+    return true
+  } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function prepareTransparencyContinuityFixture(root, output) {
+  const bundle = await planBundle(root, output)
+  const rootPrivateKeyPath = join(output, 'continuity-root-private.pem')
+  const rootPublicKeyPath = join(output, 'continuity-root-public.pem')
+  const rootAttestationPath = join(output, 'continuity-root-attestation.json')
+  const logPublicKeyPath = join(output, 'continuity-log-public.pem')
+  const config10Path = join(output, 'transparency-config-1.0.json')
+  const config11Path = join(output, 'transparency-config-1.1.json')
+  await writeEd25519KeyPair(rootPrivateKeyPath, rootPublicKeyPath)
+  const logKeys = generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  })
+  await writeFile(logPublicKeyPath, logKeys.publicKey, { mode: 0o600 })
+  const limits = {
+    request_timeout_ms: 30000,
+    max_clock_skew_ms: 30000,
+    max_request_bytes: 262144,
+    max_response_bytes: 262144,
+  }
+  const commonConfig = {
+    protocol: 'transparency-log-v1',
+    log_url: 'https://log.example/v1/entries',
+    log_origin: 'audit-log.example/v1',
+    log_public_key_path: logPublicKeyPath,
+    tls_spki_sha256: 'a'.repeat(64),
+    limits,
+  }
+  await Promise.all([
+    writeFile(config10Path, JSON.stringify({
+      schema_version: '1.0.0',
+      ...commonConfig,
+    })),
+    writeFile(config11Path, JSON.stringify({
+      schema_version: '1.1.0',
+      ...commonConfig,
+      consistency_url: 'https://log.example/v1/consistency',
+    })),
+  ])
+
+  execFileSync(
+    process.execPath,
+    [CLI, 'abort', bundle, '--reason', 'terminal continuity test'],
+    { encoding: 'utf8' },
+  )
+  execFileSync(
+    process.execPath,
+    [
+      CLI,
+      'attest',
+      bundle,
+      '--signing-key',
+      rootPrivateKeyPath,
+      '--out',
+      rootAttestationPath,
+    ],
+    { encoding: 'utf8' },
+  )
+
+  const attestation = JSON.parse(await readFile(rootAttestationPath, 'utf8'))
+  const firstLeaf = transparencyLeafHash(canonicalAttestationBytes(attestation))
+  const appendedLeaf = transparencyLeafHash(
+    Buffer.from('independent appended transparency entry', 'utf8'),
+  )
+  const laterLeaf = transparencyLeafHash(
+    Buffer.from('later independent transparency entry', 'utf8'),
+  )
+  const forkLeaf = transparencyLeafHash(
+    Buffer.from('conflicting appended transparency entry', 'utf8'),
+  )
+  const issuedAt = Date.now()
+  const firstReceipt = createTransparencyInclusionReceipt({
+    attestation,
+    leafIndex: 0,
+    treeSize: 1,
+    inclusionPath: [],
+    rootHash: firstLeaf,
+    origin: commonConfig.log_origin,
+    privateKeyBytes: logKeys.privateKey,
+    issuedAt: new Date(issuedAt - 3000),
+  })
+  const secondReceipt = createTransparencyInclusionReceipt({
+    attestation,
+    leafIndex: 0,
+    treeSize: 2,
+    inclusionPath: [appendedLeaf],
+    rootHash: transparencyNodeHash(firstLeaf, appendedLeaf),
+    origin: commonConfig.log_origin,
+    privateKeyBytes: logKeys.privateKey,
+    issuedAt: new Date(issuedAt - 2000),
+  })
+  const thirdReceipt = createTransparencyInclusionReceipt({
+    attestation,
+    leafIndex: 0,
+    treeSize: 3,
+    inclusionPath: [appendedLeaf, laterLeaf],
+    rootHash: transparencyNodeHash(
+      transparencyNodeHash(firstLeaf, appendedLeaf),
+      laterLeaf,
+    ),
+    origin: commonConfig.log_origin,
+    privateKeyBytes: logKeys.privateKey,
+    issuedAt: new Date(issuedAt - 1000),
+  })
+  const forkReceipt = createTransparencyInclusionReceipt({
+    attestation,
+    leafIndex: 0,
+    treeSize: 2,
+    inclusionPath: [forkLeaf],
+    rootHash: transparencyNodeHash(firstLeaf, forkLeaf),
+    origin: commonConfig.log_origin,
+    privateKeyBytes: logKeys.privateKey,
+    issuedAt: new Date(issuedAt - 1000),
+  })
+  const firstCheckpoint = projectTransparencySignedCheckpoint(firstReceipt)
+  const secondCheckpoint = projectTransparencySignedCheckpoint(secondReceipt)
+  const thirdCheckpoint = projectTransparencySignedCheckpoint(thirdReceipt)
+  const validConsistencyProof = createTransparencyConsistencyProof({
+    firstCheckpoint,
+    secondCheckpoint,
+    consistencyPath: [appendedLeaf],
+  })
+  const forkConsistencyProof = createTransparencyConsistencyProof({
+    firstCheckpoint,
+    secondCheckpoint: projectTransparencySignedCheckpoint(forkReceipt),
+    consistencyPath: [forkLeaf],
+  })
+  const firstToThirdConsistencyProof = createTransparencyConsistencyProof({
+    firstCheckpoint,
+    secondCheckpoint: thirdCheckpoint,
+    consistencyPath: [appendedLeaf, laterLeaf],
+  })
+  const secondToThirdConsistencyProof = createTransparencyConsistencyProof({
+    firstCheckpoint: secondCheckpoint,
+    secondCheckpoint: thirdCheckpoint,
+    consistencyPath: [laterLeaf],
+  })
+
+  return {
+    bundle,
+    rootPublicKeyPath,
+    rootAttestationPath,
+    logPublicKeyPath,
+    config10Path,
+    config11Path,
+    firstReceipt,
+    secondReceipt,
+    thirdReceipt,
+    forkReceipt,
+    validConsistencyProof,
+    forkConsistencyProof,
+    firstToThirdConsistencyProof,
+    secondToThirdConsistencyProof,
+    firstCheckpoint,
+    secondCheckpoint,
+    thirdCheckpoint,
+  }
+}
+
+function continuityPublishOptions(fixture, out, journal, additions = {}) {
+  return {
+    'root-attestation': fixture.rootAttestationPath,
+    'root-public-key': fixture.rootPublicKeyPath,
+    out,
+    ...(journal === undefined
+      ? {}
+      : { 'transparency-checkpoint-journal': journal }),
+    ...additions,
+  }
+}
+
+test('CLI publishes and offline-verifies an external transparency inclusion receipt', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const rootPrivateKeyPath = join(output, 'root-private.pem')
+    const rootPublicKeyPath = join(output, 'root-public.pem')
+    const rootAttestationPath = join(output, 'root-attestation.json')
+    const logPublicKeyPath = join(output, 'log-public.pem')
+    const configPath = join(output, 'transparency-config.json')
+    const receiptPath = join(output, 'inclusion-receipt.json')
+    await writeEd25519KeyPair(rootPrivateKeyPath, rootPublicKeyPath)
+    const logKeys = generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    })
+    await writeFile(logPublicKeyPath, logKeys.publicKey, { mode: 0o600 })
+    await writeFile(configPath, JSON.stringify({
+      schema_version: '1.0.0',
+      protocol: 'transparency-log-v1',
+      log_url: 'https://log.example/v1/entries',
+      log_origin: 'audit-log.example/v1',
+      log_public_key_path: logPublicKeyPath,
+      tls_spki_sha256: 'a'.repeat(64),
+      limits: {
+        request_timeout_ms: 30000,
+        max_clock_skew_ms: 30000,
+        max_request_bytes: 262144,
+        max_response_bytes: 262144,
+      },
+    }))
+
+    execFileSync(
+      process.execPath,
+      [CLI, 'abort', bundle, '--reason', 'terminal transparency test'],
+      { encoding: 'utf8' },
+    )
+    execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'attest',
+        bundle,
+        '--signing-key',
+        rootPrivateKeyPath,
+        '--out',
+        rootAttestationPath,
+      ],
+      { encoding: 'utf8' },
+    )
+
+    await publishTransparencyCommand(
+      [bundle, configPath],
+      {
+        'root-attestation': rootAttestationPath,
+        'root-public-key': rootPublicKeyPath,
+        out: receiptPath,
+      },
+      {
+        submitTransparencyLogEntry: async ({ attestation }) => {
+          const leafHash = transparencyLeafHash(
+            canonicalAttestationBytes(attestation),
+          )
+          const receipt = createTransparencyInclusionReceipt({
+            attestation,
+            leafIndex: 0,
+            treeSize: 1,
+            inclusionPath: [],
+            rootHash: leafHash,
+            origin: 'audit-log.example/v1',
+            privateKeyBytes: logKeys.privateKey,
+            issuedAt: new Date(Date.now() - 1000),
+          })
+          return { receipt }
+        },
+      },
+    )
+
+    const verified = execFileSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-attestation',
+        rootAttestationPath,
+        '--root-public-key',
+        rootPublicKeyPath,
+        '--transparency-receipt',
+        receiptPath,
+        '--transparency-log-public-key',
+        logPublicKeyPath,
+        '--transparency-log-origin',
+        'audit-log.example/v1',
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.match(verified, /Root authenticity: VERIFIED/)
+    assert.match(
+      verified,
+      /Transparency inclusion: VERIFIED \(audit-log\.example\/v1, tree 1, leaf 0\)/,
+    )
+
+    const partialPin = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-attestation',
+        rootAttestationPath,
+        '--root-public-key',
+        rootPublicKeyPath,
+        '--transparency-receipt',
+        receiptPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(partialPin.status, 1)
+    assert.match(
+      partialPin.stderr,
+      /--transparency-receipt, --transparency-log-public-key, and --transparency-log-origin must be supplied together/i,
+    )
+  })
+})
+
+test('CLI explicitly initializes and advances external transparency continuity before receipt output', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const fixture = await prepareTransparencyContinuityFixture(root, output)
+    const journalPath = join(output, 'continuity-journal')
+    const baselineReceiptPath = join(output, 'continuity-baseline-receipt.json')
+    let consistencyRequests = 0
+    const baseline = await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(
+        fixture,
+        baselineReceiptPath,
+        journalPath,
+        { 'initialize-transparency-checkpoint-journal': true },
+      ),
+      {
+        submitTransparencyLogEntry: async () => ({
+          receipt: fixture.firstReceipt,
+        }),
+        submitTransparencyConsistencyRequest: async () => {
+          consistencyRequests += 1
+          throw new Error('baseline must not request a consistency proof')
+        },
+      },
+    )
+
+    assert.equal(consistencyRequests, 0)
+    assert.equal(baseline.continuity.status, 'NOT_VERIFIED')
+    assert.equal(baseline.continuity.claim, 'CHECKPOINT_BASELINE_ONLY')
+    assert.equal(baseline.continuity.consistency, 'NOT_VERIFIED')
+    assert.deepEqual(
+      JSON.parse(await readFile(baselineReceiptPath, 'utf8')),
+      fixture.firstReceipt,
+    )
+    const baselineRecordPath = join(
+      journalPath,
+      '0000000000000000.checkpoint-journal.json',
+    )
+    const baselineRecord = JSON.parse(await readFile(baselineRecordPath, 'utf8'))
+    assert.equal(baselineRecord.sequence, 0)
+    assert.equal(baselineRecord.previous_record_sha256, null)
+    assert.equal(baselineRecord.consistency_proof, null)
+    assert.deepEqual(baselineRecord.checkpoint, fixture.firstCheckpoint)
+
+    const advancedReceiptPath = join(output, 'continuity-advanced-receipt.json')
+    const ordering = []
+    const advanced = await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(fixture, advancedReceiptPath, journalPath),
+      {
+        submitTransparencyLogEntry: async () => {
+          ordering.push('publication')
+          return { receipt: fixture.secondReceipt }
+        },
+        submitTransparencyConsistencyRequest: async ({
+          config,
+          requestDocument,
+          expectedFirstCheckpoint,
+          expectedSecondCheckpoint,
+        }) => {
+          assert.equal(await pathExists(advancedReceiptPath), false)
+          assert.equal(config.consistency_url, 'https://log.example/v1/consistency')
+          assert.deepEqual(requestDocument, {
+            schema_version: '1.0.0',
+            protocol: 'transparency-log-consistency-v1',
+            kind: 'red-team-audit/transparency-consistency-request',
+            first_tree_size: 1,
+            second_tree_size: 2,
+          })
+          assert.deepEqual(expectedFirstCheckpoint, fixture.firstCheckpoint)
+          assert.deepEqual(expectedSecondCheckpoint, fixture.secondCheckpoint)
+          assert.deepEqual(
+            (await readdir(journalPath))
+              .filter((name) => name.endsWith('.checkpoint-journal.json')),
+            ['0000000000000000.checkpoint-journal.json'],
+          )
+          ordering.push('proof')
+          return { proof: fixture.validConsistencyProof }
+        },
+        openTransparencyCheckpointJournal: async (options) => {
+          const journal = await openTransparencyCheckpointJournal(options)
+          return {
+            load: (...args) => journal.load(...args),
+            advance: async (advanceOptions) => {
+              const result = await journal.advance(advanceOptions)
+              if (advanceOptions.consistencyProof !== undefined) {
+                assert.equal(await pathExists(advancedReceiptPath), false)
+                ordering.push('journal')
+              }
+              return result
+            },
+            continuityForCheckpoint: (...args) =>
+              journal.continuityForCheckpoint(...args),
+            close: (...args) => journal.close(...args),
+          }
+        },
+      },
+    )
+
+    assert.deepEqual(ordering, ['publication', 'proof', 'journal'])
+    assert.equal(advanced.continuity.status, 'VERIFIED')
+    assert.equal(
+      advanced.continuity.claim,
+      'CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT',
+    )
+    assert.equal(
+      advanced.continuity.consistency,
+      'CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT',
+    )
+    assert.deepEqual(
+      JSON.parse(await readFile(advancedReceiptPath, 'utf8')),
+      fixture.secondReceipt,
+    )
+    const advancedRecord = JSON.parse(await readFile(join(
+      journalPath,
+      '0000000000000001.checkpoint-journal.json',
+    ), 'utf8'))
+    assert.equal(advancedRecord.sequence, 1)
+    assert.match(advancedRecord.previous_record_sha256, /^[a-f0-9]{64}$/)
+    assert.deepEqual(advancedRecord.checkpoint, fixture.secondCheckpoint)
+    assert.deepEqual(
+      advancedRecord.consistency_proof,
+      fixture.validConsistencyProof,
+    )
+
+    const offlineJournalNames = (await readdir(journalPath)).sort()
+    await rename(fixture.config11Path, `${fixture.config11Path}.offline`)
+    const verificationArguments = [
+      fixture.bundle,
+      '--root-attestation',
+      fixture.rootAttestationPath,
+      '--root-public-key',
+      fixture.rootPublicKeyPath,
+      '--transparency-receipt',
+      advancedReceiptPath,
+      '--transparency-log-public-key',
+      fixture.logPublicKeyPath,
+      '--transparency-log-origin',
+      'audit-log.example/v1',
+      '--transparency-checkpoint-journal',
+      journalPath,
+    ]
+    const validated = spawnSync(
+      process.execPath,
+      [CLI, 'validate', ...verificationArguments, '--json'],
+      { encoding: 'utf8' },
+    )
+    assert.equal(validated.status, 0, validated.stderr)
+    const validation = JSON.parse(validated.stdout)
+    assert.equal(validation.valid, true)
+    assert.equal(validation.transparency_inclusion.status, 'VERIFIED')
+    assert.equal(
+      validation.transparency_inclusion.consistency,
+      'CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT',
+    )
+    assert.equal(
+      validation.transparency_inclusion.continuity.claim,
+      'CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT',
+    )
+
+    const reported = spawnSync(
+      process.execPath,
+      [CLI, 'report', ...verificationArguments],
+      { encoding: 'utf8' },
+    )
+    assert.equal(reported.status, 0, reported.stderr)
+    assert.match(reported.stdout, /# Red Team Audit Report/)
+    assert.match(
+      reported.stderr,
+      /Checkpoint continuity: CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT/,
+    )
+    assert.deepEqual((await readdir(journalPath)).sort(), offlineJournalNames)
+  })
+})
+
+test('CLI republishes when a concurrent journal advance omits its first receipt checkpoint', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const fixture = await prepareTransparencyContinuityFixture(root, output)
+    const journalPath = join(output, 'concurrent-ahead-journal')
+    await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(
+        fixture,
+        join(output, 'concurrent-ahead-baseline.json'),
+        journalPath,
+        { 'initialize-transparency-checkpoint-journal': true },
+      ),
+      {
+        submitTransparencyLogEntry: async () => ({
+          receipt: fixture.firstReceipt,
+        }),
+      },
+    )
+
+    const competingJournal = await openTransparencyCheckpointJournal({
+      directory: journalPath,
+      expectedOrigin: 'audit-log.example/v1',
+      publicKeyBytes: await readFile(fixture.logPublicKeyPath),
+      maxClockSkewMs: 30000,
+    })
+    try {
+      await competingJournal.advance({
+        expectedHead: fixture.firstCheckpoint,
+        checkpoint: fixture.thirdCheckpoint,
+        consistencyProof: fixture.firstToThirdConsistencyProof,
+      })
+    } finally {
+      await competingJournal.close()
+    }
+    const journalNamesBefore = (await readdir(journalPath)).sort()
+
+    const receiptPath = join(output, 'concurrent-ahead-receipt.json')
+    let publications = 0
+    let consistencyRequests = 0
+    const result = await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(fixture, receiptPath, journalPath),
+      {
+        submitTransparencyLogEntry: async () => {
+          publications += 1
+          if (publications === 1) return { receipt: fixture.secondReceipt }
+          if (publications === 2) return { receipt: fixture.thirdReceipt }
+          throw new Error('publication must converge after one idempotent retry')
+        },
+        submitTransparencyConsistencyRequest: async () => {
+          consistencyRequests += 1
+          throw new Error('an ahead journal must not request a reverse proof')
+        },
+      },
+    )
+
+    assert.equal(publications, 2)
+    assert.equal(consistencyRequests, 0)
+    assert.equal(result.continuity.status, 'VERIFIED')
+    assert.equal(
+      result.continuity.claim,
+      'CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT',
+    )
+    assert.deepEqual(
+      JSON.parse(await readFile(receiptPath, 'utf8')),
+      fixture.thirdReceipt,
+    )
+    assert.deepEqual((await readdir(journalPath)).sort(), journalNamesBefore)
+  })
+})
+
+test('CLI preserves a historical checkpoint fork classification without republishing', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const fixture = await prepareTransparencyContinuityFixture(root, output)
+    const journalPath = join(output, 'historical-fork-journal')
+    await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(
+        fixture,
+        join(output, 'historical-fork-baseline.json'),
+        journalPath,
+        { 'initialize-transparency-checkpoint-journal': true },
+      ),
+      {
+        submitTransparencyLogEntry: async () => ({
+          receipt: fixture.firstReceipt,
+        }),
+      },
+    )
+
+    const retainedJournal = await openTransparencyCheckpointJournal({
+      directory: journalPath,
+      expectedOrigin: 'audit-log.example/v1',
+      publicKeyBytes: await readFile(fixture.logPublicKeyPath),
+      maxClockSkewMs: 30000,
+    })
+    try {
+      await retainedJournal.advance({
+        expectedHead: fixture.firstCheckpoint,
+        checkpoint: fixture.secondCheckpoint,
+        consistencyProof: fixture.validConsistencyProof,
+      })
+      await retainedJournal.advance({
+        expectedHead: fixture.secondCheckpoint,
+        checkpoint: fixture.thirdCheckpoint,
+        consistencyProof: fixture.secondToThirdConsistencyProof,
+      })
+    } finally {
+      await retainedJournal.close()
+    }
+    const journalNamesBefore = (await readdir(journalPath)).sort()
+    const receiptPath = join(output, 'historical-fork-receipt.json')
+    let publications = 0
+
+    await assert.rejects(
+      publishTransparencyCommand(
+        [fixture.bundle, fixture.config11Path],
+        continuityPublishOptions(fixture, receiptPath, journalPath),
+        {
+          submitTransparencyLogEntry: async () => {
+            publications += 1
+            if (publications > 1) {
+              throw new Error('a confirmed historical fork must not be retried')
+            }
+            return { receipt: fixture.forkReceipt }
+          },
+        },
+      ),
+      (error) => {
+        assert.equal(
+          error.code,
+          'TRANSPARENCY_CHECKPOINT_JOURNAL_FORK',
+        )
+        assert.match(
+          error.message,
+          /publication may already be durable.*conflicts with the journal root at the same tree size/is,
+        )
+        return true
+      },
+    )
+
+    assert.equal(publications, 1)
+    assert.equal(await pathExists(receiptPath), false)
+    assert.deepEqual((await readdir(journalPath)).sort(), journalNamesBefore)
+  })
+})
+
+test('CLI continuity flags and failed proofs leave the external journal and receipt output unchanged', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const fixture = await prepareTransparencyContinuityFixture(root, output)
+    let unexpectedPublications = 0
+    const rejectBeforePublication = {
+      submitTransparencyLogEntry: async () => {
+        unexpectedPublications += 1
+        return { receipt: fixture.firstReceipt }
+      },
+    }
+
+    const initWithoutJournalOutput = join(output, 'init-without-journal.json')
+    await assert.rejects(
+      publishTransparencyCommand(
+        [fixture.bundle, fixture.config11Path],
+        continuityPublishOptions(
+          fixture,
+          initWithoutJournalOutput,
+          undefined,
+          { 'initialize-transparency-checkpoint-journal': true },
+        ),
+        rejectBeforePublication,
+      ),
+      /--initialize-transparency-checkpoint-journal requires --transparency-checkpoint-journal/i,
+    )
+    assert.equal(await pathExists(initWithoutJournalOutput), false)
+
+    const legacyJournalPath = join(output, 'legacy-config-journal')
+    const legacyOutput = join(output, 'legacy-config-receipt.json')
+    await assert.rejects(
+      publishTransparencyCommand(
+        [fixture.bundle, fixture.config10Path],
+        continuityPublishOptions(
+          fixture,
+          legacyOutput,
+          legacyJournalPath,
+          { 'initialize-transparency-checkpoint-journal': true },
+        ),
+        rejectBeforePublication,
+      ),
+      /requires a version 1\.1 transparency configuration with consistency_url/i,
+    )
+    assert.equal(await pathExists(legacyOutput), false)
+    assert.equal(await pathExists(legacyJournalPath), false)
+
+    const journalPath = join(output, 'failure-continuity-journal')
+    const missingInitOutput = join(output, 'missing-init-receipt.json')
+    await assert.rejects(
+      publishTransparencyCommand(
+        [fixture.bundle, fixture.config11Path],
+        continuityPublishOptions(fixture, missingInitOutput, journalPath),
+        rejectBeforePublication,
+      ),
+      /checkpoint journal is empty.*--initialize-transparency-checkpoint-journal/i,
+    )
+    assert.equal(unexpectedPublications, 0)
+    assert.equal(await pathExists(missingInitOutput), false)
+    assert.deepEqual(await readdir(journalPath), [])
+
+    const baselineOutput = join(output, 'failure-baseline-receipt.json')
+    await publishTransparencyCommand(
+      [fixture.bundle, fixture.config11Path],
+      continuityPublishOptions(
+        fixture,
+        baselineOutput,
+        journalPath,
+        { 'initialize-transparency-checkpoint-journal': true },
+      ),
+      {
+        submitTransparencyLogEntry: async () => ({
+          receipt: fixture.firstReceipt,
+        }),
+      },
+    )
+    const baselineRecordPath = join(
+      journalPath,
+      '0000000000000000.checkpoint-journal.json',
+    )
+    const baselineBytes = await readFile(baselineRecordPath)
+    const baselineNames = (await readdir(journalPath)).sort()
+    const poisonedOutput = join(journalPath, 'receipt-must-not-live-here.json')
+    await assert.rejects(
+      publishTransparencyCommand(
+        [fixture.bundle, fixture.config11Path],
+        continuityPublishOptions(fixture, poisonedOutput, journalPath),
+        rejectBeforePublication,
+      ),
+      /receipt output must be outside the checkpoint journal directory/i,
+    )
+    assert.equal(unexpectedPublications, 0)
+    assert.equal(await pathExists(poisonedOutput), false)
+    const truncatedProof = {
+      ...structuredClone(fixture.validConsistencyProof),
+      consistency_path: [],
+    }
+    const failures = [
+      {
+        label: 'unavailable',
+        pattern: /publication may already be durable.*consistency transport failed/is,
+        submit: async () => {
+          throw new Error('consistency transport failed')
+        },
+      },
+      {
+        label: 'truncated',
+        pattern: /not a valid consistency proof/i,
+        submit: async () => ({ proof: truncatedProof }),
+      },
+      {
+        label: 'fork',
+        pattern: /proof does not bind the expected and proposed checkpoints/i,
+        submit: async () => ({ proof: fixture.forkConsistencyProof }),
+      },
+    ]
+
+    for (const failure of failures) {
+      const failedOutput = join(output, `${failure.label}-receipt.json`)
+      await assert.rejects(
+        publishTransparencyCommand(
+          [fixture.bundle, fixture.config11Path],
+          continuityPublishOptions(fixture, failedOutput, journalPath),
+          {
+            submitTransparencyLogEntry: async () => ({
+              receipt: fixture.secondReceipt,
+            }),
+            submitTransparencyConsistencyRequest: failure.submit,
+          },
+        ),
+        failure.pattern,
+        failure.label,
+      )
+      assert.equal(await pathExists(failedOutput), false, failure.label)
+      assert.deepEqual(
+        (await readdir(journalPath)).sort(),
+        baselineNames,
+        failure.label,
+      )
+      assert.deepEqual(
+        await readFile(baselineRecordPath),
+        baselineBytes,
+        failure.label,
+      )
+    }
   })
 })
 

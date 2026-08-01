@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-checkpoint-journal-record.schema.json",
+  "title": "Red Team Audit external checkpoint-journal record",
+  "description": "One immutable controller-owned record anchoring a signed transparency checkpoint and its continuity from the preceding record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "sequence",
+    "previous_record_sha256",
+    "checkpoint",
+    "consistency_proof"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/transparency-checkpoint-journal-record"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740990
+    },
+    "previous_record_sha256": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "checkpoint": {
+      "$ref": "https://red-team-audit.dev/schemas/transparency-signed-checkpoint.schema.json"
+    },
+    "consistency_proof": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "https://red-team-audit.dev/schemas/transparency-consistency-proof.schema.json"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "sequence": {
+            "const": 0
+          }
+        },
+        "required": [
+          "sequence"
+        ]
+      },
+      "then": {
+        "properties": {
+          "previous_record_sha256": {
+            "type": "null"
+          },
+          "consistency_proof": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "sequence": {
+            "minimum": 1
+          },
+          "previous_record_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "consistency_proof": {
+            "$ref": "https://red-team-audit.dev/schemas/transparency-consistency-proof.schema.json"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-inclusion-receipt.schema.json",
+  "title": "Red Team Audit transparency inclusion receipt",
+  "description": "An offline-verifiable Merkle inclusion proof under an Ed25519-signed transparency-log checkpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "entry",
+    "leaf_index",
+    "inclusion_path",
+    "checkpoint",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/transparency-inclusion-receipt"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "content_sha256",
+        "leaf_hash"
+      ],
+      "properties": {
+        "kind": {
+          "const": "red-team-audit/root-manifest-attestation"
+        },
+        "content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "leaf_hash": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "leaf_index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740990
+    },
+    "inclusion_path": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tree_size",
+        "root_hash",
+        "issued_at",
+        "signing"
+      ],
+      "properties": {
+        "origin": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+        },
+        "tree_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "root_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "signing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "key_id"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "Ed25519"
+            },
+            "key_id": {
+              "type": "string",
+              "pattern": "^ed25519:[a-f0-9]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 88,
+      "maxLength": 88,
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    }
+  }
+}
