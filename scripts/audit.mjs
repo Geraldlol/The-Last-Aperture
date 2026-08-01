@@ -1520,10 +1520,10 @@ export async function verifyControlBundle(
     throw new Error('policy artifact does not match the run provenance')
   }
   if (
-    !['static', 'remote_static'].includes(policy.mode)
-    || run.capability_mode !== 'STATIC'
+    !['static', 'remote_static', 'test'].includes(policy.mode)
+    || !['STATIC', 'TEST_EXECUTION'].includes(run.capability_mode)
   ) {
-    throw new Error('0.10.0 can dispatch and ingest only STATIC runs')
+    throw new Error('0.10.0 can dispatch and ingest only STATIC and TEST_EXECUTION runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -3208,9 +3208,9 @@ async function planCommand(positionals, options) {
       workspaceRoot: targetRoot,
       policySource: 'external',
     })
-    if (!['static', 'remote_static'].includes(policy.mode)) {
+    if (!['static', 'remote_static', 'test'].includes(policy.mode)) {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.10.0',
+        'local_dynamic Rules of Engagement require the T2 boot broker, which is not available in 0.10.0',
       )
     }
     if (policy.mode === 'remote_static' && !sealSource) {

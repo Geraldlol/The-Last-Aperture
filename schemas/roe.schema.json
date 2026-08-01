@@ -156,6 +156,51 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "test"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "execute": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              },
+              "write_file": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              },
+              "network": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {

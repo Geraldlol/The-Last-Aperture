@@ -422,6 +422,26 @@ function buildNormalizedPolicy(rawPolicy, options) {
       'remote_static mode requires network and permits neither write_file nor execute',
     )
   }
+  // Rail 1 confines targets to the tree and localhost, and rail 3 confines
+  // proof writes to a security leaf. Both are enforced here rather than left to
+  // prose, because test mode is the first mode that can write and execute.
+  if (raw.mode === 'test') {
+    const rootsAreSecurityLeaves = capabilities.write_file.roots.every(
+      (root) => root.split('/').includes('security'),
+    )
+    if (
+      !capabilities.execute.enabled
+      || !capabilities.write_file.enabled
+      || capabilities.network.enabled
+      || !rootsAreSecurityLeaves
+    ) {
+      issue(
+        'capabilities',
+        'TEST_MODE_CONTRADICTION',
+        'test mode requires execute and write_file under a security leaf, and forbids network',
+      )
+    }
+  }
 
   return {
     schema_version: '1.0',

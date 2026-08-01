@@ -27,11 +27,16 @@ function jsonFixture(name) {
   return JSON.parse(fixture(name))
 }
 
+// local_dynamic is the mode with no capability contradictions of its own, which
+// is what a fixture exercising the kernel generically needs. It was 'test'
+// until test mode acquired its own constraints — execute and write_file
+// required, network forbidden — which this fixture deliberately violates in
+// order to exercise network authorization.
 function explicitPolicy() {
   return {
     schema_version: '1.0',
     policy_id: 'test-policy',
-    mode: 'test',
+    mode: 'local_dynamic',
     workspace_root: ROOT,
     capabilities: {
       read_file: {
