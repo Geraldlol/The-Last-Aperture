@@ -1584,9 +1584,35 @@ Shared harness components are referenced by name and not restated here: the **re
 
 **Tier rule, and the honest headline for this lens.** T1 is a proof the repository's own test command executes. T2 requires the auditor to stand up infrastructure the repository does not already stand up, and the user is asked every time.
 
-**Apex tests execute only inside an org, and an org is a remote host.** Under this skill's hard rails the auditor writes the Apex test and does not run it. **Every Apex recipe below therefore lands at T3 UNPROVEN, capped at Medium**, unless the user explicitly runs `sf apex run test` themselves and pastes the result. That is not a defect in the recipes; it is the rail, and it must be stated in the report's coverage block every run rather than left for the reader to infer. R3 below is the one proof in this lens that actually executes locally, and it should be foregrounded for exactly that reason.
+**Apex tests execute only inside an org, and an org is a remote host.** Under this skill's hard rails the auditor writes the Apex test and does not run it, so **every Apex recipe's behavioural half lands at T3 UNPROVEN, capped at Medium**, unless the user explicitly runs `sf apex run test` themselves and pastes the result. That is not a defect in the recipes; it is the rail, and it must be stated in the report's coverage block every run rather than left for the reader to infer.
 
-### R1 — Two-subject authorization sweep (Apex; T3 UNPROVEN unless the user runs it)
+**Do not read that as "Apex is unauditable here."** It is a statement about *behavioural* proof, not about the class of finding. Declarations in the checkout decide most authorization questions on their own: sharing keywords, query modes, `viewAllRecords`/`modifyAllRecords` grants, and object sharing models are all in the repository and all computable. R1's static half and the guest variant both reach **T1** offline, as does R3. Where a recipe has a computable half, run it and report at its tier — a capped behavioural half is not a reason to skip the class, and treating it as one has measurably cost this lens its largest finding category.
+
+### R1 — Entry-point authorization (static half T1; behavioural half T3)
+
+**Run the static half first, and never let the dynamic half's tier stand in for the whole recipe.** Most of what R1 asks — *can a user reach a record the sharing model should hide?* — is decided by declarations in the checkout, not by runtime behaviour. Those cases are computable offline and are **T1**, by the same method the guest variant below uses. Only the residue needs an org.
+
+Treating the whole recipe as T3 has a measurable cost. On a real 631-class org the static rule finds ten unenforced entry points; an audit that read R1 as "capped at Medium, unprovable" reported zero Apex authorization findings and spent its effort on metadata instead. The tier label suppressed the class, not just its grade.
+
+**The static rule.** For each Apex class containing `@AuraEnabled`, `@RestResource`, `@InvocableMethod`, or `webservice static`, and excluding `@isTest` classes, the entry point is unenforced when **both**:
+
+1. the class declares `without sharing`, or declares no sharing keyword at all — an undeclared class entered directly from Lightning or REST runs in system mode, and `inherited sharing` entered directly runs *with* sharing and is therefore not a hit; and
+2. it runs a SOQL query with no user-mode guard — none of `WITH USER_MODE`, `WITH SECURITY_ENFORCED`, `AccessLevel.USER_MODE`, `Security.stripInaccessible`, or an explicit `isAccessible()`/`isQueryable()` check.
+
+Escalate the grade where a permission set or profile in the checkout grants `viewAllRecords` or `modifyAllRecords` on an object the class queries: the sharing model is then irrelevant to reachability, and this is computable from the same metadata the guest variant reads.
+
+**Assert both directions, as counts, per the detector-and-fixture-pair runner.** `detect(vulnerable) == 1` on a fixture with one unenforced entry point, and `detect(clean) == 0` on the same class with `with sharing` added. Four traps, each of which produces a green result on vulnerable code:
+
+- **Iterate methods, not files.** The failure message names class *and* method. A rule reported at file granularity hides the second unenforced method in a class whose first one you fixed.
+- **The undeclared case is absence-shaped.** A rule that fires on a *missing* `with sharing` passes by matching nothing when the sweep is misconfigured. Assert it fires on a fixture with the declaration deliberately removed.
+- **Exclude `@isTest` explicitly and assert the exclusion.** Test classes are routinely `without sharing` by design and will dominate the result set otherwise.
+- **Assert the non-test entry-point population is non-empty.** A sweep that matches zero classes passes perfectly and proves nothing.
+
+**Fails on:** `without sharing` or no declaration, plus a bare `[SELECT …]`. **Passes on:** `with sharing`, `inherited sharing` at the entry point, or any user-mode guard on every query.
+
+**What the static half cannot decide, and must not claim.** Whether a filter in the method body correctly scopes to the running user. A `with sharing` class can still leak by building a predicate from a caller-supplied Id, and a `without sharing` class can be correct because it filters explicitly. The static rule reports *unenforced declaration plus unguarded query*, which is a defect in its own right; it does not report *proven cross-tenant read*. That claim needs the dynamic half.
+
+**The dynamic half (Apex; T3 UNPROVEN unless the user runs it).**
 
 Build two subjects once — an owning user with a record, and a second user with no share to it — using the **two-subject fixture**, and seed the record with a distinctive marker from the **canary fixture set**. Then call each entry point as the second subject and assert **both** that the record is absent from the result **and** that the marker appears nowhere in the returned payload.
 
@@ -1637,7 +1663,7 @@ Enumerate the components with the **registry-driven enumerator** over the LWC bu
 
 Name these in the coverage block rather than letting silence imply safety.
 
-- **Every Apex behavior**, under the rails above, unless the user runs the tests.
+- **Apex runtime behavior** — whether a filter in a method body correctly scopes to the running user — unless the user runs the tests. This does *not* cover the declaration-level authorization questions R1's static half decides offline; those are reportable at T1 and must not be parked here.
 - **Org-wide defaults for standard objects only.** These decide whether a sharing finding is real at all, and for a **custom** object they are in the checkout — `<sharingModel>` and `<externalSharingModel>` in `objects/X__c/X__c.object-meta.xml` — so a custom-object OWD must never appear in this block. Report only the standard objects, and only where Sharing Settings were not retrieved.
 - **Permission set and profile assignment**, which decides who a grant actually reaches.
 - **The live guest-user posture** — assigned permission sets and org guest-hardening settings.
