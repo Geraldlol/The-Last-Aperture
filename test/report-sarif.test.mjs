@@ -1073,7 +1073,7 @@ test('Markdown report separates claimed severity from proof-backed status', () =
   )
 
   assert.match(report, /Claimed severity: `High`/)
-  assert.match(report, /Effective severity: `Medium`/)
+  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
   assert.match(report, /Proof tier: `T0`/)
   assert.match(report, /Proof status: UNPROVEN.*Static mode/)
   assert.match(summary, /cand:web:001/)
@@ -1125,7 +1125,10 @@ test('Markdown report neutralizes provider-controlled markup and line breaks', (
   assert.match(report, /&lt;script&gt;/)
   assert.match(
     report,
-    /^### Medium — Legitimate title \\#\\# Forged heading �exe\.txt &lt;img/m,
+    // The severity and confidence tokens come from controlled enums and are
+    // emitted unescaped; everything after the em dash is provider text and must
+    // still arrive escaped.
+    /^### High \(unproven\) — Legitimate title \\#\\# Forged heading �exe\.txt &lt;img/m,
   )
   assert.equal((report.match(/^## Findings$/gm) ?? []).length, 1)
   assert.equal((report.match(/^## Coverage$/gm) ?? []).length, 1)
@@ -1379,4 +1382,70 @@ test('the markdown findings list sorts by claimed impact before confidence', () 
     report.indexOf('Unproven critical claim') < report.indexOf('Confirmed moderate claim'),
     'an unproven Critical belongs above a confirmed Medium, labelled rather than buried',
   )
+})
+
+// The report headline must state how bad the finding is, qualified by how well
+// established it is. Leading with the confidence-gated value told a reader a
+// claimed Critical was "Medium", which reads as moderate rather than unverified.
+
+test('a finding heading leads with claimed impact, qualified by confidence', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({
+      title: 'Unproven critical claim',
+      claimed_impact_severity: 'Critical',
+      effective_severity: 'Medium',
+      verification_status: 'UNPROVEN',
+    })],
+  }))
+  assert.match(report, /^### Critical \(unproven\) — Unproven critical claim/m)
+  assert.doesNotMatch(report, /^### Medium — Unproven critical claim/m)
+})
+
+test('a confirmed finding says so in its heading', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({
+      title: 'Confirmed claim',
+      claimed_impact_severity: 'High',
+      effective_severity: 'High',
+      verification_status: 'CONFIRMED',
+      proof_tier: 'T1',
+    })],
+  }))
+  assert.match(report, /^### High \(confirmed\) — Confirmed claim/m)
+})
+
+test('the severity summary counts claimed impact, not gated priority', () => {
+  const report = renderMarkdownReport(run({
+    findings: [
+      finding({ candidate_id: 'cand:a', claimed_impact_severity: 'Critical', effective_severity: 'Medium' }),
+      finding({ candidate_id: 'cand:b', claimed_impact_severity: 'Critical', effective_severity: 'Medium' }),
+    ],
+  }))
+  // Columns are Critical, High, Medium, Low, Info. Two claimed Criticals must
+  // appear in the Critical column, not collapsed into Medium by the gate.
+  assert.match(report, /\| 2 \| 0 \| 0 \| 0 \| 0 \|/)
+  assert.doesNotMatch(report, /\| 0 \| 0 \| 2 \| 0 \| 0 \|/)
+})
+
+test('the gated value is not labelled a severity', () => {
+  const report = renderMarkdownReport(run())
+  assert.doesNotMatch(report, /Effective severity:/)
+  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
+})
+
+test('a forged verification status cannot inject markup into a heading', () => {
+  // headingSeverity emits its qualifier unescaped, so it resolves through a
+  // fixed map. Anything not in that map is dropped, never rendered.
+  for (const forged of [
+    '## Forged heading',
+    'UNPROVEN`) — <script>alert(1)</script>',
+    'CONFIRMED\n## Injected',
+  ]) {
+    const report = renderMarkdownReport(run({
+      findings: [finding({ title: 'Injection probe', verification_status: forged })],
+    }))
+    assert.match(report, /^### High — Injection probe$/m, 'unknown status must be dropped')
+    assert.doesNotMatch(report, /^#{1,6} Forged/m)
+    assert.doesNotMatch(report, /^#{1,6} Injected/m)
+  }
 })

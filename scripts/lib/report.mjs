@@ -150,13 +150,36 @@ function isUnverifiedHighImpactClaim(finding) {
     && finding.verification_status !== 'CONFIRMED'
 }
 
+// Counted by claimed impact, so the summary states the risk profile. The
+// confidence-gated view is served by the unverified-high-impact table below and
+// by SARIF rank; collapsing both into one row reported three Criticals as zero.
 function countBySeverity(findings) {
   return Object.fromEntries(
     [...SEVERITY_RANK.keys()].map((severity) => [
       severity,
-      findings.filter((finding) => severityOf(finding) === severity).length,
+      findings.filter((finding) => claimedSeverityOf(finding) === severity).length,
     ]),
   )
+}
+
+// "Critical (unproven)" is the whole point: how bad it is if real, and how well
+// established that is, in the one line a reader scans.
+//
+// The qualifier is emitted unescaped, so it is resolved through a fixed map
+// rather than derived from the record. A provider-supplied status that is not
+// one of these is dropped instead of rendered.
+const CONFIDENCE_LABEL = new Map([
+  ['CONFIRMED', 'confirmed'],
+  ['NOT_REPRODUCED', 'not reproduced'],
+  ['INCONCLUSIVE', 'inconclusive'],
+  ['DISPROVED', 'disproved'],
+  ['UNPROVEN', 'unproven'],
+])
+
+function headingSeverity(finding) {
+  const claimed = markdownText(claimedSeverityOf(finding))
+  const label = CONFIDENCE_LABEL.get(finding.verification_status)
+  return label === undefined ? claimed : `${claimed} (${label})`
 }
 
 function boundedCoverageText(value) {
@@ -559,14 +582,14 @@ export function renderMarkdownReport(run) {
 
   for (const finding of survivors) {
     lines.push(
-      `### ${markdownText(severityOf(finding))} — ${markdownText(finding.title)}`,
+      `### ${headingSeverity(finding)} — ${markdownText(finding.title)}`,
       '',
       `Candidate: ${inlineCode(finding.candidate_id)}  `,
       `Lens/topic: ${inlineCode(finding.lens)} / ${inlineCode(finding.topic)}  `,
       `Location: ${(finding.location ?? []).map((location) => inlineCode(location)).join(', ')}  `,
       `Reachability: ${inlineCode(finding.reachable_from)}  `,
       `Claimed severity: ${inlineCode(finding.claimed_impact_severity)}  `,
-      `Effective severity: ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
+      `Priority (confidence-gated): ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
       `Existence: ${inlineCode(finding.existence_check?.status ?? 'NOT ASSESSED')}  `,
       `Proof tier: ${inlineCode(finding.proof_tier ?? 'NOT ASSESSED')}  `,
       `Verification: ${inlineCode(finding.verification_status ?? 'NOT ASSESSED')}  `,
