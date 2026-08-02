@@ -8,6 +8,8 @@
  * The mirror is not a sandbox. The executed command is the project's own, run
  * with the project's own environment, and does whatever that does.
  */
+import { readFileSync } from 'node:fs'
+import Ajv2020 from 'ajv/dist/2020.js'
 import { authorizeAction } from './policy.mjs'
 import {
   assertTargetUnchanged,
@@ -17,6 +19,21 @@ import {
   MirrorMutationError,
 } from './disposable-mirror.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+
+const PROOF_CONFIG_SCHEMA_URL = new URL(
+  '../../schemas/proof-config.schema.json',
+  import.meta.url,
+)
+const validateProofConfigSchema = new Ajv2020({ strict: true, allErrors: true })
+  .compile(JSON.parse(readFileSync(PROOF_CONFIG_SCHEMA_URL, 'utf8')))
+
+export function assertValidProofConfig(config) {
+  if (validateProofConfigSchema(config)) return config
+  const detail = validateProofConfigSchema.errors
+    .map((error) => `${error.instancePath || '/'} ${error.message}`)
+    .join('; ')
+  throw new Error(`proof configuration is invalid: ${detail}`)
+}
 
 export async function executeProof({
   targetRoot,

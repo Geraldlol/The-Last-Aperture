@@ -9,17 +9,20 @@ import {
   sign as signBytes,
   verify as verifyBytes,
 } from 'node:crypto'
-import { constants as fsConstants } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { constants as fsConstants, existsSync } from 'node:fs'
 import {
   lstat,
   link,
   mkdir,
+  mkdtemp,
   open,
   realpath,
   rename,
   unlink,
   writeFile,
 } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import {
   basename,
   dirname,
@@ -40,6 +43,8 @@ import {
 } from './lib/contracts.mjs'
 import { isMainModule } from './lib/main-module.mjs'
 import { compareCanonicalStrings } from './lib/canonical-order.mjs'
+import { assertValidProofConfig, executeProof } from './lib/proof-execution.mjs'
+import { proofEvidence } from './lib/proof-evidence.mjs'
 import {
   classifyProviderAttemptRecovery,
   commitProviderAttempt,
@@ -202,6 +207,7 @@ Usage:
   red-team-audit next <run.json|bundle-directory>
   red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
   red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>
+  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
   red-team-audit ingest <run.json|bundle-directory> <job-result.json>
   red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
   red-team-audit finalize <run.json|bundle-directory>
@@ -319,6 +325,10 @@ const COMMAND_ARGUMENTS = {
       'transparency-log-origin': 'value',
       'transparency-checkpoint-journal': 'value',
     },
+  },
+  'run-proof': {
+    positionals: 2,
+    options: {},
   },
   compare: {
     positionals: 2,
@@ -4765,6 +4775,69 @@ function assertAttemptUsesTrustedProviderConfiguration(attempt, trusted) {
   }
 }
 
+// shell:false is load-bearing. The RoE allowlist matches program and argv
+// exactly, and a shell would let an argument smuggle `;` or `&&` past it.
+function spawnProofCommand(program, args, cwd) {
+  return new Promise((settle) => {
+    const child = spawn(program, args, {
+      cwd,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('close', (code) => settle({ code: code ?? 1, stdout, stderr }))
+    child.on('error', (error) => settle({ code: 127, stdout, stderr: String(error.message) }))
+  })
+}
+
+export async function runProofCommand(positionals, _options = {}, dependencies = {}) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  if (loaded.run.capability_mode !== 'TEST_EXECUTION') {
+    throw new Error(
+      'run-proof requires a TEST_EXECUTION run; plan with a test-mode Rules of Engagement',
+    )
+  }
+  if (!loaded.run.source_snapshot) {
+    throw new Error('run-proof requires a bundle created with plan --seal-source')
+  }
+  const config = assertValidProofConfig(await readJson(
+    requirePositional(positionals, 1, 'proof configuration'),
+    { maxBytes: 8 * 1024 * 1024, label: 'proof configuration JSON' },
+  ))
+
+  const control = await verifyControlBundle(loaded.directory, loaded.run, {
+    requireCurrentLensPack: true,
+  })
+  const policy = normalizePolicy(control.policy, {
+    workspaceRoot: control.policy.workspace_root,
+    policySource: 'external',
+  })
+
+  const targetRoot = loaded.run.repository.root
+  const mirrorRoot = join(await mkdtemp(join(tmpdir(), 'red-team-audit-proof-')), 'mirror')
+  const outcome = await executeProof({
+    targetRoot,
+    mirrorRoot,
+    expectedTreeDigest: loaded.run.repository.tree_digest,
+    policy,
+    config,
+    spawn: dependencies.spawn ?? spawnProofCommand,
+  })
+
+  // The pair runner's sixth rule replays against the previous revision, which a
+  // target with no history cannot supply. Recorded, never silently skipped.
+  const ruleSixApplicable = existsSync(join(targetRoot, '.git'))
+  process.stdout.write(`${stableJson({
+    job_id: config.job_id,
+    owned_paths: outcome.ownedPaths,
+    evidence: proofEvidence(outcome, config, { ruleSixApplicable }),
+  })}\n`)
+}
+
 export async function runProviderCommand(positionals, _options = {}, dependencies = {}) {
   const providerRunner = dependencies.providerRunner ?? runDockerProvider
   const cleanupProviderContainer = dependencies.cleanupProviderContainer
@@ -5565,6 +5638,7 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'next') return nextCommand(positionals, options)
   if (command === 'run-provider') return runProviderCommand(positionals, options)
   if (command === 'run-remote') return runRemoteCommand(positionals, options)
+  if (command === 'run-proof') return runProofCommand(positionals, options)
   if (command === 'ingest') return ingestCommand(positionals, options)
   if (command === 'ingest-batch') return ingestBatchCommand(positionals, options)
   if (command === 'finalize') return finalizeCommand(positionals, options)
