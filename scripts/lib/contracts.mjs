@@ -342,6 +342,18 @@ function isDatabaseFinding(record) {
     || /^(?:database(?:-|$)|db\.)/.test(record?.topic ?? '')
 }
 
+// Controller synthesis is deferred until every base lens job terminates, but
+// findings arrive during fan-out. A database finding filed then binds to the
+// authority contribution that will become the run profile; ingest applies the
+// same fallback in ensureDatabaseProfileBinding.
+function authorityContributionEntry(run, storeId) {
+  const profile = (run.store_contributions ?? []).find((envelope) =>
+    envelope.role === 'AUTHORITY'
+    && envelope.contribution?.store_id === storeId)
+    ?.contribution?.profile
+  return profile === undefined ? undefined : { profile }
+}
+
 function cloneJson(value) {
   return structuredClone(value)
 }
@@ -2667,6 +2679,7 @@ function runInvariantErrors(run, { final = false } = {}) {
     if (!isDatabaseFinding(finding)) return
     const storeId = finding.store_context?.store_id
     const entry = byStoreId.get(storeId)
+      ?? authorityContributionEntry(run, storeId)
     if (!entry) {
       addError(
         errors,
