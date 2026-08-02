@@ -1449,3 +1449,43 @@ test('a forged verification status cannot inject markup into a heading', () => {
     assert.doesNotMatch(report, /^#{1,6} Injected/m)
   }
 })
+
+// A CommonMark code span opens with a run of N backticks and closes at the next
+// run of exactly N. Content that starts or ends with a backtick merges with the
+// delimiter, so the span never closes and the rest of the line renders live.
+function codeSpanClosesAtEnd(rendered) {
+  const open = rendered.match(/^`+/)
+  if (!open) return false
+  const n = open[0].length
+  const body = rendered.slice(n)
+  const closing = [...body.matchAll(/`+/g)].find((run) => run[0].length === n)
+  return closing !== undefined && closing.index + n === body.length
+}
+
+test('a provider value bounded by backticks cannot break out of its code span', () => {
+  for (const hostile of [
+    '`leading backtick',
+    'trailing backtick`',
+    '``` fenced attempt',
+    '`both`',
+    'a ` b `` c ``` d',
+  ]) {
+    const report = renderMarkdownReport(run({
+      findings: [finding({ reachable_from: hostile })],
+    }))
+    const line = report.split('\n').find((l) => l.startsWith('Reachability: '))
+    assert.ok(line, 'the reachability line must render')
+    const span = line.slice('Reachability: '.length).trimEnd()
+    assert.ok(
+      codeSpanClosesAtEnd(span),
+      `code span never closes for ${JSON.stringify(hostile)}: ${JSON.stringify(span)}`,
+    )
+  }
+})
+
+test('code span padding leaves ordinary values untouched', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({ reachable_from: 'GET /orders/:id' })],
+  }))
+  assert.match(report, /^Reachability: `GET \/orders\/:id`/m)
+})

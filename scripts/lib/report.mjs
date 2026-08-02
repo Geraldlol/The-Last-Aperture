@@ -92,6 +92,15 @@ function markdownText(value, fallback = '—') {
     .replace(/^([0-9]+)([.)])(?=\s)/, '$1\\$2')
 }
 
+// A longer delimiter stops provider text closing the span early, but it is not
+// sufficient on its own: CommonMark merges the delimiter with a backtick at the
+// very start or end of the content, so `` `x `` emits ```` ```x`` ```` and the
+// span never closes — leaving the rest of the line to render as live markup.
+// The specified remedy is one space of padding, which the renderer strips.
+//
+// Angle brackets are deliberately not escaped. Code-span content is escaped by
+// the renderer, and pre-escaping would print `&lt;img&gt;` to a reader looking
+// at quoted evidence. codeBlock takes the same position for the same reason.
 function inlineCode(value, fallback = '—') {
   const text = singleLine(value, fallback)
   const longestRun = Math.max(
@@ -99,7 +108,8 @@ function inlineCode(value, fallback = '—') {
     ...(text.match(/`+/g) ?? []).map((run) => run.length),
   )
   const delimiter = '`'.repeat(longestRun + 1)
-  return `${delimiter}${text}${delimiter}`
+  const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
+  return `${delimiter}${padding}${text}${padding}${delimiter}`
 }
 
 function tableCell(value) {
