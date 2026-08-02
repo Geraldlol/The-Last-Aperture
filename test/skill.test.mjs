@@ -236,7 +236,11 @@ test('the shipped skill enters through the static executable control plane', () 
     'audit -- validate',
     'schemas/job-result.schema.json',
     'packet_sha256',
-    'static and read-only',
+    // Was 'static and read-only'. Test mode executes the target's own suite, so
+    // that phrase became false. These two are strictly stronger: the skill must
+    // still declare the default boundary AND confine execution to the mirror.
+    'read-only by default',
+    'only in a disposable mirror',
   ]) {
     assert.ok(text.includes(required), `SKILL.md must require ${JSON.stringify(required)}`)
   }
