@@ -4819,10 +4819,17 @@ export async function runProofCommand(positionals, _options = {}, dependencies =
 
   const targetRoot = loaded.run.repository.root
   const mirrorRoot = join(await mkdtemp(join(tmpdir(), 'red-team-audit-proof-')), 'mirror')
+  // The non-mutation check must measure the target exactly as plan did, or it
+  // reports every real run as mutated. Both inputs are recorded in the bundle.
+  const readCapability = policy.capabilities?.read_file
   const outcome = await executeProof({
     targetRoot,
     mirrorRoot,
     expectedTreeDigest: loaded.run.repository.tree_digest,
+    inventoryOptions: {
+      maxTextBytes: loaded.run.coverage?.policy?.max_shard_bytes,
+      includedRoots: readCapability?.enabled ? readCapability.roots : [],
+    },
     policy,
     config,
     spawn: dependencies.spawn ?? spawnProofCommand,

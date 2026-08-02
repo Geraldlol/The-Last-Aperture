@@ -39,6 +39,7 @@ export async function executeProof({
   targetRoot,
   mirrorRoot,
   expectedTreeDigest,
+  inventoryOptions = {},
   policy,
   config,
   spawn,
@@ -83,7 +84,7 @@ export async function executeProof({
       )
     }
 
-    await assertTargetUnchanged(targetRoot, expectedTreeDigest)
+    await assertTargetUnchanged(targetRoot, expectedTreeDigest, inventoryOptions)
 
     return {
       demonstration,

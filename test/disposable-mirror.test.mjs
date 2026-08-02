@@ -94,3 +94,28 @@ test('destroyMirror removes the tree', async () => {
   await destroyMirror(mirror)
   assert.equal(existsSync(mirror), false)
 })
+
+// plan does not inventory with default options — it passes maxTextBytes from the
+// coverage policy and includedRoots from the RoE. A non-mutation check that
+// recomputes with defaults compares two different measurements and fires on an
+// untouched target. It has to be given the same options the plan used.
+test('the digest re-check honours the inventory options the plan used', async () => {
+  const target = mkdtempSync(join(tmpdir(), 'rta-opts-'))
+  mkdirSync(join(target, 'src'), { recursive: true })
+  mkdirSync(join(target, 'other'), { recursive: true })
+  writeFileSync(join(target, 'src', 'a.js'), 'export const a = 1\n')
+  writeFileSync(join(target, 'other', 'b.js'), 'export const b = 2\n')
+
+  const scoped = await inventoryRepository(target, { includedRoots: ['src'] })
+  const everything = await inventoryRepository(target)
+  assert.notEqual(scoped.treeDigest, everything.treeDigest, 'the fixture must discriminate')
+
+  // Matching options: the target is unchanged, so this must not throw.
+  await assertTargetUnchanged(target, scoped.treeDigest, { includedRoots: ['src'] })
+
+  // Default options against a scoped digest: measuring something else.
+  await assert.rejects(
+    () => assertTargetUnchanged(target, scoped.treeDigest),
+    MirrorMutationError,
+  )
+})

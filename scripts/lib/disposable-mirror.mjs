@@ -56,8 +56,19 @@ export async function materializeFiles(mirrorRoot, files) {
   return written.sort(compareCanonicalStrings)
 }
 
-export async function assertTargetUnchanged(targetRoot, expectedTreeDigest) {
-  const { treeDigest } = await inventoryRepository(targetRoot)
+/**
+ * The options are not optional in practice. `plan` inventories with
+ * maxTextBytes from the coverage policy and includedRoots from the Rules of
+ * Engagement, so recomputing with defaults measures a different thing and
+ * reports an untouched target as mutated. Callers must pass the same options
+ * the plan used; they are recoverable from the bundle.
+ */
+export async function assertTargetUnchanged(
+  targetRoot,
+  expectedTreeDigest,
+  inventoryOptions = {},
+) {
+  const { treeDigest } = await inventoryRepository(targetRoot, inventoryOptions)
   if (treeDigest !== expectedTreeDigest) {
     throw new MirrorMutationError(expectedTreeDigest, treeDigest)
   }
