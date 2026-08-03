@@ -300,9 +300,14 @@ snapshot if one exists. Where neither is available the block is reported
 provider, which self-reports the answer. The controller verdict is authoritative
 for its own narrow question — is the quoted text at the cited location, does the
 claimed-absent token appear — and needs no job, no round-trip, and no trust. The
-job kind stays for what the controller cannot decide. Where the controller
-returns `NOT_LOCATED`, invariant 14's consequence (`NOT_REPRODUCED`) is applied
-by the gate, visibly, rather than silently.
+job kind stays for what the controller cannot decide.
+
+Where the controller returns `NOT_LOCATED`, invariant 14's stated consequence is
+`NOT_REPRODUCED`. This design stops short of writing that status automatically:
+the gate refuses to finalize the run and names the candidate, leaving the status
+to the proof phase that owns it. Auto-assigning `verification_status` from a
+controller verdict would have the controller reach into the phase that decides
+proof outcomes, and that is a larger change than measuring existence.
 
 ## Constraints
 
