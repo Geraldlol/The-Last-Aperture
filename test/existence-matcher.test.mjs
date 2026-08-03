@@ -188,10 +188,18 @@ test('a scope prefix does not leak into a sibling directory', () => {
 
 test('literal_ci folds the needle as well as the haystack', () => {
   const r = searchAbsence(ENTRIES, {
-    pattern: 'ConstantTimeEquals', kind: 'literal_ci', scope: ['docs'],
+    pattern: 'CONSTANTTIMEEQUALS', kind: 'literal_ci', scope: ['docs'],
   })
   assert.equal(r.outcome, 'ABSENCE_CONTRADICTED')
   assert.equal(r.matchCount, 1)
+})
+
+test('literal does not fold either side', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'CONSTANTTIMEEQUALS', kind: 'literal', scope: ['docs'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_HOLDS')
+  assert.equal(r.matchCount, 0)
 })
 
 test('matchCount counts matching lines, not occurrences within a line', () => {
