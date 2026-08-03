@@ -40,7 +40,7 @@ function family(id, label, status, anchor, evidence, paths = '', signals = '') {
 // an old positional assignment can silently inherit the changed activator.
 const CONTRACT = {
   'database-and-data-stores': {
-    hash: '3a89c02682153a23',
+    hash: '1c45b8c1294b084f',
     families: [
       family(
         'generic-sql-orm',
@@ -148,6 +148,15 @@ const CONTRACT = {
         'database-replication-cdc-history-and-sharing',
         'A named copy path is inventoried; consistency and authority require the selected engine adapter',
         '25-45',
+      ),
+      family(
+        'connection-configuration',
+        'Connection strings and application settings',
+        'PARTIAL',
+        'database-principal-and-role-boundaries',
+        'Host, transport mode and connecting principal are established; engine version is not, so adapter selection still needs a declared version',
+        '46-51',
+        '98-108',
       ),
     ],
   },
@@ -1201,10 +1210,10 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
   const typedActivationEntries = lenses.flatMap(({ lens }) => ['paths', 'signals'].flatMap((kind) =>
     (lens.frontmatter.activates_on?.[kind] ?? [])
       .map((scalar, index) => `${lens.name}\0${kind}\0${index}\0${scalar}`)))
-  assert.equal(typedActivationEntries.length, 946, 'the exact contract must own all 946 typed activation entries')
+  assert.equal(typedActivationEntries.length, 963, 'the exact contract must own all 963 typed activation entries')
   assert.equal(
     new Set(typedActivationEntries).size,
-    946,
+    963,
     'lens + kind + index + scalar activation identities must remain unique',
   )
   const lensQualifiedRawScalars = lenses.flatMap(({ lens }) => [
@@ -1213,7 +1222,7 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
   ].map((scalar) => `${lens.name}\0${scalar}`))
   assert.equal(
     new Set(lensQualifiedRawScalars).size,
-    945,
+    962,
     'raw scalar duplication drifted; audit repeated text separately from typed ownership',
   )
 

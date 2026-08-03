@@ -50,6 +50,12 @@ activates_on:
     - '**/*cdc*.yml'
     - '**/*cdc*.json'
     - '**/*cdc*.conf'
+    - '**/.env'
+    - '**/.env.*'
+    - '**/local.settings.json'
+    - '**/local.settings.*.json'
+    - '**/appsettings.json'
+    - '**/appsettings.*.json'
   signals:
     - '@prisma/client'
     - 'drizzle-orm'
@@ -149,6 +155,17 @@ activates_on:
     - 'jdbc:sqlserver:'
     - 'jdbc:oracle:'
     - 'jdbc:sqlite:'
+    - 'postgres://'
+    - 'postgresql://'
+    - 'mongodb://'
+    - 'mongodb+srv://'
+    - 'redis://'
+    - 'rediss://'
+    - 'mysql://'
+    - 'mariadb://'
+    - 'sqlserver://'
+    - 'sslmode='
+    - 'Data Source='
 owns:
   - database-principal-and-role-boundaries
   - database-native-authorization-and-tenant-isolation
@@ -337,6 +354,7 @@ PARTIAL until its adapter, version and deployment are established.
 | Cassandra, Scylla and graph surfaces | PARTIAL | `database-integrity-transactions-and-concurrency` | Wide-column and graph adapters cover their native units; shared-row tenancy may remain application-only |
 | Vector and warehouse surfaces | PARTIAL | `database-lifecycle-and-copy-propagation` | Control-plane tenancy and copy behavior are assessed; semantic retrieval remains in llm-and-ai |
 | Backup, restore, replication and CDC artifacts | PARTIAL | `database-replication-cdc-history-and-sharing` | A named copy path is inventoried; consistency and authority require the selected engine adapter |
+| Connection strings and application settings | PARTIAL | `database-principal-and-role-boundaries` | Host, transport mode and connecting principal are established; engine version is not, so adapter selection still needs a declared version |
 
 ## Checklist
 
