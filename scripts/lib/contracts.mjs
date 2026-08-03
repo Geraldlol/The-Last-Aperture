@@ -114,6 +114,8 @@ const STAGE_ONE_FIELDS = new Set([
   'cwe',
   'evidence',
   'source_anchors',
+  'quotes',
+  'absence_claims',
   'attack',
   'impact',
   'reachable_from',
