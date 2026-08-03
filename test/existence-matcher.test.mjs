@@ -185,3 +185,28 @@ test('a scope prefix does not leak into a sibling directory', () => {
   })
   assert.equal(r.outcome, 'ABSENCE_UNCHECKABLE')
 })
+
+test('literal_ci folds the needle as well as the haystack', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'ConstantTimeEquals', kind: 'literal_ci', scope: ['docs'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_CONTRADICTED')
+  assert.equal(r.matchCount, 1)
+})
+
+test('matchCount counts matching lines, not occurrences within a line', () => {
+  const entries = [{ path: 'src/x.ts', kind: 'text', content: 'dup and dup again\nclean line' }]
+  const r = searchAbsence(entries, { pattern: 'dup', kind: 'literal', scope: ['src'] })
+  assert.equal(r.matchCount, 1)
+  assert.deepEqual(r.hits, [{ path: 'src/x.ts', line: 1 }])
+})
+
+test('hits truncate at 16 while matchCount keeps the full total', () => {
+  const content = Array.from({ length: 20 }, (_, i) => `line ${i} has needle here`).join('\n')
+  const entries = [{ path: 'src/many.ts', kind: 'text', content }]
+  const r = searchAbsence(entries, { pattern: 'needle', kind: 'literal', scope: ['src'] })
+  assert.equal(r.matchCount, 20)
+  assert.equal(r.hits.length, 16)
+  assert.deepEqual(r.hits[0], { path: 'src/many.ts', line: 1 })
+  assert.deepEqual(r.hits[15], { path: 'src/many.ts', line: 16 })
+})
