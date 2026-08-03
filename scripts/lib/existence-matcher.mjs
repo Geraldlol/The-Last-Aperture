@@ -1,3 +1,5 @@
+import { compareCanonicalStrings } from './canonical-order.mjs'
+
 const HORIZONTAL_WHITESPACE = /^[ \t]+|[ \t]+$/g
 
 function trimHorizontal(line) {
@@ -111,5 +113,54 @@ export function matchQuote(content, quoteText, claimedLine) {
     matchCount: starts.length,
     startByte,
     endByte,
+  }
+}
+
+const MAX_RECORDED_HITS = 16
+
+function inScope(path, scope) {
+  return scope.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))
+}
+
+export function searchAbsence(entries, claim) {
+  const scope = [...claim.scope]
+  const fold = claim.kind === 'literal_ci'
+  const needle = fold ? claim.pattern.toLowerCase() : claim.pattern
+
+  const searchable = entries
+    .filter((entry) =>
+      entry.kind === 'text'
+      && typeof entry.content === 'string'
+      && inScope(entry.path, scope))
+    .sort((left, right) => compareCanonicalStrings(left.path, right.path))
+
+  if (searchable.length === 0) {
+    return {
+      outcome: 'ABSENCE_UNCHECKABLE',
+      matchCount: 0,
+      searchedFiles: 0,
+      hits: [],
+    }
+  }
+
+  let matchCount = 0
+  const hits = []
+  for (const entry of searchable) {
+    const lines = String(entry.content).split(/\r\n|\n|\r/)
+    for (let index = 0; index < lines.length; index += 1) {
+      const haystack = fold ? lines[index].toLowerCase() : lines[index]
+      if (!haystack.includes(needle)) continue
+      matchCount += 1
+      if (hits.length < MAX_RECORDED_HITS) {
+        hits.push({ path: entry.path, line: index + 1 })
+      }
+    }
+  }
+
+  return {
+    outcome: matchCount > 0 ? 'ABSENCE_CONTRADICTED' : 'ABSENCE_HOLDS',
+    matchCount,
+    searchedFiles: searchable.length,
+    hits,
   }
 }

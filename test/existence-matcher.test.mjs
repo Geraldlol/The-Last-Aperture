@@ -115,3 +115,73 @@ test('LOCATED_OFF_LINE returns the full documented tuple', () => {
   assert.equal(typeof r.endByte, 'number')
   assert.ok(r.endByte > r.startByte)
 })
+
+import { searchAbsence } from '../scripts/lib/existence-matcher.mjs'
+
+const ENTRIES = [
+  { path: 'src/a.cls', kind: 'text', content: 'void f() {}\nBoolean ok = constantTimeEquals(x, y);' },
+  { path: 'src/b.cls', kind: 'text', content: 'void g() {}' },
+  { path: 'docs/n.md', kind: 'text', content: 'mentions ConstantTimeEquals here' },
+  { path: 'bin/blob.png', kind: 'binary', content: null },
+]
+
+test('an absence that holds reports ABSENCE_HOLDS', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'notPresentAnywhere', kind: 'literal', scope: ['src'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_HOLDS')
+  assert.equal(r.matchCount, 0)
+  assert.equal(r.searchedFiles, 2)
+})
+
+test('a contradicted absence names where', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'constantTimeEquals', kind: 'literal', scope: ['src'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_CONTRADICTED')
+  assert.equal(r.matchCount, 1)
+  assert.deepEqual(r.hits, [{ path: 'src/a.cls', line: 2 }])
+})
+
+test('scope restricts the search', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'constantTimeEquals', kind: 'literal', scope: ['src/b.cls'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_HOLDS')
+  assert.equal(r.searchedFiles, 1)
+})
+
+test('literal_ci matches a differently cased occurrence', () => {
+  const sensitive = searchAbsence(ENTRIES, {
+    pattern: 'constanttimeequals', kind: 'literal', scope: ['docs'],
+  })
+  assert.equal(sensitive.outcome, 'ABSENCE_HOLDS')
+  const insensitive = searchAbsence(ENTRIES, {
+    pattern: 'constanttimeequals', kind: 'literal_ci', scope: ['docs'],
+  })
+  assert.equal(insensitive.outcome, 'ABSENCE_CONTRADICTED')
+})
+
+test('a scope matching no inventory entry is UNCHECKABLE, never HOLDS', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'anything', kind: 'literal', scope: ['src/typo-does-not-exist'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_UNCHECKABLE')
+  assert.equal(r.searchedFiles, 0)
+})
+
+test('a scope of only binary entries is UNCHECKABLE', () => {
+  const r = searchAbsence(ENTRIES, {
+    pattern: 'anything', kind: 'literal', scope: ['bin'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_UNCHECKABLE')
+  assert.equal(r.searchedFiles, 0)
+})
+
+test('a scope prefix does not leak into a sibling directory', () => {
+  const entries = [{ path: 'srcx/a.ts', kind: 'text', content: 'boom' }]
+  const r = searchAbsence(entries, {
+    pattern: 'boom', kind: 'literal', scope: ['src'],
+  })
+  assert.equal(r.outcome, 'ABSENCE_UNCHECKABLE')
+})
