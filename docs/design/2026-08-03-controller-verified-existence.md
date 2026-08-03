@@ -58,9 +58,21 @@ helper claimed absent that exists three files over.
 `ingest` already calls `verifyRepositorySnapshot` (`audit.mjs:2056`), which
 re-inventories `run.repository.root` and throws unless the full security view —
 tree digest, entries, errors, limits — is byte-identical to the committed
-snapshot. By the time a finding is applied, **the controller has already proven
-the target is unchanged and knows where it is.** Reading a cited file to check a
-quote costs one open on a tree it has just hashed.
+snapshot.
+
+It costs nothing beyond that. `inventory.mjs:521` decodes every non-binary file
+during that pass (`const content = binary ? null : bytes.toString('utf8')`) and
+holds it on the entry; `serializeInventory` strips `content` and `absolutePath`
+only when writing to disk. So by the time a finding is applied, **the controller
+already holds in memory the decoded text of every text file in the target, read
+under handle-bound no-follow semantics and proven unchanged since planning.**
+
+Quote matching and absence search are therefore pure in-memory operations over
+data already loaded and already hashed: no second read, no extra I/O, no
+time-of-check/time-of-use window, and no dependency on a sealed snapshot. The
+only plumbing required is to stop discarding that live inventory —
+`verifyRepositorySnapshot` currently computes it, compares it, and returns only
+`control`.
 
 ## Design
 
@@ -190,9 +202,9 @@ adapter-supplied there.
 
 Per-line trimmed, contiguous. Applied to both the quote and the candidate file:
 
-1. Decode UTF-8. On invalid bytes fall back to `latin1` byte comparison — the
-   reasoning at `_harness.md:222`, where decoding a binary sink as UTF-8 replaces
-   invalid bytes with `U+FFFD` and destroys the sequence being searched for.
+1. Take the inventory entry's already-decoded `content`. Binary entries carry
+   `content: null` and `kind: "binary"` and are never candidates, so no encoding
+   fallback is needed here — the inventory has already made that call.
 2. Split on `\r\n`, `\n`, or `\r`.
 3. Trim leading and trailing horizontal whitespace (space, tab) from each line.
 4. Drop wholly empty leading and trailing lines from the quote.
@@ -226,9 +238,18 @@ in force. A hit contradicts the claim and records where.
 
 ### 6. `--require-verified-existence`
 
-An opt-in `finalize` gate mirroring `--require-source-closure`. Off by default.
-It refuses finalization while any active finding's outcome is `UNVERIFIED`
-**or `NOT_APPLICABLE`**.
+An opt-in gate mirroring `--require-source-closure`, and mirroring it precisely:
+that flag is set at **`plan`** time (`audit.mjs:270`), recorded immutably in the
+run as `coverage.closure.required_source_closure`, and enforced inside
+`buildFinalizedRun` (`job-protocol.mjs:1613`). This gate follows the same shape —
+a `plan` flag, a recorded policy field, enforcement at finalization.
+
+Plan-time matters. A finalize-time flag is omitted by whoever runs finalize; a
+plan-time policy is bound into the run and cannot be dropped later by the party
+whose work it constrains.
+
+Off by default. It refuses finalization while any active finding's outcome is
+`UNVERIFIED` **or `NOT_APPLICABLE`**.
 
 `NOT_APPLICABLE` has to fail the gate, or the gate is trivially bypassed: a
 provider that simply omits `quotes` offers nothing to check, lands at
@@ -309,10 +330,11 @@ matching zero inventory entries yielding `ABSENCE_UNCHECKABLE` and never
 `UNVERIFIED`; re-indented quote yields `VERIFIED`; correct content at a wrong
 line yields `DRIFTED` and records both lines.
 
-**Gate integration.** `finalize --require-verified-existence` refuses while one
-finding is `UNVERIFIED`, and succeeds once it is not. It also refuses a finding
-at `NOT_APPLICABLE`, so omitting `quotes` cannot buy passage. Without the flag,
-both finalize and are reported.
+**Gate integration.** A run planned with `--require-verified-existence` refuses
+to finalize while one finding is `UNVERIFIED`, and succeeds once it is not. It
+also refuses a finding at `NOT_APPLICABLE`, so omitting `quotes` cannot buy
+passage. A run planned without the flag finalizes in both cases and reports the
+outcome.
 
 **Forgery.** A hand-edited verdict in `run.json` fails `validate`.
 
