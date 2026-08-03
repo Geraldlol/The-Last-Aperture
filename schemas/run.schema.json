@@ -286,6 +286,22 @@
     },
     {
       "if": {
+        "required": [
+          "existence_verifications"
+        ]
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "7.0.0"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": {
           "state": {
             "enum": [
