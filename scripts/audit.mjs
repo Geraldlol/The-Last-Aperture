@@ -2053,7 +2053,7 @@ export async function verifyControlBundle(
   }
 }
 
-async function verifyRepositorySnapshot(directory, run) {
+export async function verifyRepositorySnapshot(directory, run) {
   const control = await verifyControlBundle(
     directory,
     run,
@@ -2081,7 +2081,7 @@ async function verifyRepositorySnapshot(directory, run) {
       'repository snapshot changed after planning; create a new run before dispatching or ingesting work',
     )
   }
-  return control
+  return { ...control, inventoryEntries: current.entries }
 }
 
 async function loadJobSidecar(directory, run, job) {
@@ -5157,6 +5157,7 @@ async function prepareOneResult(
   loaded,
   resultPath,
   artifactCapacity,
+  inventoryEntries,
 ) {
   const jobResult = await readJson(resultPath, {
     maxBytes: MAX_PROVIDER_RESULT_BYTES,
@@ -5194,6 +5195,7 @@ async function prepareOneResult(
       path: resultRelativePath,
       sha256: sha256(canonicalResult),
     },
+    inventoryEntries,
   })
   const advanced = advanceUntilBlocked(applied)
   const serializedRun = stableJson(advanced)
@@ -5224,8 +5226,10 @@ function logAcceptedResult(prepared) {
   console.log(`Pending jobs: ${prepared.pendingCount}`)
 }
 
-async function ingestOneResult(loaded, resultPath, artifactCapacity) {
-  const prepared = await prepareOneResult(loaded, resultPath, artifactCapacity)
+async function ingestOneResult(loaded, resultPath, artifactCapacity, inventoryEntries) {
+  const prepared = await prepareOneResult(
+    loaded, resultPath, artifactCapacity, inventoryEntries,
+  )
   await writeOnceBundleArtifact(
     loaded.directory,
     prepared.resultRelativePath,
@@ -5243,7 +5247,9 @@ async function ingestCommand(positionals) {
   const resultPath = resolve(requirePositional(positionals, 1, 'job result'))
   assertValidRun(loaded.run)
   const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
-  await ingestOneResult(loaded, resultPath, control.artifactCapacity)
+  await ingestOneResult(
+    loaded, resultPath, control.artifactCapacity, control.inventoryEntries,
+  )
 }
 
 async function ingestBatchCommand(positionals) {
@@ -5260,6 +5266,7 @@ async function ingestBatchCommand(positionals) {
         loaded,
         resultPath,
         artifactCapacity,
+        control.inventoryEntries,
       )
       accepted += 1
     } catch (error) {
