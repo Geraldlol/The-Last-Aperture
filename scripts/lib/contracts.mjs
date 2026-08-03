@@ -151,7 +151,7 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
 const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
-const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0', '6.0.0'])
+const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'])
 
 function modeledDatabaseRun(run) {
   return MODELED_DATABASE_RUN_SCHEMAS.has(run?.schema_version)
@@ -1337,12 +1337,12 @@ function attemptInvariantErrors(run) {
           'attempt expiry must be a valid time after the lease time',
         )
       }
-      if (run?.schema_version === '6.0.0' && event?.backend === undefined) {
+      if (['6.0.0', '7.0.0'].includes(run?.schema_version) && event?.backend === undefined) {
         addError(
           errors,
           'ATTEMPT_BACKEND_MISSING',
           `${pointer}/backend`,
-          'v6 attempt leases must declare their execution backend',
+          'v6+ attempt leases must declare their execution backend',
         )
       }
       if (event?.backend === 'REMOTE_GATEWAY') {
@@ -1536,7 +1536,7 @@ function attemptInvariantErrors(run) {
       }
     }
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run?.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run?.schema_version)
       && ['SUCCEEDED', 'FAILED'].includes(job.state)
       && job.kind !== 'REPORT'
       && (hasOwn(job, 'input_sha256') || hasOwn(job, 'producer'))
@@ -2304,7 +2304,7 @@ function v3CoverageInvariantErrors(run) {
 
 function v4StoreSynthesisInvariantErrors(run) {
   const errors = []
-  if (!['4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) return errors
+  if (!['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) return errors
 
   const jobs = new Map((run.jobs ?? []).map((job) => [job.job_id, job]))
   const relationships = expectedStoreContributionRelationships(run)
@@ -3478,7 +3478,7 @@ function runTransitionErrors(previous, next) {
       (event) => event?.job_id === jobId,
     )
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       && priorJob.state === 'RUNNING'
       && nextJob.state === 'PENDING'
     ) {
@@ -3773,7 +3773,7 @@ function runTransitionErrors(previous, next) {
       && addedStoreIds.has(gap.area.slice('store:'.length))
     )
     const synthesisResolution = (
-      ['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
+      ['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       && previous.phase === 'FANOUT'
       && next.phase === 'TRIAGE'
       && typeof gap?.area === 'string'
@@ -4136,7 +4136,7 @@ function runTransitionErrors(previous, next) {
       ? completedProviderJobs[0].nextJob
       : null
     if (
-      !['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)
+      !['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       || databaseCompletion?.kind !== 'LENS'
       || databaseCompletion?.lens !== 'database-and-data-stores'
       || databaseCompletion?.closure_round !== undefined
@@ -4160,7 +4160,7 @@ function runTransitionErrors(previous, next) {
   const nextProfiles = Array.isArray(next.store_profiles) ? next.store_profiles : []
   const addedProfiles = nextProfiles.slice(priorProfileCount)
   if (addedProfiles.length > 0) {
-    if (['4.0.0', '5.0.0', '6.0.0'].includes(next.schema_version)) {
+    if (['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)) {
       const expectedProfiles = synthesizeStoreProfiles(next)
         .map(({ profile }) => profile)
       if (

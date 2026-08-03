@@ -41,7 +41,7 @@ import {
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
 export const PLATFORM_VERSION = '0.10.0'
-export const RUN_SCHEMA_VERSION = '6.0.0'
+export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
 function sha256(value) {

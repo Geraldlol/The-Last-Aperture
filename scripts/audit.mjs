@@ -888,7 +888,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
   const projection = {
     inventory: coverage?.inventory,
   }
-  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(schemaVersion)) return projection
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(schemaVersion)) return projection
   return {
     model_version: coverage?.model_version,
     policy: coverage?.policy,
@@ -928,7 +928,7 @@ function assertImmutableCoveragePlan(
       'planned coverage artifact is not the immutable initial coverage snapshot',
     )
   }
-  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) return
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) return
 
   const expectedRecords = inventoryCoverageRecords(snapshot.entries)
   const expectedDenominators = buildCategoryDenominators(expectedRecords)
@@ -1029,7 +1029,7 @@ function assertSidecarJobIdentity(
     lens: job.lens,
     repository_root: run.repository.root,
     ...(
-      ['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version) || requireProtocolFields
+      ['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version) || requireProtocolFields
         ? {
             schema_version: run.schema_version,
             phase: job.closure_round !== undefined
@@ -1072,7 +1072,7 @@ function assertSidecarJobIdentity(
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
-  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
@@ -1560,7 +1560,7 @@ export async function verifyControlBundle(
   )
   let databaseDiscoveryCommitted
   let databaseConformanceCommitted
-  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     databaseDiscoveryCommitted = await readVerifiedArtifact(
       directory,
       run,
@@ -1704,7 +1704,7 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
-      ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)
+      ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
         : []),
       ...(run.database_conformance
@@ -1990,7 +1990,7 @@ export async function verifyControlBundle(
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
-    ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)
+    ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
@@ -4501,9 +4501,9 @@ export async function runRemoteCommand(positionals, _options = {}, dependencies 
   }
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (loaded.run.schema_version !== '6.0.0' || !loaded.run.source_snapshot) {
+  if (!['6.0.0', '7.0.0'].includes(loaded.run.schema_version) || !loaded.run.source_snapshot) {
     throw new Error(
-      'run-remote requires a runner-ready v6 bundle created with remote_static Rules of Engagement and --seal-source',
+      'run-remote requires a runner-ready v6 or v7 bundle created with remote_static Rules of Engagement and --seal-source',
     )
   }
   const trusted = await loadTrustedRemoteGatewayConfiguration(
@@ -4851,7 +4851,7 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
     ?? cleanupDockerProviderContainer
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(loaded.run.schema_version)
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(loaded.run.schema_version)
     || !loaded.run.source_snapshot) {
     throw new Error(
       'run-provider requires a runner-ready v2 bundle created with plan --seal-source',

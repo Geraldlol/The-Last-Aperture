@@ -487,7 +487,7 @@ function unresolvedPrincipal(profile) {
 
 function applyStoreContributions(run, job, jobResult, options = {}) {
   const contributions = jobResult.store_contributions ?? []
-  if (!['4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
+  if (!['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     if (contributions.length > 0) {
       throw resultError(
         'store_contributions require a run schema 4/5 database job',
@@ -624,7 +624,7 @@ function applyStoreContributions(run, job, jobResult, options = {}) {
 
 function applyStoreProfiles(run, job, jobResult, options = {}) {
   const profiles = jobResult.store_profiles ?? []
-  if (['4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
+  if (['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     if (profiles.length > 0) {
       throw resultError(
         'run schema 4/5 providers cannot append store_profiles directly',
@@ -830,7 +830,7 @@ function applyFindings(run, job, findings, options = {}) {
       ensureTopicAuthority(job, finding, options.sidecar, { originating: true })
       if (existingIndex !== undefined) {
         const isClosureRetry = (
-          ['3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)
+          ['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
           && Number.isInteger(job.closure_round)
           && job.closure_round > 0
         )
@@ -1439,7 +1439,7 @@ function advanceClosureRound(run) {
 }
 
 function materializeStoreSynthesis(run) {
-  if (!['4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) return
+  if (!['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) return
   if ((run.store_profiles ?? []).length > 0) {
     throw resultError(
       'schema 4/5 store synthesis cannot rewrite an existing profile',

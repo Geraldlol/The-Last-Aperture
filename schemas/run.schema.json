@@ -34,7 +34,8 @@
         "3.0.0",
         "4.0.0",
         "5.0.0",
-        "6.0.0"
+        "6.0.0",
+        "7.0.0"
       ]
     },
     "run_id": {
@@ -165,6 +166,11 @@
       "items": {
         "$ref": "#/$defs/attemptEvent"
       }
+    },
+    "existence_verifications": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/existenceVerification" }
     }
   },
   "allOf": [
@@ -177,7 +183,8 @@
               "3.0.0",
               "4.0.0",
               "5.0.0",
-              "6.0.0"
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -200,7 +207,8 @@
               "3.0.0",
               "4.0.0",
               "5.0.0",
-              "6.0.0"
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -243,7 +251,8 @@
             "enum": [
               "4.0.0",
               "5.0.0",
-              "6.0.0"
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -268,7 +277,8 @@
           "schema_version": {
             "enum": [
               "5.0.0",
-              "6.0.0"
+              "6.0.0",
+              "7.0.0"
             ]
           }
         }
@@ -1768,6 +1778,68 @@
         "job_id": {
           "type": "string",
           "minLength": 3
+        }
+      }
+    },
+    "existenceVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "quote_results", "absence_results", "outcome"],
+      "properties": {
+        "candidate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "outcome": {
+          "enum": ["VERIFIED", "DRIFTED", "UNVERIFIED", "NOT_APPLICABLE", "NOT_REDERIVABLE"]
+        },
+        "quote_results": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "outcome", "claimed_line", "match_count"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "outcome": { "enum": ["LOCATED", "LOCATED_OFF_LINE", "NOT_LOCATED"] },
+              "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "claimed_line": { "type": "integer", "minimum": 1 },
+              "found_line": { "type": ["integer", "null"], "minimum": 1 },
+              "match_count": { "type": "integer", "minimum": 0 },
+              "start_byte": { "type": ["integer", "null"], "minimum": 0 },
+              "end_byte": { "type": ["integer", "null"], "minimum": 0 },
+              "excerpt_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+              "anchor_state": { "enum": ["ANCHORED", "ANCHOR_UNAVAILABLE"] }
+            }
+          }
+        },
+        "absence_results": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "outcome", "match_count", "searched_files"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "outcome": {
+                "enum": ["ABSENCE_HOLDS", "ABSENCE_CONTRADICTED", "ABSENCE_UNCHECKABLE"]
+              },
+              "match_count": { "type": "integer", "minimum": 0 },
+              "searched_files": { "type": "integer", "minimum": 0 },
+              "hits": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "line"],
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "line": { "type": "integer", "minimum": 1 }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

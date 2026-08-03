@@ -160,8 +160,8 @@ export function appendAttemptEvent(run, eventInput) {
 
 export function leaseProviderAttempt(run, jobId, metadata) {
   assertValidRun(run)
-  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0'].includes(run.schema_version)) {
-    throw new Error('Observed provider attempts require a v2-v6 run')
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
+    throw new Error('Observed provider attempts require a v2-v7 run')
   }
   if (!run.source_snapshot || !run.control_snapshot) {
     throw new Error('Observed provider attempts require sealed source and control snapshots')
@@ -227,8 +227,8 @@ export function leaseProviderAttempt(run, jobId, metadata) {
 
 export function leaseRemoteAttempt(run, jobId, metadata) {
   assertValidRun(run)
-  if (run.schema_version !== '6.0.0') {
-    throw new Error('Remote gateway attempts require a v6 run')
+  if (!['6.0.0', '7.0.0'].includes(run.schema_version)) {
+    throw new Error('Remote gateway attempts require a v6 or v7 run')
   }
   if (!run.source_snapshot || !run.control_snapshot) {
     throw new Error('Remote gateway attempts require sealed source and control snapshots')
