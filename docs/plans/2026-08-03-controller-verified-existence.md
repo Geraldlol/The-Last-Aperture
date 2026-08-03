@@ -221,7 +221,7 @@ git commit -m "feat: admit machine-checkable quote and absence claims on a findi
 - Produces:
   - `indexFileLines(content) -> { lines: string[], normalized: string[], byteStarts: number[], byteEnds: number[] }` — `byteStarts[i]`/`byteEnds[i]` bracket line `i`'s content in UTF-8 bytes, excluding the terminator.
   - `normalizeQuote(text) -> string[]`
-  - `matchQuote(content, quoteText, claimedLine) -> { outcome, foundLine, matchCount, startByte, endByte }` where `outcome` is `'LOCATED' | 'LOCATED_OFF_LINE' | 'NOT_LOCATED'`. On `NOT_LOCATED` the other fields are `null`.
+  - `matchQuote(content, quoteText, claimedLine) -> { outcome, foundLine, matchCount, startByte, endByte }` where `outcome` is `'LOCATED' | 'LOCATED_OFF_LINE' | 'NOT_LOCATED'`. On `NOT_LOCATED`, `foundLine`, `startByte` and `endByte` are `null` and `matchCount` is `0` — `match_count` is a required non-nullable integer in the Task 4 schema, so it must never be null.
 
 - [ ] **Step 1: Write the failing test**
 

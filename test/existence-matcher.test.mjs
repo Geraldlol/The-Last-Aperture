@@ -94,3 +94,24 @@ test('a quote that normalizes to nothing never matches', () => {
   assert.deepEqual(normalizeQuote('   \n\t\n  '), [])
   assert.equal(matchQuote(FILE, '   \n  ', 1).outcome, 'NOT_LOCATED')
 })
+
+test('NOT_LOCATED returns the full documented tuple', () => {
+  const r = matchQuote(FILE, "publicNetworkAccess: 'Disabled'", 3)
+  assert.deepEqual(r, {
+    outcome: 'NOT_LOCATED',
+    foundLine: null,
+    matchCount: 0,
+    startByte: null,
+    endByte: null,
+  })
+})
+
+test('LOCATED_OFF_LINE returns the full documented tuple', () => {
+  const r = matchQuote(FILE, "publicNetworkAccess: 'Enabled'", 27)
+  assert.equal(r.outcome, 'LOCATED_OFF_LINE')
+  assert.equal(r.foundLine, 3)
+  assert.equal(r.matchCount, 1)
+  assert.equal(typeof r.startByte, 'number')
+  assert.equal(typeof r.endByte, 'number')
+  assert.ok(r.endByte > r.startByte)
+})
