@@ -1,14 +1,15 @@
 # Red Team Audit
 
-Red Team Audit is an evidence-first, agent-assisted source audit platform. Its
+Red Team Audit is an evidence-first, agent-assisted source audit platform with
+a separate, narrowly authorized external HTTPS reconnaissance controller. Its
 security lenses supply domain judgment; a deterministic Node.js control plane
 owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
-and stores they examined. The optional sealed runner can prove that its adapter
-completed a byte challenge over exact planned bytes, but cannot prove the
-provider understood or analyzed those bytes correctly. The optional remote
-gateway path proves that an externally pinned gateway accepted one exact
-signed request; that acceptance is not proof of model comprehension.
+and stores they examined. The optional sealed runner can prove byte consumption
+and the optional remote gateway can prove acceptance of one signed provider
+request; neither proves model comprehension. External HTTP reconnaissance has
+its own authorization, action denominator, stop path, and nonclaims. It never
+becomes repository coverage.
 
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
@@ -16,10 +17,21 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.10.0 adds externally anchored transparency-checkpoint continuity for
-signed terminal roots to the bounded coverage, detached root-attestation, sealed
-provider, remote gateway, database conformance, and controller-owned
-store-synthesis foundation:
+Version 0.11.0 adds separately authorized, bounded external HTTP reconnaissance
+to the v0.10 externally anchored transparency, bounded coverage, detached
+root-attestation, sealed-provider, remote-gateway, database-conformance, and
+controller-owned store-synthesis foundation:
+
+- A separate `http-recon-v1` protocol with no repository, lens, closure, code
+  coverage, or T0-T3 proof-tier claim.
+- A default one-action operator-attested mode requiring no authorization files,
+  plus an optional externally signed RoE mode with owner key, hash-bound
+  document, and fresh target-control proof.
+- Exact HTTPS `HEAD`, `GET`, or `OPTIONS` actions only, with schema-enforced hard
+  caps, runtime CA and hostname validation, recorded certificate identity,
+  concurrency one, durable stop, and explicit uncertain-delivery state.
+- No redirects, retries, crawl, authentication, request bodies, retained normal
+  response bodies, mutation, exploitation, fuzzing, or load generation.
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -90,13 +102,14 @@ store-synthesis foundation:
 - Baseline comparison that distinguishes `fixed` from `not-observed`.
 - TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
 
-The general dynamic T1/T2 target proof broker is not enabled. Local static mode
-does not execute target code, follow target symlinks, or make network calls.
-`remote_static` permits only the configured gateway request authorized by the
-external policy; it does not grant network authority to repository content or
-the provider packet. The local provider boundary runs a separately supplied,
-trusted adapter image against brokered sealed data; it does not mount or
-execute the target.
+The general dynamic T1/T2 target proof broker is not enabled. T2 retains its
+historical meaning: a locally booted application reached only through
+loopback. `http-recon-v1` is not T2 and cannot verify a repository finding.
+Local static mode does not execute target code, follow target symlinks, or make
+network calls. `remote_static` permits only the configured provider-gateway
+request; it grants no network authority to repository content or a provider
+packet. The local provider boundary runs a separately supplied trusted adapter
+image against brokered sealed data; it neither mounts nor executes the target.
 
 The standalone database lab is separate opt-in `LOCAL_DYNAMIC` execution of
 controller-owned synthetic SQL. It never reads the audited target or target
@@ -133,6 +146,61 @@ npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --require-so
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
+
+### Authorized external HTTP reconnaissance
+
+This path is separate from `npm.cmd run audit`. The default mode records an
+operator declaration of asset-owner permission and seals one exact action. It
+does not require a signed RoE, authorization-document, or public-key path:
+
+```powershell
+npm.cmd run audit:http-recon -- plan `
+  --target-url https://target.example/exact-path `
+  --operator-id <operator-id> `
+  --authorized-by "asset owner name or role" `
+  --authorization-reference "ticket, email, or conversation reference" `
+  --attest-authorized `
+  --out C:\audit-runs\http-recon-run-001
+
+npm.cmd run audit:http-recon -- next `
+  C:\audit-runs\http-recon-run-001
+
+npm.cmd run audit:http-recon -- run `
+  C:\audit-runs\http-recon-run-001 <action-id> `
+  --operator-id <operator-id> `
+  --rationale "authorized header and status observation" `
+  --confirm-authorization-current
+```
+
+Planning is network-free and `HEAD` is the default method. No certificate
+lookup or advance SPKI value is needed: execution validates the certificate
+chain with the runtime-configured CA trust, validates the hostname, and records
+the certificate and SPKI hashes from that same connection before dispatch. Add
+`--tls-spki-sha256 <64-lowercase-hex>` only when an advance pin is available.
+After planning, the CLI accepts no target, URL, method, TLS policy, header,
+credential, body, proof endpoint, retry, or limit override. Operator-attested
+mode makes zero proof requests and may execute only its one sealed action.
+`run` must use the operator ID that created the plan. Its permission claim is
+not independently verified.
+Stop immediately without needing a still-valid authorization artifact:
+
+```powershell
+npm.cmd run audit:http-recon -- stop `
+  C:\audit-runs\http-recon-run-001 `
+  --operator-id <operator-id> `
+  --reason "operator stop"
+```
+
+Then `finalize` and `validate` using only the attested bundle; use
+`report <bundle>` to locate the generated report. The optional higher-assurance
+`plan-signed` command retains the signed RoE, authorization-document, owner-key,
+and live-proof workflow. A complete run may say
+`NO_FINDINGS_OBSERVED_IN_AUTHORIZED_PROBED_SURFACE`, never clean or safe. Every
+report states that repository inventory, lens activation, source closure, and
+code coverage are not applicable. See
+[`docs/http-recon-protocol.md`](docs/http-recon-protocol.md) and
+[`ADR 0014`](docs/adr/0014-operator-attested-http-recon.md), as amended by
+[`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md).
 
 ### Disposable database conformance
 
@@ -374,8 +442,9 @@ to exit or independently verify the marker before manual recovery.
 
 ## Safety model
 
-The repository under audit is untrusted data. A README, source comment,
-`AGENTS.md`, generated file, HTTP response, or tool output cannot:
+The repository and external target are untrusted data. A README, source
+comment, `AGENTS.md`, generated file, HTTP response, DNS answer, or tool output
+cannot:
 
 - Change scope or capability mode.
 - Grant file, command, credential, or network access.
@@ -403,11 +472,19 @@ a bundle the CLI later refuses to read. These checks are against observed
 filesystem state; use a bundle directory that a hostile local process cannot
 concurrently replace (see `SECURITY.md`).
 
-This architecture is informed by OWASP APTS 0.1.0, but the project does not
-claim APTS conformance. See
-[`docs/adr/0001-executable-audit-platform.md`](docs/adr/0001-executable-audit-platform.md).
+This architecture uses OWASP APTS 0.1.0 as a governance design baseline and
+NIST SP 800-115 as a planning and authorization baseline. The project claims
+conformance with neither. See
+[`docs/adr/0001-executable-audit-platform.md`](docs/adr/0001-executable-audit-platform.md)
+and [`ADR 0013`](docs/adr/0013-authorized-external-http-recon.md).
+Operator-attested authorization is the lower-assurance exception documented in
+[`ADR 0014`](docs/adr/0014-operator-attested-http-recon.md); its URL-first TLS
+policy is documented in [`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md).
 
-## Run states
+## Repository audit run states
+
+The separate HTTP-reconnaissance states and nonclaims are defined in
+[`docs/http-recon-protocol.md`](docs/http-recon-protocol.md).
 
 - `PLANNED`: inventory and jobs exist; no provider work is implied.
 - `RUNNING`: at least one stage has begun.

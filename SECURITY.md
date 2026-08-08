@@ -15,14 +15,48 @@ details of an unfixed vulnerability in a public issue.
 
 ## Supported security boundary
 
+Version 0.11.0 adds a separate authorized external HTTP-reconnaissance
+controller for engagements where the asset owner supplies permission but no
+repository. It does not weaken or reuse the repository audit's coverage or T2
+boundaries. Planning is offline. The default `OPERATOR_ATTESTED` path accepts
+one exact target action, records the operator, declared authorizer, and
+authorization reference, and requires explicit confirmation.
+It requires no signed RoE, authorization-document, or public-key path. This is
+a declaration only and does not independently verify owner permission,
+ownership, legal authority, or revocation. Optional `EXTERNAL_SIGNED` mode
+retains all three artifacts plus a short-lived signed proof.
+
+The first external slice is deliberately narrow: one public HTTPS origin,
+one operator-attested or finitely many signed HEAD/GET/OPTIONS URLs,
+concurrency one, at most one request per second, ordinary hostname validation
+and CA-chain validation, public-only DNS answers, bounded time and response
+bytes, no redirects or retries, fixed headers, and no retained probe bodies.
+Operator-attested execution records the observed certificate and SPKI hashes;
+an advance pin is optional there and remains mandatory in signed mode. It never
+accepts credentials, cookies,
+request bodies, mutation methods, arbitrary headers, discovered links, or
+payloads. An out-of-band stop marker is checked before dispatch and while a
+request is in flight. A request whose delivery cannot be resolved is terminal
+and is never replayed automatically.
+
+This mode records controller-observed transport metadata only. It does not
+provide repository inventory, source closure, code coverage, authenticated
+authorization testing, exploitation, browser execution, fuzzing, brute force,
+bulk access, or load testing. Broader active techniques require a future typed
+capability with a fresh action-specific authorization; neither an HTTP-recon
+signature nor an operator attestation can enable them.
+
 Version 0.10.0 supports static, read-only planning, externally produced job
 results, and an opt-in sealed provider runner. It never executes target code or
 grants the provider a target mount, host network, credentials, or arbitrary
 host process authority.
 
-Two features open an outbound network connection, and both are opt-in and
-externally authorized. Signed remote-gateway execution sends one Ed25519-signed
-request to a single TLS-SPKI-pinned, DNS-scope-restricted HTTPS endpoint.
+Three feature families open an outbound network connection, and all are opt-in.
+HTTP reconnaissance sends only its sealed action. Its default operator-attested
+mode uses runtime-configured CA trust and hostname validation and records the
+observed SPKI; its signed mode remains externally verified and SPKI-pinned.
+Signed remote-gateway execution sends one Ed25519-signed request to a single
+TLS-SPKI-pinned, DNS-scope-restricted HTTPS endpoint.
 Transparency publication sends only the canonical detached root attestation to
 one such endpoint. Neither transmits repository source, findings, provider
 output, credentials, or the target path, and neither follows redirects.
@@ -133,6 +167,16 @@ when the repository may be modified by a hostile local process.
   512 MiB aggregate verification limits; the controller reserves capacity
   before append/finalize operations.
 - Never place production credentials in the target process environment.
+- Keep external HTTP-recon owner keys and authorization documents outside the
+  mutable run bundle. The signature proves possession of the pinned key and the
+  live proof demonstrates technical control at the observed endpoint; neither
+  alone establishes legal authority, ownership, or corporate approval.
+- Treat `OPERATOR_ATTESTED` as lower assurance. Its locally sealed scope and
+  declared authorization reference do not cryptographically verify permission
+  and cannot provide a live revocation signal.
+- Use only owner-approved exact URLs whose GET behavior is explicitly known to
+  be non-mutating. A nominally safe HTTP method can still trigger application
+  side effects.
 - Do not use T1/T2 proof against production or shared infrastructure.
 - Use the abort command if scope, environment, or authorization becomes
   uncertain.

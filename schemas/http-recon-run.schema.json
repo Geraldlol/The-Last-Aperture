@@ -1,0 +1,738 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/http-recon-run.schema.json",
+  "title": "Red Team Audit authorized HTTP reconnaissance run",
+  "description": "The bounded controller state for one externally authorized HTTP reconnaissance plan.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "capability_mode",
+    "run_id",
+    "engagement_id",
+    "created_at",
+    "updated_at",
+    "state",
+    "authorization",
+    "target",
+    "plan_sha256",
+    "limits",
+    "budget",
+    "target_proof",
+    "actions",
+    "stop",
+    "report",
+    "event_chain"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/http-recon-run"
+    },
+    "capability_mode": {
+      "const": "AUTHORIZED_HTTP_RECON"
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "engagement_id": {
+      "$ref": "#/$defs/id"
+    },
+    "created_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "state": {
+      "enum": [
+        "PLANNED",
+        "ACTIVE",
+        "PROBE_PLAN_COMPLETE",
+        "STOPPED",
+        "FAILED",
+        "OUTCOME_UNCERTAIN"
+      ]
+    },
+    "authorization": {
+      "$ref": "#/$defs/authorization"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "budget": {
+      "$ref": "#/$defs/budget"
+    },
+    "target_proof": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/targetProofReceipt"
+        }
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "stop": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/stop"
+        }
+      ]
+    },
+    "report": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/report"
+        }
+      ]
+    },
+    "event_chain": {
+      "$ref": "#/$defs/eventChain"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "actionId": {
+      "type": "string",
+      "pattern": "^http-recon-action:[a-f0-9]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "nullableTimestamp": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/timestamp"
+        }
+      ]
+    },
+    "httpsUrl": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2048,
+      "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "authorization": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/externalSignedAuthorization"
+        },
+        {
+          "$ref": "#/$defs/operatorAttestedAuthorization"
+        }
+      ]
+    },
+    "externalSignedAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "authorization_id",
+        "signed_roe_sha256",
+        "payload_sha256",
+        "document_sha256",
+        "owner_key_id",
+        "valid_from",
+        "valid_until"
+      ],
+      "properties": {
+        "mode": {
+          "const": "EXTERNAL_SIGNED"
+        },
+        "authorization_id": {
+          "$ref": "#/$defs/id"
+        },
+        "signed_roe_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "payload_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        },
+        "valid_from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "operatorAttestedAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "authorization_id",
+        "operator_id",
+        "authorized_by",
+        "authorization_reference",
+        "statement",
+        "attested_at",
+        "scope_sha256",
+        "independently_verified",
+        "valid_from",
+        "valid_until"
+      ],
+      "properties": {
+        "mode": {
+          "const": "OPERATOR_ATTESTED"
+        },
+        "authorization_id": {
+          "$ref": "#/$defs/id"
+        },
+        "operator_id": {
+          "$ref": "#/$defs/id"
+        },
+        "authorized_by": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "authorization_reference": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "statement": {
+          "const": "I confirm that I am authorized by the asset owner to perform this exact bounded HTTP reconnaissance action."
+        },
+        "attested_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "scope_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "independently_verified": {
+          "const": false
+        },
+        "valid_from": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "valid_until": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "target": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/externalSignedTarget"
+        },
+        {
+          "$ref": "#/$defs/operatorAttestedTarget"
+        }
+      ]
+    },
+    "externalSignedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tls_spki_sha256",
+        "proof"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "tls_spki_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "proof": {
+          "$ref": "#/$defs/proofDescriptor"
+        }
+      }
+    },
+    "operatorAttestedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tls",
+        "proof"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "tls": {
+          "$ref": "#/$defs/tlsPolicy"
+        },
+        "proof": {
+          "type": "null"
+        }
+      }
+    },
+    "tlsPolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "PKIX_HOSTNAME"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "spki_sha256"
+          ],
+          "properties": {
+            "mode": {
+              "const": "PKIX_HOSTNAME_AND_SPKI_PIN"
+            },
+            "spki_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      ]
+    },
+    "proofDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "url",
+        "challenge_nonce",
+        "max_age_ms"
+      ],
+      "properties": {
+        "method": {
+          "const": "GET"
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "challenge_nonce": {
+          "$ref": "#/$defs/sha256"
+        },
+        "max_age_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 300000
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_probe_requests",
+        "max_target_proof_requests",
+        "max_target_proof_response_bytes",
+        "request_timeout_ms",
+        "max_response_bytes",
+        "max_aggregate_response_bytes",
+        "max_wall_time_ms",
+        "min_interval_ms",
+        "concurrency"
+      ],
+      "properties": {
+        "max_probe_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_target_proof_requests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "max_target_proof_response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 30000
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_aggregate_response_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "max_wall_time_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 900000
+        },
+        "min_interval_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "concurrency": {
+          "const": 1
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proof_requests_used",
+        "probe_requests_used",
+        "response_bytes_used",
+        "started_at",
+        "last_request_at"
+      ],
+      "properties": {
+        "proof_requests_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "probe_requests_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "response_bytes_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "started_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        },
+        "last_request_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "sequence",
+        "method",
+        "url",
+        "safe_to_get",
+        "state",
+        "attempt_count",
+        "leased_at",
+        "sent_at",
+        "completed_at",
+        "observation_path",
+        "observation_sha256",
+        "error"
+      ],
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/actionId"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "method": {
+          "enum": [
+            "HEAD",
+            "GET",
+            "OPTIONS"
+          ]
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "safe_to_get": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "LEASED",
+            "SENT",
+            "COMMITTED",
+            "FAILED",
+            "DELIVERY_AMBIGUOUS"
+          ]
+        },
+        "attempt_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "leased_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        },
+        "sent_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        },
+        "completed_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        },
+        "observation_path": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000-\\u001f\\u007f\\\\]+$"
+            }
+          ]
+        },
+        "observation_sha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/sha256"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/actionError"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "GET"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "then": {
+            "properties": {
+              "safe_to_get": {
+                "const": true
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "safe_to_get": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "actionError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 96,
+          "pattern": "^[A-Z][A-Z0-9_]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      }
+    },
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_at",
+        "observed_at",
+        "operator_id",
+        "reason"
+      ],
+      "properties": {
+        "requested_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "operator_id": {
+          "$ref": "#/$defs/id"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size",
+        "generated_at"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000-\\u001f\\u007f\\\\]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16777216
+        },
+        "generated_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "eventChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "last_sha256"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "last_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "targetProofReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_at",
+        "request_started_at",
+        "expires_at",
+        "proof_sha256",
+        "proof",
+        "dns_sha256",
+        "resolved_ip",
+        "peer_spki_sha256",
+        "response_bytes"
+      ],
+      "properties": {
+        "verified_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "request_started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "proof_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "proof": {
+          "$ref": "https://red-team-audit.dev/schemas/http-recon-target-proof.schema.json"
+        },
+        "dns_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "resolved_ip": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 45,
+          "pattern": "^[0-9A-Fa-f:.]+$"
+        },
+        "peer_spki_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "response_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      }
+    }
+  }
+}

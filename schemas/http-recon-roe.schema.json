@@ -1,0 +1,418 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/http-recon-roe.schema.json",
+  "title": "Red Team Audit authorized HTTP reconnaissance rules of engagement",
+  "description": "An externally signed, exact-target authorization envelope for one bounded HTTPS reconnaissance plan.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "engagement_id",
+    "environment",
+    "authorization",
+    "target",
+    "validity",
+    "limits",
+    "evidence_handling",
+    "stop_conditions",
+    "requests",
+    "signing",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/http-recon-roe"
+    },
+    "engagement_id": {
+      "$ref": "#/$defs/id"
+    },
+    "environment": {
+      "enum": [
+        "production",
+        "non_production"
+      ]
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization_id",
+        "statement",
+        "authorized_by",
+        "emergency_stop_contact",
+        "document_sha256"
+      ],
+      "properties": {
+        "authorization_id": {
+          "$ref": "#/$defs/id"
+        },
+        "statement": {
+          "const": "I authorize the bounded HTTP reconnaissance described by this RoE against the exact target, request list, and validity window."
+        },
+        "authorized_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "organization",
+            "approver_name",
+            "approver_role",
+            "contact"
+          ],
+          "properties": {
+            "organization": {
+              "$ref": "#/$defs/humanText"
+            },
+            "approver_name": {
+              "$ref": "#/$defs/humanText"
+            },
+            "approver_role": {
+              "$ref": "#/$defs/humanText"
+            },
+            "contact": {
+              "$ref": "#/$defs/contact"
+            }
+          }
+        },
+        "emergency_stop_contact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "contact"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/humanText"
+            },
+            "contact": {
+              "$ref": "#/$defs/contact"
+            }
+          }
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    },
+    "validity": {
+      "$ref": "#/$defs/validity"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "evidence_handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "classification",
+        "retention_days"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "PUBLIC",
+            "INTERNAL",
+            "CONFIDENTIAL",
+            "RESTRICTED"
+          ]
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        }
+      }
+    },
+    "stop_conditions": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        {
+          "const": "AUTHORIZATION_REVOKED"
+        },
+        {
+          "const": "EMERGENCY_STOP_REQUESTED"
+        },
+        {
+          "const": "AUTHORIZATION_WINDOW_CLOSED"
+        },
+        {
+          "const": "TARGET_PROOF_INVALID"
+        },
+        {
+          "const": "TARGET_IDENTITY_CHANGED"
+        },
+        {
+          "const": "LIMIT_REACHED"
+        },
+        {
+          "const": "UNEXPECTED_SIDE_EFFECT"
+        }
+      ],
+      "items": false
+    },
+    "requests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/request"
+      }
+    },
+    "signing": {
+      "$ref": "#/$defs/signing"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "humanText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "contact": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2048,
+      "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tls_spki_sha256",
+        "proof"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "tls_spki_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "url",
+            "challenge_nonce",
+            "max_age_ms"
+          ],
+          "properties": {
+            "method": {
+              "const": "GET"
+            },
+            "url": {
+              "$ref": "#/$defs/httpsUrl"
+            },
+            "challenge_nonce": {
+              "$ref": "#/$defs/sha256"
+            },
+            "max_age_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 300000
+            }
+          }
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "not_before",
+        "not_after"
+      ],
+      "properties": {
+        "not_before": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "not_after": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_probe_requests",
+        "max_target_proof_requests",
+        "max_target_proof_response_bytes",
+        "request_timeout_ms",
+        "max_response_bytes",
+        "max_aggregate_response_bytes",
+        "max_wall_time_ms",
+        "min_interval_ms",
+        "concurrency"
+      ],
+      "properties": {
+        "max_probe_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_target_proof_requests": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "max_target_proof_response_bytes": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 65536
+        },
+        "request_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 30000
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_aggregate_response_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "max_wall_time_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 900000
+        },
+        "min_interval_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 60000
+        },
+        "concurrency": {
+          "const": 1
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "url"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "HEAD",
+            "GET",
+            "OPTIONS"
+          ]
+        },
+        "url": {
+          "$ref": "#/$defs/httpsUrl"
+        },
+        "safe_to_get": {
+          "const": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "GET"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "then": {
+            "required": [
+              "safe_to_get"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "safe_to_get"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value_base64"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "value_base64": {
+          "type": "string",
+          "minLength": 88,
+          "maxLength": 88,
+          "pattern": "^[A-Za-z0-9+/]{86}==$"
+        }
+      }
+    }
+  }
+}
