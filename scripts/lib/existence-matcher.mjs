@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { parseEvidenceLocation } from './evidence-locator.mjs'
 
 const HORIZONTAL_WHITESPACE = /^[ \t]+|[ \t]+$/g
 
@@ -162,5 +164,138 @@ export function searchAbsence(entries, claim) {
     matchCount,
     searchedFiles: searchable.length,
     hits,
+  }
+}
+
+// Building a fresh Map/array from the full inventory on every call is the right default
+// for a single lookup, but applyFindings verifies many candidates against the same
+// inventory in one pass. Both helpers below let a caller compute the shared view once
+// and thread it through verifyFindingExistence's optional parameters instead of paying
+// an O(inventory size) rebuild per candidate.
+export function indexEntriesByPath(entries) {
+  return new Map(entries.map((entry) => [entry.path, entry]))
+}
+
+// searchAbsence itself still filters by kind/content/scope and sorts on every call — its
+// signature and semantics are unchanged. Pre-reducing entries to just the text-bearing
+// ones, sorted once by canonical path, means that per-claim work now runs over a much
+// smaller, already-ordered array instead of the raw (possibly huge, mostly non-text)
+// inventory, without altering searchAbsence's output for any given claim.
+export function sortedTextEntries(entries) {
+  return entries
+    .filter((entry) => entry.kind === 'text' && typeof entry.content === 'string')
+    .sort((left, right) => compareCanonicalStrings(left.path, right.path))
+}
+
+function sha256Hex(buffer) {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+export function verifyFindingExistence(
+  finding,
+  entries,
+  byPath = indexEntriesByPath(entries),
+  textEntries = sortedTextEntries(entries),
+) {
+  // An evidence-qualified finding is graded by evidence-locator.mjs against a
+  // sealed bundle, not against the repository inventory. Running it through the
+  // repository matcher would report it as an unavailable anchor, double-counting
+  // a bundle finding as a repository failure.
+  if ((finding.location ?? []).some((value) => parseEvidenceLocation(value))) {
+    return {
+      candidate_id: finding.candidate_id,
+      quote_results: [],
+      absence_results: [],
+      outcome: 'NOT_APPLICABLE',
+    }
+  }
+
+  const quotes = Array.isArray(finding.quotes) ? finding.quotes : []
+  const claims = Array.isArray(finding.absence_claims) ? finding.absence_claims : []
+
+  const quoteResults = quotes.map((quote, index) => {
+    const entry = byPath.get(quote.path)
+    if (!entry || entry.kind !== 'text' || typeof entry.content !== 'string') {
+      return {
+        index,
+        outcome: 'NOT_LOCATED',
+        path: quote.path,
+        claimed_line: quote.line,
+        found_line: null,
+        match_count: 0,
+        start_byte: null,
+        end_byte: null,
+        excerpt_sha256: null,
+        anchor_state: 'ANCHOR_UNAVAILABLE',
+      }
+    }
+    const match = matchQuote(entry.content, quote.text, quote.line)
+    const base = {
+      index,
+      outcome: match.outcome,
+      path: quote.path,
+      claimed_line: quote.line,
+      found_line: match.foundLine,
+      match_count: match.matchCount,
+    }
+    if (match.outcome === 'NOT_LOCATED') {
+      return {
+        ...base,
+        start_byte: null,
+        end_byte: null,
+        excerpt_sha256: null,
+        anchor_state: 'ANCHOR_UNAVAILABLE',
+      }
+    }
+    // Byte anchors come from re-encoding the decoded content as UTF-8. That only
+    // round-trips to the original bytes if those bytes were valid UTF-8 to begin with;
+    // otherwise content already has U+FFFD in place of the invalid bytes and any byte
+    // offset computed from it would be wrong. The inventory's sha256 of the original
+    // bytes is the oracle: if re-encoding doesn't reproduce it, withhold the anchor
+    // rather than report a byte range that cannot be trusted.
+    const bytes = Buffer.from(entry.content, 'utf8')
+    const roundTrips = typeof entry.sha256 !== 'string'
+      || sha256Hex(bytes) === entry.sha256.toLowerCase()
+    if (!roundTrips) {
+      return {
+        ...base,
+        start_byte: null,
+        end_byte: null,
+        excerpt_sha256: null,
+        anchor_state: 'ANCHOR_UNAVAILABLE',
+      }
+    }
+    const excerpt = bytes.subarray(match.startByte, match.endByte)
+    return {
+      ...base,
+      start_byte: match.startByte,
+      end_byte: match.endByte,
+      excerpt_sha256: sha256Hex(excerpt),
+      anchor_state: 'ANCHORED',
+    }
+  })
+
+  const absenceResults = claims.map((claim, index) => ({
+    index,
+    ...searchAbsence(textEntries, claim),
+  })).map(({ matchCount, searchedFiles, ...rest }) => ({
+    ...rest,
+    match_count: matchCount,
+    searched_files: searchedFiles,
+  }))
+
+  let outcome = 'NOT_APPLICABLE'
+  if (quotes.length > 0 || claims.length > 0) {
+    const failed = quoteResults.some((r) => r.outcome === 'NOT_LOCATED')
+      || absenceResults.some((r) => r.outcome !== 'ABSENCE_HOLDS')
+    const drifted = quoteResults.some((r) => r.outcome === 'LOCATED_OFF_LINE')
+    outcome = failed ? 'UNVERIFIED' : (drifted ? 'DRIFTED' : 'VERIFIED')
+  }
+
+  return {
+    candidate_id: finding.candidate_id,
+    quote_results: quoteResults,
+    absence_results: absenceResults,
+    outcome,
   }
 }
