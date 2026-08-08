@@ -50,6 +50,18 @@ a parameter that fails its own pattern is refused rather than interpolated.
 any vector containing a mutating verb or an impersonation flag, for the day
 someone adds an operation here that smuggles one in.
 
+### Platform constraint: shell shims
+
+This controller never spawns a shell, and `execFile` cannot launch a Windows
+`.cmd` or `.bat` shim without one. A CLI distributed only as a shim is
+therefore reported **absent** and the plan refuses — fail-closed, which is the
+right direction, but the reason says so explicitly rather than claiming the
+tool is missing.
+
+`sf` is affected: npm installs it as `sf.cmd`, so the `sf.*` operations cannot
+run on Windows without a native executable on `PATH`. `kubectl` ships a real
+executable and is unaffected.
+
 ## Authorization
 
 Attestation, a declared target class, a named operator, impact counters and a

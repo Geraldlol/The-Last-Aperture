@@ -1,7 +1,7 @@
 # Evidence-Class Boundary — Design
 
 - **Date:** 2026-08-08
-- **Status:** Approved in outline; rewritten against canonical contracts, awaiting operator review
+- **Status:** **Implemented and merged 2026-08-09.** All five plans landed; see *Implementation reconciliation* at the end for every place the built system differs from this design, and why.
 - **Scope:** Phase 0 of a four-phase program (see *Program phases*)
 - **Motivating incident:** DEF CON 34 Kubernetes Learning CTF — "Terminate Transfer", "Shell in the Ghost"
 - **Canonical contracts this design extends:** `skills/red-team-audit/lenses/_schema.md`, `skills/red-team-audit/lenses/_topics.md`, `skills/red-team-audit/lenses/_harness.md`, `skills/red-team-audit/lenses/_database-adapters/contract.md`
@@ -163,6 +163,7 @@ evidence_profile:
   adapter_version: "1.0.0"
   contract_version: 1
   coverage_state: COVERED                      # existing enum
+  artifact_kind: oci-image                     # required for built-artifact, forbidden otherwise
   files:
     - path: payload/layers/02/entries.json
       sha256: 6c1f...
@@ -210,7 +211,7 @@ Rules:
 
 - `state` is `consumed` or `not-consumed`. Every canonical class must appear; omission is a lint failure, mirroring the database rule that an adapter "may not rename or omit a canonical one" (`contract.md:314`).
 - `artifact_kinds` is required when `built-artifact` is `consumed`, and names the artifact kinds the lens can interpret from the canonical set: `oci-image`, `apk`, `ipa`, `jar`, `dist-bundle`. A lens must not claim coverage of a kind it has no rules for — `mobile-app-security` declares `[apk, ipa]`, `cloud-and-iac` declares `[oci-image]`. An acquired artifact whose kind no activated lens declares yields `INVENTORY_ONLY`, never silence.
-- `may_conclude` bounds what a finding from that class may assert. A finding asserting outside its class's `may_conclude` is malformed.
+- `may_conclude` bounds what a finding from that class may assert, drawn from the canonical claim-kind vocabulary declared in `_evidence-adapters/contract.md` → `## Claim kinds`. A finding names its assertion in the Stage-1 field `evidence_claim`; a record whose `evidence_claim` falls outside its class's `may_conclude` is malformed. It is required for every consumed class except `source`, which is exempt — `source` is what every lens in this registry already does, and bounding it would re-litigate all 174 owned topics.
 - A lens with `state: not-consumed` for a class contributes `NOT_APPLICABLE` for it, not `NOT_ASSESSED` — the lens has nothing to say, which is different from evidence being missing.
 - `threat-modeling` is advisory and makes no coverage claim (`SKILL.md:23-24`). It declares all four classes `not-consumed` and is exempt from evidence-class coverage reporting.
 - `business-logic`, `completeness`, `attack-chaining`, and `ai-generated-code` own no topics and read the merged set. They declare classes `consumed` where they can reason over another lens's evidence, and inherit the `owns: []` exemption at `_schema.md:95-109` unchanged.
@@ -289,7 +290,7 @@ Because bundles are hashed and content-addressed, re-verification months later i
 
 **New invariant, in the style of invariant 15:**
 
-> **16.** A record whose `location` carries an evidence-qualified form has `evidence_context` present, and its `evidence_class` is declared `consumed` by the lens named in `lens`. Its claim lies within that class's `may_conclude`. Where two classes yield conflicting claims for one topic, the higher-precedence class prevails and the conflict is recorded; a lower-precedence class never overrides a higher one. A claim resting on a class whose coverage is `NOT_ASSESSED` or `INVENTORY_ONLY` is `UNPROVEN` and capped at Medium.
+> **16.** A record whose `location` carries an evidence-qualified form has `evidence_context` present, and its `evidence_class` is declared `consumed` by the lens named in `lens`. Its `evidence_claim` lies within that class's `may_conclude`. Where two classes yield conflicting claims for one topic, the higher-precedence class prevails and the conflict is recorded; a lower-precedence class never overrides a higher one. A claim resting on a class whose coverage is `NOT_ASSESSED` or `INVENTORY_ONLY` is `UNPROVEN` and capped at Medium.
 
 The final clause reuses invariant 8's existing arithmetic rather than adding a mechanism.
 
@@ -468,3 +469,107 @@ One design, five plans:
 5. **`deployed` and `runtime` adapters** — read-only allowlists, attestation, PHI scope enforcement, impact counters, kill switch.
 
 Plan 2 is deliberately ordered before any adapter: it is the smallest change that removes the false-clearance failure mode, and it is independently shippable.
+
+All five shipped, in that order, merged to `main` on 2026-08-09 across 22 commits.
+Plan 2's claim held: after it and before any adapter existed, an audit of a
+repository containing only the motivating Dockerfile already printed *"An
+unexamined evidence class is a coverage gap, not a clearance."*
+
+---
+
+## Implementation reconciliation
+
+Every place the built system differs from the design above, and why. Recorded
+here rather than left to drift, because a design nobody reconciles becomes a
+document that describes a system that does not exist.
+
+### Contract gaps this design had
+
+Three things were unenforceable as specified. Each was found by trying to
+implement the rule, not by re-reading it.
+
+1. **`may_conclude` had nothing to check against.** The design says a finding
+   asserting outside its class's `may_conclude` is malformed but names no field
+   carrying the assertion. Resolved: Stage-1 `evidence_claim`, required with
+   `evidence_context`, drawn from a closed six-value vocabulary declared in
+   `_evidence-adapters/contract.md`. Without both halves the rule validates
+   nothing, and every lens invents its own labels — the shadow-registry failure
+   `_schema.md:107` warns about.
+
+2. **`location`'s pattern rejected the evidence form outright.**
+   `finding.schema.json` required a trailing `:line`, so
+   `peerstar-api-image:layer/02/…json` was not merely ungradeable, it was
+   unrepresentable. The two forms are now disjoint by construction — a
+   repository path carries `/` or `.` and cannot be an `evidence_id`; a
+   repository line is purely digits and cannot be a locator — so no reader has
+   to guess which one it holds.
+
+3. **A bundle recorded no artifact kind.** The design puts `artifact_kinds` on
+   the lens but never records what kind a given bundle carries, making "an
+   acquired artifact whose kind no activated lens declares yields
+   `INVENTORY_ONLY`" uncomputable. Resolved: `evidence_profile.artifact_kind`.
+
+### Decisions the design left open
+
+- **One record, one evidence source.** A record may not mix a repository
+  location with an evidence-qualified one. `store_context`'s "one record
+  concerns one store" is the same rule for the same reason, and a mixed record
+  makes precedence unresolvable — which class is the record resting on?
+- **The four owns-nothing lenses consume `source` only.** They reason over the
+  merged finding set, not over raw evidence, and a finding they originate lands
+  on the owning lens's topic where the owner's declaration bounds it. Declaring
+  classes they have no rules for would manufacture coverage.
+- **`--evidence-bundle` takes a comma-separated list**, not a repeated flag:
+  `audit.mjs`'s argument parser rejects a duplicated option, and one string
+  stays one immutable value in the plan digest.
+
+### Where enforcement actually lives
+
+Invariant 16 could not be enforced in one place, because its four clauses need
+different inputs:
+
+| Clause | Enforced in | Why there |
+|---|---|---|
+| `evidence_context` present, ids match, no mixed locations | `contracts.mjs`, unconditional | Record-local; needs nothing else |
+| Class declared `consumed`, claim within `may_conclude`, coverage cap | `contracts.mjs`, when the caller supplies `options.evidence` | Needs the lens pack and the run's coverage matrix, which `validateFinding` has no access to |
+| Precedence between two records | `evidenceConflicts(findings)`, a set-level resolver | A conflict is a property of a pair; a single-record validator cannot see one |
+
+The coverage matrix is hashed into `plan_digest`, so it cannot be edited after
+planning — which means `validate` recomputes the same field. Both sides are
+conditional so a run planned before the matrix existed still validates.
+
+### Operational constraints found by building it
+
+- **`sf` is unusable by the `deployed` adapter on Windows.** It ships as a
+  `.cmd` shim, and `execFile` cannot launch those without `shell: true`, which
+  this controller never uses. It fails closed and now says so accurately —
+  *"installed as a shell shim … supply a native executable"* rather than the
+  false *"not found on PATH"*. The design's table claims `salesforce-platform`
+  can reach live org state; on this platform it currently cannot. `kubectl`
+  works, shipping a real executable.
+- **Impact counters were built one tier earlier than specified.** The design
+  attaches them to `deployed-state` and `live-runtime`. `registry` is the first
+  adapter that leaves the machine, so the mechanism was written there and
+  reused twice rather than implemented twice.
+- **PHI redaction identifies structure by field name, never by value shape.** A
+  value-shape heuristic passed `TXJzIFJvc2EgTGVl` through verbatim: base64 PHI
+  is frequently pure alphanumeric and indistinguishable from a resource kind by
+  inspection.
+- **A non-image archive grades `NOT_ASSESSED`, not `PARTIAL`.** `PARTIAL` means
+  some was acquired and the omissions are named; an archive with no readable
+  structure acquired nothing.
+- **Payload prefixes are positional.** Keying them by `operation_id` collided
+  when one plan ran two `k8s.resource` reads of different objects — a
+  legitimate plan — and duplicated `detection_evidence` against a `uniqueItems`
+  constraint.
+
+### Still open
+
+- **Phase 1 is unblocked but unstarted.** `artifact.md` declares all five OCI
+  rule anchors and the fixtures plant all five patterns; no detection rule is
+  written. That is Phase 1, in lens and adapter prose, not in Node.
+- **Phase 2 has no rule anchors.** `deployed.md` and `runtime.md` declare none.
+- **Phase 3 remains out of scope** and must not be implemented from this
+  document. The hard-rail amendment recorded above is still a prerequisite, and
+  `runtime.md` says so in its own body so the next reader of that file does not
+  have to reconstruct the boundary from a spec they may never see.
