@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/evidence-bundle.schema.json",
+  "title": "Evidence acquisition bundle profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_context",
+    "target_class",
+    "phi_scope",
+    "phi_bearing",
+    "adapter_version",
+    "contract_version",
+    "coverage_state",
+    "files",
+    "attestation",
+    "coverage_gaps"
+  ],
+  "properties": {
+    "schema": { "const": "evidence-bundle-v1" },
+    "evidence_context": { "$ref": "#/$defs/evidenceContext" },
+    "target_class": { "enum": ["LAB", "NONPROD", "PRODUCTION", "THIRD_PARTY"] },
+    "phi_scope": { "enum": ["none", "possible", "confirmed"] },
+    "phi_bearing": { "type": "boolean" },
+    "adapter_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "contract_version": { "type": "integer", "minimum": 1 },
+    "coverage_state": {
+      "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+    },
+    "artifact_kind": {
+      "enum": ["apk", "dist-bundle", "ipa", "jar", "oci-image"]
+    },
+    "files": {
+      "type": "array",
+      "maxItems": 65536,
+      "items": { "$ref": "#/$defs/bundleFile" }
+    },
+    "attestation": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/attestation" }]
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": { "$ref": "#/$defs/coverageGap" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "evidenceId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "evidenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "evidence_class",
+        "adapter_id",
+        "target_identity",
+        "acquisition_mode",
+        "acquired_on",
+        "detection_evidence",
+        "confidence"
+      ],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/evidenceId" },
+        "evidence_class": {
+          "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+        },
+        "adapter_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "target_identity": { "$ref": "#/$defs/nonEmptyString" },
+        "acquisition_mode": { "$ref": "#/$defs/nonEmptyString" },
+        "acquired_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "detection_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
+    },
+    "bundleFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^payload/(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$",
+          "maxLength": 1024
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operator_id", "authorized_by", "authorization_reference", "attested_on"],
+      "properties": {
+        "operator_id": { "$ref": "#/$defs/nonEmptyString" },
+        "authorized_by": { "$ref": "#/$defs/nonEmptyString" },
+        "authorization_reference": { "$ref": "#/$defs/nonEmptyString" },
+        "attested_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "credential_ref": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "coverageGap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["area", "reason"],
+      "properties": {
+        "area": { "$ref": "#/$defs/nonEmptyString" },
+        "reason": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  }
+}
