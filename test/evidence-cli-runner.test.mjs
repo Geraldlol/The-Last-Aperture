@@ -27,6 +27,26 @@ test('an absent CLI probes absent with a named reason, and never throws by itsel
   assert.match(probe.reason, /not found|ENOENT/i)
 })
 
+test('a Windows shell shim is reported as a shim, not as a missing tool', async (t) => {
+  if (process.platform !== 'win32') return t.skip('shell shims are a Windows concern')
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join, delimiter } = await import('node:path')
+  const directory = await mkdtemp(join(tmpdir(), 'rta-shim-'))
+  await writeFile(join(directory, 'rta-fake-cli.cmd'), '@echo off\r\necho 1.0.0\r\n')
+
+  const probe = await probeCli('rta-fake-cli', {
+    versionArgs: ['--version'],
+    env: { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}` },
+  })
+  // Fail-closed is right, but "not found on PATH" would be a false reason for a
+  // tool that is plainly installed, and an operator would act on it wrongly.
+  assert.equal(probe.present, false)
+  assert.match(probe.reason, /shell shim/i)
+  assert.match(probe.reason, /rta-fake-cli\.cmd/)
+  assert.equal(/not found on PATH/.test(probe.reason), false)
+})
+
 test('a missing dependency is a failure, never an empty success', async () => {
   await assert.rejects(
     () => runBoundedCli({ name: 'crane', args: ['pull'], resolver: absentCliResolver }),

@@ -168,6 +168,27 @@ test('SARIF for a fully covered run raises no notification', () => {
   assert.deepEqual(notifications, [])
 })
 
+test('a PHI-bearing bundle is named in the report without its contents', () => {
+  const report = renderMarkdownReport(run({
+    evidence_bundles: [{
+      evidence_id: 'prod-cluster',
+      evidence_class: 'deployed-state',
+      adapter_id: 'deployed',
+      coverage_state: 'COVERED',
+      phi_bearing: true,
+      root_sha256: 'd'.repeat(64),
+    }],
+  }))
+  assert.match(report, /PHI-bearing/i)
+  assert.match(report, /prod-cluster/)
+  assert.match(report, /dddddddddddd/)
+  assert.match(report, /contents are not reproduced/i)
+})
+
+test('a run with no PHI-bearing bundle raises no PHI notice', () => {
+  assert.equal(/PHI-bearing/i.test(renderMarkdownReport(run())), false)
+})
+
 test('a run planned before this change still renders', () => {
   const legacy = run()
   delete legacy.evidence_coverage

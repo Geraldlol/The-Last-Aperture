@@ -1,0 +1,192 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createDeployedAdapter } from '../scripts/lib/evidence-adapters/deployed.mjs'
+import { verifyEvidenceBundle } from '../scripts/lib/evidence-bundle.mjs'
+import { runEvidenceAdapterConformance } from './helpers/evidence-adapter-conformance.mjs'
+import { absentCliResolver, stubCli } from './helpers/stub-cli.mjs'
+
+const SECRET_JSON = JSON.stringify({
+  apiVersion: 'v1',
+  kind: 'List',
+  items: [{
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: { name: 'patient-db', namespace: 'clinical' },
+    data: { DB_PASSWORD: 'aHVudGVyMg==', PATIENT_EXPORT: 'TXJzIFJvc2EgTGVl' },
+  }],
+})
+
+async function kubectlStub(body = SECRET_JSON) {
+  return stubCli('kubectl', `
+    if (args[0] === 'version') { process.stdout.write('v1.29.4\\n') }
+    else { process.stdout.write(${JSON.stringify(body)}) }
+  `)
+}
+
+async function adapterWithStub(body) {
+  const stub = await kubectlStub(body)
+  return createDeployedAdapter({ clock: () => '2026-08-08T14:22:10Z', resolver: stub.resolver })
+}
+
+const REQUEST = {
+  evidence_id: 'prod-cluster',
+  context: 'peerstar-prod',
+  operations: [{ operation_id: 'k8s.resources', params: { kind: 'secrets', namespace: 'clinical' } }],
+  target_class: 'PRODUCTION',
+  acknowledge_production: true,
+  phi_scope: 'possible',
+  attest_authorized: true,
+  operator_id: 'gmaida',
+  authorized_by: 'security-lead',
+  authorization_reference: 'JIRA-4418',
+}
+
+runEvidenceAdapterConformance(await adapterWithStub(), { validPlanRequest: REQUEST })
+
+test('plan seals the operation list and probes kubectl without running anything', async () => {
+  const adapter = await adapterWithStub()
+  const planned = await adapter.plan(REQUEST)
+  assert.equal(planned.evidence_context_seed.evidence_class, 'deployed-state')
+  assert.equal(planned.evidence_context_seed.acquisition_mode, 'read-only-query')
+  assert.equal(planned.operations.length, 1)
+  assert.deepEqual(planned.operations[0].args, ['get', 'secrets', '-n', 'clinical', '-o', 'json'])
+  assert.equal(planned.dependency.present, true)
+})
+
+test('plan refuses an operation outside the allowlist', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(
+    () => adapter.plan({
+      ...REQUEST,
+      operations: [{ operation_id: 'k8s.delete', params: { kind: 'ns' } }],
+    }),
+    /not allowlisted/i,
+  )
+})
+
+test('plan refuses PRODUCTION without an explicit acknowledgment', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, acknowledge_production: false }),
+    /PRODUCTION|acknowledg/i,
+  )
+})
+
+test('plan refuses THIRD_PARTY without a signed authorization artifact', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, target_class: 'THIRD_PARTY' }),
+    /signed|higher-assurance/i,
+  )
+})
+
+test('plan refuses without attestation, because deployed-state floors it', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(() => adapter.plan({ ...REQUEST, attest_authorized: false }), /attest/i)
+})
+
+test('an absent kubectl fails at plan time rather than succeeding emptily', async () => {
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: absentCliResolver,
+  })
+  await assert.rejects(() => adapter.plan(REQUEST), /kubectl|absent|not found/i)
+})
+
+test('run acquires the objects and the bundle verifies', async () => {
+  const adapter = await adapterWithStub()
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const written = await adapter.run(await adapter.plan(REQUEST), { out })
+  assert.deepEqual((await verifyEvidenceBundle(written.directory)).errors, [])
+  assert.equal(written.profile.evidence_context.evidence_class, 'deployed-state')
+  assert.equal(written.profile.coverage_state, 'COVERED')
+  assert.equal(Object.hasOwn(written.profile, 'artifact_kind'), false)
+})
+
+test('phi_scope possible captures key names and shapes but no values', async () => {
+  const adapter = await adapterWithStub()
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const written = await adapter.run(await adapter.plan(REQUEST), { out })
+  assert.equal(written.profile.phi_bearing, false)
+
+  const bytes = await readFile(join(written.directory, 'payload', 'objects', '00', '0.json'))
+  const text = bytes.toString('utf8')
+  assert.match(text, /PATIENT_EXPORT/)
+  assert.equal(text.includes('TXJzIFJvc2EgTGVl'), false)
+  assert.equal(text.includes('aHVudGVyMg=='), false)
+})
+
+test('phi_scope none captures contents in full and marks nothing', async () => {
+  const adapter = await adapterWithStub()
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const written = await adapter.run(
+    await adapter.plan({ ...REQUEST, phi_scope: 'none' }),
+    { out },
+  )
+  const text = (await readFile(
+    join(written.directory, 'payload', 'objects', '00', '0.json'),
+  )).toString('utf8')
+  assert.match(text, /TXJzIFJvc2EgTGVl/)
+  assert.equal(written.profile.phi_bearing, false)
+})
+
+test('unparsed output is PARTIAL with the unparsed portion named', async () => {
+  const adapter = await adapterWithStub('not json at all')
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const written = await adapter.run(await adapter.plan(REQUEST), { out })
+  assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /pars/i.test(reason)))
+})
+
+test('impact counters halt acquisition when a cap is exceeded', async () => {
+  const stub = await kubectlStub()
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: stub.resolver,
+    limits: { maxCommands: 1, maxObjects: 1 },
+  })
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const planned = await adapter.plan({
+    ...REQUEST,
+    operations: [
+      { operation_id: 'k8s.resource', params: { kind: 'secrets', name: 'a', namespace: 'clinical' } },
+      { operation_id: 'k8s.resource', params: { kind: 'secrets', name: 'b', namespace: 'clinical' } },
+    ],
+  })
+  const written = await adapter.run(planned, { out })
+  assert.equal(written.profile.coverage_state, 'PARTIAL')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /cap/i.test(reason)))
+})
+
+test('a stop request halts the loop before the next operation', async () => {
+  const stub = await kubectlStub()
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: stub.resolver,
+  })
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const planned = await adapter.plan({
+    ...REQUEST,
+    operations: Array.from({ length: 4 }, (_unused, index) => ({
+      operation_id: 'k8s.resource',
+      params: { kind: 'secrets', name: `s${index}`, namespace: 'clinical' },
+    })),
+  })
+  let calls = 0
+  const written = await adapter.run(planned, {
+    out,
+    shouldStop: () => {
+      calls += 1
+      return calls > 2
+    },
+  })
+  assert.equal(written.profile.coverage_state, 'PARTIAL')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /stopped by the operator/i.test(reason)))
+  const executed = JSON.parse(
+    (await readFile(join(written.directory, 'payload', 'operations.json'))).toString('utf8'),
+  )
+  assert.equal(executed.length, 2, 'the loop must stop rather than run every planned operation')
+})

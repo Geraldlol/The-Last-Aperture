@@ -858,6 +858,26 @@ export function renderMarkdownReport(run) {
         '',
       )
     }
+    const phiBearing = (run.evidence_bundles ?? []).filter(({ phi_bearing: bearing }) => bearing)
+    if (phiBearing.length > 0) {
+      lines.push(
+        '#### PHI-bearing evidence',
+        '',
+        'The following bundles were captured with contents under a declared PHI scope. ' +
+        'Their contents are not reproduced here; the bundle is itself an auditable ' +
+        'artifact and is subject to its retention limit.',
+        '',
+        '| Evidence | Class | Adapter | Bundle digest |',
+        '|---|---|---|---|',
+      )
+      for (const bundle of phiBearing) {
+        lines.push(
+          `| ${tableCell(bundle.evidence_id)} | ${tableCell(bundle.evidence_class)} | ` +
+          `${tableCell(bundle.adapter_id)} | ${inlineCode(bundle.root_sha256.slice(0, 12))} |`,
+        )
+      }
+      lines.push('')
+    }
     if ((evidenceSummary.inventory_only_cell_count ?? 0) > 0) {
       lines.push(
         `${evidenceSummary.inventory_only_cell_count} lens/topic obligation` +

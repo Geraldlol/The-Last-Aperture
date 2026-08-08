@@ -4,7 +4,10 @@ const EVIDENCE_LOCATION = /^([a-z0-9][a-z0-9-]{0,63}):(?!\d+$)(.+)$/
 const LAYER_LOCATOR = /^layer\/(\d{2,})\/(.+)$/
 const HISTORY_LOCATOR = /^config\/history\[(\d+)\]$/
 const ORPHAN_LOCATOR = /^orphan\/(sha256:[0-9a-f]{64})$/
+const OBJECT_LOCATOR = /^([a-z0-9][a-z0-9./-]*)\/([A-Z][A-Za-z0-9]*)\/([a-z0-9-]+)\/([a-z0-9.-]+)$/
 const MAX_OBSERVED_BYTES = 512
+// Bounded for the same reason every other loop in this subsystem is.
+const MAX_OBJECT_SCAN = 4096
 
 export function parseEvidenceLocation(value) {
   const match = EVIDENCE_LOCATION.exec(String(value))
@@ -57,6 +60,40 @@ export async function resolveEvidenceLocator(directory, locator) {
       payload_path: 'payload/orphan-blobs.json',
       bytes: element === undefined ? null : Buffer.from(JSON.stringify(element), 'utf8'),
     }
+  }
+
+  // A deployed-state object, cited as <apiVersion>/<Kind>/<namespace>/<name>.
+  // The payload prefix is the operation's position, so the scan walks
+  // operations.json rather than reconstructing a directory from the locator.
+  const object = OBJECT_LOCATOR.exec(locator)
+  if (object) {
+    const [, apiVersion, kind, namespace, name] = object
+    const executed = await readJsonPayload(directory, 'payload/operations.json')
+    for (const { payload_prefix: prefix } of executed ?? []) {
+      if (typeof prefix !== 'string') continue
+      for (let index = 0; index < MAX_OBJECT_SCAN; index += 1) {
+        const path = `payload/objects/${prefix}/${index}.json`
+        let parsed
+        try {
+          parsed = JSON.parse((await readEvidencePayloadFile(directory, path)).toString('utf8'))
+        } catch {
+          break
+        }
+        if (
+          parsed?.apiVersion === apiVersion
+          && parsed?.kind === kind
+          && parsed?.metadata?.namespace === namespace
+          && parsed?.metadata?.name === name
+        ) {
+          return {
+            kind: 'object',
+            payload_path: path,
+            bytes: Buffer.from(JSON.stringify(parsed), 'utf8'),
+          }
+        }
+      }
+    }
+    return { kind: 'object', payload_path: null, bytes: null }
   }
 
   return { kind: 'unknown', payload_path: null, bytes: null }

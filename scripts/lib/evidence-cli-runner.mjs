@@ -1,4 +1,25 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { delimiter, join } from 'node:path'
+
+// On Windows many CLIs ship only as a .cmd/.bat shim, which execFile cannot
+// launch without `shell: true` — and this runner never uses a shell. Refusing
+// is the safe direction, but "not found on PATH" would be a false reason for a
+// tool that is plainly installed, and an operator would act on it wrongly.
+const SHELL_SHIM_EXTENSIONS = ['.cmd', '.bat']
+
+function findShellShim(name, env) {
+  if (process.platform !== 'win32') return null
+  const path = env?.PATH ?? env?.Path ?? ''
+  for (const directory of String(path).split(delimiter)) {
+    if (!directory) continue
+    for (const extension of SHELL_SHIM_EXTENSIONS) {
+      const candidate = join(directory, `${name}${extension}`)
+      if (existsSync(candidate)) return candidate
+    }
+  }
+  return null
+}
 
 export const DEFAULT_CLI_LIMITS = Object.freeze({
   timeoutMs: 120000,
@@ -92,6 +113,17 @@ export async function probeCli(name, {
     windowsHide: true,
   })
   if (error && (error.code === 'ENOENT' || error.code === 'EACCES')) {
+    const shim = findShellShim(name, env)
+    if (shim) {
+      return {
+        name,
+        present: false,
+        version: null,
+        reason: `${name} is installed at ${shim} as a shell shim, which this `
+          + 'controller will not execute because it never spawns a shell; supply a '
+          + 'native executable on PATH',
+      }
+    }
     return { name, present: false, version: null, reason: `${error.code}: not found on PATH` }
   }
   if (error && error.killed) {

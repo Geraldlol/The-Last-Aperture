@@ -4,6 +4,8 @@ import { resolveEvidenceAdapter } from './evidence-adapters.mjs'
 import { readEvidenceBundle, verifyEvidenceBundle } from './evidence-bundle.mjs'
 import { createArtifactAdapter } from './evidence-adapters/artifact.mjs'
 import { createRegistryAdapter } from './evidence-adapters/registry.mjs'
+import { createDeployedAdapter } from './evidence-adapters/deployed.mjs'
+import { createRuntimeAdapter } from './evidence-adapters/runtime.mjs'
 
 const PLAN_FILE = 'acquisition-plan.json'
 
@@ -12,6 +14,8 @@ const PLAN_FILE = 'acquisition-plan.json'
 const ADAPTER_FACTORIES = new Map([
   ['artifact', createArtifactAdapter],
   ['registry', createRegistryAdapter],
+  ['deployed', createDeployedAdapter],
+  ['runtime', createRuntimeAdapter],
 ])
 
 export class AcquisitionError extends Error {
@@ -49,7 +53,7 @@ export async function isAcquisitionStopped(bundle) {
   }
 }
 
-export async function planAcquisition({ adapterId, request, out, env = process.env }) {
+export async function planAcquisition({ adapterId, request, out, env = process.env, resolver }) {
   const routed = resolveEvidenceAdapter(adapterId)
   if (routed.selection_status !== 'SELECTED') {
     throw new AcquisitionError(
@@ -65,7 +69,7 @@ export async function planAcquisition({ adapterId, request, out, env = process.e
       `adapter "${adapterId}" is declared in the routing manifest but not implemented`,
     )
   }
-  const adapter = factory({ env })
+  const adapter = factory({ env, resolver })
   const plan = await adapter.plan(request)
   const directory = resolve(out)
   await writePlanFile(directory, {
@@ -83,6 +87,7 @@ export async function runAcquisition({
   operatorId,
   authorizationConfirmed = false,
   env = process.env,
+  resolver,
 }) {
   const directory = resolve(bundle)
   const record = await readPlanFile(directory)
@@ -106,7 +111,7 @@ export async function runAcquisition({
     )
   }
 
-  const adapter = ADAPTER_FACTORIES.get(record.adapter_id)({ env })
+  const adapter = ADAPTER_FACTORIES.get(record.adapter_id)({ env, resolver })
   const written = await adapter.run(record.plan, {
     out: directory,
     authorizationConfirmed,

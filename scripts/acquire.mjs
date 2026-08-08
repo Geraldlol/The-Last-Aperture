@@ -15,6 +15,8 @@ const HELP = `red-team-audit evidence acquisition 0.11.0
 Usage:
   audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
   audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
+  audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--capture-contents --acknowledge-phi] [--json]
+  audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--capture-contents --acknowledge-phi] [--json]
   audit:acquire <adapter> run <bundle> --operator-id <id> [--confirm-authorization-current] [--json]
   audit:acquire <adapter> finalize <bundle> [--json]
   audit:acquire <adapter> validate <bundle> [--json]
@@ -23,7 +25,10 @@ Usage:
 Boundary:
   Planning performs no acquisition. The artifact adapter reads only a file it
   was handed and makes no network request; the registry adapter pulls one
-  digest-pinned image and nothing else. A bundle carries a credential reference,
+  digest-pinned image and nothing else. Every deployed and runtime command is
+  built from a controller-side read-only allowlist, so a mutating command is
+  unconstructible. Impact counters halt acquisition at their caps and stop is
+  idempotent. A bundle carries a credential reference,
   never a credential value. Bundles are written outside their target and are
   refused by \`audit -- plan\` if a single byte does not verify. This control
   plane mutates nothing. Exploitation is a separate tier that does not exist in
@@ -70,9 +75,21 @@ const VALUE_OPTIONS = new Set([
   'phi-scope',
   'operator-id',
   'reason',
+  'context',
+  'namespace',
+  'pod',
+  'container',
+  'operation',
 ])
 
-const FLAG_OPTIONS = new Set(['json', 'confirm-authorization-current', 'attest-authorized'])
+const FLAG_OPTIONS = new Set([
+  'json',
+  'confirm-authorization-current',
+  'attest-authorized',
+  'acknowledge-production',
+  'acknowledge-phi',
+  'capture-contents',
+])
 
 // Per-adapter plan shapes. Registered adapters keep their own required set, so
 // an adapter with no authorization floor is not made to carry one it does not need.
@@ -94,6 +111,16 @@ const PLAN_SHAPES = {
     ],
     requiredFlags: ['attest-authorized'],
     optional: ['target-class', 'phi-scope', 'json'],
+  },
+  deployed: {
+    required: ['evidence-id', 'context', 'operation', 'target-class', 'phi-scope', 'operator-id', 'authorized-by', 'authorization-reference', 'out'],
+    requiredFlags: ['attest-authorized'],
+    optional: ['acknowledge-production', 'acknowledge-phi', 'capture-contents', 'json'],
+  },
+  runtime: {
+    required: ['evidence-id', 'context', 'operation', 'target-class', 'phi-scope', 'operator-id', 'authorized-by', 'authorization-reference', 'out', 'namespace', 'pod', 'container'],
+    requiredFlags: ['attest-authorized'],
+    optional: ['acknowledge-production', 'acknowledge-phi', 'capture-contents', 'json'],
   },
 }
 
@@ -144,6 +171,23 @@ function assertShape(adapter, command, positionals, options) {
   }
 }
 
+// --operation takes a compact id:key=value,key=value form, repeated as a
+// comma-separated list, because parseArguments rejects a duplicated option.
+function parseOperations(value) {
+  if (typeof value !== 'string') return undefined
+  return value.split(',').map((entry) => {
+    const [id, ...pairs] = entry.split(':')
+    const params = Object.fromEntries(
+      pairs.join(':').split(';').filter(Boolean).map((pair) => {
+        const index = pair.indexOf('=')
+        if (index === -1) throw new Error(`--operation parameter must be key=value: ${pair}`)
+        return [pair.slice(0, index).trim(), pair.slice(index + 1).trim()]
+      }),
+    )
+    return { operation_id: id.trim(), params }
+  })
+}
+
 function printJson(value) {
   process.stdout.write(stableJson(value))
 }
@@ -171,6 +215,14 @@ export async function main(argv = process.argv.slice(2)) {
         authorized_by: options['authorized-by'],
         authorization_reference: options['authorization-reference'],
         attest_authorized: options['attest-authorized'] === true,
+        context: options.context,
+        namespace: options.namespace,
+        pod: options.pod,
+        container: options.container,
+        operations: parseOperations(options.operation),
+        acknowledge_production: options['acknowledge-production'] === true,
+        acknowledge_phi: options['acknowledge-phi'] === true,
+        capture_contents: options['capture-contents'] === true,
         target_class: options['target-class'] ?? (adapter === 'registry' ? 'NONPROD' : 'LAB'),
         phi_scope: options['phi-scope'] ?? 'none',
       },

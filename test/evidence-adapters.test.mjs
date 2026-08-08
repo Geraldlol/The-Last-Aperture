@@ -153,6 +153,30 @@ test('the registry adapter declares no rule anchors of its own', () => {
   assert.deepEqual([...declaredEvidenceRuleAnchors(readFileSync(REGISTRY_DOC, 'utf8'))], [])
 })
 
+for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runtime.md']]) {
+  test(`the ${adapterId} adapter document states its safety envelope`, () => {
+    const doc = readFileSync(
+      fileURLToPath(new URL(`../skills/red-team-audit/lenses/_evidence-adapters/${file}`, import.meta.url)),
+      'utf8',
+    )
+    assert.match(doc, /read-only/i)
+    assert.match(doc, /impact counter/i)
+    assert.match(doc, /kill switch|stop/i)
+    assert.match(doc, /phi-scope|phi_scope/)
+    assert.match(doc, /attestation/i)
+    assert.match(doc, /mutat/i)
+  })
+}
+
+test('the runtime document states it is not an exploitation tier', () => {
+  const doc = readFileSync(
+    fileURLToPath(new URL('../skills/red-team-audit/lenses/_evidence-adapters/runtime.md', import.meta.url)),
+    'utf8',
+  )
+  assert.match(doc, /Phase 3|exploitation/i)
+  assert.match(doc, /mutates nothing/i)
+})
+
 test('the manifest file is the one the module reads', () => {
   const onDisk = JSON.parse(readFileSync(fileURLToPath(EVIDENCE_ADAPTER_MANIFEST_URL), 'utf8'))
   assert.deepEqual(onDisk, evidenceAdapterManifest)
