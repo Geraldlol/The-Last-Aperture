@@ -30,6 +30,8 @@ Where a later stage disagrees with an earlier one it says so **beside** the orig
 | `store_context` | object | **Required when `lens: database-and-data-stores`.** Stable store identity, selected adapter and the evidence that selected it; shape below |
 | `principal_path` | object | **Required when `lens: database-and-data-stores`.** Authenticated/session/effective/owner-definer identities plus bypass capabilities |
 | `enforcement_plane` | application / database / cloud / filesystem / unknown | **Required when `lens: database-and-data-stores`.** Where the claimed invariant is actually enforced |
+| `evidence_context` | object | **Required when `location` carries an evidence-qualified form.** Stable evidence identity, the acquiring adapter and the evidence that identified it; shape below |
+| `evidence_claim` | claim kind | **Required with `evidence_context`.** The one thing this finding asserts, bounded by the lens's `may_conclude` for that class |
 | `copy_path` | string or string[] | Optional database context: primary, replica, CDC, history, backup, clone, export, index or another named copy |
 | `adapter_rule_id` | stable string | **Required for version- or deployment-sensitive database claims.** Resolves to the selected adapter's rule |
 | `semantic_source` | URL + verified date | **Required with `adapter_rule_id`.** Primary documentation establishing the engine behavior, not a search result or secondary summary |
@@ -79,6 +81,82 @@ cannot be confirmed High or Critical: it is `UNPROVEN` and capped at Medium
 until that semantic premise is established. Reuse `contingent_fact` and
 `contingent_query` when one live fact would settle it; there is no parallel
 database uncertainty field.
+
+### Evidence context
+
+A repository audit has exactly one evidence source: files in the repository.
+Every lens therefore reasons about the *recipe* and reports on the *result* —
+and `COPY secret.txt` followed by `RUN rm /secret.txt` reads as a removal in
+the Dockerfile while the bytes stay fully readable in the layer below the
+whiteout marker. A finding derived from anything other than the repository
+carries an additional context rather than laundering an acquisition guess
+through prose, for the same reason `store_context` exists.
+
+`evidence_context` has this shape:
+
+```yaml
+evidence_id: peerstar-api-image
+evidence_class: built-artifact
+adapter_id: artifact
+target_identity: sha256:9f2c...
+acquisition_mode: offline-export
+acquired_on: 2026-08-08T14:22:10Z
+detection_evidence:
+  - shell-in-the-ghost.tar.gz sha256:4aaff082
+confidence: high
+```
+
+All eight fields are required. It is the small immutable routing projection of
+the bundle's `evidence_profile`, exactly as `store_context` is the projection
+of `store_profile`; adapters must not substitute a private shape.
+
+`evidence_id` is operator-assigned, unique within a run, and stable across
+re-acquisitions of the same target. It is the handle `location` resolves
+through, so an id that changes between runs breaks every finding referencing
+it — the same property `candidate_id` needs, for the same reason. It must not
+contain a hostname. One bundle carries one `evidence_id`; two acquisitions of
+one target at different times are two bundles with the same `evidence_id` and
+different `acquired_on` and `target_identity`.
+
+`evidence_class` is one of `source`, `built-artifact`, `deployed-state`,
+`live-runtime`, in ascending precedence. `source` never appears here: the
+repository is the default evidence source and needs no context to name it.
+
+One record concerns one evidence source. A finding that would cite both the
+Dockerfile and the image is the precedence case, and the precedence case is
+two records with a recorded conflict — never one record with two premises.
+
+### Evidence-qualified `location`
+
+`location` is `file:line` in the repository, and it now also accepts an
+evidence-qualified form:
+
+```text
+<evidence_id>:<class-specific-locator>
+
+peerstar-api-image:layer/02/var/lib/db/sbom/zsh-5.9r7.spdx.json
+peerstar-api-image:config/history[8]
+prod-cluster:v1/Namespace/sidecars/Pod/sidecars/spec.volumes[0]
+```
+
+The two forms are disjoint by construction: a repository path carries `/` or
+`.` and cannot be an `evidence_id`, and a repository line is purely digits and
+cannot be a locator. `<evidence_id>` must resolve to an `evidence_context`
+present in the run.
+
+**The three `existence_check` outcomes carry over exactly**, because the
+ordering rule they encode has nothing to do with where the artifact lives:
+
+- **The bundle is absent from the run, or the locator does not resolve within
+  it** — `NOT_REPRODUCED`. Consistent with the existing rule that failing to
+  locate an artifact is a statement about the claim, not about the harness.
+- **The locator resolves and the quoted `evidence` is not there** —
+  `DISPROVED`, quoting what was actually found.
+- **Both check out** — proceed to tier assignment.
+
+Because bundles are content-addressed and hashed, re-verification months later
+is exact rather than approximate — a stronger guarantee than the repository
+case, where a checkout may have moved.
 
 ### `candidate_id` — stable across dedup, merge and re-runs
 
@@ -311,6 +389,7 @@ A validator for this contract enforces exactly these. Each one corresponds to a 
 13. The proof queue is ordered by `claimed_impact_severity`. Every Critical and High is enqueued, including those capped to Medium by invariant 6. Within a band, `contingent:` records precede `unknown` ones, because a named query closes them.
 14. No `verification_status` is assigned without `existence_check`, and `existence_check: not_located` implies `verification_status: NOT_REPRODUCED`. The check is ordered before the argument, so a record that grades an artifact nobody opened is malformed, not optimistic.
 15. A record with `lens: database-and-data-stores` has `store_context`, `principal_path` and `enforcement_plane`. A version- or deployment-sensitive claim also has `adapter_rule_id` and `semantic_source`; otherwise `verification_status` is `UNPROVEN` and `effective_severity` is at most Medium. An `inventory-only` adapter can appear in Coverage but cannot produce a clearance.
+16. A record whose `location` carries an evidence-qualified form has `evidence_context` present, and its `evidence_class` is declared `consumed` by the lens named in `lens`. Its `evidence_claim` lies within that class's `may_conclude`. Where two classes yield conflicting claims for one topic, the higher-precedence class prevails and the conflict is recorded; a lower-precedence class never overrides a higher one. A claim resting on a class whose coverage is `NOT_ASSESSED` or `INVENTORY_ONLY` is `UNPROVEN` and capped at Medium.
 
 Invariants 7, 8 and 10 together are the criterion that makes the whole contract worth having: **every Critical or High in a shipped report carries `CONFIRMED` with T1 or T2 evidence attached.** Anything else caps at Medium, arithmetically, with no room for a judgement call. Invariant 14 is what keeps that criterion from being satisfied by a well-argued claim about a file nobody opened — the criterion is about evidence, and an unread artifact is not evidence at any tier.
 
