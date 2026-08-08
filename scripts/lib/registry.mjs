@@ -1,5 +1,12 @@
 import { stripFencedBlocks } from './frontmatter.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import {
+  EVIDENCE_ARTIFACT_KINDS,
+  EVIDENCE_CLASSES,
+  EVIDENCE_CLASS_ORDER,
+  isEvidenceArtifactKind,
+  isEvidenceClaimKind,
+} from './evidence-classes.mjs'
 
 // Ownership model. Pure functions over parsed lenses — no file I/O, so the
 // rules are testable against synthetic lens sets rather than the real corpus.
@@ -257,6 +264,108 @@ export function checkBodyClaims(lenses, slugs) {
     }
   }
   return violations
+}
+
+const EVIDENCE_STATES = new Set(['consumed', 'not-consumed'])
+
+// R9. A lens that never says which evidence classes it can speak to makes
+// "we read the Dockerfile but never the image" inexpressible, and an audit
+// that cannot express a blind spot reports it as silence. Silence reads as
+// clearance, which is the failure this rule exists to make impossible.
+export function checkEvidenceClasses(lenses) {
+  const violations = []
+  for (const l of lenses) {
+    const name = l.frontmatter?.name ?? l.name ?? '<unnamed>'
+    const push = (message) => violations.push({ rule: 'R9', slug: null, lenses: [name], message })
+    const declared = l.frontmatter?.activates_on?.evidence_classes
+
+    if (declared === null || typeof declared !== 'object' || Array.isArray(declared)) {
+      push(`${name}: activates_on.evidence_classes is missing; every lens declares all four classes`)
+      continue
+    }
+
+    for (const key of Object.keys(declared)) {
+      if (!EVIDENCE_CLASS_ORDER.includes(key)) {
+        push(`${name}: unknown evidence class "${key}"`)
+      }
+    }
+
+    for (const evidenceClass of EVIDENCE_CLASS_ORDER) {
+      const entry = declared[evidenceClass]
+      if (entry === undefined) {
+        push(`${name}: evidence class "${evidenceClass}" is not declared`)
+        continue
+      }
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+        push(`${name}: evidence class "${evidenceClass}" must be a mapping with a state`)
+        continue
+      }
+      if (!EVIDENCE_STATES.has(entry.state)) {
+        push(
+          `${name}: evidence class "${evidenceClass}" state must be consumed or not-consumed, `
+          + `got "${entry.state}"`,
+        )
+        continue
+      }
+
+      const consumed = entry.state === 'consumed'
+      const kinds = entry.artifact_kinds
+      const claims = entry.may_conclude
+
+      if (!consumed) {
+        for (const key of ['artifact_kinds', 'may_conclude']) {
+          if (entry[key] !== undefined) {
+            push(`${name}: "${evidenceClass}" is not-consumed and must not declare ${key}`)
+          }
+        }
+        continue
+      }
+
+      if (evidenceClass === EVIDENCE_CLASSES.BUILT_ARTIFACT) {
+        if (!Array.isArray(kinds) || kinds.length === 0) {
+          push(
+            `${name}: "built-artifact" is consumed and must declare a non-empty artifact_kinds `
+            + `from ${EVIDENCE_ARTIFACT_KINDS.join(', ')}`,
+          )
+        } else {
+          for (const kind of kinds) {
+            if (!isEvidenceArtifactKind(kind)) {
+              push(`${name}: unknown artifact kind "${kind}" in "built-artifact"`)
+            }
+          }
+        }
+      } else if (kinds !== undefined) {
+        push(`${name}: artifact_kinds is only meaningful for "built-artifact", not "${evidenceClass}"`)
+      }
+
+      // source is exempt: it is what every lens in this registry already does,
+      // and bounding it now would re-litigate all 174 owned topics.
+      if (evidenceClass === EVIDENCE_CLASSES.SOURCE) {
+        if (claims !== undefined) {
+          push(`${name}: "source" needs no may_conclude; its claims are bounded by topic ownership`)
+        }
+        continue
+      }
+      if (!Array.isArray(claims) || claims.length === 0) {
+        push(`${name}: "${evidenceClass}" is consumed and must declare a non-empty may_conclude`)
+        continue
+      }
+      for (const claim of claims) {
+        if (!isEvidenceClaimKind(claim)) {
+          push(`${name}: unknown claim kind "${claim}" in "${evidenceClass}"`)
+        }
+      }
+    }
+  }
+  return violations
+}
+
+// The corpus as a lookup, for the coverage matrix and the finding validator.
+export function lensEvidenceDeclarations(lenses) {
+  return new Map(lenses.map((l) => [
+    l.frontmatter?.name ?? l.name,
+    l.frontmatter?.activates_on?.evidence_classes ?? {},
+  ]))
 }
 
 // Coverage observation channel. Reports detector-to-literal ratios for lenses

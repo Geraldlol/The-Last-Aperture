@@ -5,6 +5,15 @@ runs_in: fanout
 activates_on:
   paths: ["**/crypto/**"]
   signals: ["cryptography"]
+  evidence_classes:
+    source:
+      state: not-consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns: [jwt-jws-and-jwks-verification]
 defers: {}
 frameworks: [cwe-top-25]

@@ -82,6 +82,16 @@ activates_on:
     - '.sf/'
     - 'sfdx-scanner'
     - 'apiVersion in *-meta.xml'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: consumed
+      may_conclude: [drift-from-source, runtime-misconfiguration]
+    live-runtime:
+      state: not-consumed
 owns:
   - apex-sharing-declaration
   - apex-crud-fls-enforcement

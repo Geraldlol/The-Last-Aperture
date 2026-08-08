@@ -45,6 +45,15 @@ activates_on:
     - 'Admin and end-user surfaces in one deployable: /admin routes, is_staff, role === "admin", impersonation / "login as user" helpers'
     - 'Literal strings "trust boundary", "threat model", "STRIDE", "DFD", "data flow diagram" anywhere in docs or ADRs'
     - 'User prompt supplies a diagram, topology description, or design proposal instead of code'
+  evidence_classes:
+    source:
+      state: not-consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns:
   - trust-boundary-inventory
   - attacker-profile-model

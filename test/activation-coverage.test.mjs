@@ -1025,9 +1025,17 @@ const NO_ACTIVATION = new Map([
   ['completeness', 'triage'],
 ])
 
+// Scoped to the activation scalars this check is about. `activates_on` also
+// carries `evidence_classes`, which declares which evidence classes the lens
+// consumes and has no paths, signals or family selectors in it; hashing it here
+// would make every evidence-class edit demand a re-audit of all 963 scalars.
 function activationHash(frontmatter) {
+  const activatesOn = frontmatter.activates_on ?? {}
   return createHash('sha256')
-    .update(JSON.stringify(frontmatter.activates_on ?? { paths: [], signals: [] }))
+    .update(JSON.stringify({
+      paths: activatesOn.paths ?? [],
+      signals: activatesOn.signals ?? [],
+    }))
     .digest('hex')
     .slice(0, 16)
 }

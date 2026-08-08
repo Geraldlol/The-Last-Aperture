@@ -166,6 +166,17 @@ activates_on:
     - 'sqlserver://'
     - 'sslmode='
     - 'Data Source='
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: consumed
+      may_conclude: [drift-from-source, runtime-misconfiguration]
+    live-runtime:
+      state: consumed
+      may_conclude: [runtime-misconfiguration, sensitive-data-at-rest]
 owns:
   - database-principal-and-role-boundaries
   - database-native-authorization-and-tenant-isolation

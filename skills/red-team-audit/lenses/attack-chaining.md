@@ -5,6 +5,15 @@ runs_in: triage
 activates_on:
   paths: []
   signals: []
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns: []
 defers: {}
 frameworks: [mitre-attack]

@@ -27,6 +27,19 @@ activates_on:
     - 'protocol/asset signals: X-Signature / X-Hub-Signature / Stripe-Signature style webhook headers, ecrecover / secp256k1 / low-s, /.well-known/jwks.json, SAMLResponse, InResponseTo, KeyInfo, argon2id$ / $2b$ / pbkdf2_sha256$ hash prefixes in fixtures or migrations'
     - 'node:crypto'
     - 'Ed25519'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: consumed
+      artifact_kinds: [apk, ipa, jar, oci-image]
+      may_conclude: [secret-present-in-artifact]
+    deployed-state:
+      state: consumed
+      may_conclude: [runtime-misconfiguration]
+    live-runtime:
+      state: consumed
+      may_conclude: [runtime-misconfiguration]
 owns:
   - tls-and-certificate-validation
   - jwt-jws-and-jwks-verification

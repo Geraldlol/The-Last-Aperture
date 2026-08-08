@@ -72,6 +72,15 @@ activates_on:
     - 'acceptEdits / bypassPermissions'
     - 'an env var holding an agent command line (*_COMMAND, *_CMD) split and spawned'
     - 'a raw httpx.post / requests.post / fetch to an inference URL assembled from a base constant'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns:
   - prompt-injection
   - model-output-taint-propagation
