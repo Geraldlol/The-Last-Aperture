@@ -137,6 +137,7 @@ import {
 } from './lib/provider-runner.mjs'
 import { buildRetryJobTemplate } from './lib/work-shards.mjs'
 import { loadDatabaseConformanceEvidence } from './lib/database-conformance-controller.mjs'
+import { loadEvidenceBundle } from './lib/evidence-bundle.mjs'
 import {
   assertValidRemoteGatewayConfig,
   createRemoteRequestEnvelope,
@@ -203,7 +204,7 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
 const HELP = `red-team-audit 0.11.0
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   red-team-audit next <run.json|bundle-directory>
   red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
   red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>
@@ -263,6 +264,7 @@ const COMMAND_ARGUMENTS = {
       out: 'value',
       roe: 'value',
       'database-conformance': 'value',
+      'evidence-bundle': 'value',
       'max-text-bytes': 'value',
       'max-shard-files': 'value',
       'max-shard-bytes': 'value',
@@ -3259,6 +3261,40 @@ async function planCommand(positionals, options) {
       throw new Error('database conformance evidence path changed while it was read')
     }
   }
+  // Evidence of uncertain provenance is worse than absent evidence because it
+  // launders into findings, so loadEvidenceBundle refuses rather than warning.
+  const evidenceBundles = []
+  if (typeof options['evidence-bundle'] === 'string') {
+    for (const argument of options['evidence-bundle'].split(',')) {
+      const bundleArgument = resolve(argument.trim())
+      const before = await realpath(bundleArgument)
+      if (pathWithin(targetRoot, before)) {
+        throw new Error(
+          'evidence bundles must be supplied from outside the untrusted target repository',
+        )
+      }
+      const loaded = await loadEvidenceBundle(before)
+      const after = await realpath(bundleArgument)
+      if (after !== before || pathWithin(targetRoot, after)) {
+        throw new Error('evidence bundle path changed while it was read')
+      }
+      evidenceBundles.push({
+        evidence_id: loaded.evidence_context.evidence_id,
+        evidence_class: loaded.evidence_context.evidence_class,
+        adapter_id: loaded.evidence_context.adapter_id,
+        ...(loaded.profile.artifact_kind
+          ? { artifact_kind: loaded.profile.artifact_kind }
+          : {}),
+        coverage_state: loaded.profile.coverage_state,
+        phi_bearing: loaded.profile.phi_bearing,
+        root_sha256: loaded.root_sha256,
+      })
+    }
+    const ids = evidenceBundles.map(({ evidence_id: id }) => id)
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('each evidence_id must be unique within a run')
+    }
+  }
   const maxTextBytes = positiveInteger(options['max-text-bytes'], '--max-text-bytes')
   const maxShardFiles = positiveInteger(
     options['max-shard-files'],
@@ -3277,6 +3313,7 @@ async function planCommand(positionals, options) {
     lensDirectory: DEFAULT_LENS_DIRECTORY,
     policy,
     databaseConformanceEvidence,
+    evidenceBundles,
     sealSource,
     ...(maxTextBytes === undefined ? {} : { inventoryOptions: { maxTextBytes } }),
     shardOptions: {

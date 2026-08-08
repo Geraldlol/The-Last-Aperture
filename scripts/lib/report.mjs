@@ -1,5 +1,6 @@
 import { findingFingerprint } from './lifecycle.mjs'
 import { isSurvivingFinding } from './findings.mjs'
+import { evidenceConflicts } from './contracts.mjs'
 import {
   filterResolvedCoverageGaps,
   projectCoverageGaps,
@@ -822,6 +823,70 @@ export function renderMarkdownReport(run) {
         `${tableCell(profile.coverage_state)} | ` +
         `${tableCell(profile.assessed_topics.join(', ') || 'none')} | ` +
         `${tableCell(profile.principal_path.effective_principal)} |`,
+      )
+    }
+    lines.push('')
+  }
+
+  const evidenceCoverage = run.evidence_coverage
+  if (evidenceCoverage) {
+    const evidenceSummary = evidenceCoverage.summary ?? {}
+    lines.push(
+      '### Evidence-class coverage',
+      '',
+      '| Lens | Topic | Evidence class | Coverage | Basis |',
+      '|---|---|---|---|---|',
+    )
+    for (const cell of evidenceCoverage.cells ?? []) {
+      lines.push(
+        `| ${tableCell(cell.lens)} | ${tableCell(cell.topic)} | ` +
+        `${tableCell(cell.evidence_class)} | ${tableCell(cell.state)} | ` +
+        `${tableCell(cell.reason)} |`,
+      )
+    }
+    lines.push('')
+    // INVENTORY_ONLY and NOT_ASSESSED are never rendered as pass, clean, secure
+    // or no findings. Stating the blind spot is the whole point: silence about
+    // an unexamined class is what reads as clearance.
+    if ((evidenceSummary.unreached_class_count ?? 0) > 0) {
+      const classes = (evidenceSummary.unreached_classes ?? []).join(', ')
+      lines.push(
+        `${evidenceSummary.unreached_class_count} evidence ` +
+        `class${evidenceSummary.unreached_class_count === 1 ? ' was' : 'es were'} not acquired ` +
+        `for this run: ${classes}. Findings and clean results below cover the ` +
+        'repository only. An unexamined evidence class is a coverage gap, not a clearance.',
+        '',
+      )
+    }
+    if ((evidenceSummary.inventory_only_cell_count ?? 0) > 0) {
+      lines.push(
+        `${evidenceSummary.inventory_only_cell_count} lens/topic obligation` +
+        `${evidenceSummary.inventory_only_cell_count === 1 ? '' : 's'} received evidence no ` +
+        'activated lens has a rule for; those are inventoried, not assessed.',
+        '',
+      )
+    }
+  }
+
+  const conflicts = evidenceConflicts(run.findings ?? [])
+  if (conflicts.length > 0) {
+    lines.push(
+      '### Precedence conflicts',
+      '',
+      'Where two evidence classes disagree about one topic the higher-precedence ' +
+      'class prevails and the disagreement is recorded here. A lower-precedence ' +
+      'signal never overrides a conflicting higher-precedence one.',
+      '',
+      '| Topic | Prevailing | Class | Superseded | Class |',
+      '|---|---|---|---|---|',
+    )
+    for (const conflict of conflicts) {
+      lines.push(
+        `| ${tableCell(conflict.topic)} | ` +
+        `${inlineCode(conflict.prevailing_candidate_id)} | ` +
+        `${tableCell(conflict.prevailing_class)} | ` +
+        `${inlineCode(conflict.superseded_candidate_id)} | ` +
+        `${tableCell(conflict.superseded_class)} |`,
       )
     }
     lines.push('')
