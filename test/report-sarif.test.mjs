@@ -157,6 +157,123 @@ test('lifecycle authority never invents a provider declaration for absent or fai
   }
 })
 
+test('a lens shard that failed withdraws the whole lens coverage authority', () => {
+  const shard = (index, state, authority) => ({
+    job_id: `lens:web-and-api:shard-000${index}-aaaaaaaaaaaa`,
+    kind: 'LENS',
+    lens: 'web-and-api',
+    state,
+    ...(authority ? { coverage_authority: authority } : {}),
+  })
+  const baseline = run({ findings: [] })
+  const observed = 'CONTROLLER_OBSERVED_CONSUMPTION'
+
+  for (const jobs of [
+    [shard(1, 'SUCCEEDED', observed), shard(2, 'FAILED'), shard(3, 'FAILED')],
+    [shard(1, 'FAILED'), shard(2, 'SUCCEEDED', observed), shard(3, 'SUCCEEDED', observed)],
+  ]) {
+    const comparison = compareRuns(baseline, run({
+      run_id: 'run:test:partial-shards',
+      state: 'COMPLETE_WITH_GAPS',
+      jobs,
+    }))
+    assert.equal(
+      comparison.results[0].resolution_authority,
+      'NO_CURRENT_COVERAGE_AUTHORITY',
+      'one succeeded shard cannot speak for shards that never produced',
+    )
+    assert.doesNotMatch(comparison.resolution_authority, /controller-observed byte consumption/)
+  }
+})
+
+test('lens authority is the weakest authority across every shard that ran', () => {
+  const shard = (index, authority) => ({
+    job_id: `lens:web-and-api:shard-000${index}-aaaaaaaaaaaa`,
+    kind: 'LENS',
+    lens: 'web-and-api',
+    state: 'SUCCEEDED',
+    coverage_authority: authority,
+  })
+  const baseline = run({ findings: [] })
+  const authorityFor = (jobs) => compareRuns(baseline, run({
+    run_id: 'run:test:shard-authority',
+    jobs,
+  })).results[0].resolution_authority
+
+  assert.equal(
+    authorityFor([shard(1, 'CONTROLLER_OBSERVED_CONSUMPTION'), shard(2, 'CONTROLLER_OBSERVED_CONSUMPTION')]),
+    'CONTROLLER_OBSERVED_CONSUMPTION',
+  )
+  assert.equal(
+    authorityFor([shard(1, 'REMOTE_REQUEST_ACCEPTED'), shard(2, 'REMOTE_REQUEST_ACCEPTED')]),
+    'REMOTE_REQUEST_ACCEPTED',
+  )
+  assert.equal(
+    authorityFor([shard(1, 'CONTROLLER_OBSERVED_CONSUMPTION'), shard(2, 'PROVIDER_DECLARED')]),
+    'PROVIDER_DECLARED',
+  )
+})
+
+test('dormant and skipped closure templates never withdraw a completed lens authority', () => {
+  const baseline = run({ findings: [] })
+  const comparison = compareRuns(baseline, run({
+    run_id: 'run:test:closure-templates',
+    jobs: [
+      {
+        job_id: 'lens:web-and-api:shard-0001-aaaaaaaaaaaa',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SUCCEEDED',
+        coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      },
+      {
+        job_id: 'closure:01:shard-0001-aaaaaaaaaaaa:bbbbbbbbbbbb',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SKIPPED',
+        closure_round: 1,
+      },
+      {
+        job_id: 'closure:02:shard-0001-aaaaaaaaaaaa:cccccccccccc',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'DORMANT',
+        closure_round: 2,
+      },
+    ],
+  }))
+  assert.equal(
+    comparison.results[0].resolution_authority,
+    'CONTROLLER_OBSERVED_CONSUMPTION',
+  )
+})
+
+test('resolution requires every shard of the lens, not merely one of them', () => {
+  const partial = run({
+    run_id: 'run:test:partial-resolution',
+    state: 'COMPLETE_WITH_GAPS',
+    findings: [],
+    jobs: [
+      {
+        job_id: 'lens:web-and-api:shard-0001-aaaaaaaaaaaa',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'SUCCEEDED',
+        coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      },
+      {
+        job_id: 'lens:web-and-api:shard-0002-bbbbbbbbbbbb',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        state: 'FAILED',
+      },
+    ],
+  })
+  assert.equal(coverageSupportsResolution(partial, finding()), false)
+  assert.equal(compareRuns(run(), partial).counts.fixed, 0)
+  assert.equal(compareRuns(run(), partial).counts['not-observed'], 1)
+})
+
 test('lifecycle summary preserves mixed declared and observed authority', () => {
   const cryptoFinding = finding({
     candidate_id: 'cand:crypto:001',
@@ -197,6 +314,38 @@ test('lifecycle summary preserves mixed declared and observed authority', () => 
     ]),
   )
   assert.match(comparison.resolution_authority, /mixed provider-declared/i)
+})
+
+test('remote acceptance remains a distinct lifecycle and report authority', () => {
+  const baseline = run()
+  const current = run({
+    run_id: 'run:test:remote-authority',
+    findings: [],
+    jobs: [{
+      job_id: 'lens:web-and-api',
+      kind: 'LENS',
+      lens: 'web-and-api',
+      state: 'SUCCEEDED',
+      coverage_authority: 'REMOTE_REQUEST_ACCEPTED',
+      producer: {
+        name: 'remote-fixture',
+        version: '1.0.0',
+        instance_id: 'remote:fixture',
+      },
+    }],
+  })
+  const comparison = compareRuns(baseline, current)
+  assert.equal(
+    comparison.results[0].resolution_authority,
+    'REMOTE_REQUEST_ACCEPTED',
+  )
+  assert.match(
+    comparison.resolution_authority,
+    /remote gateway request acceptance/i,
+  )
+  const report = renderMarkdownReport(current)
+  assert.match(report, /Remote request accepted jobs: 1/)
+  assert.match(report, /REMOTE_REQUEST_ACCEPTED proves the pinned gateway/i)
 })
 
 test('attributable coverage gaps veto only the resolutions they can affect', () => {
@@ -924,7 +1073,7 @@ test('Markdown report separates claimed severity from proof-backed status', () =
   )
 
   assert.match(report, /Claimed severity: `High`/)
-  assert.match(report, /Effective severity: `Medium`/)
+  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
   assert.match(report, /Proof tier: `T0`/)
   assert.match(report, /Proof status: UNPROVEN.*Static mode/)
   assert.match(summary, /cand:web:001/)
@@ -976,7 +1125,10 @@ test('Markdown report neutralizes provider-controlled markup and line breaks', (
   assert.match(report, /&lt;script&gt;/)
   assert.match(
     report,
-    /^### Medium — Legitimate title \\#\\# Forged heading �exe\.txt &lt;img/m,
+    // The severity and confidence tokens come from controlled enums and are
+    // emitted unescaped; everything after the em dash is provider text and must
+    // still arrive escaped.
+    /^### High \(unproven\) — Legitimate title \\#\\# Forged heading �exe\.txt &lt;img/m,
   )
   assert.equal((report.match(/^## Findings$/gm) ?? []).length, 1)
   assert.equal((report.match(/^## Coverage$/gm) ?? []).length, 1)
@@ -1002,8 +1154,85 @@ test('disproved and not-reproduced candidates are preserved but not reported as 
   assert.match(report, /Withdrawn candidates/)
   assert.match(report, /DISPROVED/)
   assert.match(report, /NOT_REPRODUCED/)
-  assert.equal(sarif.runs[0].results.length, 0)
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].kind),
+    ['external', 'external'],
+  )
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].status),
+    ['accepted', 'accepted'],
+  )
+  assert.match(
+    sarif.runs[0].results[0].suppressions[0].justification,
+    /DISPROVED|NOT REPRODUCED/,
+  )
+  const properties = sarif.runs[0].invocations[0].properties
+  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 2)
+  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(properties.unverified_high_impact_claims, 2)
   assert.equal(compareRuns(run(), current).counts.unchanged, 0)
+})
+
+test('SARIF records a dropped Critical instead of emitting a clean empty result set', () => {
+  const dropped = finding({
+    candidate_id: 'cand:web:dropped',
+    claimed_impact_severity: 'Critical',
+    triage_disposition: 'dropped',
+    drop_reason: 'The cited route is unreachable in the shipped build.',
+  })
+  const merged = finding({
+    candidate_id: 'cand:web:merged',
+    claimed_impact_severity: 'Critical',
+    triage_disposition: 'merged',
+    merged_into_candidate_id: 'cand:web:dropped',
+  })
+  const sarif = renderSarif(run({ findings: [dropped, merged] }))
+  const properties = sarif.runs[0].invocations[0].properties
+
+  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 2)
+  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ properties: entry }) => entry.candidate_id),
+    ['cand:web:dropped', 'cand:web:merged'],
+  )
+  assert.deepEqual(
+    sarif.runs[0].results.map(({ properties: entry }) => entry.triage_disposition),
+    ['dropped', 'merged'],
+  )
+  assert.equal(
+    sarif.runs[0].results[1].properties.merged_into_candidate_id,
+    'cand:web:dropped',
+  )
+  assert.match(
+    sarif.runs[0].results[0].suppressions[0].justification,
+    /DROPPED before proof: The cited route is unreachable/,
+  )
+})
+
+test('SARIF suppresses only withdrawn candidates and leaves survivors as open results', () => {
+  const survivor = finding()
+  const dropped = finding({
+    candidate_id: 'cand:web:dropped',
+    triage_disposition: 'dropped',
+    drop_reason: 'Duplicate of an accepted candidate.',
+  })
+  const sarif = renderSarif(run({ findings: [survivor, dropped] }))
+  const [first, second] = sarif.runs[0].results
+
+  assert.equal(sarif.runs[0].results.length, 2)
+  assert.equal(Object.hasOwn(first, 'suppressions'), false)
+  assert.equal(first.properties.candidate_id, 'cand:web:001')
+  assert.equal(second.suppressions.length, 1)
+  assert.equal(second.properties.candidate_id, 'cand:web:dropped')
+  assert.equal(
+    sarif.runs[0].invocations[0].properties.findings_state,
+    'FINDINGS_REPORTED',
+  )
+  assert.equal(sarif.runs[0].invocations[0].properties.withdrawn_candidates, 1)
 })
 
 test('SARIF carries stable rule IDs, locations, fingerprints and run honesty', () => {
@@ -1072,4 +1301,191 @@ test('reports expose controller-owned database discovery before provider profile
   assert.equal(properties.database_discovery_scoped_paths, 1)
   assert.equal(properties.database_discovery_unresolved, 1)
   assert.equal(properties.database_discovery_limit_gaps, 1)
+})
+
+// Severity and confidence are two axes. SARIF has a field for each: `level` is
+// how bad the finding is, `rank` is how urgent it is to act on. Collapsing both
+// into `level` reported a claimed Critical to every machine consumer as a
+// warning, which reads as "moderate" rather than as "unverified".
+
+test('SARIF level carries claimed impact, not confidence-gated priority', () => {
+  const sarif = renderSarif(run())
+  const result = sarif.runs[0].results[0]
+  assert.equal(result.properties.claimed_impact_severity, 'High')
+  assert.equal(result.properties.effective_severity, 'Medium')
+  assert.equal(
+    result.level,
+    'error',
+    'a claimed High must reach a CI gate as error even while unproven',
+  )
+})
+
+test('SARIF rank carries the confidence-gated priority', () => {
+  const result = renderSarif(run()).runs[0].results[0]
+  assert.equal(typeof result.rank, 'number')
+  assert.ok(result.rank >= 0 && result.rank <= 100, 'rank is a SARIF 0-100 score')
+  const confirmed = renderSarif(run({
+    findings: [finding({
+      claimed_impact_severity: 'High',
+      effective_severity: 'High',
+      verification_status: 'CONFIRMED',
+      proof_tier: 'T1',
+    })],
+  })).runs[0].results[0]
+  assert.ok(
+    confirmed.rank > result.rank,
+    'a demonstrated finding outranks the same claim left unproven',
+  )
+})
+
+test('an unproven Critical outranks a confirmed Medium in SARIF level', () => {
+  const critical = finding({
+    candidate_id: 'cand:web:critical',
+    claimed_impact_severity: 'Critical',
+    effective_severity: 'Medium',
+    verification_status: 'UNPROVEN',
+    proof_tier: 'T0',
+  })
+  const moderate = finding({
+    candidate_id: 'cand:web:moderate',
+    claimed_impact_severity: 'Medium',
+    effective_severity: 'Medium',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+  })
+  const results = renderSarif(run({ findings: [moderate, critical] })).runs[0].results
+  const byId = new Map(results.map((entry) => [entry.properties.candidate_id, entry]))
+  assert.equal(byId.get('cand:web:critical').level, 'error')
+  assert.equal(byId.get('cand:web:moderate').level, 'warning')
+})
+
+test('the markdown findings list sorts by claimed impact before confidence', () => {
+  // Both carry effective Medium, so the old comparator ties and falls through
+  // to candidate_id. The ids are chosen so alphabetical order is the wrong
+  // answer — otherwise this test passes without the comparator changing.
+  const critical = finding({
+    candidate_id: 'cand:web:zzz',
+    title: 'Unproven critical claim',
+    claimed_impact_severity: 'Critical',
+    effective_severity: 'Medium',
+  })
+  const moderate = finding({
+    candidate_id: 'cand:web:aaa',
+    title: 'Confirmed moderate claim',
+    claimed_impact_severity: 'Medium',
+    effective_severity: 'Medium',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+  })
+  const report = renderMarkdownReport(run({ findings: [moderate, critical] }))
+  assert.ok(
+    report.indexOf('Unproven critical claim') < report.indexOf('Confirmed moderate claim'),
+    'an unproven Critical belongs above a confirmed Medium, labelled rather than buried',
+  )
+})
+
+// The report headline must state how bad the finding is, qualified by how well
+// established it is. Leading with the confidence-gated value told a reader a
+// claimed Critical was "Medium", which reads as moderate rather than unverified.
+
+test('a finding heading leads with claimed impact, qualified by confidence', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({
+      title: 'Unproven critical claim',
+      claimed_impact_severity: 'Critical',
+      effective_severity: 'Medium',
+      verification_status: 'UNPROVEN',
+    })],
+  }))
+  assert.match(report, /^### Critical \(unproven\) — Unproven critical claim/m)
+  assert.doesNotMatch(report, /^### Medium — Unproven critical claim/m)
+})
+
+test('a confirmed finding says so in its heading', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({
+      title: 'Confirmed claim',
+      claimed_impact_severity: 'High',
+      effective_severity: 'High',
+      verification_status: 'CONFIRMED',
+      proof_tier: 'T1',
+    })],
+  }))
+  assert.match(report, /^### High \(confirmed\) — Confirmed claim/m)
+})
+
+test('the severity summary counts claimed impact, not gated priority', () => {
+  const report = renderMarkdownReport(run({
+    findings: [
+      finding({ candidate_id: 'cand:a', claimed_impact_severity: 'Critical', effective_severity: 'Medium' }),
+      finding({ candidate_id: 'cand:b', claimed_impact_severity: 'Critical', effective_severity: 'Medium' }),
+    ],
+  }))
+  // Columns are Critical, High, Medium, Low, Info. Two claimed Criticals must
+  // appear in the Critical column, not collapsed into Medium by the gate.
+  assert.match(report, /\| 2 \| 0 \| 0 \| 0 \| 0 \|/)
+  assert.doesNotMatch(report, /\| 0 \| 0 \| 2 \| 0 \| 0 \|/)
+})
+
+test('the gated value is not labelled a severity', () => {
+  const report = renderMarkdownReport(run())
+  assert.doesNotMatch(report, /Effective severity:/)
+  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
+})
+
+test('a forged verification status cannot inject markup into a heading', () => {
+  // headingSeverity emits its qualifier unescaped, so it resolves through a
+  // fixed map. Anything not in that map is dropped, never rendered.
+  for (const forged of [
+    '## Forged heading',
+    'UNPROVEN`) — <script>alert(1)</script>',
+    'CONFIRMED\n## Injected',
+  ]) {
+    const report = renderMarkdownReport(run({
+      findings: [finding({ title: 'Injection probe', verification_status: forged })],
+    }))
+    assert.match(report, /^### High — Injection probe$/m, 'unknown status must be dropped')
+    assert.doesNotMatch(report, /^#{1,6} Forged/m)
+    assert.doesNotMatch(report, /^#{1,6} Injected/m)
+  }
+})
+
+// A CommonMark code span opens with a run of N backticks and closes at the next
+// run of exactly N. Content that starts or ends with a backtick merges with the
+// delimiter, so the span never closes and the rest of the line renders live.
+function codeSpanClosesAtEnd(rendered) {
+  const open = rendered.match(/^`+/)
+  if (!open) return false
+  const n = open[0].length
+  const body = rendered.slice(n)
+  const closing = [...body.matchAll(/`+/g)].find((run) => run[0].length === n)
+  return closing !== undefined && closing.index + n === body.length
+}
+
+test('a provider value bounded by backticks cannot break out of its code span', () => {
+  for (const hostile of [
+    '`leading backtick',
+    'trailing backtick`',
+    '``` fenced attempt',
+    '`both`',
+    'a ` b `` c ``` d',
+  ]) {
+    const report = renderMarkdownReport(run({
+      findings: [finding({ reachable_from: hostile })],
+    }))
+    const line = report.split('\n').find((l) => l.startsWith('Reachability: '))
+    assert.ok(line, 'the reachability line must render')
+    const span = line.slice('Reachability: '.length).trimEnd()
+    assert.ok(
+      codeSpanClosesAtEnd(span),
+      `code span never closes for ${JSON.stringify(hostile)}: ${JSON.stringify(span)}`,
+    )
+  }
+})
+
+test('code span padding leaves ordinary values untouched', () => {
+  const report = renderMarkdownReport(run({
+    findings: [finding({ reachable_from: 'GET /orders/:id' })],
+  }))
+  assert.match(report, /^Reachability: `GET \/orders\/:id`/m)
 })

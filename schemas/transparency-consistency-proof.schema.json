@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-consistency-proof.schema.json",
+  "title": "Red Team Audit transparency consistency proof",
+  "description": "A self-contained RFC 6962/9162 consistency path between two independently signed checkpoints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "first_checkpoint",
+    "second_checkpoint",
+    "consistency_path"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/transparency-consistency-proof"
+    },
+    "first_checkpoint": {
+      "$ref": "https://red-team-audit.dev/schemas/transparency-signed-checkpoint.schema.json"
+    },
+    "second_checkpoint": {
+      "$ref": "https://red-team-audit.dev/schemas/transparency-signed-checkpoint.schema.json"
+    },
+    "consistency_path": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

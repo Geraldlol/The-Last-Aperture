@@ -5,6 +5,15 @@ runs_in: fanout
 activates_on:
   paths: ["**/routes/**"]
   signals: ["express"]
+  evidence_classes:
+    source:
+      state: not-consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns: [csrf, jwt-jws-and-jwks-verification]
 defers:
   jwt-jws-and-jwks-verification: crypto-and-key-management

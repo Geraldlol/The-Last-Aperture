@@ -139,6 +139,18 @@ activates_on:
     - 'gatekeeper'
     - 'helm'
     - 'allow read, write: if true'   # added with baas-security-rules
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: consumed
+      artifact_kinds: [oci-image]
+      may_conclude: [secret-present-in-artifact, unexpected-artifact-content]
+    deployed-state:
+      state: consumed
+      may_conclude: [drift-from-source, runtime-misconfiguration]
+    live-runtime:
+      state: not-consumed
 owns:
   - iam-policy-and-privilege-scope
   - cloud-oidc-trust-policy

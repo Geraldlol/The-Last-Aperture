@@ -10,6 +10,33 @@ node_modules/
 # packages. Working notes for a plan in flight, not part of the record.
 .superpowers/
 
+# Operator key material, attestations, and receipts. The documented workflow
+# keeps these outside the repository entirely; this is only a backstop for a
+# keypair generated in the working directory while following the quickstart.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.asc
+.env
+.env.*
+!.env.example
+
+# Deliberate, non-production test material stays tracked. Without these
+# negations the patterns above would silently drop a fixture, which is a
+# worse failure than the one they prevent. Scoped to exactly those patterns:
+# a bare `!fixtures/**` also re-includes build output the rules above exclude,
+# such as the Gradle caches under fixtures/clean/android.
+!**/fixtures/**/*.pem
+!**/fixtures/**/*.key
+!**/fixtures/**/*.p12
+!**/fixtures/**/*.pfx
+!**/fixtures/**/*.jks
+!**/fixtures/**/*.asc
+!**/fixtures/**/.env
+!**/fixtures/**/.env.*
+
 # The pre-scrub reference sources. These are the untracked inputs Phase A
 # migrates from, and they must never enter history: they still contain
 # private-product residue and named-vendor content. The scrubbed lenses under

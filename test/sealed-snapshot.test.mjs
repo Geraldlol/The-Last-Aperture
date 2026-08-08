@@ -1,8 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
+import { inventoryRepository } from '../scripts/lib/inventory.mjs'
 import {
   assertValidSealedSnapshotIndex,
   buildSealedControlSnapshot,
@@ -276,6 +279,71 @@ test('index validation rejects traversal, duplicate paths, hidden bytes, and una
     (error) =>
       ['SHARD_LAYOUT_INVALID', 'FILE_MANIFEST_DIGEST_MISMATCH'].includes(error.code),
   )
+})
+
+test('real inventory entries without a content digest still seal and stay counted', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'red-team-seal-undigested-'))
+  try {
+    await writeFile(join(fixtureRoot, 'app.js'), 'export const a = 1\n')
+    await writeFile(join(fixtureRoot, 'big.txt'), 'a'.repeat(256))
+    await writeFile(join(fixtureRoot, 'small.bin'), Buffer.from([0, 1, 2]))
+    await writeFile(
+      join(fixtureRoot, 'big.bin'),
+      Buffer.concat([Buffer.alloc(256), Buffer.from([1])]),
+    )
+    const inventory = await inventoryRepository(fixtureRoot, { maxTextBytes: 64 })
+    assert.deepEqual(
+      inventory.entries.map((entry) =>
+        [entry.path, entry.kind, Object.hasOwn(entry, 'sha256')]),
+      [
+        ['app.js', 'text', true],
+        ['big.bin', 'binary', false],
+        ['big.txt', 'too-large', false],
+        ['small.bin', 'binary', true],
+      ],
+    )
+
+    const snapshot = buildSealedSourceSnapshot(inventory)
+    assert.deepEqual(
+      snapshot.index.files.map(({ path, availability }) => [path, availability]),
+      [
+        ['app.js', 'AVAILABLE'],
+        ['big.bin', 'UNAVAILABLE'],
+        ['big.txt', 'UNAVAILABLE'],
+        ['small.bin', 'UNAVAILABLE'],
+      ],
+    )
+    const undigested = snapshot.index.files.find(({ path }) => path === 'big.txt')
+    assert.equal(Object.hasOwn(undigested, 'sha256'), false)
+    assert.equal(undigested.size, 256)
+    const digested = snapshot.index.files.find(({ path }) => path === 'small.bin')
+    assert.equal(
+      digested.sha256,
+      inventory.entries.find(({ path }) => path === 'small.bin').sha256,
+    )
+    assert.deepEqual(await verifySealedSnapshot(snapshot.indexBytes, snapshot.shards), {
+      valid: true,
+      snapshot_kind: 'source',
+      source_tree_digest: inventory.treeDigest,
+      files: 4,
+      available_files: 1,
+      unavailable_files: 3,
+      shards: 1,
+    })
+    await assert.rejects(
+      readSealedSnapshotFile(snapshot.indexBytes, undigested.file_id, snapshot.shards),
+      (error) => error.code === 'CONTENT_UNAVAILABLE',
+    )
+
+    const forged = JSON.parse(serializeSealedSnapshotIndex(snapshot.index))
+    delete forged.files.find(({ path }) => path === 'app.js').sha256
+    assert.throws(
+      () => assertValidSealedSnapshotIndex(forged),
+      (error) => error.code === 'INDEX_KEYS_INVALID',
+    )
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true })
+  }
 })
 
 test('sealed snapshot primitive has no filesystem dependency', async () => {

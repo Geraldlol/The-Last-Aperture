@@ -108,6 +108,17 @@ activates_on:
     - 'cargo build --locked'
     - 'GOFLAGS=-mod=mod'
     - 'set -x'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: consumed
+      artifact_kinds: [dist-bundle, jar, oci-image]
+      may_conclude: [secret-present-in-artifact, unexpected-artifact-content, vulnerable-component-present]
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns:
   - workflow-trigger-and-script-injection
   - runner-and-build-environment-trust

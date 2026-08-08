@@ -30,6 +30,7 @@
     "mode": {
       "enum": [
         "static",
+        "remote_static",
         "test",
         "local_dynamic"
       ]
@@ -70,6 +71,51 @@
       "if": {
         "properties": {
           "mode": {
+            "const": "remote_static"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "write_file": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              },
+              "execute": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              },
+              "network": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
             "const": "static"
           }
         },
@@ -95,6 +141,51 @@
                 "properties": {
                   "enabled": {
                     "const": false
+                  }
+                }
+              },
+              "network": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "test"
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "execute": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              },
+              "write_file": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "const": true
                   }
                 }
               },

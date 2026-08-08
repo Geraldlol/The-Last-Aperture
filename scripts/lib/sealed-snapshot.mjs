@@ -191,11 +191,19 @@ function normalizeSourceEntries(inventory) {
     const path = canonicalRelativePath(entry.path, `inventory entry ${index} path`)
     const kind = normalizeKind(entry.kind, `inventory entry ${path} kind`)
     const size = requireSafeSize(entry.size, `inventory entry ${path} size`)
-    const digest = normalizeSha256(entry.sha256, `inventory entry ${path} sha256`)
 
     if (kind !== 'text') {
-      return { path, kind, size, sha256: digest, bytes: null }
+      return {
+        path,
+        kind,
+        size,
+        sha256: entry.sha256 === undefined
+          ? null
+          : normalizeSha256(entry.sha256, `inventory entry ${path} sha256`),
+        bytes: null,
+      }
     }
+    const digest = normalizeSha256(entry.sha256, `inventory entry ${path} sha256`)
     if (typeof entry.content !== 'string') {
       fail(
         'TEXT_CONTENT_UNAVAILABLE',
@@ -293,7 +301,7 @@ function packSnapshot(snapshotKind, sourceTreeDigest, normalizedEntries, maxShar
       path: entry.path,
       kind: entry.kind,
       size: entry.size,
-      sha256: entry.sha256,
+      ...(entry.sha256 === null ? {} : { sha256: entry.sha256 }),
     }
     if (entry.bytes === null) {
       files.push({
@@ -488,7 +496,6 @@ export function assertValidSealedSnapshotIndex(value) {
       'path',
       'kind',
       'size',
-      'sha256',
       'availability',
     ]
     const available = file.availability === 'AVAILABLE'
@@ -496,11 +503,12 @@ export function assertValidSealedSnapshotIndex(value) {
     if (!available && !unavailable) {
       fail('AVAILABILITY_INVALID', `file ${fileIndex} has an unsupported availability`)
     }
+    const digested = Object.hasOwn(file, 'sha256')
     requireExactKeys(
       file,
       available
-        ? [...commonKeys, 'shard', 'offset', 'length']
-        : [...commonKeys, 'unavailable_reason'],
+        ? [...commonKeys, 'sha256', 'shard', 'offset', 'length']
+        : [...commonKeys, ...(digested ? ['sha256'] : []), 'unavailable_reason'],
       `file ${fileIndex}`,
     )
     const path = canonicalRelativePath(file.path, `file ${fileIndex} path`)
@@ -521,7 +529,7 @@ export function assertValidSealedSnapshotIndex(value) {
     }
     fileIds.add(file.file_id)
     requireSafeSize(file.size, `file ${path} size`)
-    requireCanonicalSha256(file.sha256, `file ${path} sha256`)
+    if (digested) requireCanonicalSha256(file.sha256, `file ${path} sha256`)
 
     if (available) {
       if (kind !== 'text') {

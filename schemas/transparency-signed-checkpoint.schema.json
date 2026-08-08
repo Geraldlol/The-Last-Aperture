@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/transparency-signed-checkpoint.schema.json",
+  "title": "Red Team Audit signed transparency checkpoint",
+  "description": "A standalone Ed25519-signed transparency-log tree head projected independently of any inclusion receipt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "checkpoint",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/transparency-signed-checkpoint"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin",
+        "tree_size",
+        "root_hash",
+        "issued_at",
+        "signing"
+      ],
+      "properties": {
+        "origin": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+        },
+        "tree_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "root_hash": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issued_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "signing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "key_id"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "Ed25519"
+            },
+            "key_id": {
+              "type": "string",
+              "pattern": "^ed25519:[a-f0-9]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 35,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$"
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 88,
+      "maxLength": 88,
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  }
+}

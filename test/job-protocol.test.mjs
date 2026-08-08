@@ -6,8 +6,7 @@ import {
   assertValidJobResult,
   beginJob,
   buildFinalizedRun,
-  compareProofJobs,
-  selectNextProofJob,
+  createProofJobComparator,
   validateJobResult,
 } from '../scripts/lib/job-protocol.mjs'
 import { pendingJobsForCurrentPhase } from '../scripts/audit.mjs'
@@ -516,7 +515,92 @@ test('proof priority promotes every component of a high-impact attack chain', ()
     job_id: 'proof-existence:standalone:high',
     candidate_ids: ['standalone:high'],
   }
-  assert.ok(compareProofJobs(run, component, standalone) < 0)
+  assert.ok(createProofJobComparator(run)(component, standalone) < 0)
+})
+
+test('a reachability-capped Critical outranks an ordinary High in the proof queue', () => {
+  const run = {
+    findings: [
+      triaged({
+        candidate_id: 'authz-object-level:ordinary-high',
+        claimed_impact_severity: 'High',
+        effective_severity: 'High',
+      }),
+      triaged({
+        candidate_id: 'authz-object-level:capped-critical',
+        claimed_impact_severity: 'Critical',
+        effective_severity: 'Medium',
+        reachable_from: 'unknown',
+      }),
+      triaged({
+        candidate_id: 'authz-object-level:contingent-critical',
+        claimed_impact_severity: 'Critical',
+        effective_severity: 'Medium',
+        reachable_from: 'contingent:POST /api/exports',
+        contingent_fact: 'the guest permission set is assigned to at least one user',
+        contingent_query: 'SELECT COUNT(*) FROM PermissionSetAssignment WHERE PermissionSetId = :id',
+      }),
+    ],
+  }
+  const compare = createProofJobComparator(run)
+  const ordered = run.findings
+    .map(({ candidate_id: candidateId }) => ({
+      job_id: `proof-existence:${candidateId}`,
+      candidate_ids: [candidateId],
+    }))
+    .sort(compare)
+
+  assert.deepEqual(
+    ordered.map(({ candidate_ids: candidateIds }) => candidateIds[0]),
+    [
+      'authz-object-level:contingent-critical',
+      'authz-object-level:capped-critical',
+      'authz-object-level:ordinary-high',
+    ],
+    'claimed Critical outranks claimed High even when the reachability gate capped it to Medium',
+  )
+})
+
+test('the dispatched proof queue puts a reachability-capped Critical ahead of an ordinary High', () => {
+  const cappedCritical = {
+    candidate_id: 'authz-object-level:zz-capped-critical',
+    claimed_impact_severity: 'Critical',
+    reachable_from: 'unknown',
+    title: 'Unreachable-path candidate whose claimed impact is Critical',
+  }
+  const ordinaryHigh = {
+    candidate_id: 'authz-object-level:aa-ordinary-high',
+    claimed_impact_severity: 'High',
+    title: 'Traced candidate whose claimed impact is High',
+  }
+  const stageOneFindings = [cappedCritical, ordinaryHigh].map((overrides) =>
+    stageOne(overrides))
+
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: stageOneFindings,
+  }), { sidecar: lensSidecar })
+  ;({ run } = advanceRun(run))
+  run = beginJob(run, 'triage:business-logic')
+  run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
+    findings: stageOneFindings.map((finding) => ({
+      ...finding,
+      effective_severity: finding.reachable_from === 'unknown' ? 'Medium' : 'High',
+      triage_disposition: 'queued',
+    })),
+  }))
+  ;({ run } = advanceRun(run))
+
+  assert.equal(validateRun(run).valid, true)
+  assert.deepEqual(
+    pendingJobsForCurrentPhase(run).map(({ job_id: jobId }) => jobId),
+    [
+      'proof-existence:authz-object-level:zz-capped-critical',
+      'proof-existence:authz-object-level:aa-ordinary-high',
+    ],
+    'an operator stopping early under budget must reach the capped Critical first',
+  )
 })
 
 test('proof selection indexes 4,096 findings once and preserves deterministic priority', () => {
@@ -556,8 +640,8 @@ test('proof selection indexes 4,096 findings once and preserves deterministic pr
     }))
     .reverse()
 
-  const selected = selectNextProofJob({ findings }, jobs)
-  assert.equal(selected.candidate_ids[0], 'component:4095')
+  const ordered = jobs.sort(createProofJobComparator({ findings }))
+  assert.equal(ordered[0].candidate_ids[0], 'component:4095')
   assert.equal(iterations, 1)
 })
 
@@ -863,4 +947,90 @@ test('a verification proof cannot consume its job without recording a decision',
     'RUNNING',
   )
   assert.equal(run.findings[0].verification_status, undefined)
+})
+
+const INVENTORY_ENTRIES = [{
+  path: 'src/routes/invoices.ts',
+  kind: 'text',
+  content: 'import x\nconst invoice = await repo.findById(req.params.id)\n',
+  sha256: null,
+}]
+
+test('applyJobResult records existence verdicts once inventory entries are supplied', () => {
+  const verified = stageOne({
+    quotes: [{
+      path: 'src/routes/invoices.ts',
+      line: 2,
+      text: 'const invoice = await repo.findById(req.params.id)',
+    }],
+  })
+  const unverified = stageOne({
+    candidate_id: 'authz-object-level:fabricated',
+    quotes: [{
+      path: 'src/routes/invoices.ts',
+      line: 2,
+      text: 'this text was never in the file',
+    }],
+  })
+
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: [verified, unverified],
+  }), {
+    sidecar: lensSidecar,
+    inventoryEntries: INVENTORY_ENTRIES,
+    deferTransitionValidation: true,
+  })
+
+  assert.equal(run.existence_verifications.length, 2)
+  const byCandidate = new Map(
+    run.existence_verifications.map((row) => [row.candidate_id, row]),
+  )
+  assert.equal(byCandidate.get(verified.candidate_id).outcome, 'VERIFIED')
+  assert.equal(byCandidate.get(unverified.candidate_id).outcome, 'UNVERIFIED')
+  assert.deepEqual(
+    run.existence_verifications.map((row) => row.candidate_id),
+    [...byCandidate.keys()].sort(),
+    'existence_verifications must be sorted by candidate_id',
+  )
+})
+
+test('independent proof-existence jobs accumulate existence verdicts without clobbering siblings', () => {
+  let { run, triagedFindings } = runManyToProof(2)
+  const [first, second] = triagedFindings
+  const jobIdFirst = `proof-existence:${first.candidate_id}`
+  const jobIdSecond = `proof-existence:${second.candidate_id}`
+
+  // Both existence jobs are begun before either result is applied: applyJobResult's
+  // deferTransitionValidation:true (used below, purely to isolate this accumulation
+  // behavior from the separately-tested v7-schema-version gate — see
+  // test/existence-schema-version.test.mjs) only skips the *next* applyJobResult
+  // transition's own schema check, not a later, non-deferred beginJob's. Starting a
+  // second existence job while a sibling is already RUNNING is valid: independent
+  // proof-existence jobs form one wave and assertProofWaveReady only blocks an
+  // existence job once its wave's verification jobs have been scheduled.
+  run = beginJob(run, jobIdFirst)
+  run = beginJob(run, jobIdSecond)
+
+  run = applyJobResult(run, jobResult(run, jobIdFirst, {
+    findings: [addExistence(first)],
+  }), { inventoryEntries: INVENTORY_ENTRIES, deferTransitionValidation: true })
+
+  assert.equal(run.existence_verifications.length, 1)
+  assert.equal(run.existence_verifications[0].candidate_id, first.candidate_id)
+  assert.equal(run.existence_verifications[0].outcome, 'NOT_APPLICABLE')
+
+  run = applyJobResult(run, jobResult(run, jobIdSecond, {
+    findings: [addExistence(second)],
+  }), { inventoryEntries: INVENTORY_ENTRIES, deferTransitionValidation: true })
+
+  assert.equal(
+    run.existence_verifications.length, 2,
+    'the first candidate verdict must survive the second job result',
+  )
+  assert.deepEqual(
+    run.existence_verifications.map((row) => row.candidate_id).sort(),
+    [first.candidate_id, second.candidate_id].sort(),
+  )
 })

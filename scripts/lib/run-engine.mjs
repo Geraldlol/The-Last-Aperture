@@ -12,6 +12,8 @@ import {
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mjs'
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
+import { buildEvidenceCoverage } from './evidence-coverage.mjs'
 import {
   buildCategoryDenominators,
   inventoryCoverageRecords,
@@ -39,8 +41,8 @@ import {
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.7.0'
-export const RUN_SCHEMA_VERSION = '5.0.0'
+export const PLATFORM_VERSION = '0.11.0'
+export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
 function sha256(value) {
@@ -52,7 +54,7 @@ function stableValue(value) {
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => [key, stableValue(value[key])]),
   )
 }
@@ -69,13 +71,21 @@ export function providerPolicyProjection(policy, policyDigest) {
   ) {
     throw new TypeError('provider policy projection requires a policy and SHA-256 digest')
   }
+  const remoteStatic = policy.mode === 'remote_static'
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/provider-policy-projection',
     controller_policy_sha256: policyDigest,
     policy_id: policy.policy_id,
-    mode: policy.mode,
-    capabilities: structuredClone(policy.capabilities),
+    mode: remoteStatic ? 'static' : policy.mode,
+    capabilities: remoteStatic
+      ? {
+          read_file: structuredClone(policy.capabilities.read_file),
+          write_file: { enabled: false, roots: [] },
+          execute: { enabled: false, commands: [] },
+          network: { enabled: false, destinations: [] },
+        }
+      : structuredClone(policy.capabilities),
   }
 }
 
@@ -86,7 +96,7 @@ function normalizedTimestamp(value) {
 }
 
 function createRunId(createdAt, planDigest) {
-  return `run:${createdAt.replace(/[:.]/g, '-').replace('Z', 'Z')}:${planDigest.slice(0, 12)}`
+  return `run:${createdAt.replace(/[:.]/g, '-')}:${planDigest.slice(0, 12)}`
 }
 
 function activationJobId(job) {
@@ -215,7 +225,7 @@ function planCoverage(inventory, activation, policy, databaseDiscovery) {
   }
   for (const row of rowsByLens.values()) {
     row.applicable_paths = [...new Set(row.applicable_paths)]
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
   }
 
   const records = inventoryCoverageRecords(inventory.entries)
@@ -400,6 +410,7 @@ export async function createRunPlan(options) {
       ?? options.shardPolicy?.maxRounds
       ?? DEFAULT_CLOSURE_MAX_ROUNDS,
     databaseConformanceEvidence,
+    evidenceBundles = [],
   } = options
   if (!targetRoot) throw new Error('targetRoot is required')
 
@@ -432,6 +443,11 @@ export async function createRunPlan(options) {
       maxBytes: coveragePolicy.max_shard_bytes,
     },
     databaseDiscovery,
+  })
+  const evidenceCoverage = buildEvidenceCoverage({
+    lenses,
+    activatedLenses: activation.active_lenses,
+    bundles: evidenceBundles,
   })
   const plannedJobCount = activation.jobs.length + closureTemplateJobCount(
     activation.jobs,
@@ -525,7 +541,7 @@ export async function createRunPlan(options) {
   )
   const planMaterial = {
     schema_version: RUN_SCHEMA_VERSION,
-    capability_mode: effectivePolicy.mode === 'static'
+    capability_mode: ['static', 'remote_static'].includes(effectivePolicy.mode)
       ? 'STATIC'
       : effectivePolicy.mode === 'test'
         ? 'TEST_EXECUTION'
@@ -537,6 +553,7 @@ export async function createRunPlan(options) {
     lens_pack_digest: corpusDigest,
     coverage_policy: coveragePolicy,
     database_discovery_digest: databaseDiscovery.digest,
+    evidence_coverage_sha256: sha256(stableJson(evidenceCoverage, 0)),
     ...(databaseConformance
       ? {
           database_conformance_sha256: sha256(
@@ -582,6 +599,8 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
+    evidence_bundles: evidenceBundles,
+    evidence_coverage: evidenceCoverage,
     ...(databaseConformance
       ? { database_conformance: databaseConformance }
       : {}),

@@ -3,8 +3,11 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import {
+  assertHardenedDockerInspection,
+  buildDockerCleanupArgs,
   cleanupDockerProviderContainer,
   computeConsumptionHmac,
+  normalizeProviderArtifacts,
   ProviderRunnerError,
   runDockerProvider,
   runProviderBroker,
@@ -957,4 +960,299 @@ test('Docker control-plane command output is killed at its fixed byte limit', as
     ),
   )
   assert.equal(killedWith, 'SIGKILL')
+})
+
+test('broker stream error guards outlive the call for the child lifetime', async () => {
+  const control = new PassThrough()
+  control.end('drained\n')
+  for await (const chunk of control) {
+    assert.ok(chunk)
+  }
+  const runtimeGuards = control.listenerCount('error')
+
+  const harness = brokerHarness()
+  await runHonestProvider({
+    stdin: harness.providerStdin,
+    stdout: harness.providerStdout,
+  })
+  const execution = await harness.broker
+  assert.equal(execution.job_result.state, 'SUCCEEDED')
+  assert.equal(harness.providerStdout.listenerCount('error'), runtimeGuards + 1)
+  harness.providerStdout.emit('error', new Error('late attach teardown'))
+  harness.providerStdin.emit('error', new Error('late attach teardown'))
+})
+
+test('CONTROL artifact names cannot escape a gateway materialization root', () => {
+  const limits = providerConfig().limits
+  const controlArtifact = (logicalName) => [{
+    artifact_id: 'controlartifactopaque01',
+    kind: 'CONTROL',
+    logical_name: logicalName,
+    bytes: Buffer.from('* * * * * root id\n'),
+  }]
+  for (const logicalName of [
+    '../../../../etc/cron.d/x',
+    '/etc/cron.d/x',
+    'C:/windows/system32/x',
+    'controls\\x',
+    'controls/./x',
+    'controls//x',
+    'controls/',
+  ]) {
+    assert.throws(
+      () => normalizeProviderArtifacts(controlArtifact(logicalName), limits),
+      (error) => (
+        error instanceof ProviderRunnerError
+        && error.code === 'PROVIDER_ARTIFACT_INVALID'
+      ),
+      logicalName,
+    )
+  }
+  assert.equal(
+    normalizeProviderArtifacts(
+      controlArtifact('lens:web-and-api@1.0.0'),
+      limits,
+    )[0].logical_name,
+    'lens:web-and-api@1.0.0',
+  )
+})
+
+test('container names exclude Docker name-filter regex metacharacters', () => {
+  assert.throws(
+    () => buildDockerCleanupArgs('rta-provider-a.bcdefgh'),
+    (error) => (
+      error instanceof ProviderRunnerError
+      && error.code === 'PROVIDER_CONTAINER_NAME_INVALID'
+    ),
+  )
+  assert.equal(
+    buildDockerCleanupArgs('rta-provider-abcdefgh').kill.at(-1),
+    'rta-provider-abcdefgh',
+  )
+})
+
+function hardenedLinuxInspection(config, containerName) {
+  return {
+    Id: 'b'.repeat(64),
+    Name: `/${containerName}`,
+    Platform: 'linux',
+    Mounts: [],
+    Config: {
+      User: '65532:65532',
+      WorkingDir: '/work',
+      OpenStdin: true,
+      Tty: false,
+      AttachStdout: true,
+      AttachStderr: true,
+      Env: [
+        'HTTP_PROXY=',
+        'HTTPS_PROXY=',
+        'NO_PROXY=',
+        'ALL_PROXY=',
+        'http_proxy=',
+        'https_proxy=',
+        'no_proxy=',
+        'all_proxy=',
+      ],
+      Volumes: null,
+      Healthcheck: { Test: ['NONE'] },
+    },
+    HostConfig: {
+      NetworkMode: 'none',
+      ReadonlyRootfs: true,
+      Privileged: false,
+      CapAdd: null,
+      CapDrop: ['ALL'],
+      SecurityOpt: ['no-new-privileges=true', 'seccomp=builtin'],
+      PidsLimit: config.limits.pids,
+      Memory: config.limits.memory_bytes,
+      MemorySwap: config.limits.memory_bytes,
+      NanoCpus: Math.round(config.limits.cpus * 1_000_000_000),
+      Ulimits: [{
+        Name: 'nofile',
+        Soft: config.limits.nofile,
+        Hard: config.limits.nofile,
+      }],
+      IpcMode: 'none',
+      PidMode: 'private',
+      UsernsMode: '',
+      CgroupnsMode: 'private',
+      Sysctls: {},
+      GroupAdd: null,
+      AppArmorProfile: 'docker-default',
+      Runtime: 'runc',
+      Isolation: '',
+      MaskedPaths: [
+        '/proc/asound',
+        '/proc/acpi',
+        '/proc/kcore',
+        '/proc/keys',
+        '/proc/latency_stats',
+        '/proc/timer_list',
+        '/proc/sched_debug',
+        '/proc/scsi',
+        '/sys/firmware',
+        '/sys/devices/virtual/powercap',
+      ],
+      ReadonlyPaths: [
+        '/proc/bus',
+        '/proc/fs',
+        '/proc/irq',
+        '/proc/sys',
+        '/proc/sysrq-trigger',
+      ],
+      LogConfig: { Type: 'none', Config: {} },
+      RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
+      Binds: null,
+      Mounts: [],
+      VolumesFrom: null,
+      Devices: [],
+      DeviceRequests: null,
+      Links: null,
+      ExtraHosts: null,
+      PortBindings: {},
+      PublishAllPorts: false,
+      Tmpfs: {
+        '/work': `rw,noexec,nosuid,nodev,size=${config.limits.tmpfs_bytes},mode=0700,uid=65532,gid=65532`,
+      },
+    },
+  }
+}
+
+test('hardened inspection proves the escape-relevant kernel surface', () => {
+  const config = providerConfig()
+  const containerName = 'rta-provider-kernel-surface'
+  assert.equal(
+    assertHardenedDockerInspection(
+      hardenedLinuxInspection(config, containerName),
+      config,
+      containerName,
+    ),
+    'b'.repeat(64),
+  )
+
+  for (const [field, weaken] of [
+    ['MaskedPaths', (host) => {
+      host.MaskedPaths = host.MaskedPaths.filter((path) => path !== '/proc/kcore')
+    }],
+    ['MaskedPaths absent', (host) => { delete host.MaskedPaths }],
+    ['ReadonlyPaths', (host) => {
+      host.ReadonlyPaths = host.ReadonlyPaths
+        .filter((path) => path !== '/proc/sysrq-trigger')
+    }],
+    ['UsernsMode', (host) => { host.UsernsMode = 'host' }],
+    ['CgroupnsMode', (host) => { host.CgroupnsMode = 'host' }],
+    ['Sysctls', (host) => { host.Sysctls = { 'kernel.domainname': 'escape' } }],
+    ['GroupAdd', (host) => { host.GroupAdd = ['docker'] }],
+    ['AppArmorProfile', (host) => { host.AppArmorProfile = 'unconfined' }],
+    ['Runtime', (host) => { host.Runtime = 'nvidia' }],
+    ['Isolation', (host) => { host.Isolation = 'process' }],
+  ]) {
+    const inspection = hardenedLinuxInspection(config, containerName)
+    weaken(inspection.HostConfig)
+    assert.throws(
+      () => assertHardenedDockerInspection(inspection, config, containerName),
+      (error) => (
+        error instanceof ProviderRunnerError
+        && error.code === 'PROVIDER_DOCKER_PROFILE_MISMATCH'
+      ),
+      field,
+    )
+  }
+
+  const withoutLinuxFields = hardenedLinuxInspection(config, containerName)
+  delete withoutLinuxFields.Platform
+  for (const field of [
+    'MaskedPaths',
+    'ReadonlyPaths',
+    'UsernsMode',
+    'CgroupnsMode',
+    'Sysctls',
+    'GroupAdd',
+    'AppArmorProfile',
+    'Runtime',
+    'Isolation',
+  ]) {
+    delete withoutLinuxFields.HostConfig[field]
+  }
+  assert.equal(
+    assertHardenedDockerInspection(withoutLinuxFields, config, containerName),
+    'b'.repeat(64),
+  )
+})
+
+test('the provider wall-time budget, not one Docker command slot, bounds the attach', async () => {
+  const config = providerConfig({
+    limits: {
+      wall_time_ms: 5000,
+      docker_command_timeout_ms: 1000,
+      idle_timeout_ms: 4000,
+      delivery_timeout_ms: 4000,
+    },
+  })
+  const fake = createFakeDockerSpawn(config)
+  const spawnImpl = (executable, args, options) => {
+    if (!args.includes('start')) {
+      return fake.spawnImpl(executable, args, options)
+    }
+    return hostileStartChild((child, close) => {
+      setTimeout(async () => {
+        await runHonestProvider({ stdin: child.stdin, stdout: child.stdout })
+        close(0, null)
+      }, config.limits.docker_command_timeout_ms + 400)
+    })
+  }
+
+  const execution = await holdEventLoopFor(
+    runDockerProvider({
+      config,
+      packet: providerPacket(),
+      artifacts: providerArtifacts(),
+      spawnImpl,
+      randomBytesImpl: deterministicRandomBytes,
+      randomUUIDImpl: () => '12345678-1234-1234-1234-1234567890ab',
+    }),
+    4000,
+  )
+  assert.equal(execution.job_result.state, 'SUCCEEDED')
+  assert.equal(execution.receipt.deliveries.length, 1)
+  assert.equal(fake.containerExists, false)
+})
+
+test('a stuck attach client is reported beside the broker failure it caused', async () => {
+  const config = providerConfig({ limits: { docker_command_timeout_ms: 1000 } })
+  const fake = createFakeDockerSpawn(config)
+  const spawnImpl = (executable, args, options) => {
+    if (!args.includes('start')) {
+      return fake.spawnImpl(executable, args, options)
+    }
+    const child = new EventEmitter()
+    child.stdin = new PassThrough()
+    child.stdout = new PassThrough()
+    child.stderr = new PassThrough()
+    child.stdin.on('error', () => {})
+    child.kill = () => true
+    queueMicrotask(() => child.stdout.write('not-a-protocol-frame\n'))
+    return child
+  }
+
+  await assert.rejects(
+    holdEventLoopFor(
+      runDockerProvider({
+        config,
+        packet: providerPacket(),
+        artifacts: providerArtifacts(),
+        spawnImpl,
+        randomBytesImpl: deterministicRandomBytes,
+        randomUUIDImpl: () => '12345678-1234-1234-1234-1234567890ab',
+      }),
+      3000,
+    ),
+    (error) => (
+      error instanceof ProviderRunnerError
+      && error.code === 'PROVIDER_PROTOCOL_VIOLATION'
+      && error.exit_error?.code === 'PROVIDER_DOCKER_EXIT_TIMEOUT'
+    ),
+  )
+  assert.equal(fake.containerExists, false)
 })

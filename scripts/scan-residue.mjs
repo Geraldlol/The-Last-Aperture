@@ -75,11 +75,16 @@ if (isMainModule(import.meta.url)) {
     for (const hit of scanResidue(text, terms)) hits.push({ where: `${where}:${hit.line}`, term: hit.term })
   }
 
+  // Untracked-but-not-ignored files are included: a release candidate is
+  // scanned before its new work is committed, and that work is exactly where
+  // fresh residue lives.
   let tracked
   try {
-    tracked = git(['ls-files', '-z']).split('\0').filter(Boolean)
+    tracked = git(['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
+      .split('\0')
+      .filter(Boolean)
   } catch (err) {
-    console.error(`scan-residue: could not list tracked files — ${String(err.message).trim().split('\n')[0]}`)
+    console.error(`scan-residue: could not list candidate files — ${String(err.message).trim().split('\n')[0]}`)
     console.error('INCOMPLETE: nothing was scanned. This is not a clean result.')
     process.exit(3)
   }
@@ -115,7 +120,7 @@ if (isMainModule(import.meta.url)) {
   for (const hit of hits) console.error(`RESIDUE ${hit.where}: contains "${hit.term}"`)
   for (const source of unscanned) console.error(`UNSCANNED ${source}`)
 
-  console.log(`\nscanned ${tracked.length} tracked file(s) and ${GIT_SOURCES.length} git source(s) against ${terms.length} term(s).`)
+  console.log(`\nscanned ${tracked.length} candidate file(s) and ${GIT_SOURCES.length} git source(s) against ${terms.length} term(s).`)
 
   if (hits.length) {
     console.error(`FAIL: ${hits.length} residue hit(s). Phase A cannot close.`)

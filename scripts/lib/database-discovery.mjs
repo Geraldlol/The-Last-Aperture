@@ -41,6 +41,7 @@ const HARD_LIMITS = Object.freeze({
   max_inventory_entries: 100_000,
   max_text_bytes: 512 * 1024 * 1024,
   max_single_text_bytes: 16 * 1024 * 1024,
+  max_resource_matches: 256,
 })
 
 const MANIFEST_NAMES = new Set([
@@ -1386,12 +1387,19 @@ function addObservation(map, observation) {
   }
 }
 
-function scanPackageJson(entry, observations) {
+function scanPackageJson(entry, observations, gaps) {
   if (posix.basename(entry.path).toLowerCase() !== 'package.json') return
   let parsed
   try {
-    parsed = JSON.parse(entry.content)
+    parsed = JSON.parse(entry.content.replace(/^\uFEFF/, ''))
   } catch {
+    gaps.push({
+      code: 'unparseable-manifest',
+      subject: 'package.json',
+      detail: `${
+        stableId('source', entry.path)
+      } is not valid JSON, so no manifest client evidence was read from it`,
+    })
     return
   }
   for (const section of [
@@ -1633,12 +1641,16 @@ function scanRuntimeResources(entry, observations) {
   })
 }
 
+// Every quantifier here must stay newline-free: an untrusted target file may be
+// one 16 MiB whitespace run, and a newline-crossing quantifier scans it once per
+// candidate boundary.
+const RESOURCE_BLOCK_BOUNDARY =
+  /\n(?:[ \t]*resource[ \t]+(?:['"]|[A-Za-z_])|[ \t]{0,16}[A-Za-z][A-Za-z0-9]*[ \t]*:[ \t]*(?:\r?\n[ \t]*)*\r?\n[ \t]+Type[ \t]*:|[ \t]*['"]type['"][ \t]*:)/g
+
 function resourceBlock(content, start) {
-  const nextResource = content.slice(start + 1).search(
-    /\n(?:\s*resource\s+(?:['"]|[A-Za-z_])|[ \t]{0,16}[A-Za-z][A-Za-z0-9]*\s*:\s*\r?\n[ \t]+Type\s*:|[ \t]*['"]type['"]\s*:)/,
-  )
-  const end = nextResource >= 0 ? start + 1 + nextResource : content.length
-  return content.slice(start, end)
+  RESOURCE_BLOCK_BOUNDARY.lastIndex = start + 1
+  const boundary = RESOURCE_BLOCK_BOUNDARY.exec(content)
+  return content.slice(start, boundary ? boundary.index : content.length)
 }
 
 function normalizeContainerEngine(value) {
@@ -1668,7 +1680,7 @@ function normalizeServerVersion(value, engine) {
   return withoutEngine.replaceAll('_', '.')
 }
 
-function scanResources(entry, observations, tokens) {
+function scanResources(entry, observations, tokens, gaps) {
   if (
     !/\bresource\b|\bimage\s*[:=]|\[\[d1_databases\]\]|AWS::(?:RDS|DynamoDB|ElastiCache|OpenSearchService)|Microsoft\.(?:DBfor(?:PostgreSQL|MySQL)|Cache\/redis(?:Enterprise)?)|apiVersion\s*:\s*(?:postgresql\.cnpg\.io|psmdb\.percona\.com|redis\.redis\.opstreelabs\.in)/i.test(
       entry.content,
@@ -1680,13 +1692,25 @@ function scanResources(entry, observations, tokens) {
     let occurrence = 0
     while ((match = pattern.exec(entry.content)) !== null) {
       occurrence += 1
+      if (occurrence > HARD_LIMITS.max_resource_matches) {
+        gaps.push({
+          code: 'resource-signature-match-cap',
+          subject: definition.signature,
+          detail: `${stableId('source', entry.path)} reached the ${
+            HARD_LIMITS.max_resource_matches
+          } per-signature match cap; later matches were not observed`,
+        })
+        break
+      }
       const rawEngine = definition.engineGroup
         ? match[definition.engineGroup]?.toLowerCase()
         : definition.engine
       const symbol = definition.engineGroup
         ? `database-resource-${occurrence}`
         : match[1] ?? `database-resource-${occurrence}`
-      const block = resourceBlock(entry.content, match.index)
+      const block = definition.enginePattern || definition.versionPattern
+        ? resourceBlock(entry.content, match.index)
+        : ''
       const declaredEngineMatch = definition.enginePattern?.exec(block) ?? null
       const engine = rawEngine
         ? normalizeContainerEngine(rawEngine)
@@ -1909,15 +1933,17 @@ function scanImports(entry) {
 function scanEntry(entry) {
   const observations = new Map()
   const tokens = new Set()
-  scanPackageJson(entry, observations)
+  const gaps = []
+  scanPackageJson(entry, observations, gaps)
   scanOtherManifests(entry, observations)
   scanSourceClients(entry, observations)
   scanRuntimeResources(entry, observations)
-  scanResources(entry, observations, tokens)
+  scanResources(entry, observations, tokens, gaps)
   scanBindings(entry, observations, tokens)
   scanArtifacts(entry, observations)
   return {
     ...entry,
+    gaps,
     observations: [...observations.values()]
       .map((observation) => ({
         ...observation,
@@ -2432,7 +2458,10 @@ function buildCandidates(activeObservations, visitedRelations, recordMap) {
         const matchingBindings = bindings.filter(matchesEngine)
         const matchingRelated = related.filter(matchesEngine)
         if (matchingBindings.length === 0) continue
-        const anchor = matchingBindings[0]
+        const anchor = [...matchingBindings].sort((left, right) =>
+          compareText(left.token ?? '', right.token ?? '')
+            || compareText(left.path, right.path)
+            || compareText(left.nodeId, right.nodeId))[0]
         const candidatePaths = uniqueSorted(
           [...matchingClients, ...matchingBindings, ...matchingRelated]
             .map((item) => item.path),
@@ -2825,6 +2854,7 @@ export function discoverDatabaseGraph(inventory, options = {}) {
       componentRoot: componentRootFor(record.path, roots),
     }))
   const recordMap = new Map(textRecords.map((record) => [record.path, record]))
+  for (const record of textRecords) rawGaps.push(...record.gaps)
   const pathRelations = buildPathRelations(textRecords, roots, limits, rawGaps)
   const traversal = traversePaths(textRecords, pathRelations, limits, rawGaps)
   const relevantPaths = new Set([

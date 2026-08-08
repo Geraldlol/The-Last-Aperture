@@ -12,7 +12,12 @@ import {
   validateRemoteRequestEnvelope,
   verifyRemoteRequestEnvelope,
 } from '../scripts/lib/remote-gateway-contracts.mjs'
-import { submitRemoteGatewayRequest } from '../scripts/lib/remote-gateway-client.mjs'
+import {
+  assertPublicRemoteUrl,
+  createRemoteGatewayLookup,
+  isPublicRemoteAddress,
+  submitRemoteGatewayRequest,
+} from '../scripts/lib/remote-gateway-client.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
 
 const SHA_A = 'a'.repeat(64)
@@ -219,6 +224,102 @@ test('remote request signing binds the packet, exact artifacts, transform, and t
   const nonCanonicalTime = structuredClone(envelope)
   nonCanonicalTime.controller.created_at = '2026-07-30T12:00:00Z'
   assert.equal(validateRemoteRequestEnvelope(nonCanonicalTime).valid, false)
+})
+
+test('CONTROL artifacts get the same path safety as their FILE siblings', () => {
+  const controller = keyPair()
+  const boundPacket = packet()
+  const controlBytes = Buffer.from('* * * * * root id\n', 'utf8')
+  const controlArtifact = (logicalName) => ({
+    artifact_id: 'control_0123456789abcdef',
+    kind: 'CONTROL',
+    logical_name: logicalName,
+    size: controlBytes.length,
+    sha256: sha256(controlBytes),
+    content_base64: controlBytes.toString('base64'),
+  })
+
+  assert.throws(
+    () => createRemoteRequestEnvelope({
+      provenance: provenance(boundPacket),
+      packet: boundPacket,
+      artifacts: [
+        artifact(),
+        {
+          artifact_id: 'control_0123456789abcdef',
+          kind: 'CONTROL',
+          logical_name: '../../../../etc/cron.d/x',
+          bytes: controlBytes,
+        },
+      ],
+      promptTransform: TRANSFORM,
+      privateKeyBytes: controller.privatePem,
+      createdAt: NOW,
+      ttlMs: 30_000,
+    }),
+    (error) => (
+      error instanceof RemoteGatewayContractError
+      && error.details.some(({ code }) =>
+        code === 'REMOTE_REQUEST_LOGICAL_NAME_UNSAFE')
+    ),
+  )
+
+  const envelope = requestFixture(controller, boundPacket)
+  for (const logicalName of [
+    '../../../../etc/cron.d/x',
+    '/etc/cron.d/x',
+    'C:/windows/system32/x',
+    'controls/./x',
+    'controls//x',
+  ]) {
+    const traversal = structuredClone(envelope)
+    traversal.artifacts.push(controlArtifact(logicalName))
+    const validation = validateRemoteRequestEnvelope(traversal)
+    assert.equal(validation.valid, false, logicalName)
+    assert.ok(
+      validation.errors.some(({ code }) =>
+        code === 'REMOTE_REQUEST_LOGICAL_NAME_UNSAFE'),
+      logicalName,
+    )
+    assert.ok(
+      validation.errors.some(({ code, instancePath }) =>
+        code === 'SCHEMA_PATTERN' && instancePath === '/artifacts/1/logical_name'),
+      logicalName,
+    )
+    assert.throws(
+      () => verifyRemoteRequestEnvelope({
+        envelope: traversal,
+        publicKeyBytes: controller.publicPem,
+        expectedPromptTransform: TRANSFORM,
+        now: new Date(NOW.getTime() + 1_000),
+        maxRequestTtlMs: 30_000,
+      }),
+      /remote request envelope validation failed/,
+    )
+  }
+
+  const benign = structuredClone(envelope)
+  benign.artifacts.push(controlArtifact('lens:web-and-api@1.0.0'))
+  assert.equal(
+    validateRemoteRequestEnvelope(benign).errors.some(({ code }) =>
+      code === 'REMOTE_REQUEST_LOGICAL_NAME_UNSAFE'),
+    false,
+  )
+})
+
+test('remote request validation stays total for malformed artifact shapes', () => {
+  const controller = keyPair()
+  const envelope = requestFixture(controller)
+  for (const artifacts of [null, 1, 'artifacts', {}, [null], [1], ['x'], [[]]]) {
+    const malformed = structuredClone(envelope)
+    malformed.artifacts = artifacts
+    const validation = validateRemoteRequestEnvelope(malformed)
+    assert.equal(validation.valid, false, String(JSON.stringify(artifacts)))
+    assert.ok(validation.errors.length > 0)
+  }
+  const absent = structuredClone(envelope)
+  delete absent.artifacts
+  assert.equal(validateRemoteRequestEnvelope(absent).valid, false)
 })
 
 test('reference gateway and client complete one packet-bound acceptance end to end', async () => {
@@ -451,5 +552,76 @@ test('content digest rejects a transformed request or response body', () => {
       Buffer.from('{"exact":false}\n', 'utf8'),
     ),
     RemoteGatewayContractError,
+  )
+})
+
+test('remote gateway DNS pins one validated public address and rejects local scope', async () => {
+  for (const address of [
+    '0.0.0.0',
+    '10.0.0.1',
+    '100.64.0.1',
+    '127.0.0.1',
+    '169.254.169.254',
+    '172.16.0.1',
+    '192.168.0.1',
+    '198.18.0.1',
+    '::1',
+    '::ffff:127.0.0.1',
+    '64:ff9b::7f00:1',
+    'fc00::1',
+    'fe80::1',
+    'fec0::1',
+    'feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff',
+  ]) {
+    assert.equal(isPublicRemoteAddress(address), false, address)
+  }
+  assert.equal(isPublicRemoteAddress('93.184.216.34'), true)
+  assert.equal(isPublicRemoteAddress('2606:4700:4700::1111'), true)
+  assert.equal(isPublicRemoteAddress('not-an-address'), false)
+  assert.throws(
+    () => assertPublicRemoteUrl('https://127.0.0.1/v1/audit'),
+    /non-public literal IP address/i,
+  )
+  assert.throws(
+    () => assertPublicRemoteUrl('https://[::1]/v1/audit'),
+    /non-public literal IP address/i,
+  )
+  assert.equal(
+    assertPublicRemoteUrl('https://93.184.216.34/v1/audit').hostname,
+    '93.184.216.34',
+  )
+
+  let lookupOptions
+  const lookup = createRemoteGatewayLookup((hostname, options, callback) => {
+    assert.equal(hostname, 'gateway.example')
+    lookupOptions = options
+    callback(null, [
+      { address: '127.0.0.1', family: 4 },
+      { address: '93.184.216.34', family: 4 },
+    ])
+  })
+  const selected = await new Promise((resolve, reject) => {
+    lookup('gateway.example', { family: 4 }, (error, address, family) => {
+      if (error) reject(error)
+      else resolve({ address, family })
+    })
+  })
+  assert.deepEqual(lookupOptions, { all: true, verbatim: true })
+  assert.deepEqual(selected, { address: '93.184.216.34', family: 4 })
+
+  const privateLookup = createRemoteGatewayLookup((_hostname, _options, callback) => {
+    callback(null, [
+      { address: '127.0.0.1', family: 4 },
+      { address: 'fe80::1', family: 6 },
+    ])
+  })
+  await assert.rejects(
+    () => new Promise((resolve, reject) => {
+      privateLookup('gateway.example', { family: 0 }, (error, address, family) => {
+        if (error) reject(error)
+        else resolve({ address, family })
+      })
+    }),
+    (error) => error?.code === 'REMOTE_GATEWAY_DNS_SCOPE_DENIED',
   )
 })

@@ -96,10 +96,10 @@ does not make that identifier reusable, because the upstream call may have
 acted before failing. Production gateways must retain a durable terminal
 record and return the cached outcome or an explicit duplicate response.
 
-The first implementation slice supplies strict schemas, signing and
+The first implementation slice supplied strict schemas, signing and
 verification primitives, an SPKI-pinned HTTPS client, and a replay-safe
-reference acceptor. Controller attempt-ledger integration is the next step in
-the same v0.8 build and may not weaken these contracts.
+reference acceptor. ADR 0008 integrates those contracts into schema-v6
+controller attempts without weakening their authority or replay semantics.
 
 ## Consequences
 

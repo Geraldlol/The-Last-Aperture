@@ -33,6 +33,23 @@ jobs:
       - if: matrix.node == '24'
         run: npm run gen:benchmarks -- --check
 
+  transparency-https-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Install conformance fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+          rg --version
+      - run: npm ci
+      - name: Run stateful HTTPS transparency-log conformance
+        run: npm run test:transparency:https
+
   provider-docker-conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 10

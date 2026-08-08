@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.invalid/schemas/proof-config.schema.json",
+  "title": "Proof execution configuration",
+  "description": "Names the proof job, the files the provider authored, an optional candidate patch, and the command the controller runs in the disposable mirror.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "proof_files",
+    "command",
+    "destination_guard"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^proof-(existence|verification):",
+      "maxLength": 256
+    },
+    "proof_files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    },
+    "patch_files": {
+      "description": "Whole-file replacements demonstrating a candidate fix. Absent means the bug was demonstrated and not fixed, which cannot reach CONFIRMED.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "program",
+        "args"
+      ],
+      "properties": {
+        "program": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "maxLength": 128
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "destination_guard": {
+      "description": "The recorder is in-process and authored by the provider; the controller records the declaration and cannot verify it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installed"
+      ],
+      "properties": {
+        "installed": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "description": "A mirror-relative, forward-slash lexical path. Leading slash, drive letter, UNC prefix, backslash and parent traversal are all rejected here, and containment is checked again when the file is materialized.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "contents"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "contents": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      }
+    }
+  }
+}

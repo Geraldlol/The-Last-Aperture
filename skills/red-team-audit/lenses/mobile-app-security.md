@@ -96,6 +96,17 @@ activates_on:
     - 'newArchEnabled'
     - 'expo.updates.codeSigningCertificate'
     - 'UIApplicationOpenURLOptionsSourceApplicationKey'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: consumed
+      artifact_kinds: [apk, ipa]
+      may_conclude: [secret-present-in-artifact, unexpected-artifact-content, vulnerable-component-present]
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns:
   - mobile-local-data-storage
   - platform-keystore-key-custody

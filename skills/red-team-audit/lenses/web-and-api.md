@@ -120,6 +120,17 @@ activates_on:
     - 'res.redirect / HttpResponseRedirect'
     - 'dangerouslySetInnerHTML'
     - '__schema / introspectionQuery'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: consumed
+      may_conclude: [runtime-misconfiguration]
+    live-runtime:
+      state: consumed
+      may_conclude: [drift-from-source, runtime-misconfiguration]
 owns:
   - authz-object-level
   - authz-property-level

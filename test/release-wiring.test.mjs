@@ -103,13 +103,17 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.7 database conformance commands', () => {
+test('release metadata exposes the 0.11 controller and conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
-  assert.equal(packageDocument.version, '0.7.0')
-  assert.equal(lockDocument.version, '0.7.0')
-  assert.equal(lockDocument.packages[''].version, '0.7.0')
+  assert.equal(packageDocument.version, '0.11.0')
+  assert.equal(lockDocument.version, '0.11.0')
+  assert.equal(lockDocument.packages[''].version, '0.11.0')
+  assert.match(
+    readFileSync('scripts/lib/run-engine.mjs', 'utf8'),
+    /PLATFORM_VERSION = '0\.11\.0'/,
+  )
   assert.equal(
     packageDocument.scripts['conformance:database'],
     'node scripts/database-conformance.mjs',
@@ -118,11 +122,74 @@ test('release metadata exposes the 0.7 database conformance commands', () => {
     packageDocument.scripts['test:database:docker'],
     'node scripts/run-database-docker-conformance.mjs',
   )
+  assert.equal(
+    packageDocument.scripts['test:transparency:https'],
+    'node scripts/run-transparency-log-conformance.mjs',
+  )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>/,
+  )
+})
+
+test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
+  for (const path of [
+    'docs/adr/0013-authorized-external-http-recon.md',
+    'docs/adr/0014-operator-attested-http-recon.md',
+    'docs/adr/0015-url-first-pkix-http-recon.md',
+    'docs/http-recon-protocol.md',
+    'schemas/http-recon-roe.schema.json',
+    'schemas/http-recon-target-proof.schema.json',
+    'schemas/http-recon-attested-scope.schema.json',
+    'schemas/http-recon-run.schema.json',
+    'schemas/http-recon-observation.schema.json',
+    'scripts/http-recon.mjs',
+    'scripts/lib/http-recon-contracts.mjs',
+    'scripts/lib/http-recon-client.mjs',
+    'scripts/lib/http-recon-controller.mjs',
+    'test/http-recon-contracts.test.mjs',
+    'test/http-recon-client.test.mjs',
+    'test/http-recon-controller.test.mjs',
+  ]) {
+    assert.ok(
+      readFileSync(path).length > 0,
+      `${path} must ship with the authorized HTTP-recon slice`,
+    )
+  }
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.equal(
+    packageDocument.scripts['audit:http-recon'],
+    'node scripts/http-recon.mjs',
+  )
+  for (const testPath of [
+    'test/http-recon-contracts.test.mjs',
+    'test/http-recon-client.test.mjs',
+    'test/http-recon-controller.test.mjs',
+  ]) {
+    assert.match(packageDocument.scripts['test:platform'], new RegExp(testPath.replace('.', '\\.')))
+  }
+  const cli = readFileSync('scripts/http-recon.mjs', 'utf8')
+  assert.match(cli, /Planning performs no network activity/)
+  assert.match(cli, /http-recon plan --target-url/)
+  assert.match(cli, /http-recon plan-signed --roe/)
+  assert.match(cli, /Operator-attested authorization is a/)
+  assert.match(cli, /runtime-configured CA trust and hostname validation/)
+  const attestedPlanShape = cli.slice(
+    cli.indexOf('  plan: {'),
+    cli.indexOf("  'plan-signed': {"),
+  )
+  assert.doesNotMatch(
+    attestedPlanShape.match(/required:\s*\[[\s\S]*?\]/)?.[0] ?? '',
+    /tls-spki-sha256/,
+  )
+  assert.match(attestedPlanShape, /optional:[\s\S]*tls-spki-sha256/)
+  assert.doesNotMatch(cli, /--(?:header|payload|credential|body)/)
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {
   for (const path of [
     'docs/adr/0007-signed-remote-request-acceptance.md',
+    'docs/adr/0008-remote-attempt-ledger-integration.md',
     'providers/reference-remote-gateway/README.md',
     'providers/reference-remote-gateway/gateway.mjs',
     'schemas/remote-gateway-config.schema.json',
@@ -131,10 +198,89 @@ test('the v0.8 remote gateway protocol foundation is release-wired', () => {
     'scripts/lib/remote-gateway-contracts.mjs',
     'scripts/lib/remote-gateway-client.mjs',
     'test/remote-gateway-contracts.test.mjs',
+    'test/remote-cli-integration.test.mjs',
   ]) {
     assert.ok(
       readFileSync(path).length > 0,
       `${path} must ship with the remote gateway protocol slice`,
     )
   }
+})
+
+test('the v0.9 transparency publication protocol is release-wired', () => {
+  for (const path of [
+    'docs/adr/0009-external-transparency-inclusion.md',
+    'docs/adr/0010-reference-transparency-log.md',
+    'docs/transparency-protocol.md',
+    'schemas/transparency-log-config.schema.json',
+    'schemas/transparency-publish-request.schema.json',
+    'schemas/transparency-inclusion-receipt.schema.json',
+    'scripts/lib/transparency-log-contracts.mjs',
+    'scripts/lib/transparency-log-client.mjs',
+    'scripts/run-transparency-log-conformance.mjs',
+    'providers/reference-transparency-log/store.mjs',
+    'providers/reference-transparency-log/handler.mjs',
+    'providers/reference-transparency-log/server.mjs',
+    'providers/reference-transparency-log/README.md',
+    'test/transparency-log-contracts.test.mjs',
+    'test/transparency-log-client.test.mjs',
+    'test/reference-transparency-log-store.test.mjs',
+    'test/reference-transparency-log-handler.test.mjs',
+    'test/reference-transparency-log-conformance.test.mjs',
+    'test/fixtures/reference-transparency-tls.mjs',
+  ]) {
+    assert.ok(
+      readFileSync(path).length > 0,
+      `${path} must ship with the transparency publication slice`,
+    )
+  }
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /red-team-audit publish <run\.json\|bundle-directory> <transparency-log-config\.json>/,
+  )
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+  assert.match(workflow, /^\s{2}transparency-https-conformance:$/m)
+  assert.match(workflow, /Run stateful HTTPS transparency-log conformance/)
+  assert.match(workflow, /run: npm run test:transparency:https/)
+  const jobStart = workflow.indexOf('\n  transparency-https-conformance:')
+  const jobEnd = workflow.indexOf('\n  provider-docker-conformance:', jobStart)
+  assert.notEqual(jobStart, -1)
+  assert.notEqual(jobEnd, -1)
+  const transparencyJob = workflow.slice(jobStart, jobEnd)
+  assert.doesNotMatch(transparencyJob, /continue-on-error:\s*true/)
+  assert.match(transparencyJob, /sudo apt-get install --yes ripgrep/)
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.match(
+    packageDocument.scripts['test:platform'],
+    /test\/reference-transparency-log-store\.test\.mjs/,
+  )
+  assert.match(
+    packageDocument.scripts['test:platform'],
+    /test\/reference-transparency-log-handler\.test\.mjs/,
+  )
+})
+
+test('the v0.10 externally anchored checkpoint-continuity slice is release-wired', () => {
+  for (const path of [
+    'docs/adr/0011-externally-anchored-checkpoint-continuity.md',
+    'schemas/transparency-signed-checkpoint.schema.json',
+    'schemas/transparency-consistency-request.schema.json',
+    'schemas/transparency-consistency-proof.schema.json',
+    'schemas/transparency-checkpoint-journal-record.schema.json',
+    'scripts/lib/transparency-checkpoint-journal.mjs',
+    'test/transparency-checkpoint-journal.test.mjs',
+  ]) {
+    assert.ok(
+      readFileSync(path).length > 0,
+      `${path} must ship with the checkpoint-continuity slice`,
+    )
+  }
+  const audit = readFileSync('scripts/audit.mjs', 'utf8')
+  assert.match(audit, /--transparency-checkpoint-journal/)
+  assert.match(audit, /--initialize-transparency-checkpoint-journal/)
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.match(
+    packageDocument.scripts['test:platform'],
+    /test\/transparency-checkpoint-journal\.test\.mjs/,
+  )
 })

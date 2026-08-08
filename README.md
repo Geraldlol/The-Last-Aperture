@@ -6,7 +6,9 @@ owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
 and stores they examined. The optional sealed runner can prove that its adapter
 completed a byte challenge over exact planned bytes, but cannot prove the
-provider understood or analyzed those bytes correctly.
+provider understood or analyzed those bytes correctly. The optional remote
+gateway path proves that an externally pinned gateway accepted one exact
+signed request; that acceptance is not proof of model comprehension.
 
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
@@ -14,9 +16,10 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.7.0 adds an opt-in, disposable multi-engine database conformance lab
-to the bounded coverage, detached root-attestation, sealed provider, and
-controller-owned store-synthesis foundation:
+Version 0.10.0 adds externally anchored transparency-checkpoint continuity for
+signed terminal roots to the bounded coverage, detached root-attestation, sealed
+provider, remote gateway, database conformance, and controller-owned
+store-synthesis foundation:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
@@ -43,8 +46,32 @@ controller-owned store-synthesis foundation:
   Ed25519 execution or structured failure envelopes.
 - Detached, externally pinned Ed25519 attestations over exact terminal
   `run.json` bytes.
-- Separate `PROVIDER_DECLARED` and `CONTROLLER_OBSERVED_CONSUMPTION` coverage
-  authority in run, Markdown, lifecycle, and SARIF output.
+- Canonical publication of only that detached attestation to one DNS-restricted,
+  TLS-SPKI-pinned HTTPS log endpoint.
+- Offline-verifiable RFC 6962-style Merkle inclusion receipts under an
+  externally pinned Ed25519 checkpoint key.
+- A separate exact HTTPS consistency endpoint with RFC 6962/9162 append-only
+  proofs between independently signed historical checkpoints.
+- An immutable, hash-chained external checkpoint journal with explicit
+  baseline initialization, compare-and-swap advancement, crash recovery, and
+  offline verification.
+- An optional reference-store high-water guard that rejects a local state
+  rollback or fork relative to a supplied external checkpoint.
+- A stateful reference HTTPS transparency log with signed immutable state,
+  exclusive local-process locking, restart recovery, durable idempotency, and
+  a dedicated real-TLS conformance gate.
+- Separate `INCLUSION_AT_SIGNED_CHECKPOINT` and conditional
+  `CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT` claims that preserve witness,
+  global non-equivocation, revocation, and trusted-time non-claims.
+- Separate `PROVIDER_DECLARED`, `CONTROLLER_OBSERVED_CONSUMPTION`, and
+  `REMOTE_REQUEST_ACCEPTED` coverage authority in run, Markdown, lifecycle,
+  and SARIF output.
+- A `remote_static` Rules of Engagement mode that allows one exact
+  policy-authorized HTTPS gateway while keeping provider packets read-only and
+  credential-free.
+- Canonical Ed25519 remote requests, SPKI-pinned HTTPS, RFC 9530 content
+  digests, one-use request IDs, signed gateway acceptance receipts, and
+  hash-chained schema-v6 attempt recovery.
 - Separate existence and proof transitions.
 - Per-store database adapter routing, shard-local contributions, and
   controller-synthesized coverage profiles.
@@ -54,7 +81,7 @@ controller-owned store-synthesis foundation:
 - Content-addressed engine results with checkable transcripts, exact image and
   server identities, hard resource/wall-time bounds, stale-lock recovery, and
   verified container teardown.
-- Optional schema-5 audit attachment of a complete reference-lab result,
+- Optional schema-5/6 audit attachment of a complete reference-lab result,
   explicitly labeled `UNANCHORED` and `target_deployment_proven: false`.
 - Read-only audit mode and an operator abort command.
 - Markdown, JSON, and SARIF 2.1 output.
@@ -63,10 +90,13 @@ controller-owned store-synthesis foundation:
 - Baseline comparison that distinguishes `fixed` from `not-observed`.
 - TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
 
-The general dynamic T1/T2 target proof broker is not enabled. Static mode does not execute
-target code, follow target symlinks, or make network calls. The reference
-provider boundary runs a separately supplied, trusted adapter image against
-brokered sealed data; it does not mount or execute the target.
+The general dynamic T1/T2 target proof broker is not enabled. Local static mode
+does not execute target code, follow target symlinks, or make network calls.
+`remote_static` permits only the configured gateway request authorized by the
+external policy; it does not grant network authority to repository content or
+the provider packet. The local provider boundary runs a separately supplied,
+trusted adapter image against brokered sealed data; it does not mount or
+execute the target.
 
 The standalone database lab is separate opt-in `LOCAL_DYNAMIC` execution of
 controller-owned synthetic SQL. It never reads the audited target or target
@@ -201,9 +231,51 @@ npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
 ```
 
 The detached attestation binds the exact terminal `run.json` bytes, run
-identity, state, phase, and externally pinned Ed25519 key. It is suitable for
-independent immutable storage or later transparency publication. The platform
-does not yet publish to or claim the guarantees of a transparency log.
+identity, state, phase, and externally pinned Ed25519 key. It can optionally be
+published to a separately operated transparency log:
+
+```powershell
+npm.cmd run audit -- publish C:\audit-runs\<run-directory> `
+  C:\trusted\transparency-log-config.json `
+  --root-attestation C:\trusted\attestations\<run-id>.json `
+  --root-public-key C:\trusted\root-public.pem `
+  --transparency-checkpoint-journal C:\trusted\checkpoint-journal `
+  --initialize-transparency-checkpoint-journal `
+  --out C:\trusted\receipts\<run-id>.json
+
+npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
+  --root-attestation C:\trusted\attestations\<run-id>.json `
+  --root-public-key C:\trusted\root-public.pem `
+  --transparency-receipt C:\trusted\receipts\<run-id>.json `
+  --transparency-log-public-key C:\trusted\transparency-log-public.pem `
+  --transparency-log-origin audit-log.example/v1 `
+  --transparency-checkpoint-journal C:\trusted\checkpoint-journal
+```
+
+Publication still transmits only canonical root-attestation JSON. A verified
+receipt proves inclusion at one signed checkpoint. With a version 1.1 log
+configuration and an explicitly initialized external journal, later
+publications additionally retrieve and retain an append-only consistency proof.
+Offline validation verifies the complete retained chain without contacting the
+log. This is client-local continuity, not witness quorum, global
+non-equivocation, revocation status, or trusted time. See
+[`docs/transparency-protocol.md`](docs/transparency-protocol.md).
+
+The shipped reference implementation is a bounded conformance service, not a
+production hosted log. It requires operator-supplied TLS material, an external
+Ed25519 signing key, and a dedicated external state directory. Its signed
+local chains detect holes, truncation, replacement, and contradictory tails.
+Supplying the journal head as `trustedCheckpoint` (or canonical
+`trustedCheckpointBytes`) also prevents startup against an older or conflicting
+prefix. Without that external input, whole-directory restoration remains a
+non-claim. Composition and non-claims
+are documented in
+[`providers/reference-transparency-log/README.md`](providers/reference-transparency-log/README.md).
+Run its actual HTTPS/restart/offline-validation gate with:
+
+```powershell
+npm.cmd run test:transparency:https
+```
 
 The default fan-out bound is 64 files and 4 MiB of inventoried raw bytes per
 job, with up to three closure rounds. `--max-shard-files`,
@@ -232,6 +304,38 @@ stderr, and any partial receipt without receiving coverage authority. Failed
 attempts remain in the hash-chained event history. See
 [`docs/provider-protocol.md`](docs/provider-protocol.md) and
 [`schemas/provider-config.schema.json`](schemas/provider-config.schema.json).
+
+### Signed remote gateway execution
+
+Remote execution requires an external `remote_static` Rules of Engagement
+policy whose network allowlist contains the exact gateway endpoint:
+
+```powershell
+npm.cmd run audit -- plan C:\path\to\repository `
+  --out C:\audit-runs `
+  --roe C:\trusted\remote-static-roe.json `
+  --seal-source
+
+npm.cmd run audit -- run-remote `
+  C:\audit-runs\<run-directory> `
+  C:\trusted\remote-gateway-config.json
+```
+
+The controller persists the exact canonical signed request and a schema-v6
+lease before network I/O. The HTTPS client permits no redirect, pins one
+validated public DNS answer for the connection, pins the
+certificate SPKI and gateway Ed25519 key, verifies the response content digest,
+and records the signed acceptance before committing the job result.
+
+An expired or ambiguous attempt is retained as a recoverable failure. Its
+request ID is never reused; retry creates a new attempt and signed request.
+Configuration, endpoint, transform, or key rotation inside one run is rejected.
+Source bytes leave the local machine only on this explicitly authorized path.
+`REMOTE_REQUEST_ACCEPTED` proves request acceptance, not provider
+comprehension, semantic correctness, or independent proof.
+
+See [`docs/adr/0008-remote-attempt-ledger-integration.md`](docs/adr/0008-remote-attempt-ledger-integration.md)
+and [`schemas/remote-gateway-config.schema.json`](schemas/remote-gateway-config.schema.json).
 
 For historical verification, pin the controller identity with an Ed25519 public
 key kept outside both target and bundle:

@@ -5,17 +5,28 @@
 Do not include real credentials, private source code, personal data, PHI, or
 customer evidence in a public issue.
 
-Until a dedicated private reporting channel is published, contact the repository
-owner through the private channel by which you received access and request a
-security-reporting destination. Public reports should contain only a minimized,
-synthetic reproduction.
+Report privately through GitHub Security Advisories: open the repository's
+Security tab and choose "Report a vulnerability". That channel is private
+between you and the maintainer.
+
+If you cannot use it, open a public issue containing only a minimized,
+synthetic reproduction and a request for a private contact address. Do not put
+details of an unfixed vulnerability in a public issue.
 
 ## Supported security boundary
 
-Version 0.7.0 supports static, read-only planning, externally produced job
+Version 0.10.0 supports static, read-only planning, externally produced job
 results, and an opt-in sealed provider runner. It never executes target code or
 grants the provider a target mount, host network, credentials, or arbitrary
 host process authority.
+
+Two features open an outbound network connection, and both are opt-in and
+externally authorized. Signed remote-gateway execution sends one Ed25519-signed
+request to a single TLS-SPKI-pinned, DNS-scope-restricted HTTPS endpoint.
+Transparency publication sends only the canonical detached root attestation to
+one such endpoint. Neither transmits repository source, findings, provider
+output, credentials, or the target path, and neither follows redirects.
+Offline validation contacts nothing.
 
 For run schemas 4 and 5, database providers contribute only shard-local store claims.
 The controller binds each contribution to its planned job and input digest,
@@ -24,7 +35,7 @@ after every base fan-out job has completed. Provider semantic claims remain
 declarations; authentication and deterministic synthesis do not prove that the
 analysis was correct.
 
-Version 0.7 also provides a separate opt-in database conformance lab. It runs
+Version 0.10 also provides a separate opt-in database conformance lab. It runs
 only controller-owned synthetic SQL in one digest-pinned disposable reference
 engine at a time. The container has no external network, published ports, host
 mounts, inherited proxy configuration, or target credentials; it uses a
@@ -38,6 +49,14 @@ audit plans only as `CONTROLLER_OBSERVED_DISPOSABLE_ENGINE_BEHAVIOR`; it is
 `UNANCHORED` unless separately protected, fixes
 `target_deployment_proven: false`, and cannot elevate target proof, store
 coverage, or finding severity.
+
+Version 0.10 adds an optional external transparency-checkpoint continuity
+boundary. A controller-owned immutable journal verifies RFC 6962/9162
+consistency from an explicitly initialized signed checkpoint and can be checked
+offline. The reference log can also reject startup or reload against a supplied
+external checkpoint when its local state is older or conflicting. Both controls
+depend on the checkpoint or journal remaining outside the log's rollback and
+write authority.
 
 The pure policy kernel remains an authorization decision component, not an
 isolation mechanism. The reference runner uses a local Docker/OCI boundary
@@ -103,6 +122,13 @@ when the repository may be modified by a hostile local process.
 - Keep root-manifest signing keys, verification keys, and detached attestations
   outside both the target and run bundle. Store attestations under independent
   access control if they are used as the trust anchor.
+- Keep transparency configurations, log keys, and inclusion receipts outside
+  both scopes. Publication changes external state and must be explicitly
+  authorized; it sends only the canonical detached root attestation.
+- Keep the transparency checkpoint journal outside the target, audit bundle,
+  and log state, under a principal the log cannot write. Initialize its first
+  checkpoint explicitly and retain its latest record digest independently when
+  whole-journal rollback is in scope.
 - Keep bundles within the documented 128 MiB per-artifact, 16,384-artifact, and
   512 MiB aggregate verification limits; the controller reserves capacity
   before append/finalize operations.
@@ -124,10 +150,21 @@ unchanged. A terminal run can additionally be bound to a detached Ed25519 root
 attestation whose public key and attestation are pinned outside the mutable
 bundle. Without that pair, validation reports the root as `UNANCHORED`, and an
 actor able to rewrite `run.json` can still replace an artifact and its hash
-together. Attestation timestamps are controller clock declarations, not
-trusted timestamps, and the project does not yet claim transparency-log
-inclusion, consistency, witness, or revocation guarantees. Provider execution
-envelopes remain strong only when their receipt public key is also pinned
+together. Version 0.10 can publish the exact detached attestation, verify its
+Merkle inclusion under an externally pinned signed checkpoint, and optionally
+verify `CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT` through an external
+journal. That continuity claim is local to the supplied journal and pinned log
+identity: witness quorum, cross-client agreement, global non-equivocation, key
+revocation status, and trusted time remain unverified. Attestation and
+checkpoint timestamps are signer declarations. The shipped reference log
+detects malformed local state, holes, partial rollback, replacement, and broken
+signed chains. Whole-state rollback is detected only when a newer checkpoint is
+actually supplied from outside that state; rolling the log and the sole journal
+copy back together remains undetectable without a separately retained digest or
+independent witness. It is not an
+Internet-facing service and supplies no client authorization, rate limiting,
+high availability, replication, or certificate lifecycle management.
+Provider execution envelopes remain strong only when their receipt public key is also pinned
 externally. Bundle-path checks fail closed on observed symlink/reparse
 components, but Node does not provide portable handle-relative path creation;
 keep the bundle on a directory that cannot be concurrently renamed or replaced

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import {
   assertHardenedDatabaseContainerInspection,
   assertLocalDatabaseDockerContextHost,
@@ -7,9 +9,12 @@ import {
   buildDatabaseDockerCreateArgs,
   conformanceCheck,
   databaseConformanceContainerName,
+  databaseDockerCreateEnvironment,
   runDatabaseConformanceEngine,
+  runDatabaseDockerCommand,
   scenarioResult,
 } from '../scripts/lib/database-conformance-runner.mjs'
+import { recordReadiness } from '../scripts/lib/database-conformance-scenarios.mjs'
 import { databaseConformanceManifest } from '../scripts/lib/database-conformance-contracts.mjs'
 
 const RUN_ID = 'db-lab:2026-07-30T14:00:00.000Z:abcdef123456'
@@ -435,4 +440,170 @@ test('engine lifecycle enforces one hard wall-time budget across commands', asyn
     }),
     /wall-time limit/i,
   )
+})
+
+function fakeChildProcess(code = 0) {
+  const child = new EventEmitter()
+  child.stdout = new EventEmitter()
+  child.stderr = new EventEmitter()
+  child.stdin = Object.assign(new EventEmitter(), { end() {} })
+  child.kill = () => {}
+  setImmediate(() => child.emit('close', code, null))
+  return child
+}
+
+async function settle(rounds = 32) {
+  for (let index = 0; index < rounds; index += 1) {
+    await new Promise((resolve) => {
+      setImmediate(resolve)
+    })
+  }
+}
+
+test('lab secrets reach the container through the environment, never through argv', () => {
+  const secret = 'unit-test-lab-secret'
+  for (const selected of databaseConformanceManifest.engines) {
+    const args = buildDatabaseDockerCreateArgs({
+      engine: selected,
+      config: config(),
+      runId: RUN_ID,
+      containerName: databaseConformanceContainerName(RUN_ID, selected.engine_id),
+      secret,
+    })
+    const key = selected.engine_id === 'postgresql-18.4'
+      ? 'POSTGRES_PASSWORD'
+      : 'MYSQL_ROOT_PASSWORD'
+
+    assert.equal(
+      args.some((value) => value.includes(secret)),
+      false,
+      `${selected.engine_id} leaked its secret into argv`,
+    )
+    assert.ok(args.includes(`--env=${key}`))
+    assert.deepEqual(
+      databaseDockerCreateEnvironment({ engine: selected, secret }),
+      { [key]: secret },
+    )
+  }
+})
+
+test('the Docker child process receives the lab secret in its own environment', async () => {
+  let observed
+  const spawnImpl = (runtimePath, args, options) => {
+    observed = options.env
+    return fakeChildProcess()
+  }
+
+  const result = await runDatabaseDockerCommand({
+    runtimePath: '/usr/bin/docker',
+    args: ['--context', 'default', 'create'],
+    spawnImpl,
+    timeoutMs: 5_000,
+    maxOutputBytes: 4_096,
+    secretEnvironment: { POSTGRES_PASSWORD: 'unit-test-lab-secret' },
+  })
+
+  assert.equal(result.code, 0)
+  assert.equal(observed.POSTGRES_PASSWORD, 'unit-test-lab-secret')
+
+  await runDatabaseDockerCommand({
+    runtimePath: '/usr/bin/docker',
+    args: ['--context', 'default', 'version'],
+    spawnImpl,
+    timeoutMs: 5_000,
+    maxOutputBytes: 4_096,
+  })
+  assert.equal(Object.hasOwn(observed, 'POSTGRES_PASSWORD'), false)
+})
+
+test('recorded evidence digests exactly the observation the result retains', () => {
+  const truncated = conformanceCheck('db.long.evidence', 'PASSED', 'x'.repeat(4_096))
+  assert.equal(truncated.observation.length, 2_048)
+  assert.equal(
+    truncated.evidence_sha256,
+    createHash('sha256').update(Buffer.from(truncated.observation, 'utf8')).digest('hex'),
+  )
+
+  const empty = conformanceCheck('db.empty.evidence', 'PASSED', '   \r\n  ')
+  assert.equal(
+    empty.evidence_sha256,
+    createHash('sha256').update(Buffer.from(empty.observation, 'utf8')).digest('hex'),
+  )
+})
+
+test('an interrupt removes the exact container once and re-raises the signal', async () => {
+  const docker = fakeDocker()
+  const baseline = Object.fromEntries(
+    ['SIGINT', 'SIGTERM'].map((signal) => [signal, process.listeners(signal)]),
+  )
+  const raised = []
+  const realKill = process.kill.bind(process)
+  process.kill = (pid, signal) => {
+    raised.push(signal)
+  }
+
+  try {
+    const result = await runDatabaseConformanceEngine({
+      runId: RUN_ID,
+      engineId: 'postgresql-18.4',
+      config: config(),
+      executeScenarios: async (options) => {
+        const installed = ['SIGINT', 'SIGTERM'].map((signal) =>
+          process.listeners(signal).filter((listener) =>
+            !baseline[signal].includes(listener)))
+        assert.deepEqual(installed.map((listeners) => listeners.length), [1, 1])
+        for (const listeners of installed) listeners[0]()
+        installed[0][0]()
+        await settle(8)
+        return fakeScenarios(options)
+      },
+      commandImpl: docker.command,
+      now: () => new Date('2026-07-30T14:00:00.000Z'),
+      randomBytesImpl: () => Buffer.alloc(24, 5),
+    })
+
+    await settle()
+    assert.equal(result.cleanup.container_absent, true)
+    assert.equal(docker.removals, 1)
+    assert.deepEqual(raised, ['SIGINT'])
+  } finally {
+    process.kill = realKill
+  }
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    assert.deepEqual(process.listeners(signal), baseline[signal])
+  }
+})
+
+test('readiness polling is bounded to a recorded slice of the transcript budget', () => {
+  const poll = (index) => ({
+    step: 'postgresql-18.4.readiness',
+    code: index % 2,
+    stdout: `poll-${index}`,
+    stderr: '',
+  })
+
+  const bounded = { transcript: [], gaps: [] }
+  recordReadiness({
+    ...bounded,
+    polls: Array.from({ length: 600 }, (_, index) => poll(index)),
+    label: 'postgresql-18.4',
+  })
+  assert.equal(bounded.transcript.length, 32)
+  assert.equal(bounded.transcript[0].stdout, 'poll-0')
+  assert.equal(bounded.transcript[7].stdout, 'poll-7')
+  assert.equal(bounded.transcript[8].stdout, 'poll-576')
+  assert.equal(bounded.transcript.at(-1).stdout, 'poll-599')
+  assert.equal(bounded.gaps.length, 1)
+  assert.equal(bounded.gaps[0].area, 'postgresql-18.4 readiness')
+  assert.match(bounded.gaps[0].reason, /600 readiness polls exceeded/)
+
+  const unbounded = { transcript: [], gaps: [] }
+  recordReadiness({
+    ...unbounded,
+    polls: Array.from({ length: 32 }, (_, index) => poll(index)),
+    label: 'postgresql-18.4',
+  })
+  assert.equal(unbounded.transcript.length, 32)
+  assert.deepEqual(unbounded.gaps, [])
 })

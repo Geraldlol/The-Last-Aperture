@@ -5,6 +5,15 @@ runs_in: fanout
 activates_on:
   paths: ["**/parse-sample/**"]
   signals: ["parse-sample"]
+  evidence_classes:
+    source:
+      state: not-consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: not-consumed
+    live-runtime:
+      state: not-consumed
 owns: [parse-sample-slug]
 defers: {}
 frameworks: [owasp-top-10]

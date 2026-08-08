@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { compareCanonicalStrings } from './canonical-order.mjs'
+import { compareEvidenceClassPrecedence } from './evidence-classes.mjs'
 import {
   isUnresolvedDatabaseDescriptor,
   routeDatabaseAdapter,
@@ -14,6 +16,7 @@ import {
   inventoryCoverageRecords,
   measureCoverageClosure,
   sourceClosureGaps,
+  uncoveredLensFilePairs,
 } from './coverage-model.mjs'
 import {
   exactCoverageGapId,
@@ -112,6 +115,8 @@ const STAGE_ONE_FIELDS = new Set([
   'cwe',
   'evidence',
   'source_anchors',
+  'quotes',
+  'absence_claims',
   'attack',
   'impact',
   'reachable_from',
@@ -120,6 +125,8 @@ const STAGE_ONE_FIELDS = new Set([
   'confidence',
   'proof_plan',
   'store_context',
+  'evidence_context',
+  'evidence_claim',
   'principal_path',
   'enforcement_plane',
   'copy_path',
@@ -147,7 +154,7 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
 const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
-const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0'])
+const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'])
 
 function modeledDatabaseRun(run) {
   return MODELED_DATABASE_RUN_SCHEMAS.has(run?.schema_version)
@@ -200,6 +207,26 @@ const ACTIVE_ATTEMPT_EVENTS = new Set([
 function hasOwn(object, key) {
   return object !== null && typeof object === 'object'
     && Object.prototype.hasOwnProperty.call(object, key)
+}
+
+// A hand-edited run.json can hold a schema-valid gap whose identity cannot be
+// derived. Validation must reject it, not raise out of the validator, so both
+// helpers fail closed: an unidentifiable gap stays open and resolves nothing.
+function coverageGapIdOrUndefined(gap) {
+  try {
+    return exactCoverageGapId(gap)
+  } catch {
+    return undefined
+  }
+}
+
+function openCoverageGaps(coverage) {
+  const gaps = Array.isArray(coverage?.gaps) ? coverage.gaps : []
+  try {
+    return filterResolvedCoverageGaps(gaps, coverage?.resolved_gap_ids ?? [])
+  } catch {
+    return gaps
+  }
 }
 
 const CONTRACT_TIMESTAMP_PATTERN =
@@ -276,7 +303,7 @@ function canonicalJson(value) {
   if (value !== null && typeof value === 'object') {
     const entries = Object.keys(value)
       .filter((key) => value[key] !== undefined)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
     return `{${entries.join(',')}}`
   }
@@ -318,6 +345,18 @@ function severityAbove(value, maximum) {
 function isDatabaseFinding(record) {
   return record?.lens === 'database-and-data-stores'
     || /^(?:database(?:-|$)|db\.)/.test(record?.topic ?? '')
+}
+
+// Controller synthesis is deferred until every base lens job terminates, but
+// findings arrive during fan-out. A database finding filed then binds to the
+// authority contribution that will become the run profile; ingest applies the
+// same fallback in ensureDatabaseProfileBinding.
+function authorityContributionEntry(run, storeId) {
+  const profile = (run.store_contributions ?? []).find((envelope) =>
+    envelope.role === 'AUTHORITY'
+    && envelope.contribution?.store_id === storeId)
+    ?.contribution?.profile
+  return profile === undefined ? undefined : { profile }
 }
 
 function cloneJson(value) {
@@ -486,9 +525,225 @@ export function isExactStageOneReplay(previous, replay) {
   return isDeepStrictEqual(expected, replay)
 }
 
+// A near-miss spelling must be read as unresolved reachability, never as a
+// named entry point: the schema rejects it, and the cap must not depend on the
+// schema having run first.
+const UNRESOLVED_REACHABILITY = /^\s*(?:unknown|contingent)/i
+const REACHABILITY_DROP_GROUNDS =
+  /\b(?:un)?reachab\w*|\bentry[ -]?points?\b|\bcallers?\b|\bcall[ -]?sites?\b|\bdead code\b|\bnever (?:called|invoked|reached)\b/i
+
+function unresolvedReachability(value) {
+  return typeof value === 'string' && UNRESOLVED_REACHABILITY.test(value)
+}
+
+const EVIDENCE_LOCATION_PATTERN = /^([a-z0-9][a-z0-9-]{0,63}):(?!\d+$)(.+)$/
+const EVIDENCE_COVERAGE_CAP = 'Medium'
+
+function evidenceCoverageKey(lens, topic, evidenceClass) {
+  return `${lens}\0${topic}\0${evidenceClass}`
+}
+
+// Invariant 16's declaration-aware half. Runs only when the caller supplies the
+// lens declarations and the run's coverage matrix; without them the record-local
+// half from evidenceInvariantErrors still applies.
+function evidenceDeclarationErrors(record, evidence) {
+  const errors = []
+  const context = record?.evidence_context
+  if (!context || !evidence) return errors
+
+  const declared = evidence.declarations?.get(record.lens)
+  if (!declared) {
+    addError(
+      errors,
+      'EVIDENCE_LENS_UNDECLARED',
+      '/lens',
+      `lens ${String(record.lens)} declares no evidence classes; a finding cannot rest on one`,
+    )
+    return errors
+  }
+
+  const entry = declared[context.evidence_class]
+  if (entry?.state !== 'consumed') {
+    addError(
+      errors,
+      'EVIDENCE_CLASS_NOT_CONSUMED',
+      '/evidence_context/evidence_class',
+      `${record.lens} declares "${context.evidence_class}" as `
+      + `${entry?.state ?? 'undeclared'} and cannot conclude from it`,
+    )
+    return errors
+  }
+
+  const permitted = entry.may_conclude ?? []
+  if (!permitted.includes(record.evidence_claim)) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_OUT_OF_BOUNDS',
+      '/evidence_claim',
+      `${record.lens} may conclude ${permitted.join(', ') || 'nothing'} from `
+      + `"${context.evidence_class}"; this record asserts "${String(record.evidence_claim)}"`,
+    )
+  }
+
+  const state = evidence.coverage?.get(
+    evidenceCoverageKey(record.lens, record.topic, context.evidence_class),
+  )
+  if (state === 'NOT_ASSESSED' || state === 'INVENTORY_ONLY') {
+    if (
+      record.verification_status !== undefined
+      && record.verification_status !== 'UNPROVEN'
+    ) {
+      addError(
+        errors,
+        'EVIDENCE_COVERAGE_UNPROVEN',
+        '/verification_status',
+        `evidence-class coverage is ${state}; a claim resting on it is UNPROVEN`,
+      )
+    }
+    if (
+      record.effective_severity !== undefined
+      && severityAbove(record.effective_severity, EVIDENCE_COVERAGE_CAP)
+    ) {
+      addError(
+        errors,
+        'EVIDENCE_COVERAGE_SEVERITY_CAP',
+        '/effective_severity',
+        `evidence-class coverage is ${state}; effective severity is capped at `
+        + `${EVIDENCE_COVERAGE_CAP}`,
+      )
+    }
+  }
+  return errors
+}
+
+/**
+ * The precedence resolver. Two records on one topic whose evidence classes
+ * differ are not two findings — they are one disagreement, and the higher
+ * class wins. Recording the conflict is what keeps the loser visible: a
+ * silently reconciled disagreement is indistinguishable from agreement.
+ */
+export function evidenceConflicts(findings) {
+  const byTopic = new Map()
+  for (const finding of findings ?? []) {
+    const key = `${finding.lens}\0${finding.topic}`
+    if (!byTopic.has(key)) byTopic.set(key, [])
+    byTopic.get(key).push({
+      candidate_id: finding.candidate_id,
+      topic: finding.topic,
+      evidence_class: finding.evidence_context?.evidence_class ?? 'source',
+    })
+  }
+
+  const conflicts = []
+  for (const records of byTopic.values()) {
+    const classes = new Set(records.map(({ evidence_class: c }) => c))
+    if (classes.size < 2) continue
+    const ranked = [...records].sort((left, right) =>
+      compareEvidenceClassPrecedence(right.evidence_class, left.evidence_class)
+      || compareCanonicalStrings(left.candidate_id, right.candidate_id))
+    const [prevailing, ...superseded] = ranked
+    for (const loser of superseded) {
+      if (loser.evidence_class === prevailing.evidence_class) continue
+      conflicts.push({
+        topic: prevailing.topic,
+        prevailing_candidate_id: prevailing.candidate_id,
+        prevailing_class: prevailing.evidence_class,
+        superseded_candidate_id: loser.candidate_id,
+        superseded_class: loser.evidence_class,
+      })
+    }
+  }
+  return conflicts.sort((left, right) =>
+    compareCanonicalStrings(left.prevailing_candidate_id, right.prevailing_candidate_id)
+    || compareCanonicalStrings(left.superseded_candidate_id, right.superseded_candidate_id))
+}
+
+function evidenceQualifiedLocations(record) {
+  const locations = Array.isArray(record.location) ? record.location : []
+  return locations
+    .map((value) => EVIDENCE_LOCATION_PATTERN.exec(String(value)))
+    .filter(Boolean)
+    .map((match) => ({ evidence_id: match[1], locator: match[2] }))
+}
+
+// Invariant 16's record-local half. The declaration-aware half needs the lens
+// pack and the run's coverage matrix and lives in evidenceDeclarationErrors,
+// which runs only when a caller supplies them.
+function evidenceInvariantErrors(record) {
+  const errors = []
+  const qualified = evidenceQualifiedLocations(record)
+  const locationCount = Array.isArray(record.location) ? record.location.length : 0
+  const context = record.evidence_context
+
+  if (qualified.length > 0 && qualified.length !== locationCount) {
+    addError(
+      errors,
+      'MIXED_LOCATION_CLASSES',
+      '/location',
+      'one record concerns one evidence source; a repository location and an '
+      + 'evidence-qualified location in one record is the precedence case, which is two records',
+    )
+  }
+
+  if (qualified.length > 0 && !context) {
+    addError(
+      errors,
+      'EVIDENCE_CONTEXT_REQUIRED',
+      '/evidence_context',
+      'an evidence-qualified location requires evidence_context (invariant 16)',
+    )
+  }
+  if (context && qualified.length === 0) {
+    addError(
+      errors,
+      'EVIDENCE_CONTEXT_WITHOUT_LOCATION',
+      '/location',
+      'evidence_context requires at least one evidence-qualified location',
+    )
+  }
+  if (context && !record.evidence_claim) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_REQUIRED',
+      '/evidence_claim',
+      'a finding from an acquired class names the claim it asserts',
+    )
+  }
+  if (!context && record.evidence_claim !== undefined) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_WITHOUT_CONTEXT',
+      '/evidence_claim',
+      'evidence_claim is meaningless without evidence_context',
+    )
+  }
+  if (context && context.evidence_class === 'source') {
+    addError(
+      errors,
+      'EVIDENCE_CLASS_NOT_ACQUIRED',
+      '/evidence_context/evidence_class',
+      'source evidence is the repository itself and carries no evidence_context',
+    )
+  }
+  for (const { evidence_id: evidenceId } of qualified) {
+    if (context && context.evidence_id !== evidenceId) {
+      addError(
+        errors,
+        'EVIDENCE_ID_MISMATCH',
+        '/location',
+        `location names evidence "${evidenceId}" but evidence_context is `
+        + `"${context.evidence_id}"`,
+      )
+    }
+  }
+  return errors
+}
+
 function findingInvariantErrors(record) {
   const errors = []
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return errors
+
+  errors.push(...evidenceInvariantErrors(record))
 
   const effectiveSeverity = record.effective_severity
   const claimedSeverity = record.claimed_impact_severity
@@ -509,7 +764,7 @@ function findingInvariantErrors(record) {
 
   if (
     effectiveSeverity
-    && (record.reachable_from === 'unknown' || record.reachable_from?.startsWith('contingent:'))
+    && unresolvedReachability(record.reachable_from)
     && severityAbove(effectiveSeverity, 'Medium')
   ) {
     addError(
@@ -517,6 +772,23 @@ function findingInvariantErrors(record) {
       'REACHABILITY_CAP',
       '/effective_severity',
       'unknown or contingent reachability caps effective severity at Medium',
+    )
+  }
+
+  if (
+    record.triage_disposition === 'dropped'
+    && unresolvedReachability(record.reachable_from)
+    && ['Critical', 'High'].includes(claimedSeverity)
+    && (
+      typeof record.drop_reason !== 'string'
+      || REACHABILITY_DROP_GROUNDS.test(record.drop_reason)
+    )
+  ) {
+    addError(
+      errors,
+      'REACHABILITY_DROP',
+      '/drop_reason',
+      'unknown or contingent reachability is not grounds for dropping a claimed Critical or High candidate; it stays in the proof queue',
     )
   }
 
@@ -767,6 +1039,7 @@ export function validateFinding(record, options = {}) {
   const schemaValid = validateFindingSchema(record)
   const errors = schemaValid ? [] : normalizeAjvErrors(validateFindingSchema.errors)
   errors.push(...findingInvariantErrors(record))
+  errors.push(...evidenceDeclarationErrors(record, options.evidence))
 
   const stage = inferFindingStage(record)
   if (requestedStage !== undefined && stage !== requestedStage) {
@@ -1053,6 +1326,7 @@ function attemptInvariantErrors(run) {
   const attempts = new Map()
   const activeByJob = new Map()
   const latestAttemptByJob = new Map()
+  const remoteRequestIds = new Set()
   let previousHash = null
   let previousOccurredAt = parseContractTimestamp(run?.created_at)
 
@@ -1272,6 +1546,41 @@ function attemptInvariantErrors(run) {
           'attempt expiry must be a valid time after the lease time',
         )
       }
+      if (['6.0.0', '7.0.0'].includes(run?.schema_version) && event?.backend === undefined) {
+        addError(
+          errors,
+          'ATTEMPT_BACKEND_MISSING',
+          `${pointer}/backend`,
+          'v6+ attempt leases must declare their execution backend',
+        )
+      }
+      if (event?.backend === 'REMOTE_GATEWAY') {
+        if (remoteRequestIds.has(event.request_id)) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_REUSED',
+            `${pointer}/request_id`,
+            'remote request identifiers are one-use within a run',
+          )
+        }
+        remoteRequestIds.add(event.request_id)
+        const requestArtifact = run?.artifacts?.[event.request_artifact_key]
+        if (!requestArtifact) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_ARTIFACT_MISSING',
+            `${pointer}/request_artifact_key`,
+            'remote attempt lease references an absent signed request artifact',
+          )
+        } else if (requestArtifact.sha256 !== event.request_artifact_sha256) {
+          addError(
+            errors,
+            'REMOTE_ATTEMPT_REQUEST_ARTIFACT_MISMATCH',
+            `${pointer}/request_artifact_sha256`,
+            'remote request artifact digest differs from its lease',
+          )
+        }
+      }
     }
   })
 
@@ -1352,13 +1661,17 @@ function attemptInvariantErrors(run) {
         }
       }
     }
-    if (job.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION') {
+    if ([
+      'CONTROLLER_OBSERVED_CONSUMPTION',
+      'REMOTE_REQUEST_ACCEPTED',
+    ].includes(job.coverage_authority)) {
+      const remoteAuthority = job.coverage_authority === 'REMOTE_REQUEST_ACCEPTED'
       if (!['SUCCEEDED', 'FAILED'].includes(job.state)) {
         addError(
           errors,
           'OBSERVED_COVERAGE_JOB_NOT_TERMINAL',
           `${pointer}/state`,
-          'controller-observed coverage is assigned only when an attempt commits',
+          'authenticated coverage is assigned only when an attempt commits',
         )
       }
       for (const field of provenanceFields) {
@@ -1367,7 +1680,7 @@ function attemptInvariantErrors(run) {
             errors,
             'OBSERVED_COVERAGE_PROVENANCE_MISSING',
             `${pointer}/${field}`,
-            `controller-observed coverage requires ${field}`,
+            `authenticated coverage requires ${field}`,
           )
         }
       }
@@ -1382,9 +1695,21 @@ function attemptInvariantErrors(run) {
           errors,
           'OBSERVED_COVERAGE_ATTEMPT_MISSING',
           `${pointer}/attempt_id`,
-          'controller-observed coverage requires the matching committed attempt',
+          'authenticated coverage requires the matching committed attempt',
         )
       } else {
+        if (
+          remoteAuthority
+            ? attempt.lease?.backend !== 'REMOTE_GATEWAY'
+            : attempt.lease?.backend === 'REMOTE_GATEWAY'
+        ) {
+          addError(
+            errors,
+            'COVERAGE_AUTHORITY_BACKEND_MISMATCH',
+            `${pointer}/coverage_authority`,
+            'coverage authority must match the committed attempt backend',
+          )
+        }
         if (attempt.receipt_sha256 !== job.receipt_sha256) {
           addError(
             errors,
@@ -1415,12 +1740,12 @@ function attemptInvariantErrors(run) {
           errors,
           'OBSERVED_COVERAGE_ARTIFACT_MISSING',
           `${pointer}/execution_artifact_key`,
-          'controller-observed coverage references an absent execution artifact',
+          'authenticated coverage references an absent execution artifact',
         )
       }
     }
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(run?.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run?.schema_version)
       && ['SUCCEEDED', 'FAILED'].includes(job.state)
       && job.kind !== 'REPORT'
       && (hasOwn(job, 'input_sha256') || hasOwn(job, 'producer'))
@@ -1516,6 +1841,7 @@ function authenticatedSuccessfulV3LensJob(job) {
     && [
       'PROVIDER_DECLARED',
       'CONTROLLER_OBSERVED_CONSUMPTION',
+      'REMOTE_REQUEST_ACCEPTED',
     ].includes(job.coverage_authority)
   )
 }
@@ -2187,7 +2513,7 @@ function v3CoverageInvariantErrors(run) {
 
 function v4StoreSynthesisInvariantErrors(run) {
   const errors = []
-  if (!['4.0.0', '5.0.0'].includes(run.schema_version)) return errors
+  if (!['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) return errors
 
   const jobs = new Map((run.jobs ?? []).map((job) => [job.job_id, job]))
   const relationships = expectedStoreContributionRelationships(run)
@@ -2564,6 +2890,7 @@ function runInvariantErrors(run, { final = false } = {}) {
     if (!isDatabaseFinding(finding)) return
     const storeId = finding.store_context?.store_id
     const entry = byStoreId.get(storeId)
+      ?? authorityContributionEntry(run, storeId)
     if (!entry) {
       addError(
         errors,
@@ -2838,16 +3165,37 @@ function runInvariantErrors(run, { final = false } = {}) {
     }
   }
 
+  if (!modeledDatabaseRun(run)) {
+    // v3 coverage invariants already report every unidentifiable gap.
+    for (const [index, gap] of (
+      Array.isArray(run.coverage?.gaps) ? run.coverage.gaps : []
+    ).entries()) {
+      try {
+        exactCoverageGapId(gap)
+      } catch (error) {
+        addError(
+          errors,
+          'COVERAGE_GAP_INVALID',
+          `/coverage/gaps/${index}`,
+          error.message,
+        )
+      }
+    }
+  }
+
   const coverageGaps = [
     ...(run.coverage?.unexamined ?? []),
-    ...filterResolvedCoverageGaps(
-      run.coverage?.gaps ?? [],
-      run.coverage?.resolved_gap_ids ?? [],
-    ),
+    ...openCoverageGaps(run.coverage),
+    ...uncoveredLensFilePairs(run.coverage ?? {}),
     ...(run.coverage?.lenses ?? []).filter((entry) => ['NOT_ASSESSED', 'FAILED'].includes(entry.status)),
     ...(run.jobs ?? []).filter((job) => job.state === 'FAILED'),
     ...(run.errors ?? []),
     ...storeProfiles.filter(({ coverage_state: state }) => state !== 'ASSESSED'),
+    ...(
+      run.coverage?.closure && run.coverage.closure.status !== 'CONVERGED'
+        ? [run.coverage.closure]
+        : []
+    ),
   ]
   if (
     ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)
@@ -3003,7 +3351,7 @@ function activeProofCandidateIds(run) {
     .filter((finding) => OPEN_DISPOSITIONS.has(finding.triage_disposition))
     .map(({ candidate_id: candidateId }) => candidateId)
     .filter((candidateId) => typeof candidateId === 'string')
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
 }
 
 function proofSchedule(run, prefix) {
@@ -3339,7 +3687,7 @@ function runTransitionErrors(previous, next) {
       (event) => event?.job_id === jobId,
     )
     if (
-      ['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(next.schema_version)
+      ['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       && priorJob.state === 'RUNNING'
       && nextJob.state === 'PENDING'
     ) {
@@ -3359,7 +3707,10 @@ function runTransitionErrors(previous, next) {
     if (
       priorJob.state === 'RUNNING'
       && ['SUCCEEDED', 'FAILED'].includes(nextJob.state)
-      && nextJob.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION'
+      && [
+        'CONTROLLER_OBSERVED_CONSUMPTION',
+        'REMOTE_REQUEST_ACCEPTED',
+      ].includes(nextJob.coverage_authority)
       && (
         matchingEvents.length !== 1
         || matchingEvents[0]?.event !== 'COMMITTED'
@@ -3403,7 +3754,10 @@ function runTransitionErrors(previous, next) {
     if (event?.event === 'COMMITTED' && !(
       priorJob?.state === 'RUNNING'
       && ['SUCCEEDED', 'FAILED'].includes(nextJob?.state)
-      && nextJob?.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION'
+      && [
+        'CONTROLLER_OBSERVED_CONSUMPTION',
+        'REMOTE_REQUEST_ACCEPTED',
+      ].includes(nextJob?.coverage_authority)
       && nextJob?.attempt_id === event?.attempt_id
     )) {
       addError(
@@ -3609,7 +3963,7 @@ function runTransitionErrors(previous, next) {
   )
   for (const gapId of newlyResolvedGaps) {
     const gap = nextGaps.find((candidate) =>
-      exactCoverageGapId(candidate) === gapId)
+      coverageGapIdOrUndefined(candidate) === gapId)
     const lensFileResolution = (
       gap?.kind === 'LENS_FILE'
       && completingJob?.kind === 'LENS'
@@ -3628,7 +3982,7 @@ function runTransitionErrors(previous, next) {
       && addedStoreIds.has(gap.area.slice('store:'.length))
     )
     const synthesisResolution = (
-      ['4.0.0', '5.0.0'].includes(next.schema_version)
+      ['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       && previous.phase === 'FANOUT'
       && next.phase === 'TRIAGE'
       && typeof gap?.area === 'string'
@@ -3943,7 +4297,7 @@ function runTransitionErrors(previous, next) {
       : []
     const resultBoundIds = closureLensReplay
       ? [...new Set([...changedIds, ...replayIds])]
-          .sort((left, right) => left.localeCompare(right, 'en'))
+          .sort((left, right) => compareCanonicalStrings(left, right))
       : changedIds
     if (
       nextJob.state === 'SUCCEEDED'
@@ -3991,7 +4345,7 @@ function runTransitionErrors(previous, next) {
       ? completedProviderJobs[0].nextJob
       : null
     if (
-      !['4.0.0', '5.0.0'].includes(next.schema_version)
+      !['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)
       || databaseCompletion?.kind !== 'LENS'
       || databaseCompletion?.lens !== 'database-and-data-stores'
       || databaseCompletion?.closure_round !== undefined
@@ -4015,7 +4369,7 @@ function runTransitionErrors(previous, next) {
   const nextProfiles = Array.isArray(next.store_profiles) ? next.store_profiles : []
   const addedProfiles = nextProfiles.slice(priorProfileCount)
   if (addedProfiles.length > 0) {
-    if (['4.0.0', '5.0.0'].includes(next.schema_version)) {
+    if (['4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(next.schema_version)) {
       const expectedProfiles = synthesizeStoreProfiles(next)
         .map(({ profile }) => profile)
       if (

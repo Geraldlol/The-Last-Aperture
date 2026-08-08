@@ -1,5 +1,6 @@
 import { findingFingerprint } from './lifecycle.mjs'
 import { isSurvivingFinding } from './findings.mjs'
+import { evidenceConflicts } from './contracts.mjs'
 import {
   filterResolvedCoverageGaps,
   projectCoverageGaps,
@@ -41,12 +42,22 @@ const MARKDOWN_PUNCTUATION = new Set([
   '~',
 ])
 
+// Severity and confidence are separate axes. `severityOf` is the confidence-
+// gated priority — what to act on first. `claimedSeverityOf` is how bad the
+// finding is if it is real. Reporting only the former tells a reader a claimed
+// Critical is moderate, when what is actually true is that it is unproven.
 function severityOf(finding) {
   return finding.effective_severity ?? finding.claimed_impact_severity ?? 'Info'
 }
 
+function claimedSeverityOf(finding) {
+  return finding.claimed_impact_severity ?? finding.effective_severity ?? 'Info'
+}
+
 function sortedFindings(findings) {
   return [...findings].sort((left, right) =>
+    (SEVERITY_RANK.get(claimedSeverityOf(left)) ?? 99) -
+      (SEVERITY_RANK.get(claimedSeverityOf(right)) ?? 99) ||
     (SEVERITY_RANK.get(severityOf(left)) ?? 99) -
       (SEVERITY_RANK.get(severityOf(right)) ?? 99) ||
     left.candidate_id.localeCompare(right.candidate_id, 'en'))
@@ -82,6 +93,15 @@ function markdownText(value, fallback = '—') {
     .replace(/^([0-9]+)([.)])(?=\s)/, '$1\\$2')
 }
 
+// A longer delimiter stops provider text closing the span early, but it is not
+// sufficient on its own: CommonMark merges the delimiter with a backtick at the
+// very start or end of the content, so `` `x `` emits ```` ```x`` ```` and the
+// span never closes — leaving the rest of the line to render as live markup.
+// The specified remedy is one space of padding, which the renderer strips.
+//
+// Angle brackets are deliberately not escaped. Code-span content is escaped by
+// the renderer, and pre-escaping would print `&lt;img&gt;` to a reader looking
+// at quoted evidence. codeBlock takes the same position for the same reason.
 function inlineCode(value, fallback = '—') {
   const text = singleLine(value, fallback)
   const longestRun = Math.max(
@@ -89,7 +109,8 @@ function inlineCode(value, fallback = '—') {
     ...(text.match(/`+/g) ?? []).map((run) => run.length),
   )
   const delimiter = '`'.repeat(longestRun + 1)
-  return `${delimiter}${text}${delimiter}`
+  const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
+  return `${delimiter}${padding}${text}${padding}${delimiter}`
 }
 
 function tableCell(value) {
@@ -140,13 +161,36 @@ function isUnverifiedHighImpactClaim(finding) {
     && finding.verification_status !== 'CONFIRMED'
 }
 
+// Counted by claimed impact, so the summary states the risk profile. The
+// confidence-gated view is served by the unverified-high-impact table below and
+// by SARIF rank; collapsing both into one row reported three Criticals as zero.
 function countBySeverity(findings) {
   return Object.fromEntries(
     [...SEVERITY_RANK.keys()].map((severity) => [
       severity,
-      findings.filter((finding) => severityOf(finding) === severity).length,
+      findings.filter((finding) => claimedSeverityOf(finding) === severity).length,
     ]),
   )
+}
+
+// "Critical (unproven)" is the whole point: how bad it is if real, and how well
+// established that is, in the one line a reader scans.
+//
+// The qualifier is emitted unescaped, so it is resolved through a fixed map
+// rather than derived from the record. A provider-supplied status that is not
+// one of these is dropped instead of rendered.
+const CONFIDENCE_LABEL = new Map([
+  ['CONFIRMED', 'confirmed'],
+  ['NOT_REPRODUCED', 'not reproduced'],
+  ['INCONCLUSIVE', 'inconclusive'],
+  ['DISPROVED', 'disproved'],
+  ['UNPROVEN', 'unproven'],
+])
+
+function headingSeverity(finding) {
+  const claimed = markdownText(claimedSeverityOf(finding))
+  const label = CONFIDENCE_LABEL.get(finding.verification_status)
+  return label === undefined ? claimed : `${claimed} (${label})`
 }
 
 function boundedCoverageText(value) {
@@ -446,6 +490,10 @@ export function renderMarkdownReport(run) {
       ({ coverage_authority: authority }) =>
         authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
     ).length,
+    REMOTE_REQUEST_ACCEPTED: producedJobs.filter(
+      ({ coverage_authority: authority }) =>
+        authority === 'REMOTE_REQUEST_ACCEPTED',
+    ).length,
   }
   const lensAuthority = new Map()
   for (const job of producedJobs.filter(
@@ -484,7 +532,7 @@ export function renderMarkdownReport(run) {
   }
   if (['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)) {
     lines.push(
-      '> Coverage authority is recorded per job. CONTROLLER_OBSERVED_CONSUMPTION proves the adapter completed a challenge over exact sealed bytes; it does not prove comprehension or correct analysis. PROVIDER_DECLARED remains an unauthenticated provider claim. Neither is an independent security clearance.',
+      '> Coverage authority is recorded per job. CONTROLLER_OBSERVED_CONSUMPTION proves the local adapter completed a challenge over exact sealed bytes. REMOTE_REQUEST_ACCEPTED proves the pinned gateway accepted one exact signed request. Neither proves comprehension or correct analysis. PROVIDER_DECLARED remains an unauthenticated provider claim. None is an independent security clearance.',
       '',
     )
   }
@@ -545,14 +593,14 @@ export function renderMarkdownReport(run) {
 
   for (const finding of survivors) {
     lines.push(
-      `### ${markdownText(severityOf(finding))} — ${markdownText(finding.title)}`,
+      `### ${headingSeverity(finding)} — ${markdownText(finding.title)}`,
       '',
       `Candidate: ${inlineCode(finding.candidate_id)}  `,
       `Lens/topic: ${inlineCode(finding.lens)} / ${inlineCode(finding.topic)}  `,
       `Location: ${(finding.location ?? []).map((location) => inlineCode(location)).join(', ')}  `,
       `Reachability: ${inlineCode(finding.reachable_from)}  `,
       `Claimed severity: ${inlineCode(finding.claimed_impact_severity)}  `,
-      `Effective severity: ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
+      `Priority (confidence-gated): ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
       `Existence: ${inlineCode(finding.existence_check?.status ?? 'NOT ASSESSED')}  `,
       `Proof tier: ${inlineCode(finding.proof_tier ?? 'NOT ASSESSED')}  `,
       `Verification: ${inlineCode(finding.verification_status ?? 'NOT ASSESSED')}  `,
@@ -588,7 +636,8 @@ export function renderMarkdownReport(run) {
     `Raw open gap records: ${coverageSummary.raw_open_gap_records}  `,
     `Resolved historical gap records: ${coverageSummary.resolved_gap_records}  `,
     `Provider-declared jobs: ${authorityCounts.PROVIDER_DECLARED}  `,
-    `Controller-observed consumption jobs: ${authorityCounts.CONTROLLER_OBSERVED_CONSUMPTION}`,
+    `Controller-observed consumption jobs: ${authorityCounts.CONTROLLER_OBSERVED_CONSUMPTION}  `,
+    `Remote request accepted jobs: ${authorityCounts.REMOTE_REQUEST_ACCEPTED}`,
     '',
   )
 
@@ -779,6 +828,90 @@ export function renderMarkdownReport(run) {
     lines.push('')
   }
 
+  const evidenceCoverage = run.evidence_coverage
+  if (evidenceCoverage) {
+    const evidenceSummary = evidenceCoverage.summary ?? {}
+    lines.push(
+      '### Evidence-class coverage',
+      '',
+      '| Lens | Topic | Evidence class | Coverage | Basis |',
+      '|---|---|---|---|---|',
+    )
+    for (const cell of evidenceCoverage.cells ?? []) {
+      lines.push(
+        `| ${tableCell(cell.lens)} | ${tableCell(cell.topic)} | ` +
+        `${tableCell(cell.evidence_class)} | ${tableCell(cell.state)} | ` +
+        `${tableCell(cell.reason)} |`,
+      )
+    }
+    lines.push('')
+    // INVENTORY_ONLY and NOT_ASSESSED are never rendered as pass, clean, secure
+    // or no findings. Stating the blind spot is the whole point: silence about
+    // an unexamined class is what reads as clearance.
+    if ((evidenceSummary.unreached_class_count ?? 0) > 0) {
+      const classes = (evidenceSummary.unreached_classes ?? []).join(', ')
+      lines.push(
+        `${evidenceSummary.unreached_class_count} evidence ` +
+        `class${evidenceSummary.unreached_class_count === 1 ? ' was' : 'es were'} not acquired ` +
+        `for this run: ${classes}. Findings and clean results below cover the ` +
+        'repository only. An unexamined evidence class is a coverage gap, not a clearance.',
+        '',
+      )
+    }
+    const phiBearing = (run.evidence_bundles ?? []).filter(({ phi_bearing: bearing }) => bearing)
+    if (phiBearing.length > 0) {
+      lines.push(
+        '#### PHI-bearing evidence',
+        '',
+        'The following bundles were captured with contents under a declared PHI scope. ' +
+        'Their contents are not reproduced here; the bundle is itself an auditable ' +
+        'artifact and is subject to its retention limit.',
+        '',
+        '| Evidence | Class | Adapter | Bundle digest |',
+        '|---|---|---|---|',
+      )
+      for (const bundle of phiBearing) {
+        lines.push(
+          `| ${tableCell(bundle.evidence_id)} | ${tableCell(bundle.evidence_class)} | ` +
+          `${tableCell(bundle.adapter_id)} | ${inlineCode(bundle.root_sha256.slice(0, 12))} |`,
+        )
+      }
+      lines.push('')
+    }
+    if ((evidenceSummary.inventory_only_cell_count ?? 0) > 0) {
+      lines.push(
+        `${evidenceSummary.inventory_only_cell_count} lens/topic obligation` +
+        `${evidenceSummary.inventory_only_cell_count === 1 ? '' : 's'} received evidence no ` +
+        'activated lens has a rule for; those are inventoried, not assessed.',
+        '',
+      )
+    }
+  }
+
+  const conflicts = evidenceConflicts(run.findings ?? [])
+  if (conflicts.length > 0) {
+    lines.push(
+      '### Precedence conflicts',
+      '',
+      'Where two evidence classes disagree about one topic the higher-precedence ' +
+      'class prevails and the disagreement is recorded here. A lower-precedence ' +
+      'signal never overrides a conflicting higher-precedence one.',
+      '',
+      '| Topic | Prevailing | Class | Superseded | Class |',
+      '|---|---|---|---|---|',
+    )
+    for (const conflict of conflicts) {
+      lines.push(
+        `| ${tableCell(conflict.topic)} | ` +
+        `${inlineCode(conflict.prevailing_candidate_id)} | ` +
+        `${tableCell(conflict.prevailing_class)} | ` +
+        `${inlineCode(conflict.superseded_candidate_id)} | ` +
+        `${tableCell(conflict.superseded_class)} |`,
+      )
+    }
+    lines.push('')
+  }
+
   if (coverageSummary.openFileSamples.length > 0) {
     lines.push(
       '### Open file samples',
@@ -892,7 +1025,9 @@ export function renderMarkdownReport(run) {
 }
 
 function parseLocation(value) {
-  const match = /^(.*):([1-9][0-9]*)(?::([1-9][0-9]*))?$/.exec(String(value))
+  // The path is lazy so a trailing `:line:column` binds to both groups. A
+  // greedy path swallows the line and reports the column as the line.
+  const match = /^(.*?):([1-9][0-9]*)(?::([1-9][0-9]*))?$/.exec(String(value))
   if (!match) return null
   return {
     path: match[1].replaceAll('\\', '/'),
@@ -907,17 +1042,48 @@ function sarifLevel(severity) {
   return 'note'
 }
 
+// SARIF 2.1.0 separates how bad a result is (`level`) from how urgent it is
+// (`rank`, 0-100). That is exactly the severity/confidence split, so a consumer
+// can gate on `level: error` to catch every claimed Critical, or on `rank` to
+// catch only the demonstrated ones, without the report choosing for them.
+const SARIF_RANK = new Map([
+  ['Critical', 100],
+  ['High', 80],
+  ['Medium', 50],
+  ['Low', 20],
+  ['Info', 0],
+])
+
+function sarifRank(severity) {
+  return SARIF_RANK.get(severity) ?? 0
+}
+
 export function renderSarif(run, options = {}) {
   const lifecycleByFinding = new Map(
     (options.lifecycle?.results ?? [])
       .filter((entry) => entry.finding !== null)
       .map((entry) => [`${entry.fingerprint}\0${entry.candidate_id}`, entry.state]),
   )
-  const findings = sortedFindings((run.findings ?? []).filter(isSurvivingFinding))
+  const allFindings = run.findings ?? []
+  const findings = sortedFindings(allFindings.filter(isSurvivingFinding))
+  const withdrawn = sortedFindings(allFindings.filter(
+    (finding) => !isSurvivingFinding(finding),
+  ))
+  const unverifiedHighImpact = allFindings.filter(isUnverifiedHighImpactClaim)
+  const evidenceNotifications = (run.evidence_coverage?.summary?.unreached_classes ?? [])
+    .map((evidenceClass) => ({
+      level: 'warning',
+      descriptor: { id: `evidence-class-not-assessed/${evidenceClass}` },
+      message: {
+        text: `No ${evidenceClass} evidence was acquired for this run. Results cover `
+          + 'the repository only; an unexamined evidence class is a coverage gap, '
+          + 'not a clearance.',
+      },
+    }))
   const producedJobs = (run.jobs ?? []).filter((job) => job.producer)
   const coverageSummary = coverageProjection(run.coverage ?? {})
   const rulesByTopic = new Map()
-  for (const finding of findings) {
+  for (const finding of [...findings, ...withdrawn]) {
     if (rulesByTopic.has(finding.topic)) continue
     rulesByTopic.set(finding.topic, {
       id: finding.topic,
@@ -930,7 +1096,7 @@ export function renderSarif(run, options = {}) {
     })
   }
 
-  const results = findings.map((finding) => {
+  const sarifResult = (finding) => {
     const fingerprint = findingFingerprint(finding)
     const lifecycle = lifecycleByFinding.get(`${fingerprint}\0${finding.candidate_id}`)
     const locations = (finding.location ?? [])
@@ -949,7 +1115,8 @@ export function renderSarif(run, options = {}) {
       }))
     return {
       ruleId: finding.topic,
-      level: sarifLevel(severityOf(finding)),
+      level: sarifLevel(claimedSeverityOf(finding)),
+      rank: sarifRank(severityOf(finding)),
       message: { text: `${finding.title}: ${finding.impact}` },
       locations,
       partialFingerprints: {
@@ -980,7 +1147,33 @@ export function renderSarif(run, options = {}) {
         )].sort((left, right) => left.localeCompare(right, 'en')),
       },
     }
-  })
+  }
+
+  // A withdrawn candidate is a record, not an alert. SARIF suppressions are the
+  // representation that keeps it in the machine artifact CI gates on without
+  // counting it as an open result.
+  const suppressedResult = (finding) => {
+    const result = sarifResult(finding)
+    return {
+      ...result,
+      suppressions: [{
+        kind: 'external',
+        status: 'accepted',
+        justification: proofStatusDetail(finding),
+      }],
+      properties: {
+        ...result.properties,
+        triage_disposition: finding.triage_disposition ?? null,
+        merged_into_candidate_id: finding.merged_into_candidate_id ?? null,
+        drop_reason: finding.drop_reason ?? null,
+      },
+    }
+  }
+
+  const results = [
+    ...findings.map(sarifResult),
+    ...withdrawn.map(suppressedResult),
+  ]
 
   return {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
@@ -997,6 +1190,13 @@ export function renderSarif(run, options = {}) {
       invocations: [{
         executionSuccessful: ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state),
         exitCode: run.state === 'COMPLETED' ? 0 : 2,
+        // A coverage cell is not a finding, so an unreached evidence class must
+        // not become a result — that would inflate the finding count with
+        // things nobody found. SARIF's notification channel is where "the tool
+        // could not examine X" belongs.
+        ...(evidenceNotifications.length > 0
+          ? { toolExecutionNotifications: evidenceNotifications }
+          : {}),
         properties: {
           run_state: run.state,
           capability_mode: run.capability_mode,
@@ -1061,9 +1261,17 @@ export function renderSarif(run, options = {}) {
             ({ coverage_authority: authority }) =>
               authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
           ).length,
+          remote_request_accepted_jobs: producedJobs.filter(
+            ({ coverage_authority: authority }) =>
+              authority === 'REMOTE_REQUEST_ACCEPTED',
+          ).length,
           findings_state: findings.length === 0
             ? 'NO_FINDINGS_REPORTED'
             : 'FINDINGS_REPORTED',
+          withdrawn_candidates: withdrawn.length,
+          withdrawn_high_impact_candidates: withdrawn.filter((finding) =>
+            HIGH_IMPACT_SEVERITIES.has(finding.claimed_impact_severity)).length,
+          unverified_high_impact_claims: unverifiedHighImpact.length,
           data_stores: run.store_profiles?.length ?? 0,
           data_stores_not_assessed: (run.store_profiles ?? []).filter(
             ({ coverage_state: state }) => state !== 'ASSESSED',

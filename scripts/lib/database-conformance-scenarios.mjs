@@ -192,6 +192,9 @@ const MYSQL_CLIENTS = Object.freeze({
   migration: Object.freeze({ user: 'migration_user', password: 'RtaMigration_0!' }),
 })
 
+const READINESS_TRANSCRIPT_HEAD = 8
+const READINESS_TRANSCRIPT_TAIL = 24
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -240,31 +243,56 @@ async function delay(milliseconds) {
   })
 }
 
+export function recordReadiness({ transcript, gaps, polls, label }) {
+  if (polls.length <= READINESS_TRANSCRIPT_HEAD + READINESS_TRANSCRIPT_TAIL) {
+    transcript.push(...polls)
+    return
+  }
+  transcript.push(
+    ...polls.slice(0, READINESS_TRANSCRIPT_HEAD),
+    ...polls.slice(-READINESS_TRANSCRIPT_TAIL),
+  )
+  gaps.push({
+    area: `${label} readiness`,
+    reason: `${polls.length} readiness polls exceeded the ${
+      READINESS_TRANSCRIPT_HEAD + READINESS_TRANSCRIPT_TAIL
+    }-entry readiness transcript budget; only the first ${
+      READINESS_TRANSCRIPT_HEAD
+    } and last ${READINESS_TRANSCRIPT_TAIL} polls are retained.`,
+  })
+}
+
 async function waitForReady({
   command,
   readyArgs,
   startupTimeoutMs,
   transcript,
+  gaps,
   label,
   consecutiveSuccesses = 1,
 }) {
   const deadline = Date.now() + startupTimeoutMs
+  const polls = []
   let last
   let successes = 0
-  do {
-    last = await command(readyArgs, { allowNonZero: true })
-    transcript.push({
-      step: `${label}.readiness`,
-      code: last.code,
-      stdout: last.stdout,
-      stderr: last.stderr,
-    })
-    successes = last.code === 0 ? successes + 1 : 0
-    if (successes >= consecutiveSuccesses) return
-    if (Date.now() >= deadline) break
-    await delay(1000)
-  } while (true)
-  throw new Error(`${label} did not become ready: ${combinedOutput(last)}`)
+  try {
+    do {
+      last = await command(readyArgs, { allowNonZero: true })
+      polls.push({
+        step: `${label}.readiness`,
+        code: last.code,
+        stdout: last.stdout,
+        stderr: last.stderr,
+      })
+      successes = last.code === 0 ? successes + 1 : 0
+      if (successes >= consecutiveSuccesses) return
+      if (Date.now() >= deadline) break
+      await delay(1000)
+    } while (true)
+    throw new Error(`${label} did not become ready: ${combinedOutput(last)}`)
+  } finally {
+    recordReadiness({ transcript, gaps, polls, label })
+  }
 }
 
 function dockerExecArgs(containerName, executable, args = [], extra = []) {
@@ -327,6 +355,7 @@ async function postgresSql({
 
 async function executePostgresql({ engine, config, containerName, command }) {
   const transcript = []
+  const gaps = []
   await waitForReady({
     command,
     readyArgs: dockerExecArgs(containerName, 'pg_isready', [
@@ -337,6 +366,7 @@ async function executePostgresql({ engine, config, containerName, command }) {
     ]),
     startupTimeoutMs: config.limits.startup_timeout_ms,
     transcript,
+    gaps,
     label: engine.engine_id,
   })
   const version = await postgresSql({
@@ -742,7 +772,7 @@ async function executePostgresql({ engine, config, containerName, command }) {
     scenarios,
     transcript,
     transcript_sha256: transcriptDigest(transcript),
-    gaps: [],
+    gaps,
   }
 }
 
@@ -825,6 +855,7 @@ async function executeMysql({
   command,
 }) {
   const transcript = []
+  const gaps = []
   await waitForReady({
     command,
     readyArgs: dockerExecArgs(
@@ -837,6 +868,7 @@ async function executeMysql({
     ),
     startupTimeoutMs: config.limits.startup_timeout_ms,
     transcript,
+    gaps,
     label: engine.engine_id,
     consecutiveSuccesses: 3,
   })
@@ -1240,7 +1272,7 @@ async function executeMysql({
     scenarios,
     transcript,
     transcript_sha256: transcriptDigest(transcript),
-    gaps: [],
+    gaps,
   }
 }
 

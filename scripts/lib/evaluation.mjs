@@ -1,4 +1,5 @@
 import { isSurvivingFinding } from './findings.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 
 const SEVERITIES = ['Info', 'Low', 'Medium', 'High', 'Critical']
 const SEVERITY_RANK = new Map(SEVERITIES.map((severity, index) => [severity, index]))
@@ -159,7 +160,7 @@ function normalizeExpectedCases(expectedCases) {
   }).filter(Boolean)
 
   if (issues.length) throw new EvaluationInputError(issues)
-  return normalized.sort((left, right) => left.case_id.localeCompare(right.case_id))
+  return normalized.sort((left, right) => compareCanonicalStrings(left.case_id, right.case_id))
 }
 
 function normalizeFindings(observedFindings, expectedIds = null, fieldName = 'observedFindings') {
@@ -225,8 +226,8 @@ function normalizeFindings(observedFindings, expectedIds = null, fieldName = 'ob
 
   if (issues.length) throw new EvaluationInputError(issues)
   return normalized.sort((left, right) => {
-    const caseOrder = left.case_id.localeCompare(right.case_id)
-    return caseOrder || left.candidate_id.localeCompare(right.candidate_id)
+    const caseOrder = compareCanonicalStrings(left.case_id, right.case_id)
+    return caseOrder || compareCanonicalStrings(left.candidate_id, right.candidate_id)
   })
 }
 
@@ -311,7 +312,7 @@ function choosePrimaryFinding(findings) {
   return [...findings].sort((left, right) => {
     const severityOrder = SEVERITY_RANK.get(right.effective_severity)
       - SEVERITY_RANK.get(left.effective_severity)
-    return severityOrder || left.candidate_id.localeCompare(right.candidate_id)
+    return severityOrder || compareCanonicalStrings(left.candidate_id, right.candidate_id)
   })[0]
 }
 
@@ -479,7 +480,7 @@ export function scoreEvaluation({
     rates: summary.rates,
     per_topic: perTopic,
     unexpected_by_topic: [...unexpectedByTopic]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareCanonicalStrings(left, right))
       .map(([topic, count]) => ({ topic, count })),
     cases: details,
   }
@@ -563,7 +564,7 @@ export function scoreFingerprintStability(runs, expectedCases) {
   }
 
   if (issues.length) throw new EvaluationInputError(issues)
-  normalizedRuns.sort((left, right) => left.run_id.localeCompare(right.run_id))
+  normalizedRuns.sort((left, right) => compareCanonicalStrings(left.run_id, right.run_id))
 
   const pairs = []
   for (let leftIndex = 0; leftIndex < normalizedRuns.length; leftIndex += 1) {

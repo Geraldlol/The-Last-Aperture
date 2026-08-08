@@ -33,7 +33,9 @@
         "2.0.0",
         "3.0.0",
         "4.0.0",
-        "5.0.0"
+        "5.0.0",
+        "6.0.0",
+        "7.0.0"
       ]
     },
     "run_id": {
@@ -131,6 +133,81 @@
     "database_discovery": {
       "$ref": "#/$defs/databaseDiscovery"
     },
+    "evidence_bundles": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "evidence_class", "coverage_state", "root_sha256", "adapter_id"],
+        "properties": {
+          "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "evidence_class": {
+            "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+          },
+          "adapter_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "artifact_kind": { "enum": ["apk", "dist-bundle", "ipa", "jar", "oci-image"] },
+          "coverage_state": {
+            "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+          },
+          "phi_bearing": { "type": "boolean" },
+          "root_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "evidence_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cells", "summary"],
+      "properties": {
+        "cells": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lens", "topic", "evidence_class", "state", "reason"],
+            "properties": {
+              "lens": { "type": "string" },
+              "topic": { "type": "string" },
+              "evidence_class": {
+                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+              },
+              "state": {
+                "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+              },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cell_count",
+            "bundle_count",
+            "unreached_class_count",
+            "unreached_classes",
+            "not_assessed_cell_count",
+            "inventory_only_cell_count"
+          ],
+          "properties": {
+            "cell_count": { "type": "integer", "minimum": 0 },
+            "bundle_count": { "type": "integer", "minimum": 0 },
+            "unreached_class_count": { "type": "integer", "minimum": 0 },
+            "unreached_classes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+              }
+            },
+            "not_assessed_cell_count": { "type": "integer", "minimum": 0 },
+            "inventory_only_cell_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
     "database_conformance": {
       "$ref": "https://red-team-audit.dev/schemas/database-conformance-evidence.schema.json"
     },
@@ -164,6 +241,11 @@
       "items": {
         "$ref": "#/$defs/attemptEvent"
       }
+    },
+    "existence_verifications": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/existenceVerification" }
     }
   },
   "allOf": [
@@ -175,7 +257,9 @@
               "2.0.0",
               "3.0.0",
               "4.0.0",
-              "5.0.0"
+              "5.0.0",
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -197,7 +281,9 @@
             "enum": [
               "3.0.0",
               "4.0.0",
-              "5.0.0"
+              "5.0.0",
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -239,7 +325,9 @@
           "schema_version": {
             "enum": [
               "4.0.0",
-              "5.0.0"
+              "5.0.0",
+              "6.0.0",
+              "7.0.0"
             ]
           }
         },
@@ -262,7 +350,27 @@
       "then": {
         "properties": {
           "schema_version": {
-            "const": "5.0.0"
+            "enum": [
+              "5.0.0",
+              "6.0.0",
+              "7.0.0"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "existence_verifications"
+        ]
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              "7.0.0"
+            ]
           }
         }
       }
@@ -463,6 +571,12 @@
         "policy_sha256": {
           "$ref": "#/$defs/sha256"
         },
+        "backend": {
+          "enum": [
+            "SEALED_CONTAINER",
+            "REMOTE_GATEWAY"
+          ]
+        },
         "provider_config_sha256": {
           "$ref": "#/$defs/sha256"
         },
@@ -509,6 +623,30 @@
           "minLength": 8,
           "maxLength": 128,
           "pattern": "^[a-z0-9][a-z0-9_.-]+$"
+        },
+        "remote_gateway_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controller_key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        },
+        "gateway_key_id": {
+          "type": "string",
+          "pattern": "^ed25519:[a-f0-9]{64}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+        },
+        "request_artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "request_artifact_key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
         },
         "reason": {
           "$ref": "#/$defs/nonEmptyString"
@@ -557,13 +695,75 @@
               "repository_tree_sha256",
               "lens_pack_sha256",
               "policy_sha256",
-              "provider_config_sha256",
-              "sandbox_policy_sha256",
               "source_snapshot_sha256",
               "control_snapshot_sha256",
               "budgets",
-              "expires_at",
-              "container_name"
+              "expires_at"
+            ],
+            "oneOf": [
+              {
+                "properties": {
+                  "backend": {
+                    "enum": [
+                      "SEALED_CONTAINER"
+                    ]
+                  }
+                },
+                "required": [
+                  "provider_config_sha256",
+                  "sandbox_policy_sha256",
+                  "container_name"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "remote_gateway_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "request_artifact_key"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "properties": {
+                  "backend": {
+                    "const": "REMOTE_GATEWAY"
+                  }
+                },
+                "required": [
+                  "backend",
+                  "remote_gateway_config_sha256",
+                  "controller_key_id",
+                  "gateway_key_id",
+                  "request_id",
+                  "request_artifact_key",
+                  "request_artifact_sha256"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "provider_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "sandbox_policy_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "container_name"
+                      ]
+                    }
+                  ]
+                }
+              }
             ]
           }
         },
@@ -1046,7 +1246,8 @@
         "coverage_authority": {
           "enum": [
             "PROVIDER_DECLARED",
-            "CONTROLLER_OBSERVED_CONSUMPTION"
+            "CONTROLLER_OBSERVED_CONSUMPTION",
+            "REMOTE_REQUEST_ACCEPTED"
           ]
         },
         "attempt_id": {
@@ -1668,6 +1869,68 @@
         "job_id": {
           "type": "string",
           "minLength": 3
+        }
+      }
+    },
+    "existenceVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "quote_results", "absence_results", "outcome"],
+      "properties": {
+        "candidate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "outcome": {
+          "enum": ["VERIFIED", "DRIFTED", "UNVERIFIED", "NOT_APPLICABLE", "NOT_REDERIVABLE"]
+        },
+        "quote_results": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "outcome", "claimed_line", "match_count"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "outcome": { "enum": ["LOCATED", "LOCATED_OFF_LINE", "NOT_LOCATED"] },
+              "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "claimed_line": { "type": "integer", "minimum": 1 },
+              "found_line": { "type": ["integer", "null"], "minimum": 1 },
+              "match_count": { "type": "integer", "minimum": 0 },
+              "start_byte": { "type": ["integer", "null"], "minimum": 0 },
+              "end_byte": { "type": ["integer", "null"], "minimum": 0 },
+              "excerpt_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+              "anchor_state": { "enum": ["ANCHORED", "ANCHOR_UNAVAILABLE"] }
+            }
+          }
+        },
+        "absence_results": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "outcome", "match_count", "searched_files"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "outcome": {
+                "enum": ["ABSENCE_HOLDS", "ABSENCE_CONTRADICTED", "ABSENCE_UNCHECKABLE"]
+              },
+              "match_count": { "type": "integer", "minimum": 0 },
+              "searched_files": { "type": "integer", "minimum": 0 },
+              "hits": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path", "line"],
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+                    "line": { "type": "integer", "minimum": 1 }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

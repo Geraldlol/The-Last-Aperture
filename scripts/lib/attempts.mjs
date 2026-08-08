@@ -160,8 +160,8 @@ export function appendAttemptEvent(run, eventInput) {
 
 export function leaseProviderAttempt(run, jobId, metadata) {
   assertValidRun(run)
-  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
-    throw new Error('Observed provider attempts require a v2, v3, or v4 run')
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
+    throw new Error('Observed provider attempts require a v2-v7 run')
   }
   if (!run.source_snapshot || !run.control_snapshot) {
     throw new Error('Observed provider attempts require sealed source and control snapshots')
@@ -201,6 +201,7 @@ export function leaseProviderAttempt(run, jobId, metadata) {
     attempt_id: attemptId,
     job_id: jobId,
     event: 'LEASED',
+    backend: 'SEALED_CONTAINER',
     occurred_at: occurredAt,
     nonce: metadata?.nonce ?? randomBytes(32).toString('hex'),
     packet_sha256: requireString(metadata?.packet_sha256, 'packet_sha256'),
@@ -221,6 +222,92 @@ export function leaseProviderAttempt(run, jobId, metadata) {
     budgets,
     expires_at: expiresAt,
     container_name: containerName,
+  })
+}
+
+export function leaseRemoteAttempt(run, jobId, metadata) {
+  assertValidRun(run)
+  if (!['6.0.0', '7.0.0'].includes(run.schema_version)) {
+    throw new Error('Remote gateway attempts require a v6 or v7 run')
+  }
+  if (!run.source_snapshot || !run.control_snapshot) {
+    throw new Error('Remote gateway attempts require sealed source and control snapshots')
+  }
+  const job = jobById(run, jobId)
+  if (job.state !== 'PENDING') {
+    throw new Error(`Job ${jobId} is ${job.state}; only PENDING jobs can be leased`)
+  }
+  if (findActiveAttempt(run, jobId)) {
+    throw new Error(`Job ${jobId} already has an active attempt`)
+  }
+
+  const occurredAt = metadata?.occurred_at ?? new Date().toISOString()
+  const occurredAtMilliseconds = requireTimestamp(occurredAt, 'occurred_at')
+  const budgets = clone(metadata?.budgets)
+  if (!budgets || typeof budgets !== 'object') {
+    throw new TypeError('budgets are required')
+  }
+  if (!Number.isInteger(budgets.wall_clock_ms)) {
+    throw new TypeError('budgets.wall_clock_ms must be an integer')
+  }
+  const attemptId = metadata?.attempt_id ?? `attempt:${randomUUID()}`
+  const expiresAt = metadata?.expires_at
+    ?? new Date(
+      occurredAtMilliseconds + budgets.wall_clock_ms + 30_000,
+    ).toISOString()
+  const expiresAtMilliseconds = requireTimestamp(expiresAt, 'expires_at')
+  if (expiresAtMilliseconds <= occurredAtMilliseconds) {
+    throw new RangeError('expires_at must be strictly after occurred_at')
+  }
+  const artifactKey = requireString(
+    metadata?.request_artifact_key,
+    'request_artifact_key',
+  )
+  const artifact = clone(metadata?.request_artifact)
+  if (
+    !artifact
+    || typeof artifact.path !== 'string'
+    || typeof artifact.sha256 !== 'string'
+  ) {
+    throw new TypeError('request_artifact must contain path and sha256')
+  }
+  if (Object.hasOwn(run.artifacts ?? {}, artifactKey)) {
+    throw new Error(`Artifact key ${artifactKey} already exists`)
+  }
+
+  const next = prepareJobStart(run, jobId)
+  next.artifacts[artifactKey] = artifact
+  return appendEventToCandidate(run, next, {
+    attempt_id: attemptId,
+    job_id: jobId,
+    event: 'LEASED',
+    backend: 'REMOTE_GATEWAY',
+    occurred_at: occurredAt,
+    nonce: metadata?.nonce ?? randomBytes(32).toString('hex'),
+    packet_sha256: requireString(metadata?.packet_sha256, 'packet_sha256'),
+    plan_sha256: run.plan_digest,
+    repository_tree_sha256: run.repository.tree_digest,
+    lens_pack_sha256: run.lens_pack_digest,
+    policy_sha256: run.policy_digest,
+    remote_gateway_config_sha256: requireString(
+      metadata?.remote_gateway_config_sha256,
+      'remote_gateway_config_sha256',
+    ),
+    controller_key_id: requireString(
+      metadata?.controller_key_id,
+      'controller_key_id',
+    ),
+    gateway_key_id: requireString(
+      metadata?.gateway_key_id,
+      'gateway_key_id',
+    ),
+    request_id: requireString(metadata?.request_id, 'request_id'),
+    request_artifact_key: artifactKey,
+    request_artifact_sha256: artifact.sha256,
+    source_snapshot_sha256: run.source_snapshot.root_sha256,
+    control_snapshot_sha256: run.control_snapshot.root_sha256,
+    budgets,
+    expires_at: expiresAt,
   })
 }
 
@@ -421,7 +508,9 @@ export function commitProviderAttempt(previous, candidateRun, attemptId, metadat
   if (!['SUCCEEDED', 'FAILED'].includes(job.state)) {
     throw new Error('Candidate run must contain the terminal provider result')
   }
-  job.coverage_authority = 'CONTROLLER_OBSERVED_CONSUMPTION'
+  job.coverage_authority = attempt.lease.backend === 'REMOTE_GATEWAY'
+    ? 'REMOTE_REQUEST_ACCEPTED'
+    : 'CONTROLLER_OBSERVED_CONSUMPTION'
   job.attempt_id = attemptId
   job.receipt_sha256 = attempt.receipt_sha256
   job.execution_artifact_key = attempt.execution_artifact_key

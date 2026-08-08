@@ -27,11 +27,16 @@ function jsonFixture(name) {
   return JSON.parse(fixture(name))
 }
 
+// local_dynamic is the mode with no capability contradictions of its own, which
+// is what a fixture exercising the kernel generically needs. It was 'test'
+// until test mode acquired its own constraints — execute and write_file
+// required, network forbidden — which this fixture deliberately violates in
+// order to exercise network authorization.
 function explicitPolicy() {
   return {
     schema_version: '1.0',
     policy_id: 'test-policy',
-    mode: 'test',
+    mode: 'local_dynamic',
     workspace_root: ROOT,
     capabilities: {
       read_file: {
@@ -71,6 +76,14 @@ function external(raw = explicitPolicy()) {
     workspaceRoot: ROOT,
     policySource: 'external',
   })
+}
+
+function remoteStaticPolicy() {
+  const raw = explicitPolicy()
+  raw.mode = 'remote_static'
+  raw.capabilities.write_file = { enabled: false, roots: [] }
+  raw.capabilities.execute = { enabled: false, commands: [] }
+  return raw
 }
 
 function codeOf(result) {
@@ -342,6 +355,41 @@ test('static mode denies every mutation, command, and network action', () => {
     assert.equal(result.allowed, false)
     assert.equal(codeOf(result), 'STATIC_MODE_READ_ONLY')
   }
+})
+
+test('remote_static permits only externally allowlisted reads and network', () => {
+  const policy = external(remoteStaticPolicy())
+  assert.equal(authorizeAction(policy, {
+    type: 'read_file',
+    path: 'fixtures/adversarial-policy/prompt-injection.txt',
+  }).allowed, true)
+  assert.equal(authorizeAction(policy, {
+    type: 'network',
+    url: 'https://api.example.test/v1/audit',
+    redirects: [],
+  }).allowed, true)
+  assert.equal(
+    codeOf(authorizeAction(policy, {
+      type: 'write_file',
+      path: 'test/security/result.json',
+    })),
+    'REMOTE_STATIC_MODE_READ_NETWORK_ONLY',
+  )
+  assert.equal(
+    codeOf(authorizeAction(policy, {
+      type: 'execute',
+      program: 'node',
+      args: ['--test'],
+    })),
+    'REMOTE_STATIC_MODE_READ_NETWORK_ONLY',
+  )
+
+  const dormantNetwork = remoteStaticPolicy()
+  dormantNetwork.capabilities.network = { enabled: false, destinations: [] }
+  assert.equal(validatePolicy(dormantNetwork, {
+    workspaceRoot: ROOT,
+    policySource: 'external',
+  }).valid, false)
 })
 
 test('contradictory static policy and dormant authority are rejected', () => {

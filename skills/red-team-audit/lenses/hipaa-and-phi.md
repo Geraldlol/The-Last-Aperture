@@ -67,6 +67,19 @@ activates_on:
     - 'audit-trail idioms: audit_log, access_log table with actor_id + record_id, pgaudit, CloudTrail data events, trigger-based history tables'
     - 'Salesforce audit idioms, which live in metadata and never in Apex: Shield Event Monitoring (EventLogFile, ApiEvent, ReportEvent), Field Audit Trail (FieldHistoryArchive, <historyRetentionPolicy>), Setup Audit Trail, <enableHistory> and <trackHistory> in object and field metadata'
     - 'de-identification idioms: faker + patient, synthea, scrub, redact, tokenize, crosswalk, re-identification key'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: consumed
+      artifact_kinds: [oci-image]
+      may_conclude: [sensitive-data-at-rest]
+    deployed-state:
+      state: consumed
+      may_conclude: [sensitive-data-at-rest]
+    live-runtime:
+      state: consumed
+      may_conclude: [sensitive-data-at-rest]
 owns:
   - phi-classification
   - baa-coverage-determination

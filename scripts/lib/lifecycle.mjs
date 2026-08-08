@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isSurvivingFinding } from './findings.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import { filterResolvedCoverageGaps } from './coverage-gaps.mjs'
 
 const ACTIVE_DISPOSITIONS = new Set(['queued', 'elevated'])
@@ -13,7 +14,7 @@ function stableValue(value) {
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort(compareCanonicalStrings)
       .map((key) => [key, stableValue(value[key])]),
   )
 }
@@ -64,7 +65,7 @@ function hasKnownPathRelation(area, knownPaths, sortedKnownPaths) {
   let high = sortedKnownPaths.length
   while (low < high) {
     const middle = Math.floor((low + high) / 2)
-    if (sortedKnownPaths[middle].localeCompare(prefix, 'en') < 0) low = middle + 1
+    if (compareCanonicalStrings(sortedKnownPaths[middle], prefix) < 0) low = middle + 1
     else high = middle
   }
   return sortedKnownPaths[low]?.startsWith(prefix) ?? false
@@ -84,8 +85,10 @@ function gapAffectsFinding(run, finding, locationPaths) {
     ...(coverage.unexamined ?? []).map(({ path }) => path),
     ...(run.scope?.excluded_paths ?? []).map(({ path }) => path),
   ].map(normalizedCoverageArea).filter(Boolean))
-  const sortedKnownPaths = [...knownPaths].sort((left, right) =>
-    left.localeCompare(right, 'en'))
+  // The lower-bound search below is only valid in a prefix-preserving order.
+  // Locale collation is not one: it ranks case below the separator, so `src/x`
+  // sorts ahead of `SRC/x` and the bound for `SRC/` lands on a non-match.
+  const sortedKnownPaths = [...knownPaths].sort(compareCanonicalStrings)
 
   const openGaps = filterResolvedCoverageGaps(
     coverage.gaps ?? [],
@@ -193,16 +196,27 @@ export function comparisonCompatibility(baseline, current) {
   return { comparable: reasons.length === 0, reasons }
 }
 
-export function coverageSupportsResolution(run, finding) {
-  if (!['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)) return false
-  const successfulLensJob = (run.jobs ?? []).some(
-    ({ kind, lens, state }) => (
+// A lens fans out into many LENS jobs (one per shard, plus closure retries), so
+// a lens-wide claim is only supported when every shard that carried a coverage
+// obligation succeeded. DORMANT and SKIPPED jobs never carried one.
+function obligatedLensJobs(run, lens) {
+  return (run.jobs ?? []).filter(
+    ({ kind, lens: jobLens, state }) => (
       kind === 'LENS'
-      && lens === finding.lens
-      && state === 'SUCCEEDED'
+      && jobLens === lens
+      && state !== 'DORMANT'
+      && state !== 'SKIPPED'
     ),
   )
-  if (!successfulLensJob) return false
+}
+
+function lensCoverageIsComplete(jobs) {
+  return jobs.length > 0 && jobs.every(({ state }) => state === 'SUCCEEDED')
+}
+
+export function coverageSupportsResolution(run, finding) {
+  if (!['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)) return false
+  if (!lensCoverageIsComplete(obligatedLensJobs(run, finding.lens))) return false
 
   const coverage = run.coverage ?? {}
   const examined = new Set(coverage.examined ?? [])
@@ -268,14 +282,17 @@ export function coverageSupportsResolution(run, finding) {
 }
 
 function coverageAuthorityForFinding(run, finding) {
-  const job = (run.jobs ?? []).find(
-    ({ kind, lens }) =>
-      kind === 'LENS'
-      && lens === finding.lens,
+  const jobs = obligatedLensJobs(run, finding.lens)
+  if (!lensCoverageIsComplete(jobs)) return 'NO_CURRENT_COVERAGE_AUTHORITY'
+  const authorities = new Set(
+    jobs.map(({ coverage_authority: authority }) => authority),
   )
-  if (job?.state !== 'SUCCEEDED') return 'NO_CURRENT_COVERAGE_AUTHORITY'
-  if (job?.coverage_authority === 'CONTROLLER_OBSERVED_CONSUMPTION') {
+  if (authorities.size > 1) return 'PROVIDER_DECLARED'
+  if (authorities.has('CONTROLLER_OBSERVED_CONSUMPTION')) {
     return 'CONTROLLER_OBSERVED_CONSUMPTION'
+  }
+  if (authorities.has('REMOTE_REQUEST_ACCEPTED')) {
+    return 'REMOTE_REQUEST_ACCEPTED'
   }
   return 'PROVIDER_DECLARED'
 }
@@ -290,7 +307,7 @@ function groupedFindings(run) {
   }
   for (const group of groups.values()) {
     group.sort((left, right) =>
-      String(left.candidate_id).localeCompare(String(right.candidate_id), 'en'))
+      compareCanonicalStrings(String(left.candidate_id), String(right.candidate_id)))
   }
   return groups
 }
@@ -382,18 +399,21 @@ export function compareRuns(baseline, current) {
   ])
   results.sort((left, right) =>
     order.get(left.state) - order.get(right.state) ||
-    left.fingerprint.localeCompare(right.fingerprint, 'en') ||
-    String(left.candidate_id).localeCompare(String(right.candidate_id), 'en'))
+    compareCanonicalStrings(left.fingerprint, right.fingerprint) ||
+    compareCanonicalStrings(String(left.candidate_id), String(right.candidate_id)))
 
   const resolutionAuthorities = [...new Set(
     results
       .map(({ resolution_authority: authority }) => authority),
-  )].sort((left, right) => left.localeCompare(right, 'en'))
+  )].sort((left, right) => compareCanonicalStrings(left, right))
   const resolutionAuthority = resolutionAuthorities.length === 0
     ? 'NO_RESOLUTION_CLAIMS'
     : resolutionAuthorities.length === 1
       && resolutionAuthorities[0] === 'CONTROLLER_OBSERVED_CONSUMPTION'
       ? 'controller-observed byte consumption; not comprehension or independent proof'
+      : resolutionAuthorities.length === 1
+        && resolutionAuthorities[0] === 'REMOTE_REQUEST_ACCEPTED'
+        ? 'pinned remote gateway request acceptance; not comprehension or independent proof'
       : resolutionAuthorities.length === 1
         && resolutionAuthorities[0] === 'PROVIDER_DECLARED'
         ? 'provider-declared lens, file, and store coverage; not an independent controller read receipt'
@@ -401,7 +421,7 @@ export function compareRuns(baseline, current) {
           ? 'no current successful lens coverage authority; no resolution claim is supported'
           : resolutionAuthorities.includes('NO_CURRENT_COVERAGE_AUTHORITY')
             ? 'mixed current coverage authority with at least one finding lacking successful lens coverage; no unsupported resolution claim is implied'
-            : 'mixed provider-declared and controller-observed byte consumption; neither is independent proof'
+            : 'mixed provider-declared and authenticated execution authorities; none is independent proof'
   return {
     baseline_run_id: baseline.run_id,
     current_run_id: current.run_id,

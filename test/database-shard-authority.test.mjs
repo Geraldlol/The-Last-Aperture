@@ -126,6 +126,33 @@ function contextContribution(storeId, evidencePath, coverageState = 'NOT_ASSESSE
   }
 }
 
+function databaseFinding(profile, evidencePath) {
+  return {
+    candidate_id: 'database-native-authorization:7c41ab02',
+    lens: 'database-and-data-stores',
+    topic: 'database-native-authorization-and-tenant-isolation',
+    title: 'Runtime role reads rows outside its tenant',
+    claimed_impact_severity: 'Medium',
+    location: [`${evidencePath}:1`],
+    evidence: 'The bounded evidence binds one runtime role to every tenant row.',
+    attack: 'Reuse the runtime connection to select another tenant row.',
+    impact: 'Cross-tenant read through the shared runtime principal.',
+    reachable_from: 'the application connection pool',
+    confidence: 'High',
+    proof_plan:
+      'Assert the tenant policy is enabled; fixture pair is a schema with the policy and one without.',
+    store_context: profile.store_context,
+    principal_path: profile.principal_path,
+    enforcement_plane: 'database',
+    semantic_sensitivity: 'version-sensitive',
+    adapter_rule_id: 'db.authorization.postgresql.rls-bypass',
+    semantic_source: {
+      url: 'https://www.postgresql.org/docs/16/ddl-rowsecurity.html',
+      verified_on: '2026-07-28',
+    },
+  }
+}
+
 function providerResult(
   run,
   jobId,
@@ -497,6 +524,52 @@ test('an authority shard records a local contribution without materializing a pr
   assert.equal(
     run.store_contributions[0].contribution.profile.coverage_state,
     'ASSESSED',
+  )
+})
+
+test('an authority shard reports a finding against the store it profiles', () => {
+  // Synthesis is deferred until every base lens job is terminal, but findings
+  // arrive during FANOUT. A database finding must therefore bind to the
+  // contribution that will become the profile, not to the materialized list.
+  const { home, storeId } = homeAndRelated()
+  const evidencePath = home.scoped_files[0]
+  let run = beginJob(plan.run, home.job_id)
+
+  const profile = postgresProfile(storeId, evidencePath, 'ASSESSED')
+  const result = providerResult(run, home.job_id, evidencePath, profile)
+  result.findings = [databaseFinding(profile, evidencePath)]
+
+  run = applyJobResult(run, result, {
+    sidecar: home,
+    expectedPacketSha256: PACKET_SHA256,
+  })
+
+  assert.equal(run.phase, 'FANOUT')
+  assert.equal(run.store_profiles.length, 0)
+  assert.equal(run.findings.length, 1)
+  assert.equal(run.findings[0].store_context.store_id, storeId)
+})
+
+test('a finding citing a store no shard profiles is still refused', () => {
+  const { home, storeId } = homeAndRelated()
+  const evidencePath = home.scoped_files[0]
+  const run = beginJob(plan.run, home.job_id)
+
+  const profile = postgresProfile(storeId, evidencePath, 'ASSESSED')
+  const stray = databaseFinding(profile, evidencePath)
+  stray.store_context = {
+    ...stray.store_context,
+    store_id: 'store-never-discovered',
+  }
+  const result = providerResult(run, home.job_id, evidencePath, profile)
+  result.findings = [stray]
+
+  assert.throws(
+    () => applyJobResult(run, result, {
+      sidecar: home,
+      expectedPacketSha256: PACKET_SHA256,
+    }),
+    /references an unprofiled store/,
   )
 })
 

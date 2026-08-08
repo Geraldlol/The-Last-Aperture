@@ -4,21 +4,25 @@ import {
   createHash,
   createPrivateKey,
   createPublicKey,
+  randomBytes,
   randomUUID,
   sign as signBytes,
   verify as verifyBytes,
 } from 'node:crypto'
-import { constants as fsConstants } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { constants as fsConstants, existsSync } from 'node:fs'
 import {
   lstat,
   link,
   mkdir,
+  mkdtemp,
   open,
   realpath,
   rename,
   unlink,
   writeFile,
 } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import {
   basename,
   dirname,
@@ -38,6 +42,9 @@ import {
   validateRun,
 } from './lib/contracts.mjs'
 import { isMainModule } from './lib/main-module.mjs'
+import { compareCanonicalStrings } from './lib/canonical-order.mjs'
+import { assertValidProofConfig, executeProof } from './lib/proof-execution.mjs'
+import { proofEvidence } from './lib/proof-evidence.mjs'
 import {
   classifyProviderAttemptRecovery,
   commitProviderAttempt,
@@ -45,6 +52,7 @@ import {
   findActiveAttempt,
   findProviderAttempt,
   leaseProviderAttempt,
+  leaseRemoteAttempt,
   markProviderAttemptStarted,
   recordProviderResultCaptured,
   recordProviderResultValidated,
@@ -87,7 +95,7 @@ import {
   normalizeIncludedRoots,
   serializeInventory,
 } from './lib/inventory.mjs'
-import { normalizePolicy } from './lib/policy.mjs'
+import { authorizeAction, normalizePolicy } from './lib/policy.mjs'
 import { renderMarkdownReport, renderSarif } from './lib/report.mjs'
 import {
   assertBundleArtifactSize,
@@ -129,6 +137,33 @@ import {
 } from './lib/provider-runner.mjs'
 import { buildRetryJobTemplate } from './lib/work-shards.mjs'
 import { loadDatabaseConformanceEvidence } from './lib/database-conformance-controller.mjs'
+import { loadEvidenceBundle } from './lib/evidence-bundle.mjs'
+import {
+  assertValidRemoteGatewayConfig,
+  createRemoteRequestEnvelope,
+  parseRemotePrivateKey,
+  parseRemotePublicKey,
+  verifyRemoteAcceptanceEnvelope,
+  verifyRemoteRequestEnvelope,
+} from './lib/remote-gateway-contracts.mjs'
+import {
+  submitRemoteGatewayRequest,
+} from './lib/remote-gateway-client.mjs'
+import {
+  assertValidTransparencyLogConfig,
+  createTransparencyConsistencyRequest,
+  createTransparencyPublishRequest,
+  parseTransparencyPublicKey,
+  projectTransparencySignedCheckpoint,
+  verifyTransparencyInclusion,
+} from './lib/transparency-log-contracts.mjs'
+import {
+  submitTransparencyConsistencyRequest,
+  submitTransparencyLogEntry,
+} from './lib/transparency-log-client.mjs'
+import {
+  openTransparencyCheckpointJournal,
+} from './lib/transparency-checkpoint-journal.mjs'
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
@@ -146,6 +181,7 @@ const NONRECOVERABLE_PROVIDER_CLEANUP_CODES = new Set([
 ])
 const MAX_PROVIDER_RESULT_BYTES = 8 * 1024 * 1024
 const MAX_PROVIDER_CONFIG_BYTES = 1024 * 1024
+const MAX_REMOTE_GATEWAY_CONFIG_BYTES = 1024 * 1024
 const MAX_SIGNING_KEY_BYTES = 64 * 1024
 const MAX_POLICY_BYTES = 1024 * 1024
 const MAX_LOCK_BYTES = 16 * 1024
@@ -153,6 +189,11 @@ const MAX_BENCHMARK_INPUT_BYTES = 16 * 1024 * 1024
 const MAX_BENCHMARK_CASES_BYTES = 8 * 1024 * 1024
 const MAX_BENCHMARK_THRESHOLDS_BYTES = 1024 * 1024
 const MAX_ROOT_ATTESTATION_BYTES = 64 * 1024
+const MAX_TRANSPARENCY_LOG_CONFIG_BYTES = 64 * 1024
+const MAX_TRANSPARENCY_RECEIPT_BYTES = 1024 * 1024
+// Offline verification cannot read the log configuration, so it allows the
+// largest skew any valid transparency-log-config.schema.json could configure.
+const MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS = 300_000
 const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
@@ -160,21 +201,24 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.7.0
+const HELP = `red-team-audit 0.11.0
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   red-team-audit next <run.json|bundle-directory>
   red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
+  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>
+  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
   red-team-audit ingest <run.json|bundle-directory> <job-result.json>
   red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
   red-team-audit finalize <run.json|bundle-directory>
   red-team-audit abort <run.json|bundle-directory> --reason <text>
   red-team-audit unlock <run.json|bundle-directory>
   red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
-  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>]
-  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>]
+  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]
+  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
   red-team-audit benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
 
 Safety:
@@ -220,6 +264,7 @@ const COMMAND_ARGUMENTS = {
       out: 'value',
       roe: 'value',
       'database-conformance': 'value',
+      'evidence-bundle': 'value',
       'max-text-bytes': 'value',
       'max-shard-files': 'value',
       'max-shard-bytes': 'value',
@@ -231,6 +276,7 @@ const COMMAND_ARGUMENTS = {
   },
   next: { positionals: 1, options: {} },
   'run-provider': { positionals: 2, options: {} },
+  'run-remote': { positionals: 2, options: {} },
   ingest: { positionals: 2, options: {} },
   'ingest-batch': { minPositionals: 2, options: {} },
   finalize: { positionals: 1, options: {} },
@@ -244,6 +290,17 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
     },
   },
+  publish: {
+    positionals: 2,
+    options: {
+      out: 'value',
+      'receipt-public-key': 'value',
+      'root-attestation': 'value',
+      'root-public-key': 'value',
+      'transparency-checkpoint-journal': 'value',
+      'initialize-transparency-checkpoint-journal': 'flag',
+    },
+  },
   validate: {
     positionals: 1,
     options: {
@@ -251,6 +308,10 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
       'root-attestation': 'value',
       'root-public-key': 'value',
+      'transparency-receipt': 'value',
+      'transparency-log-public-key': 'value',
+      'transparency-log-origin': 'value',
+      'transparency-checkpoint-journal': 'value',
     },
   },
   report: {
@@ -261,9 +322,20 @@ const COMMAND_ARGUMENTS = {
       'receipt-public-key': 'value',
       'root-attestation': 'value',
       'root-public-key': 'value',
+      'transparency-receipt': 'value',
+      'transparency-log-public-key': 'value',
+      'transparency-log-origin': 'value',
+      'transparency-checkpoint-journal': 'value',
     },
   },
-  compare: { positionals: 2, options: { out: 'value' } },
+  'run-proof': {
+    positionals: 2,
+    options: {},
+  },
+  compare: {
+    positionals: 2,
+    options: { out: 'value', 'receipt-public-key': 'value' },
+  },
   benchmark: {
     positionals: 1,
     options: { cases: 'value', thresholds: 'value', out: 'value' },
@@ -336,16 +408,11 @@ async function readJson(path, options = {}) {
   if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 0) {
     throw new Error('JSON input reads require a non-negative maxBytes limit')
   }
-  let text
-  try {
-    text = (await readBoundedFile(
-      absolutePath,
-      options.maxBytes,
-      options.label ?? 'JSON input',
-    )).toString('utf8')
-  } catch (error) {
-    throw error
-  }
+  const text = (await readBoundedFile(
+    absolutePath,
+    options.maxBytes,
+    options.label ?? 'JSON input',
+  )).toString('utf8')
   try {
     return JSON.parse(text)
   } catch (error) {
@@ -397,7 +464,10 @@ async function readBoundedFile(path, maxBytes, label) {
     }
     return buffer
   } catch (error) {
-    throw new Error(`cannot read ${absolutePath}: ${error.message}`)
+    throw new Error(
+      `cannot read ${absolutePath}: ${error.message}`,
+      { cause: error },
+    )
   } finally {
     await handle?.close()
   }
@@ -751,7 +821,7 @@ async function releaseOwnedLock(path, token) {
   try {
     current = await readLock(path)
   } catch (error) {
-    if (error.cause?.code === 'ENOENT' || /ENOENT/.test(error.message)) return
+    if (error.cause?.code === 'ENOENT') return
     throw error
   }
   if (current.record.pid !== process.pid || current.record.token !== token) {
@@ -820,7 +890,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
   const projection = {
     inventory: coverage?.inventory,
   }
-  if (!['3.0.0', '4.0.0', '5.0.0'].includes(schemaVersion)) return projection
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(schemaVersion)) return projection
   return {
     model_version: coverage?.model_version,
     policy: coverage?.policy,
@@ -860,7 +930,7 @@ function assertImmutableCoveragePlan(
       'planned coverage artifact is not the immutable initial coverage snapshot',
     )
   }
-  if (!['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) return
+  if (!['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) return
 
   const expectedRecords = inventoryCoverageRecords(snapshot.entries)
   const expectedDenominators = buildCategoryDenominators(expectedRecords)
@@ -961,7 +1031,7 @@ function assertSidecarJobIdentity(
     lens: job.lens,
     repository_root: run.repository.root,
     ...(
-      ['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version) || requireProtocolFields
+      ['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version) || requireProtocolFields
         ? {
             schema_version: run.schema_version,
             phase: job.closure_round !== undefined
@@ -1004,7 +1074,7 @@ function assertSidecarJobIdentity(
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
-  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
@@ -1370,7 +1440,7 @@ function assertObservedResultReflectedInRun(run, job, result) {
     const row = run.coverage.lenses.find(({ lens }) => lens === job.lens)
     const expectedPaths = result.state === 'SUCCEEDED'
       ? [...result.examined_files]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       : []
     const aggregatePaths = new Set(row?.examined_paths ?? [])
     if (!row || expectedPaths.some((path) => !aggregatePaths.has(path))) {
@@ -1461,8 +1531,11 @@ export async function verifyControlBundle(
   ) {
     throw new Error('policy artifact does not match the run provenance')
   }
-  if (policy.mode !== 'static' || run.capability_mode !== 'STATIC') {
-    throw new Error('0.7.0 can dispatch and ingest only STATIC runs')
+  if (
+    !['static', 'remote_static', 'test'].includes(policy.mode)
+    || !['STATIC', 'TEST_EXECUTION'].includes(run.capability_mode)
+  ) {
+    throw new Error('0.11.0 can dispatch and ingest only STATIC and TEST_EXECUTION runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1489,7 +1562,7 @@ export async function verifyControlBundle(
   )
   let databaseDiscoveryCommitted
   let databaseConformanceCommitted
-  if (['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)) {
+  if (['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
     databaseDiscoveryCommitted = await readVerifiedArtifact(
       directory,
       run,
@@ -1633,7 +1706,7 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
-      ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
+      ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
         : []),
       ...(run.database_conformance
@@ -1716,6 +1789,7 @@ export async function verifyControlBundle(
     throw new Error('activated lens set does not match the hashed job plan')
   }
   const verifiedExecutionEnvelopes = new Map()
+  const verifiedRemoteAcceptances = new Map()
   let evidenceKeyId = pinnedReceiptKeyId
   const attempts = (run.attempt_events ?? [])
     .filter(({ event }) => event === 'LEASED')
@@ -1740,16 +1814,55 @@ export async function verifyControlBundle(
         },
       },
     )
-    if (attempt.execution_artifact_key !== undefined) {
-      const envelope = await readAttemptEnvelope(
+    if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+      const request = await readRemoteRequestArtifact(
         { directory, run },
         attempt,
-        evidenceKeyId,
       )
-      evidenceKeyId ??= envelope.controller.key_id
-      verifiedExecutionEnvelopes.set(attempt.attempt_id, envelope)
+      const actualArtifacts = new Map(request.envelope.artifacts.map(
+        (artifact) => [artifact.artifact_id, artifact],
+      ))
+      if (actualArtifacts.size !== expectedArtifacts.size) {
+        throw new Error(
+          `remote request ${attempt.lease.request_id} does not contain the exact planned artifact set`,
+        )
+      }
+      for (const [artifactId, expected] of expectedArtifacts) {
+        const actual = actualArtifacts.get(artifactId)
+        if (
+          !actual
+          || actual.kind !== expected.artifact_kind
+          || actual.logical_name !== expected.logical_name
+          || actual.sha256 !== expected.expected_sha256
+          || actual.size !== expected.size
+        ) {
+          throw new Error(
+            `remote request ${attempt.lease.request_id} artifact ${artifactId} differs from the sealed plan`,
+          )
+        }
+      }
+    }
+    if (attempt.execution_artifact_key !== undefined) {
+      if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+        const acceptance = await readRemoteAcceptanceArtifact(
+          { directory, run },
+          attempt,
+        )
+        verifiedRemoteAcceptances.set(attempt.attempt_id, acceptance)
+      } else {
+        const envelope = await readAttemptEnvelope(
+          { directory, run },
+          attempt,
+          evidenceKeyId,
+        )
+        evidenceKeyId ??= envelope.controller.key_id
+        verifiedExecutionEnvelopes.set(attempt.attempt_id, envelope)
+      }
     }
     if (attempt.failure_artifact_key !== undefined) {
+      if (attempt.lease.backend === 'REMOTE_GATEWAY') {
+        throw new Error('remote gateway attempts cannot use container failure envelopes')
+      }
       const envelope = await readAttemptFailureEnvelope(
         { directory, run },
         attempt,
@@ -1785,9 +1898,9 @@ export async function verifyControlBundle(
     }
     const resultCandidateIds = result.findings
       .map(({ candidate_id: candidateId }) => candidateId)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     const jobCandidateIds = [...(job.candidate_ids ?? [])]
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
     if (stableJson(resultCandidateIds) !== stableJson(jobCandidateIds)) {
       throw new Error(`observed execution findings do not match job ${job.job_id}`)
     }
@@ -1832,16 +1945,67 @@ export async function verifyControlBundle(
       )
     }
   }
+  for (const job of run.jobs.filter(
+    ({ coverage_authority: authority }) =>
+      authority === 'REMOTE_REQUEST_ACCEPTED',
+  )) {
+    const attempt = findProviderAttempt(run, job.attempt_id)
+    const acceptance = verifiedRemoteAcceptances.get(attempt.attempt_id)
+    if (!acceptance) {
+      throw new Error(
+        `remote job ${job.job_id} has no verified gateway acceptance`,
+      )
+    }
+    const result = acceptance.envelope.job_result
+    if (
+      result.job_id !== job.job_id
+      || result.state !== job.state
+      || result.input_sha256.toLowerCase() !== job.input_sha256.toLowerCase()
+      || stableJson(result.producer) !== stableJson(job.producer)
+      || attempt.execution_artifact_sha256 !== job.receipt_sha256
+    ) {
+      throw new Error(`remote acceptance does not match job ${job.job_id}`)
+    }
+    const resultCandidateIds = result.findings
+      .map(({ candidate_id: candidateId }) => candidateId)
+      .sort((left, right) => compareCanonicalStrings(left, right))
+    const jobCandidateIds = [...(job.candidate_ids ?? [])]
+      .sort((left, right) => compareCanonicalStrings(left, right))
+    if (stableJson(resultCandidateIds) !== stableJson(jobCandidateIds)) {
+      throw new Error(`remote acceptance findings do not match job ${job.job_id}`)
+    }
+    assertObservedResultReflectedInRun(run, job, result)
+    if (sourceSnapshot) {
+      await assertRemoteSourceAnchors(
+        directory,
+        run,
+        job,
+        acceptance.request,
+        result,
+        sourceSnapshot,
+      )
+    }
+  }
   const planMaterial = {
     schema_version: run.schema_version,
     capability_mode: run.capability_mode,
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
-    ...(['3.0.0', '4.0.0', '5.0.0'].includes(run.schema_version)
+    ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
+          // Pinned so the evidence-class matrix cannot be edited after
+          // planning. Conditional because a run planned before the matrix
+          // existed carries none and must still validate.
+          ...(run.evidence_coverage
+            ? {
+                evidence_coverage_sha256: sha256(
+                  stableJson(run.evidence_coverage, 0),
+                ),
+              }
+            : {}),
           ...(run.database_conformance
             ? {
                 database_conformance_sha256: sha256(
@@ -1871,11 +2035,11 @@ export async function verifyControlBundle(
     const currentLensByName = new Map(currentLenses.map((lens) => [lens.name, lens]))
     const currentKnownTopics = [...new Set(currentLenses.flatMap(
       (lens) => lens.frontmatter.owns ?? [],
-    ))].sort((left, right) => left.localeCompare(right, 'en'))
+    ))].sort((left, right) => compareCanonicalStrings(left, right))
     for (const sidecar of sidecars) {
       const currentLens = currentLensByName.get(sidecar.lens)
       const expectedOwnedTopics = [...(currentLens?.frontmatter.owns ?? [])]
-        .sort((left, right) => left.localeCompare(right, 'en'))
+        .sort((left, right) => compareCanonicalStrings(left, right))
       if (
         currentLens === undefined
         || sidecar.lens_file !== currentLens.file
@@ -1901,7 +2065,7 @@ export async function verifyControlBundle(
   }
 }
 
-async function verifyRepositorySnapshot(directory, run) {
+export async function verifyRepositorySnapshot(directory, run) {
   const control = await verifyControlBundle(
     directory,
     run,
@@ -1929,7 +2093,7 @@ async function verifyRepositorySnapshot(directory, run) {
       'repository snapshot changed after planning; create a new run before dispatching or ingesting work',
     )
   }
-  return control
+  return { ...control, inventoryEntries: current.entries }
 }
 
 async function loadJobSidecar(directory, run, job) {
@@ -2101,7 +2265,7 @@ function sourcePathsForObservedJob(run, job, sidecar, sourceIndex) {
         if (match && knownPaths.has(match[1])) paths.add(match[1])
       }
     }
-    return [...paths].sort((left, right) => left.localeCompare(right, 'en'))
+    return [...paths].sort((left, right) => compareCanonicalStrings(left, right))
   }
   return []
 }
@@ -2143,7 +2307,7 @@ function observedProviderArtifactDescriptors(run, job, sidecar, control) {
     ...(sidecar?.lens_file ? [`lenses/${sidecar.lens_file}`] : []),
   ])
   for (const path of [...selectedControlPaths].sort(
-    (left, right) => left.localeCompare(right, 'en'),
+    (left, right) => compareCanonicalStrings(left, right),
   )) {
     const file = controlByPath.get(path)
     if (!file || file.availability !== 'AVAILABLE') {
@@ -2310,7 +2474,49 @@ async function loadExternalTrustFile(
   }
 }
 
-async function verifyPinnedRootAttestation(loaded, options) {
+async function openExternalCheckpointJournal({
+  pathValue,
+  loaded,
+  publicKeyBytes,
+  expectedOrigin,
+  maxClockSkewMs,
+  mustExist = false,
+  dependencies = {},
+}) {
+  if (typeof pathValue !== 'string' || !isAbsolute(pathValue)) {
+    throw new Error(
+      '--transparency-checkpoint-journal must name an absolute external directory',
+    )
+  }
+  const requested = resolve(pathValue)
+  if (mustExist) {
+    try {
+      await realpath(requested)
+    } catch (error) {
+      throw new Error(
+        `cannot open transparency checkpoint journal ${requested}: ${error.message}`,
+      )
+    }
+  }
+  const openJournal = dependencies.openTransparencyCheckpointJournal
+    ?? openTransparencyCheckpointJournal
+  return openJournal({
+    directory: requested,
+    expectedOrigin,
+    publicKeyBytes,
+    maxClockSkewMs,
+    readOnly: mustExist,
+    now: () => new Date(),
+    targetDirectory: resolve(loaded.run.repository.root),
+    auditBundleDirectory: resolve(loaded.directory),
+  })
+}
+
+async function loadPinnedRootAttestation(
+  loaded,
+  options,
+  { required = false } = {},
+) {
   const attestationPath = options['root-attestation']
   const publicKeyPath = options['root-public-key']
   const hasAttestation = typeof attestationPath === 'string'
@@ -2321,10 +2527,17 @@ async function verifyPinnedRootAttestation(loaded, options) {
     )
   }
   if (!hasAttestation) {
+    if (required) {
+      throw new Error(
+        '--root-attestation and --root-public-key are required for transparency publication or verification',
+      )
+    }
     return {
-      status: 'UNANCHORED',
-      message:
-        'run.json is valid only relative to its own unsigned artifact manifest',
+      verification: {
+        status: 'UNANCHORED',
+        message:
+          'run.json is valid only relative to its own unsigned artifact manifest',
+      },
     }
   }
   const [attestationFile, publicKeyFile] = await Promise.all([
@@ -2349,17 +2562,116 @@ async function verifyPinnedRootAttestation(loaded, options) {
       `invalid JSON in ${attestationFile.path}: ${error.message}`,
     )
   }
-  return verifyRootAttestation({
+  const verification = verifyRootAttestation({
     attestation,
     run: loaded.run,
     runSha256: loaded.sourceDigest,
     publicKeyBytes: publicKeyFile.bytes,
   })
+  return {
+    attestation,
+    attestationFile,
+    publicKeyFile,
+    verification,
+  }
 }
 
-async function rootAttestationOutputPath(pathValue, loaded) {
+async function verifyPinnedRootAttestation(loaded, options) {
+  const result = await loadPinnedRootAttestation(loaded, options)
+  return result.verification
+}
+
+async function verifyPinnedTransparencyReceipt(
+  loaded,
+  options,
+  rootAttestationRecord,
+  dependencies = {},
+) {
+  const receiptPath = options['transparency-receipt']
+  const publicKeyPath = options['transparency-log-public-key']
+  const expectedOrigin = options['transparency-log-origin']
+  const hasReceipt = typeof receiptPath === 'string'
+  const hasPublicKey = typeof publicKeyPath === 'string'
+  const hasOrigin = typeof expectedOrigin === 'string'
+  const hasJournal = typeof options['transparency-checkpoint-journal'] === 'string'
+  if (new Set([hasReceipt, hasPublicKey, hasOrigin]).size !== 1) {
+    throw new Error(
+      '--transparency-receipt, --transparency-log-public-key, and --transparency-log-origin must be supplied together',
+    )
+  }
+  if (!hasReceipt) {
+    if (hasJournal) {
+      throw new Error(
+        '--transparency-checkpoint-journal requires the transparency receipt, log public key, and origin options',
+      )
+    }
+    return {
+      status: 'NOT_SUPPLIED',
+      claim: 'NO_TRANSPARENCY_INCLUSION_CLAIM',
+    }
+  }
+  if (!rootAttestationRecord?.attestation) {
+    throw new Error(
+      'transparency verification requires --root-attestation and --root-public-key',
+    )
+  }
+  const [receiptFile, logPublicKeyFile] = await Promise.all([
+    loadExternalTrustFile(
+      receiptPath,
+      'transparency inclusion receipt',
+      loaded,
+      MAX_TRANSPARENCY_RECEIPT_BYTES,
+    ),
+    loadExternalTrustFile(
+      publicKeyPath,
+      'transparency log public key',
+      loaded,
+      MAX_SIGNING_KEY_BYTES,
+    ),
+  ])
+  let receipt
+  try {
+    receipt = JSON.parse(receiptFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in ${receiptFile.path}: ${error.message}`,
+    )
+  }
+  const inclusion = verifyTransparencyInclusion({
+    receipt,
+    attestation: rootAttestationRecord.attestation,
+    publicKeyBytes: logPublicKeyFile.bytes,
+    expectedOrigin,
+    maxClockSkewMs: MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS,
+  })
+  const journalPath = options['transparency-checkpoint-journal']
+  if (journalPath === undefined) return inclusion
+  const journal = await openExternalCheckpointJournal({
+    pathValue: journalPath,
+    loaded,
+    publicKeyBytes: logPublicKeyFile.bytes,
+    expectedOrigin,
+    maxClockSkewMs: MAX_OFFLINE_TRANSPARENCY_CLOCK_SKEW_MS,
+    mustExist: true,
+    dependencies,
+  })
+  try {
+    const continuity = await journal.continuityForCheckpoint(
+      projectTransparencySignedCheckpoint(receipt),
+    )
+    return {
+      ...inclusion,
+      consistency: continuity.consistency,
+      continuity,
+    }
+  } finally {
+    await journal.close()
+  }
+}
+
+async function externalTrustOutputPath(pathValue, loaded, label) {
   if (typeof pathValue !== 'string') {
-    throw new Error('--out is required to write a root manifest attestation')
+    throw new Error(`--out is required to write ${label}`)
   }
   const absolutePath = resolve(pathValue)
   let canonicalParent
@@ -2367,7 +2679,7 @@ async function rootAttestationOutputPath(pathValue, loaded) {
     canonicalParent = await realpath(dirname(absolutePath))
   } catch (error) {
     throw new Error(
-      `cannot prepare root manifest attestation output ${absolutePath}: ${error.message}`,
+      `cannot prepare ${label} output ${absolutePath}: ${error.message}`,
     )
   }
   const outputPath = join(canonicalParent, basename(absolutePath))
@@ -2376,7 +2688,7 @@ async function rootAttestationOutputPath(pathValue, loaded) {
     || pathWithin(resolve(loaded.run.repository.root), outputPath)
   ) {
     throw new Error(
-      'root manifest attestation output must be outside the run bundle and target repository',
+      `${label} output must be outside the run bundle and target repository`,
     )
   }
   try {
@@ -2384,10 +2696,18 @@ async function rootAttestationOutputPath(pathValue, loaded) {
   } catch (error) {
     if (error.code === 'ENOENT') return outputPath
     throw new Error(
-      `cannot inspect root manifest attestation output ${outputPath}: ${error.message}`,
+      `cannot inspect ${label} output ${outputPath}: ${error.message}`,
     )
   }
-  throw new Error(`root manifest attestation output already exists: ${outputPath}`)
+  throw new Error(`${label} output already exists: ${outputPath}`)
+}
+
+async function rootAttestationOutputPath(pathValue, loaded) {
+  return externalTrustOutputPath(
+    pathValue,
+    loaded,
+    'root manifest attestation',
+  )
 }
 
 function createControllerExecutionEnvelope(execution, attempt, signingKey) {
@@ -2726,21 +3046,15 @@ function assertControllerFailureEnvelope(
   return envelope
 }
 
-async function assertObservedSourceAnchors(
+async function assertBoundSourceAnchors(
   directory,
   run,
   job,
-  execution,
+  result,
   sourceIndex,
+  authorizedFileIds,
+  authorityLabel,
 ) {
-  const result = execution.job_result
-  const consumedIds = new Set(
-    execution.receipt.deliveries
-      .filter((delivery) =>
-        delivery.artifact_kind === 'FILE'
-        && delivery.events?.[1]?.state === 'CONSUMED')
-      .map(({ artifact_id: artifactId }) => artifactId),
-  )
   const examinedPaths = new Set(result.examined_files)
   const sourceById = new Map(sourceIndex.files.map((file) => [file.file_id, file]))
   const cachedBytes = new Map()
@@ -2754,7 +3068,7 @@ async function assertObservedSourceAnchors(
       )
     ) {
       throw new Error(
-        `observed finding ${finding.candidate_id} requires a controller-verifiable source anchor`,
+        `${authorityLabel} finding ${finding.candidate_id} requires a controller-verifiable source anchor`,
       )
     }
     for (const anchor of finding.source_anchors ?? []) {
@@ -2763,7 +3077,7 @@ async function assertObservedSourceAnchors(
         !file
         || file.availability !== 'AVAILABLE'
         || anchor.snapshot_sha256 !== run.source_snapshot.root_sha256
-        || !consumedIds.has(anchor.file_id)
+        || !authorizedFileIds.has(anchor.file_id)
         || !examinedPaths.has(file.path)
         || !Number.isSafeInteger(anchor.start_byte)
         || !Number.isSafeInteger(anchor.end_byte)
@@ -2795,6 +3109,55 @@ async function assertObservedSourceAnchors(
       }
     }
   }
+}
+
+async function assertObservedSourceAnchors(
+  directory,
+  run,
+  job,
+  execution,
+  sourceIndex,
+) {
+  const consumedIds = new Set(
+    execution.receipt.deliveries
+      .filter((delivery) =>
+        delivery.artifact_kind === 'FILE'
+        && delivery.events?.[1]?.state === 'CONSUMED')
+      .map(({ artifact_id: artifactId }) => artifactId),
+  )
+  return assertBoundSourceAnchors(
+    directory,
+    run,
+    job,
+    execution.job_result,
+    sourceIndex,
+    consumedIds,
+    'observed',
+  )
+}
+
+async function assertRemoteSourceAnchors(
+  directory,
+  run,
+  job,
+  requestEnvelope,
+  result,
+  sourceIndex,
+) {
+  const suppliedIds = new Set(
+    requestEnvelope.artifacts
+      .filter(({ kind }) => kind === 'FILE')
+      .map(({ artifact_id: artifactId }) => artifactId),
+  )
+  return assertBoundSourceAnchors(
+    directory,
+    run,
+    job,
+    result,
+    sourceIndex,
+    suppliedIds,
+    'remote',
+  )
 }
 
 function assertRequiredControlConsumption(execution, artifacts) {
@@ -2867,9 +3230,14 @@ async function planCommand(positionals, options) {
       workspaceRoot: targetRoot,
       policySource: 'external',
     })
-    if (policy.mode !== 'static') {
+    if (!['static', 'remote_static', 'test'].includes(policy.mode)) {
       throw new Error(
-        'test and local_dynamic Rules of Engagement require the proof broker, which is not available in 0.7.0',
+        'local_dynamic Rules of Engagement require the T2 boot broker, which is not available in 0.11.0',
+      )
+    }
+    if (policy.mode === 'remote_static' && !sealSource) {
+      throw new Error(
+        'remote_static Rules of Engagement require --seal-source so the controller can bind exact outbound bytes',
       )
     }
   }
@@ -2893,6 +3261,40 @@ async function planCommand(positionals, options) {
       throw new Error('database conformance evidence path changed while it was read')
     }
   }
+  // Evidence of uncertain provenance is worse than absent evidence because it
+  // launders into findings, so loadEvidenceBundle refuses rather than warning.
+  const evidenceBundles = []
+  if (typeof options['evidence-bundle'] === 'string') {
+    for (const argument of options['evidence-bundle'].split(',')) {
+      const bundleArgument = resolve(argument.trim())
+      const before = await realpath(bundleArgument)
+      if (pathWithin(targetRoot, before)) {
+        throw new Error(
+          'evidence bundles must be supplied from outside the untrusted target repository',
+        )
+      }
+      const loaded = await loadEvidenceBundle(before)
+      const after = await realpath(bundleArgument)
+      if (after !== before || pathWithin(targetRoot, after)) {
+        throw new Error('evidence bundle path changed while it was read')
+      }
+      evidenceBundles.push({
+        evidence_id: loaded.evidence_context.evidence_id,
+        evidence_class: loaded.evidence_context.evidence_class,
+        adapter_id: loaded.evidence_context.adapter_id,
+        ...(loaded.profile.artifact_kind
+          ? { artifact_kind: loaded.profile.artifact_kind }
+          : {}),
+        coverage_state: loaded.profile.coverage_state,
+        phi_bearing: loaded.profile.phi_bearing,
+        root_sha256: loaded.root_sha256,
+      })
+    }
+    const ids = evidenceBundles.map(({ evidence_id: id }) => id)
+    if (new Set(ids).size !== ids.length) {
+      throw new Error('each evidence_id must be unique within a run')
+    }
+  }
   const maxTextBytes = positiveInteger(options['max-text-bytes'], '--max-text-bytes')
   const maxShardFiles = positiveInteger(
     options['max-shard-files'],
@@ -2911,6 +3313,7 @@ async function planCommand(positionals, options) {
     lensDirectory: DEFAULT_LENS_DIRECTORY,
     policy,
     databaseConformanceEvidence,
+    evidenceBundles,
     sealSource,
     ...(maxTextBytes === undefined ? {} : { inventoryOptions: { maxTextBytes } }),
     shardOptions: {
@@ -2995,6 +3398,286 @@ async function attestCommand(positionals, options) {
   console.log(`Attestation: ${outputPath}`)
 }
 
+function sameTransparencyCheckpointHead(left, right) {
+  return left?.checkpoint?.origin === right?.checkpoint?.origin
+    && left?.checkpoint?.tree_size === right?.checkpoint?.tree_size
+    && left?.checkpoint?.root_hash === right?.checkpoint?.root_hash
+    && left?.checkpoint?.signing?.key_id
+      === right?.checkpoint?.signing?.key_id
+}
+
+async function requestPublishedCheckpointConsistency({
+  trusted,
+  firstCheckpoint,
+  secondCheckpoint,
+  dependencies,
+}) {
+  const requestDocument = createTransparencyConsistencyRequest({
+    firstSize: firstCheckpoint.checkpoint.tree_size,
+    secondSize: secondCheckpoint.checkpoint.tree_size,
+  })
+  const submitConsistency = dependencies.submitTransparencyConsistencyRequest
+    ?? submitTransparencyConsistencyRequest
+  return submitConsistency({
+    config: trusted.config,
+    requestDocument,
+    logPublicKeyBytes: trusted.logPublicKeyBytes,
+    expectedFirstCheckpoint: firstCheckpoint,
+    expectedSecondCheckpoint: secondCheckpoint,
+    ...(typeof dependencies.transparencyConsistencyTransport === 'function'
+      ? { transport: dependencies.transparencyConsistencyTransport }
+      : (
+          typeof dependencies.transparencyTransport === 'function'
+            ? { transport: dependencies.transparencyTransport }
+            : {}
+        )),
+  })
+}
+
+async function establishPublishedCheckpointContinuity({
+  journal,
+  trusted,
+  receipt,
+  initializeJournal,
+  dependencies,
+  republish,
+}) {
+  let currentReceipt = receipt
+  let publishedCheckpoint = projectTransparencySignedCheckpoint(currentReceipt)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await journal.load()
+    const retainedCheckpoint = snapshot.head
+    if (retainedCheckpoint === null) {
+      if (!initializeJournal) {
+        throw new Error(
+          'checkpoint journal became empty before continuity could be established',
+        )
+      }
+      await journal.advance({ checkpoint: publishedCheckpoint })
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    }
+    const retainedSize = retainedCheckpoint.checkpoint.tree_size
+    const publishedSize = publishedCheckpoint.checkpoint.tree_size
+    if (retainedSize === publishedSize) {
+      if (!sameTransparencyCheckpointHead(
+        retainedCheckpoint,
+        publishedCheckpoint,
+      )) {
+        throw new Error(
+          'published checkpoint conflicts with the externally retained root at the same tree size',
+        )
+      }
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    }
+    if (retainedSize < publishedSize) {
+      const result = await requestPublishedCheckpointConsistency({
+        trusted,
+        firstCheckpoint: retainedCheckpoint,
+        secondCheckpoint: publishedCheckpoint,
+        dependencies,
+      })
+      try {
+        await journal.advance({
+          expectedHead: retainedCheckpoint,
+          checkpoint: publishedCheckpoint,
+          consistencyProof: result.proof,
+        })
+        return {
+          receipt: currentReceipt,
+          continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+        }
+      } catch (error) {
+        if (
+          error?.code === 'TRANSPARENCY_CHECKPOINT_JOURNAL_CAS_CONFLICT'
+          && attempt < 2
+        ) {
+          continue
+        }
+        throw error
+      }
+    }
+
+    try {
+      return {
+        receipt: currentReceipt,
+        continuity: await journal.continuityForCheckpoint(publishedCheckpoint),
+      }
+    } catch (error) {
+      if (
+        error?.code !== 'TRANSPARENCY_CHECKPOINT_JOURNAL_CHECKPOINT_ABSENT'
+      ) {
+        throw error
+      }
+      if (typeof republish !== 'function' || attempt >= 2) {
+        throw new Error(
+          'checkpoint journal is ahead of the publication receipt and no retained offline proof binds that receipt; retry publication',
+          { cause: error },
+        )
+      }
+      const replacement = await republish()
+      currentReceipt = replacement.receipt
+      publishedCheckpoint = projectTransparencySignedCheckpoint(currentReceipt)
+    }
+  }
+  throw new Error(
+    'checkpoint journal changed repeatedly while continuity was being established',
+  )
+}
+
+export async function publishTransparencyCommand(
+  positionals,
+  options,
+  dependencies = {},
+) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  const rootRecord = await loadPinnedRootAttestation(
+    loaded,
+    options,
+    { required: true },
+  )
+  const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+    ? await loadPinnedReceiptPublicKeyId(
+        options['receipt-public-key'],
+        loaded.directory,
+        loaded.run.repository.root,
+      )
+    : undefined
+  await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  const trusted = await loadTrustedTransparencyLogConfiguration(
+    requirePositional(positionals, 1, 'transparency log configuration'),
+    loaded,
+  )
+  const outputPath = await externalTrustOutputPath(
+    options.out,
+    loaded,
+    'transparency inclusion receipt',
+  )
+  const journalPath = options['transparency-checkpoint-journal']
+  const initializeJournal = options['initialize-transparency-checkpoint-journal'] === true
+  if (initializeJournal && typeof journalPath !== 'string') {
+    throw new Error(
+      '--initialize-transparency-checkpoint-journal requires --transparency-checkpoint-journal',
+    )
+  }
+  if (
+    typeof journalPath === 'string'
+    && typeof trusted.config.consistency_url !== 'string'
+  ) {
+    throw new Error(
+      'checkpoint-journal publication requires a version 1.1 transparency configuration with consistency_url',
+    )
+  }
+  if (
+    typeof journalPath === 'string'
+    && pathWithin(resolve(journalPath), outputPath)
+  ) {
+    throw new Error(
+      'transparency inclusion receipt output must be outside the checkpoint journal directory',
+    )
+  }
+  const journal = typeof journalPath === 'string'
+    ? await openExternalCheckpointJournal({
+        pathValue: journalPath,
+        loaded,
+        publicKeyBytes: trusted.logPublicKeyBytes,
+        expectedOrigin: trusted.config.log_origin,
+        maxClockSkewMs: trusted.config.limits.max_clock_skew_ms,
+        dependencies,
+      })
+    : null
+  if (journal !== null) {
+    const before = await journal.load()
+    if (before.head === null && !initializeJournal) {
+      await journal.close()
+      throw new Error(
+        'checkpoint journal is empty; repeat with --initialize-transparency-checkpoint-journal to establish an explicit baseline',
+      )
+    }
+    if (before.head !== null && initializeJournal) {
+      await journal.close()
+      throw new Error(
+        '--initialize-transparency-checkpoint-journal is valid only for an empty journal',
+      )
+    }
+  }
+  const requestDocument = createTransparencyPublishRequest(
+    rootRecord.attestation,
+  )
+  const submit = dependencies.submitTransparencyLogEntry
+    ?? submitTransparencyLogEntry
+  const submitPublication = () => submit({
+      config: trusted.config,
+      requestDocument,
+      attestation: rootRecord.attestation,
+      logPublicKeyBytes: trusted.logPublicKeyBytes,
+      ...(typeof dependencies.transparencyTransport === 'function'
+        ? { transport: dependencies.transparencyTransport }
+        : {}),
+    })
+  let publicationAttempted = false
+  try {
+    publicationAttempted = true
+    let publication = await submitPublication()
+    let continuity = null
+    if (journal !== null) {
+      const established = await establishPublishedCheckpointContinuity({
+        journal,
+        trusted,
+        receipt: publication.receipt,
+        initializeJournal,
+        dependencies,
+        republish: submitPublication,
+      })
+      publication = {
+        ...publication,
+        receipt: established.receipt,
+      }
+      continuity = established.continuity
+    }
+    const verification = verifyTransparencyInclusion({
+      receipt: publication.receipt,
+      attestation: rootRecord.attestation,
+      publicKeyBytes: trusted.logPublicKeyBytes,
+      expectedOrigin: trusted.config.log_origin,
+      maxClockSkewMs: trusted.config.limits.max_clock_skew_ms,
+    })
+    await durableCreate(outputPath, stableJson(publication.receipt))
+    console.log(`Published ${loaded.run.run_id}`)
+    console.log(`Transparency log: ${verification.origin}`)
+    console.log(
+      `Checkpoint: tree ${verification.tree_size}, leaf ${verification.leaf_index}, ${verification.root_hash}`,
+    )
+    if (continuity !== null) {
+      console.log(`Checkpoint continuity: ${continuity.consistency}`)
+    }
+    console.log(`Inclusion receipt: ${outputPath}`)
+    return {
+      outputPath,
+      receipt: publication.receipt,
+      verification,
+      ...(continuity === null ? {} : { continuity }),
+    }
+  } catch (error) {
+    if (!publicationAttempted) throw error
+    const wrapped = new Error(
+      `transparency publication may already be durable, but no verified receipt output was written: ${error.message}`,
+      { cause: error },
+    )
+    wrapped.code = error.code ?? 'TRANSPARENCY_PUBLICATION_OUTCOME_UNCERTAIN'
+    if (error.details !== undefined) wrapped.details = error.details
+    throw wrapped
+  } finally {
+    await journal?.close()
+  }
+}
+
 async function validateCommand(positionals, options) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   const {
@@ -3004,9 +3687,16 @@ async function validateCommand(positionals, options) {
   } = loaded
   const result = validateRun(run)
   let rootAuthenticity
+  let transparencyInclusion
   if (result.valid) {
     try {
-      rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
+      const rootRecord = await loadPinnedRootAttestation(loaded, options)
+      rootAuthenticity = rootRecord.verification
+      transparencyInclusion = await verifyPinnedTransparencyReceipt(
+        loaded,
+        options,
+        rootRecord,
+      )
       const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
         ? await loadPinnedReceiptPublicKeyId(
             options['receipt-public-key'],
@@ -3029,6 +3719,9 @@ async function validateCommand(positionals, options) {
       path,
       ...result,
       ...(rootAuthenticity ? { root_authenticity: rootAuthenticity } : {}),
+      ...(transparencyInclusion
+        ? { transparency_inclusion: transparencyInclusion }
+        : {}),
     }))
   } else if (result.valid) {
     console.log(`VALID: ${path}`)
@@ -3038,6 +3731,18 @@ async function validateCommand(positionals, options) {
       )
     } else {
       console.log('Root authenticity: UNANCHORED')
+    }
+    if (transparencyInclusion.status === 'VERIFIED') {
+      console.log(
+        `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
+      )
+      if (transparencyInclusion.continuity) {
+        console.log(
+          `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
+        )
+      }
+    } else {
+      console.log('Transparency inclusion: NOT SUPPLIED')
     }
   }
   else {
@@ -3231,6 +3936,87 @@ async function loadTrustedProviderConfiguration(pathValue, loaded) {
   }
 }
 
+async function loadTrustedRemoteGatewayConfiguration(pathValue, loaded) {
+  const configFile = await loadExternalTrustFile(
+    pathValue,
+    'remote gateway configuration',
+    loaded,
+    MAX_REMOTE_GATEWAY_CONFIG_BYTES,
+  )
+  let document
+  try {
+    document = JSON.parse(configFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in remote gateway configuration ${configFile.path}: ${error.message}`,
+    )
+  }
+  assertValidRemoteGatewayConfig(document)
+  const config = structuredClone(document)
+  const controllerKeyFile = await loadExternalTrustFile(
+    config.controller_signing_private_key_path,
+    'remote controller signing key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  const gatewayKeyFile = await loadExternalTrustFile(
+    config.gateway_public_key_path,
+    'remote gateway public key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  config.controller_signing_private_key_path = controllerKeyFile.path
+  config.gateway_public_key_path = gatewayKeyFile.path
+  const controllerKey = parseRemotePrivateKey(controllerKeyFile.bytes)
+  const gatewayKey = parseRemotePublicKey(gatewayKeyFile.bytes)
+  assertValidRemoteGatewayConfig(config)
+  return {
+    config,
+    controllerKeyBytes: controllerKeyFile.bytes,
+    gatewayKeyBytes: gatewayKeyFile.bytes,
+    controllerKey,
+    gatewayKey,
+    configSha256: sha256(stableJson({
+      remote_gateway_config: config,
+      controller_key_id: controllerKey.keyId,
+      gateway_key_id: gatewayKey.keyId,
+    }, 0)),
+  }
+}
+
+async function loadTrustedTransparencyLogConfiguration(pathValue, loaded) {
+  const configFile = await loadExternalTrustFile(
+    pathValue,
+    'transparency log configuration',
+    loaded,
+    MAX_TRANSPARENCY_LOG_CONFIG_BYTES,
+  )
+  let document
+  try {
+    document = JSON.parse(configFile.bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(
+      `invalid JSON in transparency log configuration ${configFile.path}: ${error.message}`,
+    )
+  }
+  assertValidTransparencyLogConfig(document)
+  const config = structuredClone(document)
+  const logPublicKeyFile = await loadExternalTrustFile(
+    config.log_public_key_path,
+    'transparency log public key',
+    loaded,
+    MAX_SIGNING_KEY_BYTES,
+  )
+  config.log_public_key_path = logPublicKeyFile.path
+  const logKey = parseTransparencyPublicKey(logPublicKeyFile.bytes)
+  assertValidTransparencyLogConfig(config)
+  return {
+    config,
+    logPublicKeyBytes: logPublicKeyFile.bytes,
+    logKey,
+  }
+}
+
 async function persistLoadedRun(loaded, next) {
   await persistRun(loaded.path, next, loaded.sourceDigest)
   loaded.run = next
@@ -3265,6 +4051,128 @@ async function readAttemptEnvelope(loaded, attempt, pinnedKeyId) {
     throw new Error('execution envelope digest differs from its captured attempt')
   }
   return envelope
+}
+
+function embeddedRemotePublicKey(spkiBase64, label) {
+  try {
+    const spki = Buffer.from(spkiBase64, 'base64')
+    if (spki.toString('base64') !== spkiBase64) {
+      throw new Error('non-canonical base64')
+    }
+    return createPublicKey({ key: spki, type: 'spki', format: 'der' })
+  } catch (error) {
+    throw new Error(`${label} embedded public key is invalid: ${error.message}`)
+  }
+}
+
+async function readRemoteRequestArtifact(loaded, attempt) {
+  const artifact = loaded.run.artifacts?.[attempt.lease.request_artifact_key]
+  if (!artifact) {
+    throw new Error(`remote attempt ${attempt.attempt_id} request artifact is missing`)
+  }
+  const committed = await readVerifiedArtifact(
+    loaded.directory,
+    loaded.run,
+    attempt.lease.request_artifact_key,
+    artifact.path.replaceAll('\\', '/'),
+  )
+  if (
+    sha256(committed.content) !== attempt.lease.request_artifact_sha256
+    || artifact.sha256 !== attempt.lease.request_artifact_sha256
+  ) {
+    throw new Error('remote request artifact digest differs from its lease')
+  }
+  let envelope
+  try {
+    envelope = JSON.parse(committed.text)
+  } catch (error) {
+    throw new Error(`remote request envelope JSON is invalid: ${error.message}`)
+  }
+  if (stableJson(envelope, 0) !== committed.text) {
+    throw new Error('remote request artifact must retain exact canonical JSON bytes')
+  }
+  const controllerKey = embeddedRemotePublicKey(
+    envelope.controller?.public_key_spki_base64,
+    'remote request',
+  )
+  const verified = verifyRemoteRequestEnvelope({
+    envelope,
+    publicKeyBytes: controllerKey,
+    expectedPromptTransform: envelope.controller?.prompt_transform,
+    now: envelope.controller?.created_at,
+  })
+  if (
+    verified.key_id !== attempt.lease.controller_key_id
+    || envelope.controller.request_id !== attempt.lease.request_id
+    || envelope.controller.attempt_id !== attempt.attempt_id
+    || envelope.controller.attempt_nonce !== attempt.lease.nonce
+    || envelope.controller.run_id !== loaded.run.run_id
+    || envelope.controller.job_id !== attempt.job_id
+    || envelope.controller.packet_sha256 !== attempt.lease.packet_sha256
+  ) {
+    throw new Error('remote request artifact does not bind its attempt lease')
+  }
+  return {
+    envelope,
+    bytes: committed.content,
+  }
+}
+
+async function readRemoteAcceptanceArtifact(
+  loaded,
+  attempt,
+  {
+    gatewayPublicKeyBytes = undefined,
+    expectedPromptTransform = undefined,
+  } = {},
+) {
+  const request = await readRemoteRequestArtifact(loaded, attempt)
+  const artifact = loaded.run.artifacts?.[attempt.execution_artifact_key]
+  if (!artifact) {
+    throw new Error(`remote attempt ${attempt.attempt_id} acceptance artifact is missing`)
+  }
+  const committed = await readVerifiedArtifact(
+    loaded.directory,
+    loaded.run,
+    attempt.execution_artifact_key,
+    artifact.path.replaceAll('\\', '/'),
+  )
+  if (
+    sha256(committed.content) !== attempt.execution_artifact_sha256
+    || attempt.receipt_sha256 !== attempt.execution_artifact_sha256
+  ) {
+    throw new Error('remote acceptance artifact digest differs from its captured attempt')
+  }
+  let envelope
+  try {
+    envelope = JSON.parse(committed.text)
+  } catch (error) {
+    throw new Error(`remote acceptance envelope JSON is invalid: ${error.message}`)
+  }
+  if (stableJson(envelope, 0) !== committed.text) {
+    throw new Error('remote acceptance artifact must retain exact canonical JSON bytes')
+  }
+  const pinnedGatewayKey = gatewayPublicKeyBytes ?? embeddedRemotePublicKey(
+    envelope.gateway?.public_key_spki_base64,
+    'remote acceptance',
+  )
+  const verified = verifyRemoteAcceptanceEnvelope({
+    envelope,
+    requestEnvelope: request.envelope,
+    requestBytes: request.bytes,
+    gatewayPublicKeyBytes: pinnedGatewayKey,
+    expectedPromptTransform:
+      expectedPromptTransform ?? request.envelope.controller.prompt_transform,
+    now: envelope.gateway?.accepted_at,
+  })
+  if (verified.gateway_key_id !== attempt.lease.gateway_key_id) {
+    throw new Error('remote acceptance key differs from its pinned attempt lease')
+  }
+  return {
+    request: request.envelope,
+    envelope,
+    verified,
+  }
 }
 
 async function readAttemptFailureEnvelope(
@@ -3473,6 +4381,422 @@ async function completeObservedAttempt(loaded, control, attempt, signingKey) {
   return advanced
 }
 
+function remoteProviderLimits(config) {
+  return {
+    limits: {
+      max_deliveries: config.limits.max_artifacts,
+      max_file_bytes: config.limits.max_file_bytes,
+      max_total_delivery_bytes: config.limits.max_total_artifact_bytes,
+    },
+  }
+}
+
+function remoteDispatchPacket(run, job, sidecar, artifacts) {
+  const base = observedDispatchPacket(run, job, sidecar)
+  const { packet_sha256: _packetSha256, ...unsigned } = base
+  unsigned.scoped_files = artifacts
+    .filter(({ kind }) => kind === 'FILE')
+    .map(({ logical_name: logicalName }) => logicalName)
+    .sort((left, right) => compareCanonicalStrings(left, right))
+  return {
+    ...unsigned,
+    packet_sha256: sha256(stableJson(unsigned, 0)),
+  }
+}
+
+function assertRemoteGatewayAuthorized(control, trusted) {
+  if (control.policy.mode !== 'remote_static') {
+    throw new Error(
+      'run-remote requires an externally supplied remote_static Rules of Engagement policy',
+    )
+  }
+  const policy = normalizePolicy(control.policy, {
+    workspaceRoot: control.policy.workspace_root,
+    policySource: 'external',
+  })
+  const decision = authorizeAction(policy, {
+    type: 'network',
+    url: trusted.config.gateway_url,
+    redirects: [],
+  })
+  if (!decision.allowed) {
+    const message = decision.reasons
+      .map(({ code, message: reason }) => `${code}: ${reason}`)
+      .join('; ')
+    throw new Error(`remote gateway is not authorized by the run policy: ${message}`)
+  }
+  const configuredUrl = new URL(trusted.config.gateway_url).href
+  if (
+    decision.normalized_action?.url !== configuredUrl
+    || decision.normalized_action?.redirects?.length !== 0
+  ) {
+    throw new Error('remote gateway policy decision does not bind the exact configured endpoint')
+  }
+}
+
+function assertAttemptUsesTrustedRemoteConfiguration(attempt, trusted) {
+  if (
+    attempt.lease.backend !== 'REMOTE_GATEWAY'
+    || attempt.lease.remote_gateway_config_sha256 !== trusted.configSha256
+    || attempt.lease.controller_key_id !== trusted.controllerKey.keyId
+    || attempt.lease.gateway_key_id !== trusted.gatewayKey.keyId
+  ) {
+    throw new Error(
+      `attempt ${attempt.attempt_id} was leased with different remote gateway trust material`,
+    )
+  }
+}
+
+async function failRemoteAttempt({
+  loaded,
+  attemptId,
+  error,
+  reasonPrefix,
+  occurredAt = undefined,
+}) {
+  const message = error?.message ?? String(error)
+  const failed = failProviderAttempt(loaded.run, attemptId, {
+    reason: `${reasonPrefix}: ${message}`.slice(0, 16_000),
+    recoverable: true,
+    ...(occurredAt === undefined ? {} : { occurred_at: occurredAt }),
+  })
+  await persistLoadedRun(loaded, failed)
+  return failed
+}
+
+async function completeRemoteAttempt(loaded, control, attempt, trusted) {
+  assertAttemptUsesTrustedRemoteConfiguration(attempt, trusted)
+  const job = loaded.run.jobs.find(({ job_id: jobId }) => jobId === attempt.job_id)
+  if (!job) throw new Error(`remote attempt job ${attempt.job_id} no longer exists`)
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const requestArtifact = await readRemoteRequestArtifact(loaded, attempt)
+  const packet = remoteDispatchPacket(
+    loaded.run,
+    job,
+    sidecar,
+    requestArtifact.envelope.artifacts.map((artifact) => ({
+      kind: artifact.kind,
+      logical_name: artifact.logical_name,
+    })),
+  )
+  if (packet.packet_sha256 !== attempt.lease.packet_sha256) {
+    throw new Error('active remote attempt packet no longer matches the controller plan')
+  }
+  let active = attempt
+  let acceptance = await readRemoteAcceptanceArtifact(
+    loaded,
+    active,
+    {
+      gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+      expectedPromptTransform: trusted.config.prompt_transform,
+    },
+  )
+  await assertRemoteSourceAnchors(
+    loaded.directory,
+    loaded.run,
+    job,
+    acceptance.request,
+    acceptance.envelope.job_result,
+    control.sealedSnapshots.source,
+  )
+  if (active.state === 'RESULT_CAPTURED') {
+    const validated = recordProviderResultValidated(
+      loaded.run,
+      active.attempt_id,
+    )
+    await persistLoadedRun(loaded, validated)
+    active = findActiveAttempt(loaded.run, job.job_id)
+    acceptance = await readRemoteAcceptanceArtifact(
+      loaded,
+      active,
+      {
+        gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+        expectedPromptTransform: trusted.config.prompt_transform,
+      },
+    )
+  }
+  if (active.state !== 'VALIDATED') {
+    throw new Error(`remote attempt ${active.attempt_id} cannot commit from ${active.state}`)
+  }
+  const applied = applyJobResult(
+    loaded.run,
+    acceptance.envelope.job_result,
+    {
+      expectedPacketSha256: packet.packet_sha256,
+      sidecar,
+      commitObservedAttempt: (previous, candidate) =>
+        commitProviderAttempt(previous, candidate, active.attempt_id),
+    },
+  )
+  const advanced = advanceUntilBlocked(applied)
+  await persistLoadedRun(loaded, advanced)
+  console.log(`Remote ${job.job_id}: ${acceptance.envelope.job_result.state}`)
+  console.log(`Attempt: ${active.attempt_id}`)
+  console.log('Coverage authority: REMOTE_REQUEST_ACCEPTED')
+  console.log(`Run: ${advanced.state}/${advanced.phase}`)
+  return advanced
+}
+
+export async function runRemoteCommand(positionals, _options = {}, dependencies = {}) {
+  const currentInstant = () => {
+    const value = dependencies.now?.() ?? new Date()
+    const date = value instanceof Date ? value : new Date(value)
+    if (!Number.isFinite(date.getTime())) {
+      throw new Error('run-remote clock returned an invalid instant')
+    }
+    return date
+  }
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  if (!['6.0.0', '7.0.0'].includes(loaded.run.schema_version) || !loaded.run.source_snapshot) {
+    throw new Error(
+      'run-remote requires a runner-ready v6 or v7 bundle created with remote_static Rules of Engagement and --seal-source',
+    )
+  }
+  const trusted = await loadTrustedRemoteGatewayConfiguration(
+    requirePositional(positionals, 1, 'remote gateway configuration'),
+    loaded,
+  )
+  const control = await verifyControlBundle(
+    loaded.directory,
+    loaded.run,
+    { requireCurrentLensPack: true },
+  )
+  assertRemoteGatewayAuthorized(control, trusted)
+  for (const event of loaded.run.attempt_events ?? []) {
+    if (event.event !== 'LEASED' || event.backend !== 'REMOTE_GATEWAY') continue
+    if (
+      event.remote_gateway_config_sha256 !== trusted.configSha256
+      || event.controller_key_id !== trusted.controllerKey.keyId
+      || event.gateway_key_id !== trusted.gatewayKey.keyId
+    ) {
+      throw new Error(
+        'remote gateway configuration or key identity differs from existing run evidence; key and endpoint rotation require a new run',
+      )
+    }
+  }
+
+  const activeValue = findActiveAttempt(loaded.run)
+  const activeAttempts = activeValue === null ? [] : activeValue
+  if (activeAttempts.length > 1) {
+    throw new Error('run-remote refuses a run with more than one active attempt')
+  }
+  if (activeAttempts.length === 1) {
+    const active = activeAttempts[0]
+    if (active.lease.backend !== 'REMOTE_GATEWAY') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the sealed-container backend; use run-provider`,
+      )
+    }
+    assertAttemptUsesTrustedRemoteConfiguration(active, trusted)
+    const recovery = classifyProviderAttemptRecovery(
+      loaded.run,
+      active.attempt_id,
+      { now: currentInstant() },
+    )
+    if (['RESULT_CAPTURED', 'VALIDATED'].includes(active.state)) {
+      try {
+        return await completeRemoteAttempt(loaded, control, active, trusted)
+      } catch (error) {
+        await failRemoteAttempt({
+          loaded,
+          attemptId: active.attempt_id,
+          error,
+          reasonPrefix: 'captured remote result could not commit',
+          occurredAt: currentInstant().toISOString(),
+        })
+        throw error
+      }
+    }
+    if (recovery.status === 'ACTIVE_UNEXPIRED') {
+      throw new Error(
+        `remote attempt ${active.attempt_id} is active until ${recovery.expires_at}; refusing to replay its one-use request`,
+      )
+    }
+    if (recovery.status !== 'ACTIVE_EXPIRED') {
+      throw new Error(
+        `remote attempt ${active.attempt_id} cannot be recovered from ${recovery.status}`,
+      )
+    }
+    const expiryError = new Error(
+      `attempt lease expired at ${recovery.expires_at}; the prior remote outcome is ambiguous and request ${active.lease.request_id} will not be reused`,
+    )
+    expiryError.code = 'REMOTE_ATTEMPT_EXPIRED'
+    await failRemoteAttempt({
+      loaded,
+      attemptId: active.attempt_id,
+      error: expiryError,
+      reasonPrefix: 'remote attempt expired',
+      occurredAt: recovery.observed_at,
+    })
+  }
+
+  const [job] = pendingJobsForCurrentPhase(loaded.run)
+  if (!job) throw new Error('run has no provider job ready for remote execution')
+  if (job.kind === 'REPORT' || job.kind === 'PATCH') {
+    throw new Error(`job ${job.job_id} is controller-owned and cannot run remotely`)
+  }
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const artifacts = await observedProviderArtifacts(
+    loaded.directory,
+    loaded.run,
+    job,
+    sidecar,
+    control,
+    remoteProviderLimits(trusted.config),
+  )
+  const packet = remoteDispatchPacket(loaded.run, job, sidecar, artifacts)
+  const attemptId = `attempt:${randomUUID()}`
+  const requestId = `remote:${randomUUID()}`
+  const nonce = randomBytes(32).toString('hex')
+  const createdAt = currentInstant()
+  const requestEnvelope = createRemoteRequestEnvelope({
+    provenance: {
+      run_id: loaded.run.run_id,
+      job_id: job.job_id,
+      plan_sha256: loaded.run.plan_digest,
+      repository_tree_sha256: loaded.run.repository.tree_digest,
+      lens_pack_sha256: loaded.run.lens_pack_digest,
+      policy_sha256: loaded.run.policy_digest,
+      source_snapshot_sha256: loaded.run.source_snapshot.root_sha256,
+      control_snapshot_sha256: loaded.run.control_snapshot.root_sha256,
+    },
+    packet,
+    artifacts,
+    promptTransform: trusted.config.prompt_transform,
+    privateKeyBytes: trusted.controllerKeyBytes,
+    attemptId,
+    requestId,
+    nonce,
+    createdAt,
+    ttlMs: trusted.config.limits.request_ttl_ms,
+  })
+  const requestContent = stableJson(requestEnvelope, 0)
+  assertBundleArtifactSize(requestContent, 'remote request envelope')
+  reserveBundleArtifactCapacity(
+    control.artifactCapacity,
+    requestContent,
+    'remote request envelope',
+  )
+  const requestArtifactKey = `request_${artifactKeyToken(attemptId).toLowerCase()}`
+  const requestArtifactPath = `requests/${artifactToken(attemptId)}.json`
+  await writeOnceBundleArtifact(
+    loaded.directory,
+    requestArtifactPath,
+    requestContent,
+  )
+  const leased = leaseRemoteAttempt(loaded.run, job.job_id, {
+    attempt_id: attemptId,
+    nonce,
+    packet_sha256: packet.packet_sha256,
+    remote_gateway_config_sha256: trusted.configSha256,
+    controller_key_id: trusted.controllerKey.keyId,
+    gateway_key_id: trusted.gatewayKey.keyId,
+    request_id: requestId,
+    request_artifact_key: requestArtifactKey,
+    request_artifact: {
+      path: requestArtifactPath,
+      sha256: sha256(requestContent),
+    },
+    occurred_at: requestEnvelope.controller.created_at,
+    expires_at: requestEnvelope.controller.expires_at,
+    budgets: {
+      wall_clock_ms: trusted.config.limits.request_timeout_ms,
+      max_requests: 1,
+      max_bytes: (
+        trusted.config.limits.max_request_bytes
+        + trusted.config.limits.max_response_bytes
+      ),
+    },
+  })
+  if (typeof dependencies.beforeLeasePersist === 'function') {
+    await dependencies.beforeLeasePersist({
+      attempt_id: attemptId,
+      job_id: job.job_id,
+    })
+  }
+  await persistLoadedRun(loaded, leased)
+  if (typeof dependencies.afterLeasePersist === 'function') {
+    await dependencies.afterLeasePersist({
+      attempt_id: attemptId,
+      job_id: job.job_id,
+    })
+  }
+  const started = markProviderAttemptStarted(loaded.run, attemptId, {
+    occurred_at: requestEnvelope.controller.created_at,
+  })
+  await persistLoadedRun(loaded, started)
+
+  let accepted
+  try {
+    const submit = dependencies.submitRemoteGatewayRequest
+      ?? submitRemoteGatewayRequest
+    accepted = await submit({
+      config: trusted.config,
+      requestEnvelope,
+      gatewayPublicKeyBytes: trusted.gatewayKeyBytes,
+      ...(dependencies.transport === undefined
+        ? {}
+        : { transport: dependencies.transport }),
+      now: currentInstant(),
+    })
+  } catch (error) {
+    await failRemoteAttempt({
+      loaded,
+      attemptId,
+      error,
+      reasonPrefix: 'remote gateway request failed',
+      occurredAt: currentInstant().toISOString(),
+    })
+    throw error
+  }
+
+  try {
+    const acceptanceContent = stableJson(accepted.acceptance_envelope, 0)
+    assertBundleArtifactSize(acceptanceContent, 'remote acceptance envelope')
+    reserveBundleArtifactCapacity(
+      control.artifactCapacity,
+      acceptanceContent,
+      'remote acceptance envelope',
+    )
+    const artifactKey = `execution_${artifactKeyToken(attemptId).toLowerCase()}`
+    const artifactPath = `executions/${artifactToken(attemptId)}.json`
+    await writeOnceBundleArtifact(
+      loaded.directory,
+      artifactPath,
+      acceptanceContent,
+    )
+    const acceptanceSha256 = sha256(acceptanceContent)
+    const captured = recordProviderResultCaptured(loaded.run, attemptId, {
+      execution_artifact_key: artifactKey,
+      execution_artifact: {
+        path: artifactPath,
+        sha256: acceptanceSha256,
+      },
+      receipt_sha256: acceptanceSha256,
+    })
+    await persistLoadedRun(loaded, captured)
+    return await completeRemoteAttempt(
+      loaded,
+      control,
+      findActiveAttempt(loaded.run, job.job_id),
+      trusted,
+    )
+  } catch (error) {
+    const active = findActiveAttempt(loaded.run, job.job_id)
+    if (active?.attempt_id === attemptId) {
+      await failRemoteAttempt({
+        loaded,
+        attemptId,
+        error,
+        reasonPrefix: 'remote result capture or commit failed',
+        occurredAt: currentInstant().toISOString(),
+      })
+    }
+    throw error
+  }
+}
+
 function providerSandboxPolicySha256(config, containerName) {
   return sha256(stableJson({
     backend: 'OCI_DOCKER',
@@ -3498,13 +4822,83 @@ function assertAttemptUsesTrustedProviderConfiguration(attempt, trusted) {
   }
 }
 
+// shell:false is load-bearing. The RoE allowlist matches program and argv
+// exactly, and a shell would let an argument smuggle `;` or `&&` past it.
+function spawnProofCommand(program, args, cwd) {
+  return new Promise((settle) => {
+    const child = spawn(program, args, {
+      cwd,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('close', (code) => settle({ code: code ?? 1, stdout, stderr }))
+    child.on('error', (error) => settle({ code: 127, stdout, stderr: String(error.message) }))
+  })
+}
+
+export async function runProofCommand(positionals, _options = {}, dependencies = {}) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  if (loaded.run.capability_mode !== 'TEST_EXECUTION') {
+    throw new Error(
+      'run-proof requires a TEST_EXECUTION run; plan with a test-mode Rules of Engagement',
+    )
+  }
+  if (!loaded.run.source_snapshot) {
+    throw new Error('run-proof requires a bundle created with plan --seal-source')
+  }
+  const config = assertValidProofConfig(await readJson(
+    requirePositional(positionals, 1, 'proof configuration'),
+    { maxBytes: 8 * 1024 * 1024, label: 'proof configuration JSON' },
+  ))
+
+  const control = await verifyControlBundle(loaded.directory, loaded.run, {
+    requireCurrentLensPack: true,
+  })
+  const policy = normalizePolicy(control.policy, {
+    workspaceRoot: control.policy.workspace_root,
+    policySource: 'external',
+  })
+
+  const targetRoot = loaded.run.repository.root
+  const mirrorRoot = join(await mkdtemp(join(tmpdir(), 'red-team-audit-proof-')), 'mirror')
+  // The non-mutation check must measure the target exactly as plan did, or it
+  // reports every real run as mutated. Both inputs are recorded in the bundle.
+  const readCapability = policy.capabilities?.read_file
+  const outcome = await executeProof({
+    targetRoot,
+    mirrorRoot,
+    expectedTreeDigest: loaded.run.repository.tree_digest,
+    inventoryOptions: {
+      maxTextBytes: loaded.run.coverage?.policy?.max_shard_bytes,
+      includedRoots: readCapability?.enabled ? readCapability.roots : [],
+    },
+    policy,
+    config,
+    spawn: dependencies.spawn ?? spawnProofCommand,
+  })
+
+  // The pair runner's sixth rule replays against the previous revision, which a
+  // target with no history cannot supply. Recorded, never silently skipped.
+  const ruleSixApplicable = existsSync(join(targetRoot, '.git'))
+  process.stdout.write(`${stableJson({
+    job_id: config.job_id,
+    owned_paths: outcome.ownedPaths,
+    evidence: proofEvidence(outcome, config, { ruleSixApplicable }),
+  })}\n`)
+}
+
 export async function runProviderCommand(positionals, _options = {}, dependencies = {}) {
   const providerRunner = dependencies.providerRunner ?? runDockerProvider
   const cleanupProviderContainer = dependencies.cleanupProviderContainer
     ?? cleanupDockerProviderContainer
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
-  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0'].includes(loaded.run.schema_version)
+  if (!['2.0.0', '3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(loaded.run.schema_version)
     || !loaded.run.source_snapshot) {
     throw new Error(
       'run-provider requires a runner-ready v2 bundle created with plan --seal-source',
@@ -3522,6 +4916,9 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
       pinnedReceiptKeyId: trusted.signingKey.keyId,
     },
   )
+  if (control.policy.mode !== 'static') {
+    throw new Error('run-provider accepts only static Rules of Engagement; use run-remote for remote_static runs')
+  }
   if (
     control.evidenceKeyId !== undefined
     && control.evidenceKeyId !== trusted.signingKey.keyId
@@ -3539,6 +4936,11 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
   }
   if (activeAttempts.length === 1) {
     const active = activeAttempts[0]
+    if (active.lease.backend === 'REMOTE_GATEWAY') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the remote gateway backend; use run-remote`,
+      )
+    }
     const recovery = classifyProviderAttemptRecovery(
       loaded.run,
       active.attempt_id,
@@ -3802,6 +5204,7 @@ async function prepareOneResult(
   loaded,
   resultPath,
   artifactCapacity,
+  inventoryEntries,
 ) {
   const jobResult = await readJson(resultPath, {
     maxBytes: MAX_PROVIDER_RESULT_BYTES,
@@ -3839,6 +5242,7 @@ async function prepareOneResult(
       path: resultRelativePath,
       sha256: sha256(canonicalResult),
     },
+    inventoryEntries,
   })
   const advanced = advanceUntilBlocked(applied)
   const serializedRun = stableJson(advanced)
@@ -3869,8 +5273,10 @@ function logAcceptedResult(prepared) {
   console.log(`Pending jobs: ${prepared.pendingCount}`)
 }
 
-async function ingestOneResult(loaded, resultPath, artifactCapacity) {
-  const prepared = await prepareOneResult(loaded, resultPath, artifactCapacity)
+async function ingestOneResult(loaded, resultPath, artifactCapacity, inventoryEntries) {
+  const prepared = await prepareOneResult(
+    loaded, resultPath, artifactCapacity, inventoryEntries,
+  )
   await writeOnceBundleArtifact(
     loaded.directory,
     prepared.resultRelativePath,
@@ -3888,7 +5294,9 @@ async function ingestCommand(positionals) {
   const resultPath = resolve(requirePositional(positionals, 1, 'job result'))
   assertValidRun(loaded.run)
   const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
-  await ingestOneResult(loaded, resultPath, control.artifactCapacity)
+  await ingestOneResult(
+    loaded, resultPath, control.artifactCapacity, control.inventoryEntries,
+  )
 }
 
 async function ingestBatchCommand(positionals) {
@@ -3905,6 +5313,7 @@ async function ingestBatchCommand(positionals) {
         loaded,
         resultPath,
         artifactCapacity,
+        control.inventoryEntries,
       )
       accepted += 1
     } catch (error) {
@@ -4021,7 +5430,13 @@ async function reportCommand(positionals, options) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   const { directory, run } = loaded
   assertValidRun(run)
-  const rootAuthenticity = await verifyPinnedRootAttestation(loaded, options)
+  const rootRecord = await loadPinnedRootAttestation(loaded, options)
+  const rootAuthenticity = rootRecord.verification
+  const transparencyInclusion = await verifyPinnedTransparencyReceipt(
+    loaded,
+    options,
+    rootRecord,
+  )
   const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
     ? await loadPinnedReceiptPublicKeyId(
         options['receipt-public-key'],
@@ -4034,6 +5449,18 @@ async function reportCommand(positionals, options) {
     console.error(`Root authenticity: VERIFIED (${rootAuthenticity.key_id})`)
   } else {
     console.error('Root authenticity: UNANCHORED')
+  }
+  if (transparencyInclusion.status === 'VERIFIED') {
+    console.error(
+      `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
+    )
+    if (transparencyInclusion.continuity) {
+      console.error(
+        `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
+      )
+    }
+  } else {
+    console.error('Transparency inclusion: NOT SUPPLIED')
   }
   const markdown = renderMarkdownReport(run)
   if (outputs.markdownPath) {
@@ -4055,8 +5482,16 @@ async function compareCommand(positionals, options) {
   const current = await loadRun(requirePositional(positionals, 1, 'current run'))
   assertValidRun(baseline.run)
   assertValidRun(current.run)
-  await verifyControlBundle(baseline.directory, baseline.run)
-  await verifyControlBundle(current.directory, current.run)
+  for (const loaded of [baseline, current]) {
+    const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+      ? await loadPinnedReceiptPublicKeyId(
+          options['receipt-public-key'],
+          loaded.directory,
+          loaded.run.repository.root,
+        )
+      : undefined
+    await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  }
   const comparison = compareRuns(baseline.run, current.run)
   if (typeof options.out === 'string') {
     await writeJson(options.out, comparison)
@@ -4263,12 +5698,15 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'plan') return planCommand(positionals, options)
   if (command === 'next') return nextCommand(positionals, options)
   if (command === 'run-provider') return runProviderCommand(positionals, options)
+  if (command === 'run-remote') return runRemoteCommand(positionals, options)
+  if (command === 'run-proof') return runProofCommand(positionals, options)
   if (command === 'ingest') return ingestCommand(positionals, options)
   if (command === 'ingest-batch') return ingestBatchCommand(positionals, options)
   if (command === 'finalize') return finalizeCommand(positionals, options)
   if (command === 'abort') return abortCommand(positionals, options)
   if (command === 'unlock') return unlockCommand(positionals, options)
   if (command === 'attest') return attestCommand(positionals, options)
+  if (command === 'publish') return publishTransparencyCommand(positionals, options)
   if (command === 'validate') return validateCommand(positionals, options)
   if (command === 'report') return reportCommand(positionals, options)
   if (command === 'compare') return compareCommand(positionals, options)
@@ -4282,7 +5720,7 @@ if (isDirectRun) {
   main().catch((error) => {
     console.error(`ERROR: ${error.message}`)
     const details = error.errors ?? error.details
-    if (details) {
+    if (Array.isArray(details)) {
       for (const issue of details) {
         console.error(`- ${issue.code ?? issue.keyword}: ${issue.instancePath || '/'} ${issue.message}`)
       }

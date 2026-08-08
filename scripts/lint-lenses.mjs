@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseLens } from './lib/frontmatter.mjs'
 import { isMainModule } from './lib/main-module.mjs'
-import { buildRegistry, diffRegistry, checkShapes, checkDetectors, checkBodyClaims, detectorCoverage } from './lib/registry.mjs'
+import { buildRegistry, diffRegistry, checkShapes, checkDetectors, checkBodyClaims, checkEvidenceClasses, detectorCoverage } from './lib/registry.mjs'
 import { checkOrthography } from './lib/orthography.mjs'
 import { parseLedger } from './lib/ledger.mjs'
 import { checkSkill, MAX_SKILL_BYTES } from './lib/skill.mjs'
@@ -83,6 +83,7 @@ export function runLint(opts = {}) {
   violations.push(...checkShapes(lenses))
   violations.push(...checkDetectors(lenses))
   violations.push(...checkBodyClaims(lenses, slugs))
+  violations.push(...checkEvidenceClasses(lenses))
   violations.push(...checkOrthography([...slugs.keys()]))
 
   const committed = readTopics(topicsFile, violations)
@@ -121,5 +122,5 @@ if (isMainModule(import.meta.url)) {
     console.error(`\nFAIL: ${violations.length} violation(s) — ${JSON.stringify(byRule)}`)
     process.exit(1)
   }
-  console.log('\nPASS: R1-R8, SKILL and ledger gate clean.')
+  console.log('\nPASS: R1-R9, SKILL and ledger gate clean.')
 }

@@ -4,7 +4,14 @@
 const BRITISH = [
   { pattern: /isation\b/, fix: (s) => s.replace(/isation\b/, 'ization') },
   { pattern: /isations\b/, fix: (s) => s.replace(/isations\b/, 'izations') },
-  { pattern: /ised\b/, fix: (s) => s.replace(/ised\b/, 'ized') },
+  // Only the -ise suffix that pairs with -isation above. A bare /ised\b/ also
+  // fires on American spellings (unsupervised, advised, revised, compromised)
+  // and would demand "unsupervized", so the stem shape is required and the
+  // pr-omised / pr-emised collision is excluded.
+  {
+    pattern: /(?<!pr)[aeiouy][lmnrt]ised\b/,
+    fix: (s) => s.replace(/(?<!pr)([aeiouy][lmnrt])ised\b/, '$1ized'),
+  },
   { pattern: /yse\b/, fix: (s) => s.replace(/yse\b/, 'yze') },
   { pattern: /ysed\b/, fix: (s) => s.replace(/ysed\b/, 'yzed') },
 ]

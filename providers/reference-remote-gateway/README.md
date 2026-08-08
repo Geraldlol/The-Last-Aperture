@@ -33,4 +33,6 @@ before the upstream call and return a cached terminal outcome or an explicit
 duplicate response. It must never make an ambiguous failed request reusable.
 
 See [ADR 0007](../../docs/adr/0007-signed-remote-request-acceptance.md) for the
-trust model and residual risks.
+gateway trust model and
+[ADR 0008](../../docs/adr/0008-remote-attempt-ledger-integration.md) for the
+schema-v6 controller lifecycle.

@@ -250,8 +250,8 @@ after(async () => {
   if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true })
 })
 
-test('an untouched controller-created v5 plan satisfies the run contract', () => {
-  assert.equal(plannedRun.schema_version, '5.0.0')
+test('an untouched controller-created v7 plan satisfies the run contract', () => {
+  assert.equal(plannedRun.schema_version, '7.0.0')
   assert.ok(plannedRun.coverage.shards.length >= 2)
   assert.ok(plannedRun.database_discovery.nodes.length > 0)
 
@@ -376,6 +376,33 @@ test('structured and resolved coverage gap IDs cannot be invented', async (t) =>
     run.coverage.resolved_gap_ids.push(UNKNOWN_GAP_ID)
 
     assertRejected(run, ['COVERAGE_GAP_RESOLUTION_UNKNOWN'])
+  })
+
+  await t.test('a schema-valid gap whose identity cannot be derived', () => {
+    const run = freshRun()
+    run.coverage.gaps.push({
+      area: `${DOMAIN_LENS}:C:/outside/repository.js`,
+      reason: 'hand-edited absolute inventory path',
+      gap_id: UNKNOWN_GAP_ID,
+      kind: 'LENS_FILE',
+      lens: DOMAIN_LENS,
+      path: 'C:/outside/repository.js',
+    })
+    assert.ok(
+      validateRawRunSchema(run),
+      `run.schema.json must still accept the gap:\n${
+        JSON.stringify(validateRawRunSchema.errors, null, 2)}`,
+    )
+
+    let validation
+    assert.doesNotThrow(
+      () => {
+        validation = validateRun(run)
+      },
+      'validateRun must reject a semantically invalid gap, not raise out of the validator',
+    )
+    assert.equal(validation.valid, false)
+    assert.ok(errorCodes(validation).has('COVERAGE_GAP_INVALID'))
   })
 })
 

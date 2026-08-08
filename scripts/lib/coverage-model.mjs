@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import {
   DEFAULT_WORK_SHARD_LIMITS,
   packWorkShards,
@@ -105,7 +106,7 @@ function stableValue(value) {
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
+      .sort((left, right) => compareCanonicalStrings(left, right))
       .map((key) => [key, stableValue(value[key])]),
   )
 }
@@ -276,8 +277,8 @@ function buildTypedDenominators(records, examinedPaths = []) {
 
   return COVERAGE_CLASS_ORDER.map((coverageClass) => {
     const row = rows.get(coverageClass)
-    row.paths.sort((left, right) => left.localeCompare(right, 'en'))
-    row.files.sort((left, right) => left.path.localeCompare(right.path, 'en'))
+    row.paths.sort((left, right) => compareCanonicalStrings(left, right))
+    row.files.sort((left, right) => compareCanonicalStrings(left.path, right.path))
     row.files_unexamined = row.files_total - row.files_examined
     row.bytes_unexamined = row.bytes_total - row.bytes_examined
     return row
@@ -370,7 +371,7 @@ export function deterministicScopeShards(
   if (new Set(normalizedScope).size !== normalizedScope.length) {
     throw new TypeError('scopedFiles must not contain duplicate paths')
   }
-  normalizedScope.sort((left, right) => left.localeCompare(right, 'en'))
+  normalizedScope.sort((left, right) => compareCanonicalStrings(left, right))
   const material = normalizedScope.map((path) => {
     const entry = entriesByPath.get(path)
     if (!entry) throw new TypeError(`scoped file is absent from inventory: ${path}`)
@@ -417,8 +418,8 @@ export function applicableLensFilePairs(coverage) {
     .flatMap(({ lens, applicable_paths: applicablePaths = [] }) =>
       applicablePaths.map((path) => ({ lens, path })))
     .sort((left, right) =>
-      left.lens.localeCompare(right.lens, 'en')
-      || left.path.localeCompare(right.path, 'en'))
+      compareCanonicalStrings(left.lens, right.lens)
+      || compareCanonicalStrings(left.path, right.path))
 }
 
 export function uncoveredLensFilePairs(coverage) {
@@ -430,8 +431,8 @@ export function uncoveredLensFilePairs(coverage) {
         .map((path) => ({ lens, path }))
     })
     .sort((left, right) =>
-      left.lens.localeCompare(right.lens, 'en')
-      || left.path.localeCompare(right.path, 'en'))
+      compareCanonicalStrings(left.lens, right.lens)
+      || compareCanonicalStrings(left.path, right.path))
 }
 
 export function measureCoverageClosure(coverage, round = 0) {
@@ -448,7 +449,7 @@ export function measureCoverageClosure(coverage, round = 0) {
       lens,
       shard_id: shard?.shard_id ?? legacyShardId,
     }))
-    .sort((left, right) => left.job_id.localeCompare(right.job_id, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left.job_id, right.job_id))
   const material = {
     round,
     applicable_lens_file_pairs: pairs.length,
@@ -479,10 +480,12 @@ export function sourceClosureGaps(coverage) {
   const examined = new Set(coverage.examined ?? [])
   const applicablePairs = applicableLensFilePairs(coverage)
     .filter(({ path }) => canonicalPaths.has(path))
-  const applicablePaths = new Set(applicablePairs.map(({ path }) => path))
-  const fileGaps = [...applicablePaths]
+  // Source closure is a property of the canonical source inventory, not of the
+  // activated lens set: a canonical file no lens declares applicable is still
+  // an unexamined source file.
+  const fileGaps = [...canonicalPaths]
     .filter((path) => !examined.has(path))
-    .sort((left, right) => left.localeCompare(right, 'en'))
+    .sort((left, right) => compareCanonicalStrings(left, right))
     .map((path) => ({ kind: 'canonical-source-file', path }))
   const examinedByLens = new Map(
     (coverage.lenses ?? []).map(({ lens, examined_paths: paths = [] }) => [

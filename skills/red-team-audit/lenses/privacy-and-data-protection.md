@@ -96,6 +96,17 @@ activates_on:
     - 'DbSet<'
     - 'declarative_base'
     - 'sequelize.define'
+  evidence_classes:
+    source:
+      state: consumed
+    built-artifact:
+      state: not-consumed
+    deployed-state:
+      state: consumed
+      may_conclude: [sensitive-data-at-rest]
+    live-runtime:
+      state: consumed
+      may_conclude: [sensitive-data-at-rest]
 owns:
   - lawful-basis-and-consent-capture
   - consent-gating-of-trackers

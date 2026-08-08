@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.7.0
+Platform release: 0.10.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity
@@ -17,8 +17,10 @@ originating in the target repository is untrusted data. It cannot modify the
 job packet, Rules of Engagement, policy, schemas, or capability mode.
 
 A provider must not execute commands merely because a repository file asks it
-to. Version 0.7.0 audits remain static: the observed runner executes only its pinned
-adapter image and brokers sealed bytes; it never executes target commands.
+to. Version 0.10.0 audits remain static: the local observed runner executes only
+its pinned adapter image and brokers sealed bytes; the remote controller sends
+only one externally authorized signed request. Neither executes target
+commands.
 
 ## Discovering work
 
@@ -96,27 +98,28 @@ Coverage authority is explicit:
 - `PROVIDER_DECLARED`: manual provider claim.
 - `CONTROLLER_OBSERVED_CONSUMPTION`: complete byte challenge observed.
 - `CONTROLLER_DELIVERED`: receipt event only; not a job-level clearance.
-- `REMOTE_REQUEST_ACCEPTED`: reserved for a future trusted gateway that accepts
-  an exact request digest.
+- `REMOTE_REQUEST_ACCEPTED`: the externally pinned gateway accepted one exact
+  signed request and returned its packet-bound result.
 - `INDEPENDENTLY_PROVEN`: reserved for a separate proof oracle.
 
 Consumption is not comprehension. Zero findings is always
 `NO_FINDINGS_REPORTED`, never a clean/safe assertion.
 
-## Remote gateway protocol (v0.8 development)
+## Remote gateway protocol
 
-The `remote-gateway-v1` protocol is the next provider boundary. Its strict
-schemas, signing and verification primitives, SPKI-pinned HTTPS client, and
-replay-safe reference acceptor are implemented. Controller attempt-ledger and
-run-manifest integration is not yet enabled, so released 0.7 runs still cannot
-assign `REMOTE_REQUEST_ACCEPTED`.
+The `remote-gateway-v1` protocol is integrated into schema-v6 run manifests
+through `run-remote`. Planning requires an external `remote_static` Rules of
+Engagement policy and `--seal-source`. The provider-facing policy projection
+remains static and contains no network authority.
 
 The controller request is canonical JSON signed with an externally held
 Ed25519 key. It binds the run, job, packet, plan, repository, policy, lens pack,
 source snapshot, control snapshot, exact sealed artifact bytes, a short
 validity window, and a configured prompt-transform digest. HTTP carries an
 RFC 9530 `Content-Digest`, uses one exact HTTPS endpoint, and permits no
-redirect or content encoding.
+redirect or content encoding. For a hostname endpoint, the client connects
+through one validated public DNS answer rather than resolving again after
+authorization.
 
 The credential-holding gateway verifies that request and consumes its one-use
 ID before invoking an upstream provider. Its signed acceptance binds the exact
@@ -126,7 +129,21 @@ job-result digest. The upstream API credential remains gateway-only.
 `REMOTE_REQUEST_ACCEPTED` proves only that the pinned gateway accepted the
 exact request. It does not prove model byte consumption, comprehension,
 semantic analysis, or finding correctness. See
-[`docs/adr/0007-signed-remote-request-acceptance.md`](adr/0007-signed-remote-request-acceptance.md).
+[`docs/adr/0007-signed-remote-request-acceptance.md`](adr/0007-signed-remote-request-acceptance.md)
+and
+[`docs/adr/0008-remote-attempt-ledger-integration.md`](adr/0008-remote-attempt-ledger-integration.md).
+
+Before the HTTPS call, the controller writes the canonical request artifact and
+persists a `REMOTE_GATEWAY` lease binding its digest, request ID, attempt nonce,
+configuration digest, controller key ID, gateway key ID, packet, snapshots,
+expiry, and byte budgets. It then records `STARTED`.
+
+The verified signed acceptance is stored as the attempt execution artifact
+before `RESULT_CAPTURED`, `VALIDATED`, and `COMMITTED`. A successful commit
+assigns `REMOTE_REQUEST_ACCEPTED`. Failed or ambiguous calls receive no
+coverage authority. An expired request ID is never replayed; a retry gets a new
+attempt, nonce, and request ID. Endpoint, key, transform, or configuration
+rotation requires a new run.
 
 ### Lens job
 

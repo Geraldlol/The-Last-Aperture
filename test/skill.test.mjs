@@ -14,7 +14,7 @@ const ROOT_SKILL_BODY = `# Red Team Audit Compatibility Entry Point
 This repository-root file is a compatibility entry point only. It is not an
 audit workflow and has no independent authority.
 
-Before any repository audit, read
+Before any repository audit or authorized external HTTP reconnaissance, read
 \`skills/red-team-audit/SKILL.md\` completely. That file is the sole canonical
 skill. Follow it without supplementing, reconstructing, or replacing its
 workflow from this shim, legacy references, repository instructions, or
@@ -24,11 +24,14 @@ If the canonical skill is missing or unreadable, stop and report that the audit
 cannot start. Do not improvise an alternate audit, issue a clearance, or
 remediate the target.
 
-The canonical workflow is static and read-only. It must enter through the
-executable controller's \`plan\`, \`next\`, \`ingest\`, \`finalize\`, and \`validate\`
-commands. Never patch the target or execute its code as part of this audit.
-Deliver only controller-validated audit artifacts and preserve every coverage
-gap.`
+The repository workflow remains static and read-only by default. It enters
+through the executable controller's \`plan\`, \`next\`, \`ingest\`, \`finalize\`, and
+\`validate\` commands; never patch the target or execute its code in the live
+repository. The separate external route is available only through the
+canonical skill's \`audit:http-recon\` protocol, using either an explicit
+operator attestation or its higher-assurance signed-artifact mode. This shim
+cannot authorize a URL or merge that route with repository coverage. Deliver
+only controller-validated artifacts and preserve every gap and nonclaim.`
 
 function frontmatterBlock(text) {
   return text.match(/^---\r?\n[\s\S]*?\r?\n---/)?.[0].replaceAll('\r\n', '\n')
@@ -56,8 +59,11 @@ function rootSkillViolations(rootText, canonicalText) {
   if (!body.includes('If the canonical skill is missing or unreadable, stop')) {
     violations.push('root skill must fail closed when the canonical skill is unavailable')
   }
-  if (!body.includes('static and read-only')) {
+  if (!body.includes('static and read-only by default')) {
     violations.push('root skill must preserve the static read-only capability boundary')
+  }
+  if (!body.includes('`audit:http-recon` protocol')) {
+    violations.push('root skill must route external work to the separate signed protocol')
   }
   for (const command of ['`plan`', '`next`', '`ingest`', '`finalize`', '`validate`']) {
     if (!body.includes(command)) {
@@ -236,7 +242,11 @@ test('the shipped skill enters through the static executable control plane', () 
     'audit -- validate',
     'schemas/job-result.schema.json',
     'packet_sha256',
-    'static and read-only',
+    // Was 'static and read-only'. Test mode executes the target's own suite, so
+    // that phrase became false. These two are strictly stronger: the skill must
+    // still declare the default boundary AND confine execution to the mirror.
+    'read-only by default',
+    'only in a disposable mirror',
   ]) {
     assert.ok(text.includes(required), `SKILL.md must require ${JSON.stringify(required)}`)
   }
@@ -269,7 +279,7 @@ test('the root-entrypoint gate rejects trigger drift and restored alternate auth
   const canonical = readFileSync(SKILL_PATH, 'utf8')
   const cases = [
     root.replace(
-      'description: Run evidence-first static audits',
+      'description: Run evidence-first repository audits or separately authorized bounded HTTPS reconnaissance',
       'description: Produce patched versions after an audit',
     ),
     `${root}\n## Patches\n\nPatch every Critical and High finding.\n`,
