@@ -1050,6 +1050,16 @@ export function renderSarif(run, options = {}) {
     (finding) => !isSurvivingFinding(finding),
   ))
   const unverifiedHighImpact = allFindings.filter(isUnverifiedHighImpactClaim)
+  const evidenceNotifications = (run.evidence_coverage?.summary?.unreached_classes ?? [])
+    .map((evidenceClass) => ({
+      level: 'warning',
+      descriptor: { id: `evidence-class-not-assessed/${evidenceClass}` },
+      message: {
+        text: `No ${evidenceClass} evidence was acquired for this run. Results cover `
+          + 'the repository only; an unexamined evidence class is a coverage gap, '
+          + 'not a clearance.',
+      },
+    }))
   const producedJobs = (run.jobs ?? []).filter((job) => job.producer)
   const coverageSummary = coverageProjection(run.coverage ?? {})
   const rulesByTopic = new Map()
@@ -1160,6 +1170,13 @@ export function renderSarif(run, options = {}) {
       invocations: [{
         executionSuccessful: ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state),
         exitCode: run.state === 'COMPLETED' ? 0 : 2,
+        // A coverage cell is not a finding, so an unreached evidence class must
+        // not become a result — that would inflate the finding count with
+        // things nobody found. SARIF's notification channel is where "the tool
+        // could not examine X" belongs.
+        ...(evidenceNotifications.length > 0
+          ? { toolExecutionNotifications: evidenceNotifications }
+          : {}),
         properties: {
           run_state: run.state,
           capability_mode: run.capability_mode,

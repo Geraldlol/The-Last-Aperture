@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { renderMarkdownReport } from '../scripts/lib/report.mjs'
+import { renderMarkdownReport, renderSarif } from '../scripts/lib/report.mjs'
 
 function run(overrides = {}) {
   return {
@@ -134,6 +134,38 @@ test('a precedence conflict is printed, never silently reconciled', () => {
   assert.match(report, /container-image-content:5c1a7f30/)
   assert.match(report, /container-image-content:aaaa1111/)
   assert.match(report, /built-artifact/)
+})
+
+test('SARIF carries the unreached classes as notifications, not as results', () => {
+  const sarif = renderSarif(run())
+  const invocation = sarif.runs[0].invocations?.[0]
+  const notifications = invocation?.toolExecutionNotifications ?? []
+  assert.equal(notifications.length, 1)
+  assert.equal(notifications[0].level, 'warning')
+  assert.match(notifications[0].message.text, /built-artifact/)
+  assert.match(notifications[0].message.text, /not a clearance/)
+  assert.equal(sarif.runs[0].results.length, 0)
+  // The existing invocation properties must survive the merge.
+  assert.equal(typeof invocation.executionSuccessful, 'boolean')
+  assert.ok(invocation.properties)
+})
+
+test('SARIF for a fully covered run raises no notification', () => {
+  const covered = run({
+    evidence_coverage: {
+      cells: [],
+      summary: {
+        cell_count: 0,
+        bundle_count: 1,
+        unreached_class_count: 0,
+        unreached_classes: [],
+        not_assessed_cell_count: 0,
+        inventory_only_cell_count: 0,
+      },
+    },
+  })
+  const notifications = renderSarif(covered).runs[0].invocations?.[0]?.toolExecutionNotifications ?? []
+  assert.deepEqual(notifications, [])
 })
 
 test('a run planned before this change still renders', () => {

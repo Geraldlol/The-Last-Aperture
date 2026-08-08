@@ -106,6 +106,34 @@ test('a rule anchor is recognised only where the contract declares it', () => {
   )
 })
 
+const ARTIFACT_DOC = fileURLToPath(
+  new URL('../skills/red-team-audit/lenses/_evidence-adapters/artifact.md', import.meta.url),
+)
+
+test('the artifact adapter document declares its five rule anchors', () => {
+  const anchors = declaredEvidenceRuleAnchors(readFileSync(ARTIFACT_DOC, 'utf8'))
+  assert.deepEqual([...anchors].sort(), [
+    'ev.built-artifact.oci.blob-unreferenced-by-manifest',
+    'ev.built-artifact.oci.recursive-encoded-payload',
+    'ev.built-artifact.oci.secret-in-config-history',
+    'ev.built-artifact.oci.sibling-size-mtime-outlier',
+    'ev.built-artifact.oci.whiteout-named-file-with-content',
+  ])
+})
+
+test('every declared anchor is a well-formed rule ID for this adapter', () => {
+  for (const anchor of declaredEvidenceRuleAnchors(readFileSync(ARTIFACT_DOC, 'utf8'))) {
+    assert.deepEqual(evidenceRuleIdErrors(anchor, { adapterId: 'oci' }), [], anchor)
+  }
+})
+
+test('the adapter document names every locator form the resolver supports', () => {
+  const doc = readFileSync(ARTIFACT_DOC, 'utf8')
+  assert.match(doc, /layer\/NN\//)
+  assert.match(doc, /config\/history\[N\]/)
+  assert.match(doc, /orphan\//)
+})
+
 test('the manifest file is the one the module reads', () => {
   const onDisk = JSON.parse(readFileSync(fileURLToPath(EVIDENCE_ADAPTER_MANIFEST_URL), 'utf8'))
   assert.deepEqual(onDisk, evidenceAdapterManifest)
