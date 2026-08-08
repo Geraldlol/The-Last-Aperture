@@ -200,7 +200,7 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.10.0
+const HELP = `red-team-audit 0.11.0
 
 Usage:
   red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
@@ -1533,7 +1533,7 @@ export async function verifyControlBundle(
     !['static', 'remote_static', 'test'].includes(policy.mode)
     || !['STATIC', 'TEST_EXECUTION'].includes(run.capability_mode)
   ) {
-    throw new Error('0.10.0 can dispatch and ingest only STATIC and TEST_EXECUTION runs')
+    throw new Error('0.11.0 can dispatch and ingest only STATIC and TEST_EXECUTION runs')
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1994,6 +1994,16 @@ export async function verifyControlBundle(
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
+          // Pinned so the evidence-class matrix cannot be edited after
+          // planning. Conditional because a run planned before the matrix
+          // existed carries none and must still validate.
+          ...(run.evidence_coverage
+            ? {
+                evidence_coverage_sha256: sha256(
+                  stableJson(run.evidence_coverage, 0),
+                ),
+              }
+            : {}),
           ...(run.database_conformance
             ? {
                 database_conformance_sha256: sha256(
@@ -3220,7 +3230,7 @@ async function planCommand(positionals, options) {
     })
     if (!['static', 'remote_static', 'test'].includes(policy.mode)) {
       throw new Error(
-        'local_dynamic Rules of Engagement require the T2 boot broker, which is not available in 0.10.0',
+        'local_dynamic Rules of Engagement require the T2 boot broker, which is not available in 0.11.0',
       )
     }
     if (policy.mode === 'remote_static' && !sealSource) {

@@ -13,6 +13,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'n
 import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mjs'
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { buildEvidenceCoverage } from './evidence-coverage.mjs'
 import {
   buildCategoryDenominators,
   inventoryCoverageRecords,
@@ -40,7 +41,7 @@ import {
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
 
-export const PLATFORM_VERSION = '0.10.0'
+export const PLATFORM_VERSION = '0.11.0'
 export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 
@@ -409,6 +410,7 @@ export async function createRunPlan(options) {
       ?? options.shardPolicy?.maxRounds
       ?? DEFAULT_CLOSURE_MAX_ROUNDS,
     databaseConformanceEvidence,
+    evidenceBundles = [],
   } = options
   if (!targetRoot) throw new Error('targetRoot is required')
 
@@ -441,6 +443,11 @@ export async function createRunPlan(options) {
       maxBytes: coveragePolicy.max_shard_bytes,
     },
     databaseDiscovery,
+  })
+  const evidenceCoverage = buildEvidenceCoverage({
+    lenses,
+    activatedLenses: activation.active_lenses,
+    bundles: evidenceBundles,
   })
   const plannedJobCount = activation.jobs.length + closureTemplateJobCount(
     activation.jobs,
@@ -546,6 +553,7 @@ export async function createRunPlan(options) {
     lens_pack_digest: corpusDigest,
     coverage_policy: coveragePolicy,
     database_discovery_digest: databaseDiscovery.digest,
+    evidence_coverage_sha256: sha256(stableJson(evidenceCoverage, 0)),
     ...(databaseConformance
       ? {
           database_conformance_sha256: sha256(
@@ -591,6 +599,8 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
+    evidence_bundles: evidenceBundles,
+    evidence_coverage: evidenceCoverage,
     ...(databaseConformance
       ? { database_conformance: databaseConformance }
       : {}),

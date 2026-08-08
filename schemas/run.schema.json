@@ -133,6 +133,81 @@
     "database_discovery": {
       "$ref": "#/$defs/databaseDiscovery"
     },
+    "evidence_bundles": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "evidence_class", "coverage_state", "root_sha256", "adapter_id"],
+        "properties": {
+          "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "evidence_class": {
+            "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+          },
+          "adapter_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "artifact_kind": { "enum": ["apk", "dist-bundle", "ipa", "jar", "oci-image"] },
+          "coverage_state": {
+            "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+          },
+          "phi_bearing": { "type": "boolean" },
+          "root_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "evidence_coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cells", "summary"],
+      "properties": {
+        "cells": {
+          "type": "array",
+          "maxItems": 8192,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lens", "topic", "evidence_class", "state", "reason"],
+            "properties": {
+              "lens": { "type": "string" },
+              "topic": { "type": "string" },
+              "evidence_class": {
+                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+              },
+              "state": {
+                "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+              },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cell_count",
+            "bundle_count",
+            "unreached_class_count",
+            "unreached_classes",
+            "not_assessed_cell_count",
+            "inventory_only_cell_count"
+          ],
+          "properties": {
+            "cell_count": { "type": "integer", "minimum": 0 },
+            "bundle_count": { "type": "integer", "minimum": 0 },
+            "unreached_class_count": { "type": "integer", "minimum": 0 },
+            "unreached_classes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+              }
+            },
+            "not_assessed_cell_count": { "type": "integer", "minimum": 0 },
+            "inventory_only_cell_count": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
     "database_conformance": {
       "$ref": "https://red-team-audit.dev/schemas/database-conformance-evidence.schema.json"
     },
