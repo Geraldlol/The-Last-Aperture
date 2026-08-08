@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_id": "evidence-adapter-routing",
+  "verified_on": "2026-08-08",
+  "contract_version": 1,
+  "fallback": {
+    "adapter_id": "inventory-only",
+    "adapter_file": "contract.md",
+    "selection_status": "INVENTORY_ONLY",
+    "coverage_state": "NOT_ASSESSED",
+    "can_clear": false
+  },
+  "adapters": [
+    {
+      "adapter_id": "artifact",
+      "evidence_class": "built-artifact",
+      "adapter_file": "artifact.md",
+      "mechanism": "read a supplied tarball or OCI layout",
+      "external_dependency": null,
+      "authorization": {
+        "attestation": false,
+        "credential_ref": false,
+        "target_class": false,
+        "operator_identity": false,
+        "impact_counters": false,
+        "kill_switch": false
+      }
+    },
+    {
+      "adapter_id": "registry",
+      "evidence_class": "built-artifact",
+      "adapter_file": "registry.md",
+      "mechanism": "digest-pinned pull through crane or docker save",
+      "external_dependency": "crane|docker",
+      "authorization": {
+        "attestation": true,
+        "credential_ref": true,
+        "target_class": true,
+        "operator_identity": true,
+        "impact_counters": false,
+        "kill_switch": true
+      }
+    },
+    {
+      "adapter_id": "deployed",
+      "evidence_class": "deployed-state",
+      "adapter_file": "deployed.md",
+      "mechanism": "read-only cluster, cloud and org queries through an allowlisted verb set",
+      "external_dependency": "kubectl|sf|cloud-cli",
+      "authorization": {
+        "attestation": true,
+        "credential_ref": true,
+        "target_class": true,
+        "operator_identity": true,
+        "impact_counters": true,
+        "kill_switch": true
+      }
+    },
+    {
+      "adapter_id": "runtime",
+      "evidence_class": "live-runtime",
+      "adapter_file": "runtime.md",
+      "mechanism": "read-only in-container inspection through kubectl exec",
+      "external_dependency": "kubectl",
+      "authorization": {
+        "attestation": true,
+        "credential_ref": true,
+        "target_class": true,
+        "operator_identity": true,
+        "impact_counters": true,
+        "kill_switch": true
+      }
+    }
+  ]
+}
