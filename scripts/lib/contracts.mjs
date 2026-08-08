@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { compareEvidenceClassPrecedence } from './evidence-classes.mjs'
 import {
   isUnresolvedDatabaseDescriptor,
   routeDatabaseAdapter,
@@ -536,6 +537,126 @@ function unresolvedReachability(value) {
 }
 
 const EVIDENCE_LOCATION_PATTERN = /^([a-z0-9][a-z0-9-]{0,63}):(?!\d+$)(.+)$/
+const EVIDENCE_COVERAGE_CAP = 'Medium'
+
+function evidenceCoverageKey(lens, topic, evidenceClass) {
+  return `${lens}\0${topic}\0${evidenceClass}`
+}
+
+// Invariant 16's declaration-aware half. Runs only when the caller supplies the
+// lens declarations and the run's coverage matrix; without them the record-local
+// half from evidenceInvariantErrors still applies.
+function evidenceDeclarationErrors(record, evidence) {
+  const errors = []
+  const context = record?.evidence_context
+  if (!context || !evidence) return errors
+
+  const declared = evidence.declarations?.get(record.lens)
+  if (!declared) {
+    addError(
+      errors,
+      'EVIDENCE_LENS_UNDECLARED',
+      '/lens',
+      `lens ${String(record.lens)} declares no evidence classes; a finding cannot rest on one`,
+    )
+    return errors
+  }
+
+  const entry = declared[context.evidence_class]
+  if (entry?.state !== 'consumed') {
+    addError(
+      errors,
+      'EVIDENCE_CLASS_NOT_CONSUMED',
+      '/evidence_context/evidence_class',
+      `${record.lens} declares "${context.evidence_class}" as `
+      + `${entry?.state ?? 'undeclared'} and cannot conclude from it`,
+    )
+    return errors
+  }
+
+  const permitted = entry.may_conclude ?? []
+  if (!permitted.includes(record.evidence_claim)) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_OUT_OF_BOUNDS',
+      '/evidence_claim',
+      `${record.lens} may conclude ${permitted.join(', ') || 'nothing'} from `
+      + `"${context.evidence_class}"; this record asserts "${String(record.evidence_claim)}"`,
+    )
+  }
+
+  const state = evidence.coverage?.get(
+    evidenceCoverageKey(record.lens, record.topic, context.evidence_class),
+  )
+  if (state === 'NOT_ASSESSED' || state === 'INVENTORY_ONLY') {
+    if (
+      record.verification_status !== undefined
+      && record.verification_status !== 'UNPROVEN'
+    ) {
+      addError(
+        errors,
+        'EVIDENCE_COVERAGE_UNPROVEN',
+        '/verification_status',
+        `evidence-class coverage is ${state}; a claim resting on it is UNPROVEN`,
+      )
+    }
+    if (
+      record.effective_severity !== undefined
+      && severityAbove(record.effective_severity, EVIDENCE_COVERAGE_CAP)
+    ) {
+      addError(
+        errors,
+        'EVIDENCE_COVERAGE_SEVERITY_CAP',
+        '/effective_severity',
+        `evidence-class coverage is ${state}; effective severity is capped at `
+        + `${EVIDENCE_COVERAGE_CAP}`,
+      )
+    }
+  }
+  return errors
+}
+
+/**
+ * The precedence resolver. Two records on one topic whose evidence classes
+ * differ are not two findings — they are one disagreement, and the higher
+ * class wins. Recording the conflict is what keeps the loser visible: a
+ * silently reconciled disagreement is indistinguishable from agreement.
+ */
+export function evidenceConflicts(findings) {
+  const byTopic = new Map()
+  for (const finding of findings ?? []) {
+    const key = `${finding.lens}\0${finding.topic}`
+    if (!byTopic.has(key)) byTopic.set(key, [])
+    byTopic.get(key).push({
+      candidate_id: finding.candidate_id,
+      topic: finding.topic,
+      evidence_class: finding.evidence_context?.evidence_class ?? 'source',
+    })
+  }
+
+  const conflicts = []
+  for (const records of byTopic.values()) {
+    const classes = new Set(records.map(({ evidence_class: c }) => c))
+    if (classes.size < 2) continue
+    const ranked = [...records].sort((left, right) =>
+      compareEvidenceClassPrecedence(right.evidence_class, left.evidence_class)
+      || compareCanonicalStrings(left.candidate_id, right.candidate_id))
+    const [prevailing, ...superseded] = ranked
+    for (const loser of superseded) {
+      if (loser.evidence_class === prevailing.evidence_class) continue
+      conflicts.push({
+        topic: prevailing.topic,
+        prevailing_candidate_id: prevailing.candidate_id,
+        prevailing_class: prevailing.evidence_class,
+        superseded_candidate_id: loser.candidate_id,
+        superseded_class: loser.evidence_class,
+      })
+    }
+  }
+  return conflicts.sort((left, right) =>
+    compareCanonicalStrings(left.prevailing_candidate_id, right.prevailing_candidate_id)
+    || compareCanonicalStrings(left.superseded_candidate_id, right.superseded_candidate_id))
+}
 
 function evidenceQualifiedLocations(record) {
   const locations = Array.isArray(record.location) ? record.location : []
@@ -918,6 +1039,7 @@ export function validateFinding(record, options = {}) {
   const schemaValid = validateFindingSchema(record)
   const errors = schemaValid ? [] : normalizeAjvErrors(validateFindingSchema.errors)
   errors.push(...findingInvariantErrors(record))
+  errors.push(...evidenceDeclarationErrors(record, options.evidence))
 
   const stage = inferFindingStage(record)
   if (requestedStage !== undefined && stage !== requestedStage) {
