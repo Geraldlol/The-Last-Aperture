@@ -42,9 +42,19 @@
       "maxItems": 128,
       "uniqueItems": true,
       "items": {
-        "type": "string",
-        "minLength": 3,
-        "pattern": "^.+:[1-9][0-9]*(?::[1-9][0-9]*)?$"
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 3,
+            "pattern": "^.+:[1-9][0-9]*(?::[1-9][0-9]*)?$"
+          },
+          {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 1024,
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}:(?!\\d+$).+$"
+          }
+        ]
       }
     },
     "cwe": {
@@ -101,6 +111,19 @@
     },
     "store_context": {
       "$ref": "#/$defs/storeContext"
+    },
+    "evidence_context": {
+      "$ref": "#/$defs/evidenceContext"
+    },
+    "evidence_claim": {
+      "enum": [
+        "drift-from-source",
+        "runtime-misconfiguration",
+        "secret-present-in-artifact",
+        "sensitive-data-at-rest",
+        "unexpected-artifact-content",
+        "vulnerable-component-present"
+      ]
     },
     "principal_path": {
       "$ref": "#/$defs/principalPath"
@@ -890,6 +913,41 @@
         "Low",
         "Info"
       ]
+    },
+    "evidenceContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_id",
+        "evidence_class",
+        "adapter_id",
+        "target_identity",
+        "acquisition_mode",
+        "acquired_on",
+        "detection_evidence",
+        "confidence"
+      ],
+      "properties": {
+        "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+        "evidence_class": {
+          "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+        },
+        "adapter_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "target_identity": { "$ref": "#/$defs/nonEmptyString" },
+        "acquisition_mode": { "$ref": "#/$defs/nonEmptyString" },
+        "acquired_on": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "detection_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "confidence": { "enum": ["high", "medium", "low"] }
+      }
     },
     "storeContext": {
       "type": "object",

@@ -124,6 +124,8 @@ const STAGE_ONE_FIELDS = new Set([
   'confidence',
   'proof_plan',
   'store_context',
+  'evidence_context',
+  'evidence_claim',
   'principal_path',
   'enforcement_plane',
   'copy_path',
@@ -533,9 +535,94 @@ function unresolvedReachability(value) {
   return typeof value === 'string' && UNRESOLVED_REACHABILITY.test(value)
 }
 
+const EVIDENCE_LOCATION_PATTERN = /^([a-z0-9][a-z0-9-]{0,63}):(?!\d+$)(.+)$/
+
+function evidenceQualifiedLocations(record) {
+  const locations = Array.isArray(record.location) ? record.location : []
+  return locations
+    .map((value) => EVIDENCE_LOCATION_PATTERN.exec(String(value)))
+    .filter(Boolean)
+    .map((match) => ({ evidence_id: match[1], locator: match[2] }))
+}
+
+// Invariant 16's record-local half. The declaration-aware half needs the lens
+// pack and the run's coverage matrix and lives in evidenceDeclarationErrors,
+// which runs only when a caller supplies them.
+function evidenceInvariantErrors(record) {
+  const errors = []
+  const qualified = evidenceQualifiedLocations(record)
+  const locationCount = Array.isArray(record.location) ? record.location.length : 0
+  const context = record.evidence_context
+
+  if (qualified.length > 0 && qualified.length !== locationCount) {
+    addError(
+      errors,
+      'MIXED_LOCATION_CLASSES',
+      '/location',
+      'one record concerns one evidence source; a repository location and an '
+      + 'evidence-qualified location in one record is the precedence case, which is two records',
+    )
+  }
+
+  if (qualified.length > 0 && !context) {
+    addError(
+      errors,
+      'EVIDENCE_CONTEXT_REQUIRED',
+      '/evidence_context',
+      'an evidence-qualified location requires evidence_context (invariant 16)',
+    )
+  }
+  if (context && qualified.length === 0) {
+    addError(
+      errors,
+      'EVIDENCE_CONTEXT_WITHOUT_LOCATION',
+      '/location',
+      'evidence_context requires at least one evidence-qualified location',
+    )
+  }
+  if (context && !record.evidence_claim) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_REQUIRED',
+      '/evidence_claim',
+      'a finding from an acquired class names the claim it asserts',
+    )
+  }
+  if (!context && record.evidence_claim !== undefined) {
+    addError(
+      errors,
+      'EVIDENCE_CLAIM_WITHOUT_CONTEXT',
+      '/evidence_claim',
+      'evidence_claim is meaningless without evidence_context',
+    )
+  }
+  if (context && context.evidence_class === 'source') {
+    addError(
+      errors,
+      'EVIDENCE_CLASS_NOT_ACQUIRED',
+      '/evidence_context/evidence_class',
+      'source evidence is the repository itself and carries no evidence_context',
+    )
+  }
+  for (const { evidence_id: evidenceId } of qualified) {
+    if (context && context.evidence_id !== evidenceId) {
+      addError(
+        errors,
+        'EVIDENCE_ID_MISMATCH',
+        '/location',
+        `location names evidence "${evidenceId}" but evidence_context is `
+        + `"${context.evidence_id}"`,
+      )
+    }
+  }
+  return errors
+}
+
 function findingInvariantErrors(record) {
   const errors = []
   if (record === null || typeof record !== 'object' || Array.isArray(record)) return errors
+
+  errors.push(...evidenceInvariantErrors(record))
 
   const effectiveSeverity = record.effective_severity
   const claimedSeverity = record.claimed_impact_severity
