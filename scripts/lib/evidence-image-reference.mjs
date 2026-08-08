@@ -78,7 +78,10 @@ export function sealCredentialRef(value) {
 
 export function redactForLog(text) {
   return String(text)
-    .replace(/([a-z]+:\/\/[^/\s:@]+):[^/\s@]+@/gi, '$1:[REDACTED]@')
+    // The whole userinfo goes, not just the password half. Leaving
+    // `user:[REDACTED]@` behind still matches a credential-in-URL shape, so a
+    // redacted string would trip the bundle contract's own last-resort guard.
+    .replace(/([a-z]+:\/\/)[^/\s@]+@/gi, '$1[REDACTED]@')
     .replace(/\b(Bearer|Basic)\s+\S+/gi, '$1 [REDACTED]')
     .replace(/\b((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)\S+/gi, '$1[REDACTED]')
 }

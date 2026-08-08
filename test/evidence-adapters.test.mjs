@@ -134,6 +134,25 @@ test('the adapter document names every locator form the resolver supports', () =
   assert.match(doc, /orphan\//)
 })
 
+const REGISTRY_DOC = fileURLToPath(
+  new URL('../skills/red-team-audit/lenses/_evidence-adapters/registry.md', import.meta.url),
+)
+
+test('the registry adapter document states its authorization requirements', () => {
+  const doc = readFileSync(REGISTRY_DOC, 'utf8')
+  assert.match(doc, /digest-pinned/i)
+  assert.match(doc, /credential_ref/)
+  assert.match(doc, /attestation|attest-authorized/i)
+  assert.match(doc, /never a credential value/i)
+})
+
+test('the registry adapter declares no rule anchors of its own', () => {
+  // Detection over the acquired image is the oci format's business, declared
+  // in artifact.md. Two documents declaring the same anchor would make the ID
+  // ambiguous, which rule 6 exists to prevent.
+  assert.deepEqual([...declaredEvidenceRuleAnchors(readFileSync(REGISTRY_DOC, 'utf8'))], [])
+})
+
 test('the manifest file is the one the module reads', () => {
   const onDisk = JSON.parse(readFileSync(fileURLToPath(EVIDENCE_ADAPTER_MANIFEST_URL), 'utf8'))
   assert.deepEqual(onDisk, evidenceAdapterManifest)

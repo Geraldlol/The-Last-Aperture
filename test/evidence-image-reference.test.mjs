@@ -62,7 +62,16 @@ test('a credential reference must name a resolver, not float free', () => {
 test('redaction is applied to anything that reaches a log or an error', () => {
   assert.equal(
     redactForLog('failed: https://ci:hunter2@registry.example.com/v2/'),
-    'failed: https://ci:[REDACTED]@registry.example.com/v2/',
+    'failed: https://[REDACTED]@registry.example.com/v2/',
   )
   assert.match(redactForLog('Authorization: Bearer eyJhbGciOi'), /Bearer \[REDACTED\]/)
+})
+
+test('a redacted string does not itself read as a credential value', () => {
+  // Leaving `user:[REDACTED]@` behind would still match a credential-in-URL
+  // shape, so the bundle contract would refuse a correctly redacted reason.
+  const redacted = redactForLog('UNAUTHORIZED for https://ci:hunter2@registry.example.com')
+  assert.equal(redacted.includes('hunter2'), false)
+  assert.throws(() => sealCredentialRef(redacted), /reference/i)
+  assert.equal(/[a-z]+:\/\/[^/\s:@]+:[^/\s@]+@/i.test(redacted), false)
 })

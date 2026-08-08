@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path'
 import { resolveEvidenceAdapter } from './evidence-adapters.mjs'
 import { readEvidenceBundle, verifyEvidenceBundle } from './evidence-bundle.mjs'
 import { createArtifactAdapter } from './evidence-adapters/artifact.mjs'
+import { createRegistryAdapter } from './evidence-adapters/registry.mjs'
 
 const PLAN_FILE = 'acquisition-plan.json'
 
@@ -10,6 +11,7 @@ const PLAN_FILE = 'acquisition-plan.json'
 // be planned, which is what keeps the routing table and the code from drifting.
 const ADAPTER_FACTORIES = new Map([
   ['artifact', createArtifactAdapter],
+  ['registry', createRegistryAdapter],
 ])
 
 export class AcquisitionError extends Error {

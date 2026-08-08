@@ -103,16 +103,16 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.10 controller and conformance commands', () => {
+test('release metadata exposes the 0.11 controller and conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
-  assert.equal(packageDocument.version, '0.10.0')
-  assert.equal(lockDocument.version, '0.10.0')
-  assert.equal(lockDocument.packages[''].version, '0.10.0')
+  assert.equal(packageDocument.version, '0.11.0')
+  assert.equal(lockDocument.version, '0.11.0')
+  assert.equal(lockDocument.packages[''].version, '0.11.0')
   assert.match(
     readFileSync('scripts/lib/run-engine.mjs', 'utf8'),
-    /PLATFORM_VERSION = '0\.10\.0'/,
+    /PLATFORM_VERSION = '0\.11\.0'/,
   )
   assert.equal(
     packageDocument.scripts['conformance:database'],
@@ -130,6 +130,60 @@ test('release metadata exposes the 0.10 controller and conformance commands', ()
     readFileSync('scripts/audit.mjs', 'utf8'),
     /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>/,
   )
+})
+
+test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
+  for (const path of [
+    'docs/adr/0013-authorized-external-http-recon.md',
+    'docs/adr/0014-operator-attested-http-recon.md',
+    'docs/adr/0015-url-first-pkix-http-recon.md',
+    'docs/http-recon-protocol.md',
+    'schemas/http-recon-roe.schema.json',
+    'schemas/http-recon-target-proof.schema.json',
+    'schemas/http-recon-attested-scope.schema.json',
+    'schemas/http-recon-run.schema.json',
+    'schemas/http-recon-observation.schema.json',
+    'scripts/http-recon.mjs',
+    'scripts/lib/http-recon-contracts.mjs',
+    'scripts/lib/http-recon-client.mjs',
+    'scripts/lib/http-recon-controller.mjs',
+    'test/http-recon-contracts.test.mjs',
+    'test/http-recon-client.test.mjs',
+    'test/http-recon-controller.test.mjs',
+  ]) {
+    assert.ok(
+      readFileSync(path).length > 0,
+      `${path} must ship with the authorized HTTP-recon slice`,
+    )
+  }
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.equal(
+    packageDocument.scripts['audit:http-recon'],
+    'node scripts/http-recon.mjs',
+  )
+  for (const testPath of [
+    'test/http-recon-contracts.test.mjs',
+    'test/http-recon-client.test.mjs',
+    'test/http-recon-controller.test.mjs',
+  ]) {
+    assert.match(packageDocument.scripts['test:platform'], new RegExp(testPath.replace('.', '\\.')))
+  }
+  const cli = readFileSync('scripts/http-recon.mjs', 'utf8')
+  assert.match(cli, /Planning performs no network activity/)
+  assert.match(cli, /http-recon plan --target-url/)
+  assert.match(cli, /http-recon plan-signed --roe/)
+  assert.match(cli, /Operator-attested authorization is a/)
+  assert.match(cli, /runtime-configured CA trust and hostname validation/)
+  const attestedPlanShape = cli.slice(
+    cli.indexOf('  plan: {'),
+    cli.indexOf("  'plan-signed': {"),
+  )
+  assert.doesNotMatch(
+    attestedPlanShape.match(/required:\s*\[[\s\S]*?\]/)?.[0] ?? '',
+    /tls-spki-sha256/,
+  )
+  assert.match(attestedPlanShape, /optional:[\s\S]*tls-spki-sha256/)
+  assert.doesNotMatch(cli, /--(?:header|payload|credential|body)/)
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {

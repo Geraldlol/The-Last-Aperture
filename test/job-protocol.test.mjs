@@ -948,3 +948,89 @@ test('a verification proof cannot consume its job without recording a decision',
   )
   assert.equal(run.findings[0].verification_status, undefined)
 })
+
+const INVENTORY_ENTRIES = [{
+  path: 'src/routes/invoices.ts',
+  kind: 'text',
+  content: 'import x\nconst invoice = await repo.findById(req.params.id)\n',
+  sha256: null,
+}]
+
+test('applyJobResult records existence verdicts once inventory entries are supplied', () => {
+  const verified = stageOne({
+    quotes: [{
+      path: 'src/routes/invoices.ts',
+      line: 2,
+      text: 'const invoice = await repo.findById(req.params.id)',
+    }],
+  })
+  const unverified = stageOne({
+    candidate_id: 'authz-object-level:fabricated',
+    quotes: [{
+      path: 'src/routes/invoices.ts',
+      line: 2,
+      text: 'this text was never in the file',
+    }],
+  })
+
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: [verified, unverified],
+  }), {
+    sidecar: lensSidecar,
+    inventoryEntries: INVENTORY_ENTRIES,
+    deferTransitionValidation: true,
+  })
+
+  assert.equal(run.existence_verifications.length, 2)
+  const byCandidate = new Map(
+    run.existence_verifications.map((row) => [row.candidate_id, row]),
+  )
+  assert.equal(byCandidate.get(verified.candidate_id).outcome, 'VERIFIED')
+  assert.equal(byCandidate.get(unverified.candidate_id).outcome, 'UNVERIFIED')
+  assert.deepEqual(
+    run.existence_verifications.map((row) => row.candidate_id),
+    [...byCandidate.keys()].sort(),
+    'existence_verifications must be sorted by candidate_id',
+  )
+})
+
+test('independent proof-existence jobs accumulate existence verdicts without clobbering siblings', () => {
+  let { run, triagedFindings } = runManyToProof(2)
+  const [first, second] = triagedFindings
+  const jobIdFirst = `proof-existence:${first.candidate_id}`
+  const jobIdSecond = `proof-existence:${second.candidate_id}`
+
+  // Both existence jobs are begun before either result is applied: applyJobResult's
+  // deferTransitionValidation:true (used below, purely to isolate this accumulation
+  // behavior from the separately-tested v7-schema-version gate — see
+  // test/existence-schema-version.test.mjs) only skips the *next* applyJobResult
+  // transition's own schema check, not a later, non-deferred beginJob's. Starting a
+  // second existence job while a sibling is already RUNNING is valid: independent
+  // proof-existence jobs form one wave and assertProofWaveReady only blocks an
+  // existence job once its wave's verification jobs have been scheduled.
+  run = beginJob(run, jobIdFirst)
+  run = beginJob(run, jobIdSecond)
+
+  run = applyJobResult(run, jobResult(run, jobIdFirst, {
+    findings: [addExistence(first)],
+  }), { inventoryEntries: INVENTORY_ENTRIES, deferTransitionValidation: true })
+
+  assert.equal(run.existence_verifications.length, 1)
+  assert.equal(run.existence_verifications[0].candidate_id, first.candidate_id)
+  assert.equal(run.existence_verifications[0].outcome, 'NOT_APPLICABLE')
+
+  run = applyJobResult(run, jobResult(run, jobIdSecond, {
+    findings: [addExistence(second)],
+  }), { inventoryEntries: INVENTORY_ENTRIES, deferTransitionValidation: true })
+
+  assert.equal(
+    run.existence_verifications.length, 2,
+    'the first candidate verdict must survive the second job result',
+  )
+  assert.deepEqual(
+    run.existence_verifications.map((row) => row.candidate_id).sort(),
+    [first.candidate_id, second.candidate_id].sort(),
+  )
+})

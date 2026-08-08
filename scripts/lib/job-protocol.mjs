@@ -9,6 +9,11 @@ import {
   routeDatabaseAdapter,
 } from './database-adapters.mjs'
 import {
+  indexEntriesByPath,
+  sortedTextEntries,
+  verifyFindingExistence,
+} from './existence-matcher.mjs'
+import {
   coverageMetrics,
   finalizedFanoutLensRows,
   isModeledCoverage,
@@ -954,6 +959,34 @@ function applyFindings(run, job, findings, options = {}) {
       )
     }
   }
+
+  if (Array.isArray(options.inventoryEntries)) {
+    run.existence_verifications ??= []
+    const byCandidate = new Map(
+      run.existence_verifications.map((row) => [row.candidate_id, row]),
+    )
+    // Built once for the whole batch (not per candidate, not per claim) so re-verifying
+    // every candidate touched by this result stays O(candidates + inventory) instead of
+    // O(candidates x inventory) on a large target.
+    const byPath = indexEntriesByPath(options.inventoryEntries)
+    const searchableEntries = sortedTextEntries(options.inventoryEntries)
+    for (const candidateId of candidateIds) {
+      const index = byId.get(candidateId)
+      if (index === undefined) continue
+      byCandidate.set(
+        candidateId,
+        verifyFindingExistence(
+          run.findings[index],
+          options.inventoryEntries,
+          byPath,
+          searchableEntries,
+        ),
+      )
+    }
+    run.existence_verifications = [...byCandidate.values()]
+      .sort((left, right) =>
+        compareCanonicalStrings(left.candidate_id, right.candidate_id))
+  }
   return candidateIds
 }
 
@@ -1090,6 +1123,7 @@ export function applyJobResult(run, jobResult, options = {}) {
     ? applyFindings(next, job, jobResult.findings, {
         sidecar: options.sidecar,
         examinedFiles: jobResult.examined_files,
+        inventoryEntries: options.inventoryEntries,
       })
     : []
   updateCoverage(next, job, options.sidecar, jobResult)

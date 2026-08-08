@@ -14,6 +14,7 @@ const HELP = `red-team-audit evidence acquisition 0.11.0
 
 Usage:
   audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
+  audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
   audit:acquire <adapter> run <bundle> --operator-id <id> [--confirm-authorization-current] [--json]
   audit:acquire <adapter> finalize <bundle> [--json]
   audit:acquire <adapter> validate <bundle> [--json]
@@ -21,10 +22,12 @@ Usage:
 
 Boundary:
   Planning performs no acquisition. The artifact adapter reads only a file it
-  was handed and makes no network request. Bundles are written outside their
-  target and are refused by \`audit -- plan\` if a single byte does not verify.
-  This control plane mutates nothing. Exploitation is a separate tier that does
-  not exist in this release.
+  was handed and makes no network request; the registry adapter pulls one
+  digest-pinned image and nothing else. A bundle carries a credential reference,
+  never a credential value. Bundles are written outside their target and are
+  refused by \`audit -- plan\` if a single byte does not verify. This control
+  plane mutates nothing. Exploitation is a separate tier that does not exist in
+  this release.
 
 Exit codes:
   0  command succeeded
@@ -57,6 +60,10 @@ function parseArguments(values) {
 
 const VALUE_OPTIONS = new Set([
   'source',
+  'image',
+  'credential-ref',
+  'authorized-by',
+  'authorization-reference',
   'evidence-id',
   'out',
   'target-class',
@@ -65,7 +72,7 @@ const VALUE_OPTIONS = new Set([
   'reason',
 ])
 
-const FLAG_OPTIONS = new Set(['json', 'confirm-authorization-current'])
+const FLAG_OPTIONS = new Set(['json', 'confirm-authorization-current', 'attest-authorized'])
 
 // Per-adapter plan shapes. Registered adapters keep their own required set, so
 // an adapter with no authorization floor is not made to carry one it does not need.
@@ -73,6 +80,19 @@ const PLAN_SHAPES = {
   artifact: {
     required: ['source', 'evidence-id', 'out'],
     requiredFlags: [],
+    optional: ['target-class', 'phi-scope', 'json'],
+  },
+  registry: {
+    required: [
+      'image',
+      'credential-ref',
+      'evidence-id',
+      'operator-id',
+      'authorized-by',
+      'authorization-reference',
+      'out',
+    ],
+    requiredFlags: ['attest-authorized'],
     optional: ['target-class', 'phi-scope', 'json'],
   },
 }
@@ -145,7 +165,13 @@ export async function main(argv = process.argv.slice(2)) {
       request: {
         evidence_id: options['evidence-id'],
         source_path: options.source,
-        target_class: options['target-class'] ?? 'LAB',
+        image: options.image,
+        credential_ref: options['credential-ref'],
+        operator_id: options['operator-id'],
+        authorized_by: options['authorized-by'],
+        authorization_reference: options['authorization-reference'],
+        attest_authorized: options['attest-authorized'] === true,
+        target_class: options['target-class'] ?? (adapter === 'registry' ? 'NONPROD' : 'LAB'),
         phi_scope: options['phi-scope'] ?? 'none',
       },
     })
