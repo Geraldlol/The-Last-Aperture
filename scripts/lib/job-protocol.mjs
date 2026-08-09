@@ -821,16 +821,58 @@ function ensureDatabaseProfileBinding(run, finding) {
   }
 }
 
+/**
+ * Invariant 16's declaration-aware half, assembled from what the run already
+ * records. Without this the rule is documentation: `validateFinding` accepts
+ * the context but nothing in the pipeline was passing it, so "the lens declares
+ * this class consumed", "the claim is within may_conclude", and the
+ * NOT_ASSESSED/INVENTORY_ONLY severity cap were all unenforced on a real run.
+ */
+function evidenceEnforcementContext(run) {
+  const declared = run.evidence_declarations
+  if (!declared) return undefined
+  return {
+    declarations: new Map(Object.entries(declared)),
+    coverage: new Map(
+      (run.evidence_coverage?.cells ?? []).map((cell) => [
+        `${cell.lens}\0${cell.topic}\0${cell.evidence_class}`,
+        cell.state,
+      ]),
+    ),
+  }
+}
+
+// A finding citing evidence is graded against the evidence actually in the run.
+// A bundle absent from the run is `not_located` — a statement about the claim,
+// not the harness — which is what invariant 14 requires before any grade.
+function evidenceExistenceCheck(run, finding) {
+  const cited = finding.evidence_context?.evidence_id
+  if (!cited) return undefined
+  const present = (run.evidence_bundles ?? [])
+    .some(({ evidence_id: id }) => id === cited)
+  return present
+    ? {
+        status: 'located',
+        method: `evidence bundle "${cited}" is present in this run; locator `
+          + `${finding.location?.[0] ?? '(none)'} resolves at proof against its sealed payload`,
+      }
+    : {
+        status: 'not_located',
+        method: `evidence bundle "${cited}" is not present in this run`,
+      }
+}
+
 function applyFindings(run, job, findings, options = {}) {
   const byId = new Map(run.findings.map((finding, index) => [finding.candidate_id, index]))
   const candidateIds = []
+  const evidence = evidenceEnforcementContext(run)
 
   for (const finding of findings) {
     candidateIds.push(finding.candidate_id)
     ensureDatabaseProfileBinding(run, finding)
     const existingIndex = byId.get(finding.candidate_id)
     if (job.kind === 'LENS') {
-      assertValidFinding(finding, { stage: 1 })
+      assertValidFinding(finding, { stage: 1, evidence })
       ensureFindingLocations(run, job, finding, options)
       ensureTopicAuthority(job, finding, options.sidecar, { originating: true })
       if (existingIndex !== undefined) {
@@ -863,13 +905,13 @@ function applyFindings(run, job, findings, options = {}) {
         if (job.lens === 'attack-chaining') {
           throw resultError('attack-chaining may elevate existing records but cannot originate one')
         }
-        assertValidFinding(finding, { stage: 2 })
+        assertValidFinding(finding, { stage: 2, evidence })
         ensureFindingLocations(run, job, finding, options)
         ensureTopicAuthority(job, finding, options.sidecar, { originating: true })
         byId.set(finding.candidate_id, run.findings.length)
         run.findings.push(finding)
       } else {
-        assertValidFinding(finding, { stage: 2 })
+        assertValidFinding(finding, { stage: 2, evidence })
         ensureFindingLocations(run, job, finding, {
           ...options,
           previous: run.findings[existingIndex],
@@ -933,7 +975,7 @@ function applyFindings(run, job, findings, options = {}) {
       } else {
         throw resultError(`unsupported proof operation ${job.job_id}`)
       }
-      assertValidFinding(finding, { stage: 3 })
+      assertValidFinding(finding, { stage: 3, evidence })
       assertValidFindingTransition(previous, finding)
       run.findings[existingIndex] = finding
       continue
@@ -973,14 +1015,28 @@ function applyFindings(run, job, findings, options = {}) {
     for (const candidateId of candidateIds) {
       const index = byId.get(candidateId)
       if (index === undefined) continue
+      const finding = run.findings[index]
+      const evidenceCheck = evidenceExistenceCheck(run, finding)
       byCandidate.set(
         candidateId,
-        verifyFindingExistence(
-          run.findings[index],
-          options.inventoryEntries,
-          byPath,
-          searchableEntries,
-        ),
+        evidenceCheck
+          // Graded against the evidence actually in the run rather than the
+          // repository inventory, which does not contain it. Without this an
+          // evidence-qualified finding was silently ungraded — and invariant 14
+          // makes a record graded with no existence_check malformed.
+          ? {
+              candidate_id: candidateId,
+              quote_results: [],
+              absence_results: [],
+              outcome: evidenceCheck.status === 'located' ? 'VERIFIED' : 'UNVERIFIED',
+              evidence_existence_check: evidenceCheck,
+            }
+          : verifyFindingExistence(
+              finding,
+              options.inventoryEntries,
+              byPath,
+              searchableEntries,
+            ),
       )
     }
     run.existence_verifications = [...byCandidate.values()]

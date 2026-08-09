@@ -382,6 +382,10 @@ function jobSidecar(job, repositoryRoot) {
     ...(job.shard ? { shard: job.shard } : {}),
     ...(job.closure_round ? { closure_round: job.closure_round } : {}),
     ...(job.parent_job_id ? { parent_job_id: job.parent_job_id } : {}),
+    // The sidecar is the sealed packet a provider is actually handed. Carrying
+    // the evidence on the activation job alone left the lens unable to see it,
+    // which is the whole point of acquiring it.
+    ...(job.evidence ? { evidence: job.evidence } : {}),
     ...(job.database_discovery
       ? {
           database_discovery: job.database_discovery,
@@ -627,6 +631,14 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
+    // Stored so ingest can enforce invariant 16 without loading the lens
+    // pack: which class each lens consumes, and what it may conclude from it.
+    evidence_declarations: Object.fromEntries(
+      lenses.map((lens) => [
+        lens.frontmatter?.name ?? lens.name,
+        lens.frontmatter?.activates_on?.evidence_classes ?? {},
+      ]),
+    ),
     evidence_bundles: portableBundles,
     evidence_coverage: evidenceCoverage,
     ...(databaseConformance

@@ -332,6 +332,45 @@
       "items": {
         "$ref": "#/$defs/existenceVerification"
       }
+    },
+    "evidence_declarations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "enum": [
+                "consumed",
+                "not-consumed"
+              ]
+            },
+            "artifact_kinds": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "apk",
+                  "dist-bundle",
+                  "ipa",
+                  "jar",
+                  "oci-image"
+                ]
+              }
+            },
+            "may_conclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "allOf": [
@@ -2119,6 +2158,26 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "evidence_existence_check": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "method"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "located",
+                "not_located"
+              ]
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }
