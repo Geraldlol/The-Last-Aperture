@@ -142,4 +142,32 @@ fails at plan time rather than later as an empty success.
 
 ## Rule anchors
 
-None yet. Detection over acquired cluster state is Phase 2.
+Each anchor names an oracle over acquired `deployed-state` evidence. The
+detection prose that fires it is Phase 2; declaring the anchor here is what
+makes the ID valid, per `contract.md` → `## Stable rule IDs` rule 6.
+
+### `ev.deployed-state.kubernetes.secret-readable-by-default-service-account`
+
+A Secret in a namespace whose default ServiceAccount can read it, established
+from acquired RBAC rather than inferred from a manifest. The source manifests
+cannot settle this: role bindings compose, and the effective answer is a
+property of the cluster, not of any one file.
+
+### `ev.deployed-state.kubernetes.workload-runs-as-root`
+
+A running workload whose effective security context resolves to UID 0, after
+namespace defaults and admission mutation have been applied. What the manifest
+requested and what the cluster admitted are different facts.
+
+### `ev.deployed-state.kubernetes.drift-from-declared-manifest`
+
+An acquired object whose security-relevant fields differ from the repository
+manifest that claims to declare it. This is the `drift-from-source` claim, and
+it is the one a source-only audit is structurally unable to make.
+
+### `ev.deployed-state.salesforce.permission-set-assigned-to-active-user`
+
+A permission set the repository metadata defines and the org actually assigns.
+`_schema.md` names this exact case as the motivating example for
+`contingent_fact`: the path is fully traced in committed metadata and waits on
+one live fact. Acquiring `deployed-state` is what settles it.

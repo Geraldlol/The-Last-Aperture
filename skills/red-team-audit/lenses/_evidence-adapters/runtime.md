@@ -102,4 +102,25 @@ denial inside the container is a named gap, not a clearance.
 
 ## Rule anchors
 
-None yet. Detection over acquired runtime state is Phase 2.
+Each anchor names an oracle over acquired `live-runtime` evidence. The
+detection prose that fires it is Phase 2.
+
+### `ev.live-runtime.kubernetes.credential-material-in-container-environment`
+
+An environment key whose name marks it as credential-bearing, observed in the
+running container. Under any PHI scope but `none` this is established from key
+names alone — which is sufficient, because the finding is that the key is
+there, not what its value is.
+
+### `ev.live-runtime.kubernetes.process-running-unexpected-binary`
+
+A process in the container that no layer of the image accounts for. This is the
+`built-artifact` and `live-runtime` classes composing: the image says what
+should be able to run, the runtime says what is running, and the higher class
+prevails where they disagree.
+
+### `ev.live-runtime.kubernetes.writable-path-outside-declared-volume`
+
+A writable path in the merged filesystem that no declared volume or image layer
+accounts for. Content written after deployment is invisible to both the
+repository and the image.

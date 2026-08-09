@@ -181,3 +181,47 @@ test('the manifest file is the one the module reads', () => {
   const onDisk = JSON.parse(readFileSync(fileURLToPath(EVIDENCE_ADAPTER_MANIFEST_URL), 'utf8'))
   assert.deepEqual(onDisk, evidenceAdapterManifest)
 })
+
+for (const [file, expected] of [
+  ['deployed.md', [
+    'ev.deployed-state.kubernetes.drift-from-declared-manifest',
+    'ev.deployed-state.kubernetes.secret-readable-by-default-service-account',
+    'ev.deployed-state.kubernetes.workload-runs-as-root',
+    'ev.deployed-state.salesforce.permission-set-assigned-to-active-user',
+  ]],
+  ['runtime.md', [
+    'ev.live-runtime.kubernetes.credential-material-in-container-environment',
+    'ev.live-runtime.kubernetes.process-running-unexpected-binary',
+    'ev.live-runtime.kubernetes.writable-path-outside-declared-volume',
+  ]],
+]) {
+  test(`${file} declares its Phase 2 rule anchors, all well-formed`, () => {
+    const doc = readFileSync(
+      fileURLToPath(new URL(`../skills/red-team-audit/lenses/_evidence-adapters/${file}`, import.meta.url)),
+      'utf8',
+    )
+    const anchors = [...declaredEvidenceRuleAnchors(doc)].sort()
+    assert.deepEqual(anchors, expected)
+    for (const anchor of anchors) {
+      // Validated without pinning an adapter segment: these documents own
+      // several formats (kubernetes, salesforce), unlike artifact.md's oci.
+      assert.deepEqual(evidenceRuleIdErrors(anchor), [], anchor)
+    }
+  })
+}
+
+test('no rule anchor is declared by two documents', () => {
+  const directory = fileURLToPath(
+    new URL('../skills/red-team-audit/lenses/_evidence-adapters/', import.meta.url),
+  )
+  const seen = new Map()
+  for (const file of ['contract.md', 'artifact.md', 'registry.md', 'deployed.md', 'runtime.md']) {
+    for (const anchor of declaredEvidenceRuleAnchors(readFileSync(directory + file, 'utf8'))) {
+      // Two documents declaring one ID makes the ID ambiguous, which is what
+      // contract.md rule 6 exists to prevent.
+      assert.equal(seen.has(anchor), false, `${anchor} declared by ${seen.get(anchor)} and ${file}`)
+      seen.set(anchor, file)
+    }
+  }
+  assert.equal(seen.size, 12)
+})
