@@ -139,26 +139,65 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["evidence_id", "evidence_class", "coverage_state", "root_sha256", "adapter_id"],
+        "required": [
+          "evidence_id",
+          "evidence_class",
+          "coverage_state",
+          "root_sha256",
+          "adapter_id"
+        ],
         "properties": {
-          "evidence_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "evidence_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
           "evidence_class": {
-            "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+            "enum": [
+              "source",
+              "built-artifact",
+              "deployed-state",
+              "live-runtime"
+            ]
           },
-          "adapter_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-          "artifact_kind": { "enum": ["apk", "dist-bundle", "ipa", "jar", "oci-image"] },
+          "adapter_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "artifact_kind": {
+            "enum": [
+              "apk",
+              "dist-bundle",
+              "ipa",
+              "jar",
+              "oci-image"
+            ]
+          },
           "coverage_state": {
-            "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+            "enum": [
+              "COVERED",
+              "PARTIAL",
+              "INVENTORY_ONLY",
+              "NOT_ASSESSED",
+              "NOT_APPLICABLE"
+            ]
           },
-          "phi_bearing": { "type": "boolean" },
-          "root_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "phi_bearing": {
+            "type": "boolean"
+          },
+          "root_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
         }
       }
     },
     "evidence_coverage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cells", "summary"],
+      "required": [
+        "cells",
+        "summary"
+      ],
       "properties": {
         "cells": {
           "type": "array",
@@ -166,17 +205,42 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["lens", "topic", "evidence_class", "state", "reason"],
+            "required": [
+              "lens",
+              "topic",
+              "evidence_class",
+              "state",
+              "reason"
+            ],
             "properties": {
-              "lens": { "type": "string" },
-              "topic": { "type": "string" },
+              "lens": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              },
               "evidence_class": {
-                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+                "enum": [
+                  "source",
+                  "built-artifact",
+                  "deployed-state",
+                  "live-runtime"
+                ]
               },
               "state": {
-                "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
+                "enum": [
+                  "COVERED",
+                  "PARTIAL",
+                  "INVENTORY_ONLY",
+                  "NOT_ASSESSED",
+                  "NOT_APPLICABLE"
+                ]
               },
-              "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
             }
           }
         },
@@ -192,18 +256,38 @@
             "inventory_only_cell_count"
           ],
           "properties": {
-            "cell_count": { "type": "integer", "minimum": 0 },
-            "bundle_count": { "type": "integer", "minimum": 0 },
-            "unreached_class_count": { "type": "integer", "minimum": 0 },
+            "cell_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bundle_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unreached_class_count": {
+              "type": "integer",
+              "minimum": 0
+            },
             "unreached_classes": {
               "type": "array",
               "uniqueItems": true,
               "items": {
-                "enum": ["source", "built-artifact", "deployed-state", "live-runtime"]
+                "enum": [
+                  "source",
+                  "built-artifact",
+                  "deployed-state",
+                  "live-runtime"
+                ]
               }
             },
-            "not_assessed_cell_count": { "type": "integer", "minimum": 0 },
-            "inventory_only_cell_count": { "type": "integer", "minimum": 0 }
+            "not_assessed_cell_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "inventory_only_cell_count": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         }
       }
@@ -245,7 +329,9 @@
     "existence_verifications": {
       "type": "array",
       "maxItems": 4096,
-      "items": { "$ref": "#/$defs/existenceVerification" }
+      "items": {
+        "$ref": "#/$defs/existenceVerification"
+      }
     }
   },
   "allOf": [
@@ -1295,6 +1381,14 @@
           "items": {
             "$ref": "#/$defs/nonEmptyString"
           }
+        },
+        "evidence_ids": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          }
         }
       },
       "allOf": [
@@ -1875,11 +1969,26 @@
     "existenceVerification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["candidate_id", "quote_results", "absence_results", "outcome"],
+      "required": [
+        "candidate_id",
+        "quote_results",
+        "absence_results",
+        "outcome"
+      ],
       "properties": {
-        "candidate_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
         "outcome": {
-          "enum": ["VERIFIED", "DRIFTED", "UNVERIFIED", "NOT_APPLICABLE", "NOT_REDERIVABLE"]
+          "enum": [
+            "VERIFIED",
+            "DRIFTED",
+            "UNVERIFIED",
+            "NOT_APPLICABLE",
+            "NOT_REDERIVABLE"
+          ]
         },
         "quote_results": {
           "type": "array",
@@ -1887,18 +1996,71 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["index", "outcome", "claimed_line", "match_count"],
+            "required": [
+              "index",
+              "outcome",
+              "claimed_line",
+              "match_count"
+            ],
             "properties": {
-              "index": { "type": "integer", "minimum": 0 },
-              "outcome": { "enum": ["LOCATED", "LOCATED_OFF_LINE", "NOT_LOCATED"] },
-              "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
-              "claimed_line": { "type": "integer", "minimum": 1 },
-              "found_line": { "type": ["integer", "null"], "minimum": 1 },
-              "match_count": { "type": "integer", "minimum": 0 },
-              "start_byte": { "type": ["integer", "null"], "minimum": 0 },
-              "end_byte": { "type": ["integer", "null"], "minimum": 0 },
-              "excerpt_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
-              "anchor_state": { "enum": ["ANCHORED", "ANCHOR_UNAVAILABLE"] }
+              "index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outcome": {
+                "enum": [
+                  "LOCATED",
+                  "LOCATED_OFF_LINE",
+                  "NOT_LOCATED"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "claimed_line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "found_line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "match_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "start_byte": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "end_byte": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "excerpt_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "anchor_state": {
+                "enum": [
+                  "ANCHORED",
+                  "ANCHOR_UNAVAILABLE"
+                ]
+              }
             }
           }
         },
@@ -1908,24 +2070,52 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["index", "outcome", "match_count", "searched_files"],
+            "required": [
+              "index",
+              "outcome",
+              "match_count",
+              "searched_files"
+            ],
             "properties": {
-              "index": { "type": "integer", "minimum": 0 },
-              "outcome": {
-                "enum": ["ABSENCE_HOLDS", "ABSENCE_CONTRADICTED", "ABSENCE_UNCHECKABLE"]
+              "index": {
+                "type": "integer",
+                "minimum": 0
               },
-              "match_count": { "type": "integer", "minimum": 0 },
-              "searched_files": { "type": "integer", "minimum": 0 },
+              "outcome": {
+                "enum": [
+                  "ABSENCE_HOLDS",
+                  "ABSENCE_CONTRADICTED",
+                  "ABSENCE_UNCHECKABLE"
+                ]
+              },
+              "match_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "searched_files": {
+                "type": "integer",
+                "minimum": 0
+              },
               "hits": {
                 "type": "array",
                 "maxItems": 16,
                 "items": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["path", "line"],
+                  "required": [
+                    "path",
+                    "line"
+                  ],
                   "properties": {
-                    "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
-                    "line": { "type": "integer", "minimum": 1 }
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    },
+                    "line": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
                   }
                 }
               }

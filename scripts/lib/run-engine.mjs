@@ -14,6 +14,7 @@ import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mj
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { buildEvidenceCoverage } from './evidence-coverage.mjs'
+import { readEvidenceIndex } from './evidence-packet.mjs'
 import {
   buildCategoryDenominators,
   inventoryCoverageRecords,
@@ -140,6 +141,13 @@ function activationJobToRunJob(job) {
             job.database_discovery.store_candidates
               ?.map(({ store_id: storeId }) => storeId)
               ?? [],
+        }
+      : {}),
+    ...(job.evidence
+      ? {
+          evidence_ids: job.evidence.map(
+            ({ evidence_context: context }) => context.evidence_id,
+          ),
         }
       : {}),
     ...(job.activated ? {} : { reason: 'lens activation matched no repository input' }),
@@ -437,7 +445,27 @@ export async function createRunPlan(options) {
     loadLenses(lensDirectory),
     digestLensPack(lensDirectory),
   ])
+  // The bundle directory is a local path and never enters run.json, which
+  // stays portable. It is read here so fan-out packets carry the normalized
+  // entry index a lens reasons over.
+  const packetBundles = []
+  for (const bundle of evidenceBundles) {
+    const { directory, ...portable } = bundle
+    packetBundles.push({
+      ...portable,
+      evidence_context: bundle.evidence_context ?? {
+        evidence_id: bundle.evidence_id,
+        evidence_class: bundle.evidence_class,
+        adapter_id: bundle.adapter_id,
+      },
+      ...(directory ? { index: await readEvidenceIndex(directory) } : {}),
+    })
+  }
+  const portableBundles = packetBundles.map(
+    ({ index: _index, evidence_context: _context, ...rest }) => rest,
+  )
   const activation = buildActivationPlan(lenses, inventory, {
+    evidenceBundles: packetBundles,
     shardPolicy: {
       maxFiles: coveragePolicy.max_shard_files,
       maxBytes: coveragePolicy.max_shard_bytes,
@@ -447,7 +475,7 @@ export async function createRunPlan(options) {
   const evidenceCoverage = buildEvidenceCoverage({
     lenses,
     activatedLenses: activation.active_lenses,
-    bundles: evidenceBundles,
+    bundles: portableBundles,
   })
   const plannedJobCount = activation.jobs.length + closureTemplateJobCount(
     activation.jobs,
@@ -599,7 +627,7 @@ export async function createRunPlan(options) {
     jobs: plannedJobs.map(activationJobToRunJob),
     coverage,
     database_discovery: databaseDiscovery,
-    evidence_bundles: evidenceBundles,
+    evidence_bundles: portableBundles,
     evidence_coverage: evidenceCoverage,
     ...(databaseConformance
       ? { database_conformance: databaseConformance }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { lstat, readFile, readdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { evidenceForLens } from './evidence-packet.mjs'
 import { parseLens } from './frontmatter.mjs'
 import {
   DEFAULT_WORK_SHARD_LIMITS,
@@ -268,6 +269,14 @@ function boundedFanoutJobs(job, inventory, shardPolicy) {
 
 export function buildActivationPlan(lenses, inventory, options = {}) {
   const jobs = []
+  // Acquired evidence a lens may reason over, resolved once from its own
+  // declaration. A lens is handed a bundle only where it declares that class
+  // consumed and, for built-artifact, that artifact kind.
+  const evidenceBundles = options.evidenceBundles ?? []
+  const evidenceDeclarations = new Map(lenses.map((lens) => [
+    lens.frontmatter?.name ?? lens.name,
+    lens.frontmatter?.activates_on?.evidence_classes ?? {},
+  ]))
   const domainAssignments = new Map()
   const shardPolicy = {
     maxFiles: options.shardPolicy?.maxFiles ?? DEFAULT_WORK_SHARD_LIMITS.maxFiles,
@@ -331,18 +340,24 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
       if (!domainAssignments.has(match.path)) domainAssignments.set(match.path, [])
       domainAssignments.get(match.path).push(lens.name)
     }
+    const lensEvidence = evidenceForLens(lens.name, evidenceDeclarations, evidenceBundles)
     jobs.push(...boundedFanoutJobs({
       lens: lens.name,
       lens_file: lens.file,
       lens_digest: lens.digest,
       phase: 'fanout',
       activation: 'repository',
-      activated: matches.length > 0,
+      // A lens can be activated by acquired evidence alone: an image was
+      // pulled for a lens whose repository globs matched nothing is still
+      // evidence that lens owns, and dropping it would recreate the silence
+      // this whole dimension exists to remove.
+      activated: matches.length > 0 || lensEvidence.length > 0,
+      ...(lensEvidence.length > 0 ? { evidence: lensEvidence } : {}),
       scoped_files: matches
         .filter(({ kind }) => kind === 'text')
         .map(({ path }) => path),
       matches,
-      status: matches.length > 0 ? 'pending' : 'not-activated',
+      status: matches.length > 0 || lensEvidence.length > 0 ? 'pending' : 'not-activated',
       ...(lens.name === 'database-and-data-stores'
         ? { database_discovery: options.databaseDiscovery }
         : {}),
