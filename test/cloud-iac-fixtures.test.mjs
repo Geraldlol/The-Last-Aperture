@@ -83,6 +83,30 @@ const BASH_SKIP = BASH
   ? false
   : 'Bash with find/xargs/awk is unavailable; cloud lens shell snippets cannot run'
 
+// Some of these sweeps are ripgrep commands lifted verbatim from the lens, and
+// they run *inside* that shell — so ripgrep has to be probed the same way,
+// not on this process's PATH.
+//
+// Gating them matters more than it looks. Without it these two tests fail on
+// every machine without ripgrep, permanently, and a permanently-red test is
+// indistinguishable from a newly-broken one: a real regression in the cloud
+// sweeps would land in exactly the same red and nobody would look twice. That
+// is this repository's own version of the failure the evidence-class work
+// exists to prevent — a missing tool reading as a settled result.
+function ripgrepAvailable(bash) {
+  if (!bash) return false
+  const probe = spawnSync(bash, ['-c', 'rg --version'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  return !probe.error && probe.status === 0
+}
+
+const RIPGREP_SKIP = BASH_SKIP || (ripgrepAvailable(BASH)
+  ? false
+  : 'ripgrep (rg) is unavailable to the shell these lens commands run in; '
+    + 'the cloud sweeps cannot be exercised. Install ripgrep to run them.')
+
 function runBash(command, cwd) {
   const result = spawnSync(BASH, ['-c', command], {
     cwd,
@@ -251,7 +275,7 @@ test(
 
 test(
   'actual Azure firewall sentinel requires executable vulnerable properties',
-  { skip: BASH_SKIP },
+  { skip: RIPGREP_SKIP },
   () => {
     const vulnerable = runAgainstFixture(
       'fixtures/vulnerable/azure_public_data_plane.bicep',
@@ -273,7 +297,7 @@ test(
 
 test(
   'actual Terraform encryption sweep discriminates vulnerable and clean fixtures',
-  { skip: BASH_SKIP },
+  { skip: RIPGREP_SKIP },
   () => {
     const vulnerable = runAgainstFixture(
       'fixtures/vulnerable/reporting_database.tf',
