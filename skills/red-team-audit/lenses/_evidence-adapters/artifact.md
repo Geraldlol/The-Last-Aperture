@@ -69,37 +69,72 @@ structure has acquired nothing, and nothing acquired is not a partial success.
 
 ## Rule anchors
 
-Each anchor names an oracle. The detection prose that fires it is Phase 1;
-declaring the anchor here is what makes the ID valid, per `contract.md`
-→ `## Stable rule IDs` rule 6.
+Each anchor states its oracle as a predicate over the normalized entry index a
+packet carries, the `evidence_claim` a finding may assert, and the locator to
+cite. Every one is demonstrated firing on the vulnerable fixture and *not*
+firing on the clean one — `test/evidence-oci-rules.test.mjs` enforces both
+directions for every anchor declared here, so a rule nobody showed
+discriminating cannot be added silently. That is R7's discipline applied to
+acquired evidence: a check that runs, matches nothing, and reports clean is
+worse than a missing check.
+
+A finding cites `<evidence_id>:<locator>` and asserts exactly one claim, which
+must lie within the citing lens's `may_conclude` for `built-artifact`.
 
 ### `ev.built-artifact.oci.whiteout-named-file-with-content`
 
-An entry whose basename begins `.wh.` and whose size is greater than zero. A
-genuine whiteout is a 0-byte marker; a non-empty one is a file wearing the
-convention as a disguise. The normalizer records `whiteout: false` for it,
-which is the discriminator.
+**Predicate.** An entry whose basename begins `.wh.` and whose `whiteout` is
+`false` — the normalizer sets that flag only for a genuine 0-byte marker, so a
+non-empty `.wh.` file is a file wearing the convention as a disguise.
+
+**Claim.** `unexpected-artifact-content`. **Cite** the entry's own locator.
+
+**Does not fire on.** A real whiteout: 0 bytes, `whiteout: true`. Both appear
+side by side in the vulnerable fixture precisely so the discriminator is
+exercised rather than assumed.
 
 ### `ev.built-artifact.oci.blob-unreferenced-by-manifest`
 
-A blob under `blobs/sha256/` that no manifest, config, or layer descriptor
-references. Reported in `payload/orphan-blobs.json`.
+**Predicate.** A non-empty `payload/orphan-blobs.json` — a blob under
+`blobs/sha256/` that no manifest, config, or layer descriptor references.
+
+**Claim.** `unexpected-artifact-content`. **Cite** `orphan/<sha256:digest>`.
+
+**Does not fire on.** An image whose every blob is reachable from its index.
 
 ### `ev.built-artifact.oci.sibling-size-mtime-outlier`
 
-Within one directory of otherwise uniform files, an entry deviating in both
-size and mtime. This is the pattern a human auditor most reliably misses — it
-was dismissed as routine cleanup noise twice during the motivating incident
-before the outlier was noticed. Mechanical sibling comparison does not form
-favourite theories.
+**Predicate.** Within one directory, where at least four entries share a size
+and an mtime, an entry deviating in **both**. Both matter: size alone flags
+ordinary content variation, mtime alone flags an ordinary rebuild.
+
+**Claim.** `unexpected-artifact-content`. **Cite** the outlier's locator.
+
+**Does not fire on.** A directory of uniform siblings, or one whose members
+were never uniform to begin with — there is no baseline to deviate from.
+
+This is the pattern a human auditor most reliably misses. It was dismissed as
+routine cleanup noise twice during the motivating incident before the outlier
+was noticed. Mechanical sibling comparison does not form favourite theories.
 
 ### `ev.built-artifact.oci.recursive-encoded-payload`
 
-Entry content that decodes as base64 to something that itself decodes as
-base64. One layer of encoding is ordinary; two is a choice.
+**Predicate.** Entry content that decodes as base64 to text that itself decodes
+as base64 to printable bytes. One layer of encoding is ordinary; two is a
+choice.
+
+**Claim.** `unexpected-artifact-content`. **Cite** the entry's locator.
+
+**Does not fire on.** Singly-encoded content, or a string that merely looks
+base64-shaped and decodes to noise.
 
 ### `ev.built-artifact.oci.secret-in-config-history`
 
-A `history[].created_by` entry containing credential-shaped material. The build
-command is preserved in the image config whether or not the file it wrote
-survives.
+**Predicate.** A `history[].created_by` entry in `payload/config/history.json`
+containing credential-shaped material. The build command is preserved in the
+image config whether or not the file it wrote survives — the whole point being
+that `RUN rm` removes the file and leaves the command.
+
+**Claim.** `secret-present-in-artifact`. **Cite** `config/history[N]`.
+
+**Does not fire on.** A history whose commands carry no credential material.
