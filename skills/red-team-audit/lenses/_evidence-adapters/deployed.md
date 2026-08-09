@@ -50,17 +50,34 @@ a parameter that fails its own pattern is refused rather than interpolated.
 any vector containing a mutating verb or an impersonation flag, for the day
 someone adds an operation here that smuggles one in.
 
-### Platform constraint: shell shims
+### Platform note: npm shims on Windows
 
 This controller never spawns a shell, and `execFile` cannot launch a Windows
-`.cmd` or `.bat` shim without one. A CLI distributed only as a shim is
-therefore reported **absent** and the plan refuses — fail-closed, which is the
-right direction, but the reason says so explicitly rather than claiming the
-tool is missing.
+`.cmd` shim without one. Rather than refuse every npm-distributed CLI, the
+controller reads the shim and runs the node invocation it declares:
 
-`sf` is affected: npm installs it as `sf.cmd`, so the `sf.*` operations cannot
-run on Windows without a native executable on `PATH`. `kubectl` ships a real
-executable and is unaffected.
+```text
+"%_prog%" --no-deprecation "%dp0%\node_modules\@salesforce\cli\bin\run.js" %*
+```
+
+becomes `node --no-deprecation <entry> <args>`, executed directly. **Still no
+shell** — the argument vector is passed through and never re-parsed as a
+command string, which is the property the read-only allowlist depends on.
+
+This is not a general `.bat` interpreter and must not become one. A shim that
+does not match that exact shape, whose entry script is absent, or that reaches
+for any other `%VAR%` expansion resolves to nothing and the plan refuses, with
+a reason that distinguishes three different faults: the tool is absent, the
+shim is unresolvable, or the shim resolved and the probe then failed. An
+operator acts differently on each.
+
+Trust boundary: this executes the script the shim points at — the same script
+the shim itself would have run. Someone who can rewrite entries on your `PATH`
+already decides what `sf` means.
+
+`sf` is the case in point: npm installs it as `sf.cmd`, and the `sf.*`
+operations now plan and run on Windows. `kubectl` ships a real executable and
+never needed this.
 
 ## Authorization
 

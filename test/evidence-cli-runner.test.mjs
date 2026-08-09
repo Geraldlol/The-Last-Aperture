@@ -6,6 +6,7 @@ import {
   ImpactCapExceededError,
   ImpactCounters,
   probeCli,
+  resolveNodeShim,
   runBoundedCli,
 } from '../scripts/lib/evidence-cli-runner.mjs'
 import { absentCliResolver, stubCli } from './helpers/stub-cli.mjs'
@@ -27,24 +28,116 @@ test('an absent CLI probes absent with a named reason, and never throws by itsel
   assert.match(probe.reason, /not found|ENOENT/i)
 })
 
-test('a Windows shell shim is reported as a shim, not as a missing tool', async (t) => {
+// An npm-generated .cmd shim, byte-for-byte the shape npm emits.
+async function npmShim(name, scriptBody, { flags = '--no-deprecation' } = {}) {
+  const { mkdtemp, writeFile, mkdir } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const directory = await mkdtemp(join(tmpdir(), 'rta-shim-'))
+  await mkdir(join(directory, 'node_modules', 'pkg', 'bin'), { recursive: true })
+  const entry = join(directory, 'node_modules', 'pkg', 'bin', 'run.js')
+  await writeFile(entry, scriptBody, 'utf8')
+  await writeFile(
+    join(directory, `${name}.cmd`),
+    '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n'
+    + 'SETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n'
+    + '  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n\r\n'
+    + `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" ${flags} `
+    + '"%dp0%\\node_modules\\pkg\\bin\\run.js" %*\r\n',
+    'utf8',
+  )
+  return { directory, entry }
+}
+
+test('an npm shim is resolved to a direct node invocation, with no shell', async (t) => {
+  if (process.platform !== 'win32') return t.skip('shell shims are a Windows concern')
+  const { delimiter } = await import('node:path')
+  const shim = await npmShim(
+    'rta-shimmed-cli',
+    'process.stdout.write(process.argv.slice(2).join(" ") || "2.4.0")',
+  )
+  const env = { ...process.env, PATH: `${shim.directory}${delimiter}${process.env.PATH}` }
+
+  const probe = await probeCli('rta-shimmed-cli', { versionArgs: ['--version'], env })
+  assert.equal(probe.present, true)
+  assert.equal(probe.version, '--version')
+  assert.equal(probe.via_node_shim.endsWith('rta-shimmed-cli.cmd'), true)
+
+  // The argument vector must survive verbatim — that is the whole reason the
+  // shell is refused in the first place.
+  const result = await runBoundedCli({
+    name: 'rta-shimmed-cli',
+    args: ['data', 'query', '-q', 'SELECT Id FROM Account WHERE Name = 1'],
+    env,
+  })
+  assert.equal(result.code, 0)
+  assert.equal(
+    result.stdout.toString('utf8'),
+    'data query -q SELECT Id FROM Account WHERE Name = 1',
+  )
+})
+
+test('a shim that is not a resolvable node invocation is still refused', async (t) => {
   if (process.platform !== 'win32') return t.skip('shell shims are a Windows concern')
   const { mkdtemp, writeFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join, delimiter } = await import('node:path')
   const directory = await mkdtemp(join(tmpdir(), 'rta-shim-'))
-  await writeFile(join(directory, 'rta-fake-cli.cmd'), '@echo off\r\necho 1.0.0\r\n')
+  await writeFile(join(directory, 'rta-opaque-cli.cmd'), '@echo off\r\necho 1.0.0\r\n')
+  const env = { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}` }
 
-  const probe = await probeCli('rta-fake-cli', {
-    versionArgs: ['--version'],
-    env: { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH}` },
-  })
-  // Fail-closed is right, but "not found on PATH" would be a false reason for a
-  // tool that is plainly installed, and an operator would act on it wrongly.
+  // Fail-closed, and the reason names the shim rather than claiming the tool is
+  // missing — an operator would act on those two differently.
+  const probe = await probeCli('rta-opaque-cli', { versionArgs: ['--version'], env })
   assert.equal(probe.present, false)
   assert.match(probe.reason, /shell shim/i)
-  assert.match(probe.reason, /rta-fake-cli\.cmd/)
+  assert.match(probe.reason, /rta-opaque-cli\.cmd/)
   assert.equal(/not found on PATH/.test(probe.reason), false)
+
+  await assert.rejects(
+    () => runBoundedCli({ name: 'rta-opaque-cli', args: ['x'], env }),
+    (error) => error instanceof CliUnavailableError && /shell shim/i.test(error.message),
+  )
+})
+
+test('a shim that resolves but then fails says so, not "cannot resolve"', async (t) => {
+  if (process.platform !== 'win32') return t.skip('shell shims are a Windows concern')
+  const { delimiter } = await import('node:path')
+  const shim = await npmShim('rta-failing-cli', 'process.exit(3)')
+  const env = { ...process.env, PATH: `${shim.directory}${delimiter}${process.env.PATH}` }
+  const probe = await probeCli('rta-failing-cli', { versionArgs: ['--version'], env })
+  assert.equal(probe.present, false)
+  assert.match(probe.reason, /resolved through its npm shim/i)
+  assert.match(probe.reason, /exited 3/)
+  // The two faults send an operator to different places.
+  assert.equal(/cannot resolve/i.test(probe.reason), false)
+})
+
+test('a shim whose entry script is absent does not resolve', async (t) => {
+  if (process.platform !== 'win32') return t.skip('shell shims are a Windows concern')
+  const { rm } = await import('node:fs/promises')
+  const { delimiter } = await import('node:path')
+  const shim = await npmShim('rta-broken-cli', 'process.stdout.write("x")')
+  await rm(shim.entry)
+  const env = { ...process.env, PATH: `${shim.directory}${delimiter}${process.env.PATH}` }
+  const probe = await probeCli('rta-broken-cli', { versionArgs: ['--version'], env })
+  assert.equal(probe.present, false)
+  assert.match(probe.reason, /shell shim/i)
+})
+
+test('shim resolution is not a general .bat interpreter', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const directory = await mkdtemp(join(tmpdir(), 'rta-shim-'))
+  // A shim that reaches for shell expansion we deliberately do not perform.
+  const path = join(directory, 'evil.cmd')
+  await writeFile(
+    path,
+    'endLocal & "%_prog%" "%dp0%\\node_modules\\pkg\\bin\\run.js" %SOMETHING% %*\r\n',
+    'utf8',
+  )
+  assert.equal(resolveNodeShim(path), null)
 })
 
 test('a missing dependency is a failure, never an empty success', async () => {

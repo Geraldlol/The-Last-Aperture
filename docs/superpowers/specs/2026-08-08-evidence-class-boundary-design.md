@@ -540,13 +540,17 @@ conditional so a run planned before the matrix existed still validates.
 
 ### Operational constraints found by building it
 
-- **`sf` is unusable by the `deployed` adapter on Windows.** It ships as a
-  `.cmd` shim, and `execFile` cannot launch those without `shell: true`, which
-  this controller never uses. It fails closed and now says so accurately —
-  *"installed as a shell shim … supply a native executable"* rather than the
-  false *"not found on PATH"*. The design's table claims `salesforce-platform`
-  can reach live org state; on this platform it currently cannot. `kubectl`
-  works, shipping a real executable.
+- **npm shims on Windows needed resolving, not refusing.** `execFile` cannot
+  launch a `.cmd` shim without `shell: true`, which this controller never uses,
+  so `sf` — installed by npm as `sf.cmd` — was initially reported absent and
+  the `sf.*` operations could not run at all. Resolved by reading the shim and
+  executing the node invocation it declares (`node --no-deprecation <entry>
+  <args>`) directly: still no shell, the argument vector still never re-parsed
+  as a command string. Verified against the real install: `sf` probes at
+  `@salesforce/cli/2.144.6` and `sf.org-display` plans end to end. Deliberately
+  not a general `.bat` interpreter — an unmatched shape, a missing entry
+  script, or any other `%VAR%` expansion resolves to nothing and the plan
+  refuses. `kubectl` ships a real executable and never needed this.
 - **Impact counters were built one tier earlier than specified.** The design
   attaches them to `deployed-state` and `live-runtime`. `registry` is the first
   adapter that leaves the machine, so the mechanism was written there and
