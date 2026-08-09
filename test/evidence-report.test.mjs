@@ -195,3 +195,67 @@ test('a run planned before this change still renders', () => {
   delete legacy.evidence_bundles
   assert.doesNotThrow(() => renderMarkdownReport(legacy))
 })
+
+test('NOT_APPLICABLE cells are counted, not printed as hundreds of rows', () => {
+  const noisy = run({
+    evidence_coverage: {
+      cells: [
+        ...Array.from({ length: 200 }, (_unused, index) => ({
+          lens: 'llm-and-ai',
+          topic: `topic-${index}`,
+          evidence_class: 'built-artifact',
+          state: 'NOT_APPLICABLE',
+          reason: 'llm-and-ai did not activate in this run',
+        })),
+        {
+          lens: 'cloud-and-iac',
+          topic: 'container-image-content',
+          evidence_class: 'built-artifact',
+          state: 'NOT_ASSESSED',
+          reason: 'no built-artifact evidence was acquired for this run',
+        },
+      ],
+      summary: {
+        cell_count: 201,
+        bundle_count: 0,
+        unreached_class_count: 1,
+        unreached_classes: ['built-artifact'],
+        not_assessed_cell_count: 1,
+        inventory_only_cell_count: 0,
+      },
+    },
+  })
+  const report = renderMarkdownReport(noisy)
+  const section = report.slice(report.indexOf('### Evidence-class coverage'))
+  const rows = section.split('\n').filter((line) => line.startsWith('| '))
+  // One header plus one actionable row (the |--- separator does not match).
+  // The 200 inapplicable cells are a sentence, not 200 rows burying it.
+  assert.equal(rows.length, 2)
+  assert.match(section, /200 further lens\/topic\/class cells are NOT_APPLICABLE/)
+  assert.match(section, /no built-artifact evidence was acquired/)
+})
+
+test('a fully inapplicable matrix prints no table at all', () => {
+  const report = renderMarkdownReport(run({
+    evidence_coverage: {
+      cells: [{
+        lens: 'llm-and-ai',
+        topic: 't',
+        evidence_class: 'built-artifact',
+        state: 'NOT_APPLICABLE',
+        reason: 'llm-and-ai did not activate in this run',
+      }],
+      summary: {
+        cell_count: 1,
+        bundle_count: 0,
+        unreached_class_count: 0,
+        unreached_classes: [],
+        not_assessed_cell_count: 0,
+        inventory_only_cell_count: 0,
+      },
+    },
+  }))
+  const section = report.slice(report.indexOf('### Evidence-class coverage'))
+  assert.equal(section.split('\n').filter((line) => line.startsWith('| ')).length, 0)
+  assert.match(section, /1 further lens\/topic\/class cell is NOT_APPLICABLE/)
+})

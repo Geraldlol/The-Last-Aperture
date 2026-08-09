@@ -831,20 +831,39 @@ export function renderMarkdownReport(run) {
   const evidenceCoverage = run.evidence_coverage
   if (evidenceCoverage) {
     const evidenceSummary = evidenceCoverage.summary ?? {}
-    lines.push(
-      '### Evidence-class coverage',
-      '',
-      '| Lens | Topic | Evidence class | Coverage | Basis |',
-      '|---|---|---|---|---|',
-    )
-    for (const cell of evidenceCoverage.cells ?? []) {
+    // NOT_APPLICABLE cells are the overwhelming majority — a lens that did not
+    // activate, or a class it declares not-consumed — and printing them buries
+    // the handful of cells that are the entire point under hundreds of rows of
+    // nothing. They stay in run.json, where a machine reads them; the report
+    // states their count and shows what a reader has to act on.
+    const reportable = (evidenceCoverage.cells ?? [])
+      .filter((cell) => cell.state !== 'NOT_APPLICABLE')
+    const notApplicable = (evidenceCoverage.cells ?? []).length - reportable.length
+
+    lines.push('### Evidence-class coverage', '')
+    if (reportable.length > 0) {
       lines.push(
-        `| ${tableCell(cell.lens)} | ${tableCell(cell.topic)} | ` +
-        `${tableCell(cell.evidence_class)} | ${tableCell(cell.state)} | ` +
-        `${tableCell(cell.reason)} |`,
+        '| Lens | Topic | Evidence class | Coverage | Basis |',
+        '|---|---|---|---|---|',
+      )
+      for (const cell of reportable) {
+        lines.push(
+          `| ${tableCell(cell.lens)} | ${tableCell(cell.topic)} | ` +
+          `${tableCell(cell.evidence_class)} | ${tableCell(cell.state)} | ` +
+          `${tableCell(cell.reason)} |`,
+        )
+      }
+      lines.push('')
+    }
+    if (notApplicable > 0) {
+      lines.push(
+        `${notApplicable} further lens/topic/class ` +
+        `${notApplicable === 1 ? 'cell is' : 'cells are'} ` +
+        'NOT_APPLICABLE — the lens did not activate, or declares that class ' +
+        'not-consumed. They carry no obligation and are recorded in `run.json`.',
+        '',
       )
     }
-    lines.push('')
     // INVENTORY_ONLY and NOT_ASSESSED are never rendered as pass, clean, secure
     // or no findings. Stating the blind spot is the whole point: silence about
     // an unexamined class is what reads as clearance.
