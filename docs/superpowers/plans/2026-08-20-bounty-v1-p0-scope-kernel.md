@@ -56,7 +56,7 @@ Split rationale: `bounty-target.mjs` is separated from the kernel because URL co
   - `MAX_CANDIDATE_LENGTH: number`
   - `host` is lowercase, punycode-encoded, with no trailing dot and no brackets on IPv6.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-target.test.mjs`:
 
@@ -127,12 +127,12 @@ test('encodes internationalized hosts to punycode', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-target.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/lib/bounty-target.mjs'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `scripts/lib/bounty-target.mjs`:
 
@@ -204,12 +204,12 @@ export function canonicalizeCandidate(rawUrl) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-target.test.mjs`
 Expected: PASS, 9 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/bounty-target.mjs test/bounty-target.test.mjs
@@ -232,7 +232,7 @@ git commit -m "feat(bounty-v1): canonicalize candidate URLs for scope decisions"
   - Rule shape consumed: `{ rule_id: string, host_kind: 'exact' | 'wildcard' | 'ip', host: string, ports?: number[], path_prefix?: string }`
   - Sealed scope shape consumed: `{ scope_rules: { allow: Rule[], deny: Rule[], private_targets_sealed?: boolean } }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-scope-kernel.test.mjs`:
 
@@ -400,12 +400,12 @@ test('a rule that throws during matching denies the candidate', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-scope-kernel.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/lib/bounty-scope-kernel.mjs'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `scripts/lib/bounty-scope-kernel.mjs`:
 
@@ -524,17 +524,17 @@ export function decideScope(sealedScope, rawCandidate) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-scope-kernel.test.mjs`
 Expected: PASS, 15 tests
 
-- [ ] **Step 5: Verify kernel purity**
+- [x] **Step 5: Verify kernel purity**
 
 Run: `grep -nE "node:(fs|http|https|dns|child_process)|Date\.now|fetch\(" scripts/lib/bounty-scope-kernel.mjs scripts/lib/bounty-target.mjs`
 Expected: no output. Any match is a Global Constraints violation — remove it before committing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/lib/bounty-scope-kernel.mjs test/bounty-scope-kernel.test.mjs
@@ -555,7 +555,7 @@ git commit -m "feat(bounty-v1): fail-closed scope kernel with deny precedence"
 
 This is the P0 gate. It is the reason the phase exists.
 
-- [ ] **Step 1: Write the fixture file**
+- [x] **Step 1: Write the fixture file**
 
 Create `fixtures/bounty/scope-kernel-cases.json`:
 
@@ -627,7 +627,7 @@ Two notes on this fixture file:
 
 **`double-trailing-dot-denied`** — the expected reason depends on how Node's WHATWG URL parser handles the empty trailing label. If `new URL()` accepts it, `normalizeHost` returns `null` and the reason is `host-not-canonicalizable`; if the parser rejects it outright, the reason is `candidate-unparsable`. Run the case, then record whichever reason the parser actually produces. **The `expect` value stays `DENY` either way** — that is the assertion that matters. Do not "fix" this by loosening the kernel.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `test/bounty-scope-kernel-adversarial.test.mjs`:
 
@@ -663,22 +663,22 @@ test('no case in the suite reaches ALLOW by default', () => {
 })
 ```
 
-- [ ] **Step 3: Run test to verify it fails or reveals kernel gaps**
+- [x] **Step 3: Run test to verify it fails or reveals kernel gaps**
 
 Run: `node --test test/bounty-scope-kernel-adversarial.test.mjs`
 Expected: FAIL on any case where the Task 2 kernel disagrees with the fixture. Fix the **kernel**, never the fixture, unless the fixture's stated expectation is itself wrong — and if you change a fixture expectation, say so explicitly in the commit message.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-scope-kernel-adversarial.test.mjs`
 Expected: PASS, 40 tests
 
-- [ ] **Step 5: Run the whole suite for regressions**
+- [x] **Step 5: Run the whole suite for regressions**
 
 Run: `npm.cmd test`
 Expected: PASS. The existing ~130 test files must be unaffected — nothing in Tasks 1-3 modifies existing files.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add fixtures/bounty/scope-kernel-cases.json test/bounty-scope-kernel-adversarial.test.mjs
@@ -702,7 +702,7 @@ git commit -m "test(bounty-v1): adversarial scope kernel conformance fixtures"
   - `BOUNTY_SCOPE_SCHEMA_VERSION = '1.0.0'`
   - `PROGRAM_POLICY_SEALED_STATEMENT: string`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-contracts.test.mjs`:
 
@@ -828,12 +828,12 @@ test('digests a policy snapshot to lowercase hex sha256', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-contracts.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/lib/bounty-contracts.mjs'`
 
-- [ ] **Step 3: Write the schema**
+- [x] **Step 3: Write the schema**
 
 Create `schemas/bounty-scope.schema.json`:
 
@@ -980,7 +980,7 @@ Create `schemas/bounty-scope.schema.json`:
 }
 ```
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 Create `scripts/lib/bounty-contracts.mjs`:
 
@@ -1023,14 +1023,14 @@ export function digestPolicySnapshot(bytes) {
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `node --test test/bounty-contracts.test.mjs`
 Expected: PASS, 11 tests
 
 Note: Ajv reports `additionalProperties` violations with the offending key in `error.params.additionalProperty`, which is why the message builder appends it — the `extra_field` test asserts on that name.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add schemas/bounty-scope.schema.json scripts/lib/bounty-contracts.mjs test/bounty-contracts.test.mjs
@@ -1053,7 +1053,7 @@ git commit -m "feat(bounty-v1): sealed bounty scope schema and contract validati
   - Throws on: `phi: true`, missing attestation, empty allow list, `notAfter <= notBefore`, an `intensity` outside `normal|aggressive|ham`, `intensity !== 'normal'` without `active_testing: true`, `intensity === 'ham'` without `automation_allowed: true`, and `desync_probes: true` at any intensity below `ham`.
   - `permissions.intensity` is the HAM dial from spec §20. The planner gates it; every later phase reads it. It never widens `scope_rules`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-planner.test.mjs`:
 
@@ -1237,12 +1237,12 @@ test('records the operator attestation statement verbatim', () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-planner.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/lib/bounty-planner.mjs'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `scripts/lib/bounty-planner.mjs`:
 
@@ -1406,12 +1406,12 @@ export function createProgramSealedScope(options) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-planner.test.mjs`
 Expected: PASS, 16 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/bounty-planner.mjs test/bounty-planner.test.mjs
@@ -1435,7 +1435,7 @@ git commit -m "feat(bounty-v1): seal bounty program policy into a scope perimete
   - `checkBountyScope(bundlePath, candidate) -> Promise<{ decision, rule_id, reason }>`
   - Bundle layout: `<outParent>/<engagementId>/scope.json`, `<...>/bundle.json` where `bundle.json` = `{ kind: 'red-team-audit/bounty-bundle', schema_version: '1.0.0', engagement_id, scope_sha256, created_at }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-controller.test.mjs`:
 
@@ -1567,12 +1567,12 @@ test('plan refuses to overwrite an existing bundle', async () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-controller.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/lib/bounty-controller.mjs'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `scripts/lib/bounty-controller.mjs`:
 
@@ -1662,12 +1662,12 @@ export async function checkBountyScope(bundlePath, candidate) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-controller.test.mjs`
 Expected: PASS, 6 tests
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/bounty-controller.mjs test/bounty-controller.test.mjs
@@ -1687,7 +1687,7 @@ git commit -m "feat(bounty-v1): bounty bundle controller with policy drift detec
 - Consumes: all four controller functions from Task 6; `isMainModule` from `scripts/lib/main-module.mjs`; `PLATFORM_VERSION` from `scripts/lib/run-engine.mjs`.
 - Produces: `runBountyCli(argv: string[]) -> Promise<number>` (exit code). Exit 0 on success, 1 on invalid input or failed validation, 2 on a `DENY` scope check so shell callers can branch on it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/bounty-cli.test.mjs`:
 
@@ -1820,12 +1820,12 @@ test('revalidate exits nonzero on policy drift', async () => {
 })
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test test/bounty-cli.test.mjs`
 Expected: FAIL — `Cannot find module '../scripts/bounty.mjs'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `scripts/bounty.mjs`:
 
@@ -2023,12 +2023,12 @@ if (isMainModule(import.meta.url)) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test test/bounty-cli.test.mjs`
 Expected: PASS, 8 tests
 
-- [ ] **Step 5: Wire the npm scripts**
+- [x] **Step 5: Wire the npm scripts**
 
 In `package.json`, add to `"scripts"`:
 
@@ -2042,7 +2042,7 @@ Append these seven files to the end of the existing `test:platform` value, space
 test/bounty-target.test.mjs test/bounty-scope-kernel.test.mjs test/bounty-scope-kernel-adversarial.test.mjs test/bounty-contracts.test.mjs test/bounty-planner.test.mjs test/bounty-controller.test.mjs test/bounty-cli.test.mjs
 ```
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `npm.cmd test`
 Expected: PASS, all files including the seven new ones.
@@ -2052,7 +2052,7 @@ Then confirm the CLI is reachable through npm:
 Run: `npm.cmd run audit:bounty -- --help`
 Expected: exit 0, help text printed.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add scripts/bounty.mjs test/bounty-cli.test.mjs package.json
@@ -2063,18 +2063,24 @@ git commit -m "feat(bounty-v1): audit:bounty controller cli"
 
 ## P0 Exit Gate
 
-All must hold before P1 begins:
+All must hold before P1 begins. Verified 2026-08-21.
 
-- [ ] `npm.cmd test` passes with all seven new test files wired into `test:platform`
-- [ ] `fixtures/bounty/scope-kernel-cases.json` has ≥ 35 cases and every one passes
-- [ ] `grep -nE "node:(fs|http|https|dns|child_process)|Date\.now|fetch\(" scripts/lib/bounty-scope-kernel.mjs scripts/lib/bounty-target.mjs` returns nothing
-- [ ] No new entry in `package.json` `dependencies`
-- [ ] `npm.cmd run audit:bounty -- --help` exits 0
-- [ ] A tampered `scope.json` fails `validate`
-- [ ] A changed policy file makes `revalidate` exit 1
-- [ ] Sealing `--intensity ham` yields `scope_rules` byte-identical to `--intensity normal`, and every DENY candidate still denies. **Intensity must never move the perimeter** — this is the assertion that keeps HAM safe to run at full volume.
-- [ ] `--intensity ham` is refused without both `--active-testing` and `--automation`
-- [ ] `--desync` is refused at any intensity below `ham`
+- [x] `npm.cmd test` — **1548 tests, 1543 pass, 2 fail, 3 skipped.** All seven bounty files are wired into `test:platform`; 105 bounty tests, zero failures. The 2 failures are pre-existing and unrelated: `canonical-ordering.test.mjs:126` (their `http-authed-response-metadata.mjs` uses `localeCompare`, which the repo's own rule forbids outside `report.mjs`/`canonical-order.mjs`) and `http-authed-credential.test.mjs:355` (hardcoded Aug 17–18 validity window, lapsed Aug 18; the real CLI reads the ambient clock). Baseline before this phase was 1443 tests carrying the same 2 failures, and 1443 + 105 = 1548, so nothing regressed. **The suite does not pass clean, and this checkbox does not claim it does.**
+- [x] `fixtures/bounty/scope-kernel-cases.json` has ≥ 35 cases and every one passes — 38 cases, 40 tests
+- [x] `grep -nE "node:(fs|http|https|dns|child_process)|Date\.now|fetch\(" scripts/lib/bounty-scope-kernel.mjs scripts/lib/bounty-target.mjs` returns nothing — clean; `node:net` for `isIP` is the only import
+- [x] No new entry in `package.json` `dependencies` — still exactly `acorn`, `ajv`, `yaml`
+- [x] `npm.cmd run audit:bounty -- --help` exits 0
+- [x] A tampered `scope.json` fails `validate` — digest mismatch, `test/bounty-controller.test.mjs`
+- [x] A changed policy file makes `revalidate` exit 1 — `test/bounty-cli.test.mjs`
+- [x] Sealing `--intensity ham` yields `scope_rules` byte-identical to `--intensity normal`, and every DENY candidate still denies. **Intensity must never move the perimeter** — this is the assertion that keeps HAM safe to run at full volume. Asserted in `bounty-planner.test.mjs` and `bounty-cli.test.mjs`, and confirmed live against a `ham`-sealed bundle.
+- [x] `--intensity ham` is refused without both `--active-testing` and `--automation`
+- [x] `--desync` is refused at any intensity below `ham`
+
+### Carried forward out of P0
+
+- `package.json` wiring is applied on disk but **left uncommitted**. That file already held in-flight v0.11→v0.12 http-authed changes, and `test:platform` is a single line, so the bounty wiring could not be staged without dragging an unrelated version bump into a bounty commit. Operator decision.
+- `release-wiring.test.mjs` gates protocols on an explicit path allowlist. `bounty-v1` is absent and does not need an entry until the protocol is released; add it in P1 alongside ADR 0019.
+- The `format: "date-time"` defect fixed in `6c0c1c4` passed every unit test, because a silently-ignored schema constraint fails open. Later phases need an end-to-end CLI smoke run, not unit tests alone.
 
 ## Deferred to Later Phases
 
