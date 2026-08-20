@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/bounty-oob-session.schema.json",
+  "title": "Red Team Audit bounty-v1 out-of-band session",
+  "description": "An OOB interaction session and its mint ledger. The backend is recorded as evidence of where callbacks were observed: a hosted backend means callback data transited a third-party service. Nothing in this protocol gates on that recording. Absence of a callback is NO_INTERACTION_OBSERVED and is never proof that a target is not vulnerable. The stored private key belongs to our own OOB session and is not a credential for any target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "backend",
+    "server",
+    "correlation_id",
+    "secret",
+    "private_key_pem",
+    "created_at",
+    "ledger"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0"] },
+    "kind": { "const": "red-team-audit/bounty-oob-session" },
+    "backend": { "enum": ["hosted", "self_hosted"] },
+    "server": { "type": "string", "minLength": 1, "maxLength": 253 },
+    "correlation_id": { "type": "string", "pattern": "^[a-z0-9]{20}$" },
+    "secret": { "type": "string", "minLength": 8, "maxLength": 128 },
+    "private_key_pem": { "type": "string", "minLength": 1 },
+    "created_at": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "mints"],
+      "properties": {
+        "schema_version": { "enum": ["1.0.0"] },
+        "mints": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "nonce",
+              "label",
+              "requestId",
+              "insertionPoint",
+              "role",
+              "bugClass",
+              "mintedAt"
+            ],
+            "properties": {
+              "nonce": { "type": "string", "pattern": "^[a-z0-9]{13}$" },
+              "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "requestId": { "type": "string", "maxLength": 256 },
+              "insertionPoint": { "type": "string", "maxLength": 512 },
+              "role": { "type": "string", "maxLength": 128 },
+              "bugClass": { "type": "string", "maxLength": 64 },
+              "mintedAt": {
+                "type": "string",
+                "minLength": 24,
+                "maxLength": 24,
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

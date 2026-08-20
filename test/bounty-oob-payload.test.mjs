@@ -62,6 +62,23 @@ test('extraction tolerates a trailing dot and deeper labels', () => {
   )
 })
 
+test('extracts from a bare label, which is what hosted interactsh reports', () => {
+  // Regression: interactsh full-id is "<cid><nonce>" with no domain. Requiring a
+  // domain suffix dropped every real hosted callback.
+  const correlationId = 'c'.repeat(20)
+  assert.equal(
+    extractNonce({ host: `${correlationId}abcdefghijklm`, correlationId, server: 'oast.fun' }),
+    'abcdefghijklm',
+  )
+})
+
+test('a bare label with a foreign correlation id is refused', () => {
+  assert.equal(
+    extractNonce({ host: `${'d'.repeat(20)}abcdefghijklm`, correlationId: 'c'.repeat(20), server: 'oast.fun' }),
+    null,
+  )
+})
+
 test('extraction refuses a foreign correlation id or server', () => {
   const correlationId = 'c'.repeat(20)
   const foreign = buildPayloadHost({ correlationId: 'd'.repeat(20), nonce: 'abcdefghijklm', server: 'oast.fun' })

@@ -6,6 +6,13 @@ import {
   revalidateBountyBundle,
   validateBountyBundle,
 } from './lib/bounty-controller.mjs'
+import {
+  closeOobSession,
+  mintOobPayload,
+  oobSessionStatus,
+  openOobSession,
+  pollOobSession,
+} from './lib/bounty-oob-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
 import { PLATFORM_VERSION } from './lib/run-engine.mjs'
 
@@ -16,6 +23,26 @@ Usage:
   bounty validate <bundle> [--json]
   bounty revalidate <bundle> --policy-file <fresh-snapshot> [--json]
   bounty scope <bundle> --check <url> [--json]
+  bounty oob open <bundle> --backend <hosted|self-hosted> [--server <domain>] [--json]
+  bounty oob mint <bundle> --label <text> --bug-class <class> [--request-id <id>] [--insertion-point <text>] [--role <name>] [--json]
+  bounty oob poll <bundle> [--json]
+  bounty oob status <bundle> [--json]
+  bounty oob close <bundle> [--json]
+
+Out-of-band interaction (design spec section 17):
+  Blind SSRF, blind XXE, blind RCE, out-of-band SQLi and most blind SSTI are
+  invisible without a callback channel. Every minted payload carries a nonce, so
+  a callback names the exact request, parameter, and role that produced it.
+
+  --backend hosted       a public interactsh server (default oast.fun). Needs no
+                         infrastructure. Callback data -- including target
+                         hostnames -- transits a third-party service, which the
+                         session records. A minority of programs forbid this.
+  --backend self-hosted  our own DNS and HTTP listeners on --server. Needs a
+                         domain with wildcard DNS and a host to run on.
+
+  An absent callback is NO_INTERACTION_OBSERVED. A blind vector that produced no
+  interaction is inconclusive and is never proof that a target is sound.
 
 Scope rule specs:
   *.example.com         all subdomains, NOT the apex
@@ -145,6 +172,78 @@ async function commandPlan(options) {
   return 0
 }
 
+async function commandOob(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'open') {
+    const requested = options.backend === true ? '' : String(options.backend ?? 'hosted')
+    const backend = requested === 'self-hosted' ? 'self_hosted' : requested
+    const server = typeof options.server === 'string'
+      ? options.server
+      : (backend === 'hosted' ? 'oast.fun' : requireOption(options, 'server'))
+    const session = await openOobSession({ bundlePath: bundle, backend, server, now: new Date() })
+    emit({
+      command: 'oob open',
+      backend: session.backend,
+      server: session.server,
+      correlation_id: session.correlation_id,
+      third_party_transit: session.backend === 'hosted',
+      summary: `OPENED ${session.backend} session on ${session.server} correlation=${session.correlation_id}${
+        session.backend === 'hosted' ? ' (callback data transits a third party)' : ''
+      }`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'mint') {
+    const minted = await mintOobPayload({
+      bundlePath: bundle,
+      label: requireOption(options, 'label'),
+      bugClass: requireOption(options, 'bug-class'),
+      requestId: typeof options['request-id'] === 'string' ? options['request-id'] : '',
+      insertionPoint: typeof options['insertion-point'] === 'string' ? options['insertion-point'] : '',
+      role: typeof options.role === 'string' ? options.role : '',
+      now: new Date(),
+    })
+    emit({
+      command: 'oob mint',
+      host: minted.host,
+      url: minted.url,
+      nonce: minted.nonce,
+      summary: minted.host,
+    }, asJson)
+    return 0
+  }
+  if (action === 'poll') {
+    const { summary } = await pollOobSession({ bundlePath: bundle })
+    emit({
+      command: 'oob poll',
+      ...summary,
+      summary: `${summary.status} total=${summary.total} matched=${summary.matched} unmatched=${summary.unmatched}`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'status') {
+    const status = await oobSessionStatus({ bundlePath: bundle })
+    emit({
+      command: 'oob status',
+      ...status,
+      summary: `${status.status} backend=${status.backend} server=${status.server} mints=${status.mints} observed=${status.observed} matched=${status.matched}`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'close') {
+    const result = await closeOobSession({ bundlePath: bundle })
+    emit({
+      command: 'oob close',
+      ...result,
+      summary: result.deregistered ? 'DEREGISTERED' : `NO_REMOTE_SESSION backend=${result.backend}`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown oob action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -154,6 +253,7 @@ export async function runBountyCli(argv) {
   }
   try {
     if (command === 'plan') return await commandPlan(options)
+    if (command === 'oob') return await commandOob(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       emit({

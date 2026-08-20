@@ -32,14 +32,26 @@ export function buildPayloadHost({ correlationId, nonce, server }) {
   return `${correlationId}${nonce}.${server}`.toLowerCase()
 }
 
+// Callback identifiers arrive in two shapes, and both must correlate.
+//
+// A hosted interactsh server reports `full-id` as the bare 33-character label
+// with no domain attached ("<cid><nonce>"). Our own DNS listener sees the name
+// the resolver actually asked for, which is a full FQDN
+// ("<cid><nonce>.oob.example"), and a target may prepend further labels.
+//
+// So the domain suffix is stripped when present and simply absent otherwise.
+// Requiring it -- as an earlier version did -- silently dropped every real
+// hosted callback while every offline test still passed.
 export function extractNonce({ host, correlationId, server }) {
   if (typeof host !== 'string' || host.length === 0) return null
   if (typeof correlationId !== 'string' || typeof server !== 'string') return null
   let normalized = host.toLowerCase()
   if (normalized.endsWith('.')) normalized = normalized.slice(0, -1)
   const suffix = `.${server.toLowerCase()}`
-  if (!normalized.endsWith(suffix)) return null
-  const labels = normalized.slice(0, -suffix.length).split('.')
+  if (normalized.endsWith(suffix)) {
+    normalized = normalized.slice(0, -suffix.length)
+  }
+  const labels = normalized.split('.')
   const candidate = labels[labels.length - 1]
   if (candidate === undefined) return null
   if (candidate.length !== CORRELATION_ID_LENGTH + NONCE_LENGTH) return null
