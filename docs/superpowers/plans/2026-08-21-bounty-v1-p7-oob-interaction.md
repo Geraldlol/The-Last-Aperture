@@ -1755,7 +1755,8 @@ Verified 2026-08-21.
 - [x] A hosted session records `backend: "hosted"` in the bundle
 - [x] No code path gates on `permissions.third_party` — per operator decision; the session records `third_party_transit` as evidence only
 - [x] An empty poll reports `NO_INTERACTION_OBSERVED` and never implies absence of vulnerability
-- [x] 61 OOB tests across 7 files, all passing; every unit test runs with `fetch` injected, so none opens a socket
+- [x] **67 OOB tests across 7 files, all passing**; every unit test runs with `fetch` injected, so none opens a socket
+- [x] `npm.cmd test` — **1615 tests, 1610 pass, 2 fail, 3 skipped.** The 2 failures are the same pre-existing pair from P0 (`canonical-ordering.test.mjs:126` and `http-authed-credential.test.mjs:355`); zero bounty or OOB failures. Baseline at the end of P0 was 1548, and 1548 + 67 = 1615 exactly, so nothing regressed. **The suite does not pass clean, and this checkbox does not claim it does.**
 
 ### The defect the live run caught
 
