@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/bounty-surface-inventory.schema.json",
+  "title": "Red Team Audit bounty-v1 surface inventory",
+  "description": "Attack surface observed inside a sealed program perimeter. Status is OBSERVED or PARTIAL and there is deliberately no COMPLETE: any source that failed is recorded in gaps, and an inventory built with a failed source is not a full picture of the surface. Refusals are retained because a refused candidate is evidence about the perimeter's shape, not noise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "engagement_id", "created_at", "hosts", "zone_hints", "refused", "gaps"],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0"] },
+    "kind": { "const": "red-team-audit/bounty-surface-inventory" },
+    "engagement_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "created_at": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "hosts": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "port", "sources"],
+        "properties": {
+          "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "sources": { "type": "array", "items": { "type": "string", "maxLength": 64 } },
+          "observed_at": { "type": "string", "maxLength": 32 },
+          "probe": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url": { "type": "string", "maxLength": 2048 },
+              "status": { "type": ["integer", "null"] },
+              "server": { "type": ["string", "null"], "maxLength": 256 },
+              "title": { "type": ["string", "null"], "maxLength": 512 },
+              "content_type": { "type": ["string", "null"], "maxLength": 256 },
+              "content_length": { "type": ["integer", "null"] },
+              "location": { "type": ["string", "null"], "maxLength": 2048 },
+              "tech_hints": { "type": "array", "items": { "type": "string", "maxLength": 128 } },
+              "error": { "type": ["string", "null"], "maxLength": 512 }
+            }
+          }
+        }
+      }
+    },
+    "zone_hints": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["zone", "sources"],
+        "properties": {
+          "zone": { "type": "string", "minLength": 1, "maxLength": 253 },
+          "sources": { "type": "array", "items": { "type": "string", "maxLength": 64 } }
+        }
+      }
+    },
+    "refused": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["host", "reason"],
+        "properties": {
+          "host": { "type": "string", "maxLength": 253 },
+          "reason": { "type": "string", "maxLength": 128 },
+          "ruleId": { "type": "string", "maxLength": 128 }
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "reason"],
+        "properties": {
+          "source": { "type": "string", "maxLength": 64 },
+          "reason": { "type": "string", "maxLength": 128 },
+          "detail": { "type": "string", "maxLength": 1024 }
+        }
+      }
+    }
+  }
+}
