@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/bounty-scope.schema.json",
+  "title": "Red Team Audit bounty program scope (bounty-v1)",
+  "description": "A sealed bug bounty program perimeter. The authorization records an operator declaration of program enrollment; it does not verify enrollment, asset ownership, scope currency, or revocation. This scope is never repository coverage and never an audit clearance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "engagement_id",
+    "platform",
+    "environment",
+    "data_class",
+    "program",
+    "authorization",
+    "validity",
+    "scope_rules",
+    "stop_conditions"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0"] },
+    "kind": { "const": "red-team-audit/bounty-scope" },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "platform": { "enum": ["yeswehack", "hackerone", "intigriti", "direct"] },
+    "environment": { "enum": ["production", "non_production"] },
+    "data_class": { "const": "non_phi" },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program_handle", "policy_url", "policy_snapshot_sha256"],
+      "properties": {
+        "program_handle": { "$ref": "#/$defs/id" },
+        "policy_url": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+        "policy_snapshot_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "authorization_id",
+        "statement",
+        "operator_id",
+        "authorized_by",
+        "authorization_reference",
+        "attested_at",
+        "independently_verified",
+        "permissions"
+      ],
+      "properties": {
+        "mode": { "const": "PROGRAM_POLICY_SEALED" },
+        "authorization_id": { "$ref": "#/$defs/id" },
+        "statement": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "operator_id": { "$ref": "#/$defs/id" },
+        "authorized_by": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "authorization_reference": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "attested_at": { "$ref": "#/$defs/timestamp" },
+        "independently_verified": { "const": false },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "active_testing",
+            "production",
+            "third_party",
+            "phi",
+            "mutation",
+            "automation_allowed",
+            "intensity",
+            "desync_probes",
+            "rate_limit_rps"
+          ],
+          "properties": {
+            "active_testing": { "type": "boolean" },
+            "production": { "type": "boolean" },
+            "third_party": { "type": "boolean" },
+            "phi": { "const": false },
+            "mutation": { "type": "boolean" },
+            "automation_allowed": { "type": "boolean" },
+            "intensity": { "enum": ["normal", "aggressive", "ham"] },
+            "desync_probes": { "type": "boolean" },
+            "rate_limit_rps": { "type": "integer", "minimum": 1, "maximum": 200 }
+          }
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["not_before", "not_after"],
+      "properties": {
+        "not_before": { "$ref": "#/$defs/timestamp" },
+        "not_after": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "scope_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "deny"],
+      "properties": {
+        "allow": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/rule" } },
+        "deny": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/rule" } },
+        "private_targets_sealed": { "type": "boolean" }
+      }
+    },
+    "stop_conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_findings", "operator_stop"],
+      "properties": {
+        "max_findings": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "operator_stop": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 32 },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule_id", "host_kind", "host"],
+      "properties": {
+        "rule_id": { "$ref": "#/$defs/id" },
+        "host_kind": { "enum": ["exact", "wildcard", "ip"] },
+        "host": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "path_prefix": { "type": "string", "pattern": "^/", "maxLength": 1024 }
+      }
+    }
+  }
+}
