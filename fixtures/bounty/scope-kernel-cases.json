@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "red-team-audit/bounty-scope-kernel-cases",
+  "description": "Cross-language conformance contract for the bounty-v1 scope kernel. The Node reference implementation in scripts/lib/bounty-scope-kernel.mjs and the P2 Python proxy addon must both produce the recorded decision and reason for every case. Never loosen the kernel to make a case pass.",
+  "scope": {
+    "scope_rules": {
+      "allow": [
+        { "rule_id": "a1", "host_kind": "wildcard", "host": "target.example" },
+        { "rule_id": "a2", "host_kind": "exact", "host": "target.example" },
+        { "rule_id": "a3", "host_kind": "exact", "host": "api.other.example", "path_prefix": "/api" },
+        { "rule_id": "a4", "host_kind": "ip", "host": "203.0.113.7" },
+        { "rule_id": "a5", "host_kind": "wildcard", "host": "ports.example", "ports": [443, 8443] }
+      ],
+      "deny": [
+        { "rule_id": "d1", "host_kind": "exact", "host": "internal.target.example" },
+        { "rule_id": "d2", "host_kind": "wildcard", "host": "corp.target.example" }
+      ]
+    }
+  },
+  "cases": [
+    { "case_id": "apex-listed-allows", "candidate": "https://target.example/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "subdomain-allows", "candidate": "https://www.target.example/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "nested-subdomain-allows", "candidate": "https://a.b.c.target.example/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "explicit-deny-beats-wildcard", "candidate": "https://internal.target.example/", "expect": "DENY", "expect_reason": "explicit-deny-rule" },
+    { "case_id": "deny-wildcard-covers-children", "candidate": "https://vpn.corp.target.example/", "expect": "DENY", "expect_reason": "explicit-deny-rule" },
+    { "case_id": "suffix-confusion-denied", "candidate": "https://eviltarget.example/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "domain-suffix-append-denied", "candidate": "https://target.example.evil.net/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "userinfo-confusion-denied", "candidate": "https://target.example@evil.net/", "expect": "DENY", "expect_reason": "candidate-carries-userinfo" },
+    { "case_id": "userinfo-with-password-denied", "candidate": "https://target.example:x@evil.net/", "expect": "DENY", "expect_reason": "candidate-carries-userinfo" },
+    { "case_id": "trailing-dot-normalizes-to-allow", "candidate": "https://www.target.example./", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "double-trailing-dot-denied", "candidate": "https://www.target.example../", "expect": "DENY", "expect_reason": "host-not-canonicalizable" },
+    { "case_id": "uppercase-host-normalizes-to-allow", "candidate": "https://WWW.TARGET.EXAMPLE/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "idn-homograph-denied", "candidate": "https://tаrget.example/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "non-default-port-denied", "candidate": "https://www.target.example:8443/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "sealed-port-allows", "candidate": "https://api.ports.example:8443/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "unsealed-port-on-ported-rule-denied", "candidate": "https://api.ports.example:9000/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "path-prefix-exact-allows", "candidate": "https://api.other.example/api", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "path-prefix-child-allows", "candidate": "https://api.other.example/api/v1/users", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "path-prefix-sibling-denied", "candidate": "https://api.other.example/apifoo", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "path-prefix-root-denied", "candidate": "https://api.other.example/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "path-traversal-escape-denied", "candidate": "https://api.other.example/api/../admin", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "listed-ip-allows", "candidate": "https://203.0.113.7/", "expect": "ALLOW", "expect_reason": "allow-rule-matched" },
+    { "case_id": "unlisted-ip-denied", "candidate": "https://203.0.113.8/", "expect": "DENY", "expect_reason": "candidate-unlisted" },
+    { "case_id": "loopback-denied", "candidate": "http://127.0.0.1/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "localhost-denied", "candidate": "http://localhost/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "rfc1918-ten-denied", "candidate": "http://10.1.2.3/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "rfc1918-172-denied", "candidate": "http://172.16.0.1/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "rfc1918-192-denied", "candidate": "http://192.168.1.1/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "aws-metadata-denied", "candidate": "http://169.254.169.254/latest/meta-data/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "gcp-metadata-denied", "candidate": "http://metadata.google.internal/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "alibaba-metadata-denied", "candidate": "http://100.100.100.200/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "ipv6-loopback-denied", "candidate": "http://[::1]/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "ipv6-link-local-denied", "candidate": "http://[fe80::1]/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "ipv6-unique-local-denied", "candidate": "http://[fd00::1]/", "expect": "DENY", "expect_reason": "private-target-not-sealed" },
+    { "case_id": "file-scheme-denied", "candidate": "file:///etc/passwd", "expect": "DENY", "expect_reason": "scheme-not-http" },
+    { "case_id": "gopher-scheme-denied", "candidate": "gopher://target.example/", "expect": "DENY", "expect_reason": "scheme-not-http" },
+    { "case_id": "unparsable-denied", "candidate": "https://", "expect": "DENY", "expect_reason": "candidate-unparsable" },
+    { "case_id": "empty-denied", "candidate": "", "expect": "DENY", "expect_reason": "candidate-not-a-string" }
+  ]
+}
