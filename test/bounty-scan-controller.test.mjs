@@ -26,7 +26,12 @@ async function workspace(port, { activeTesting = true } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'bounty-scan-'))
   await writeFile(join(dir, 'scope.json'), JSON.stringify({
     engagement_id: 'scan-testbed',
-    authorization: { permissions: { rate_limit_rps: 100, active_testing: activeTesting } },
+    // intensity is required: the scanner resolves breadth from the sealed tier and
+    // fails closed without one. aggressive gives all three classes and no caps,
+    // which is what these ground-truth assertions need.
+    authorization: {
+      permissions: { rate_limit_rps: 100, active_testing: activeTesting, intensity: 'aggressive' },
+    },
     validity: { not_before: '2026-08-21T00:00:00.000Z', not_after: '2026-08-22T00:00:00.000Z' },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [port] }],
@@ -124,7 +129,9 @@ test('scanning refuses an expired scope before any probe', async () => {
   try {
     await writeFile(join(dir, 'scope.json'), JSON.stringify({
       engagement_id: 'expired',
-      authorization: { permissions: { rate_limit_rps: 100, active_testing: true } },
+      // Complete apart from the expiry, so this fails for the reason it claims
+      // rather than incidentally on a missing intensity tier.
+      authorization: { permissions: { rate_limit_rps: 100, active_testing: true, intensity: 'normal' } },
       validity: { not_before: '2026-06-01T00:00:00.000Z', not_after: '2026-07-01T00:00:00.000Z' },
       scope_rules: { allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [testbed.port] }], deny: [], private_targets_sealed: true },
     }), 'utf8')
