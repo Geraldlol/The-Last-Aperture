@@ -64,12 +64,12 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** a token bucket of capacity 1 refilling at `ratePerSecond`. `ratePerSecond` must be a positive integer; anything else throws. There is no bypass parameter and no burst allowance beyond the single token, because the sealed limit is the authorization rather than a performance knob.
 
-- [ ] **Step 1:** Write failing tests — issuing N tokens at rate R waits at least (N-1)/R seconds of injected time; a non-positive or non-integer rate throws; `stats()` reports issued count and accumulated wait.
-- [ ] **Step 2:** Run to confirm module-not-found failure.
-- [ ] **Step 3:** Implement the bucket with injected `now`/`sleep`.
-- [ ] **Step 4:** Run to green.
-- [ ] **Step 5:** Purity grep — no fs, net, or ambient clock.
-- [ ] **Step 6:** Commit.
+- [x] **Step 1:** Write failing tests — issuing N tokens at rate R waits at least (N-1)/R seconds of injected time; a non-positive or non-integer rate throws; `stats()` reports issued count and accumulated wait.
+- [x] **Step 2:** Run to confirm module-not-found failure.
+- [x] **Step 3:** Implement the bucket with injected `now`/`sleep`.
+- [x] **Step 4:** Run to green.
+- [x] **Step 5:** Purity grep — no fs, net, or ambient clock.
+- [x] **Step 6:** Commit.
 
 ---
 
@@ -85,8 +85,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** `*.example.com` classifies as `zone_hint` with value `example.com`; a wildcard is never a probe target. Bare names classify as `host`. Anything carrying a scheme, path, port, or whitespace is rejected — sources emit names, and a source emitting a URL is a source bug worth surfacing rather than silently coercing.
 
-- [ ] **Step 1:** Write failing tests, including the wildcard/zone-hint split, `DNS:` prefix stripping, trailing dots, case folding, dedupe stability, and rejection of `http://x`, `x/y`, `x:443`, and whitespace.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
+- [x] **Step 1:** Write failing tests, including the wildcard/zone-hint split, `DNS:` prefix stripping, trailing dots, case folding, dedupe stability, and rejection of `http://x`, `x/y`, `x:443`, and whitespace.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
 
 ---
 
@@ -102,8 +102,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** every candidate is converted to a concrete `https://host/` URL and run through `decideScope`. Only ALLOW yields an approval. Zone hints are refused with reason `zone-hint-not-probeable`. The brand exists so a probe can refuse anything that did not come through here — the same fail-closed reasoning as the kernel, one layer up.
 
-- [ ] **Step 1:** Write failing tests — in-scope host approved with its rule id; out-of-scope refused; zone hint refused; a hand-forged object without the brand rejected by `assertApproved`; refusals carry the kernel's reason verbatim.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement over `decideScope`. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
+- [x] **Step 1:** Write failing tests — in-scope host approved with its rule id; out-of-scope refused; zone hint refused; a hand-forged object without the brand rejected by `assertApproved`; refusals carry the kernel's reason verbatim.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement over `decideScope`. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
 
 ---
 
@@ -122,8 +122,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** `status` is `PARTIAL` whenever `gaps.length > 0`, otherwise `OBSERVED`. There is no `COMPLETE`. Hosts dedupe on `host:port`, keeping the richest probe record. Refusals are retained rather than discarded — a refused candidate is evidence about the perimeter's shape.
 
-- [ ] **Step 1:** Write failing tests including dedupe-on-merge, gap forcing `PARTIAL`, refusals retained, and schema rejection of a `COMPLETE` status.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement plus schema. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Write failing tests including dedupe-on-merge, gap forcing `PARTIAL`, refusals retained, and schema rejection of a `COMPLETE` status.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement plus schema. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -138,8 +138,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** takes an approval, never a hostname. `connectImpl` is injected so parsing and error paths are tested without a socket. A connect failure returns a gap-shaped error rather than throwing through the pipeline. `parseSubjectAltName` and `certificateFacts` are pure and carry the bulk of the tests.
 
-- [ ] **Step 1:** Write failing tests — parse the real `www.wikipedia.org` SAN string (41 DNS entries, 26 wildcards) from a recorded fixture; parse `IP Address:` entries; `certificateFacts` extraction; `assertApproved` rejection of an unbranded input; injected connect failure yields a gap reason.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Write failing tests — parse the real `www.wikipedia.org` SAN string (41 DNS entries, 26 wildcards) from a recorded fixture; parse `IP Address:` entries; `certificateFacts` extraction; `assertApproved` rejection of an unbranded input; injected connect failure yields a gap reason.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -155,8 +155,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** calls `limiter.acquire()` before every request, with no code path that skips it. Follows no redirects — `location` is recorded and the redirect target becomes a *new candidate* that must pass the gate on its own, which is precisely how open-redirect chains escape a scope if followed blindly. `extractTitle` caps its scan length so a hostile multi-megabyte response cannot stall the pipeline.
 
-- [ ] **Step 1:** Write failing tests — `assertApproved` refusal of unbranded input; limiter called exactly once per probe; redirects recorded not followed; title extraction with a length cap and with no title present; tech hints from `server`/`x-powered-by`; a fetch rejection recorded as `error` rather than thrown.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Write failing tests — `assertApproved` refusal of unbranded input; limiter called exactly once per probe; redirects recorded not followed; title extraction with a length cap and with no title present; tech hints from `server`/`x-powered-by`; a fetch rejection recorded as `error` rather than thrown.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -170,8 +170,8 @@ A wildcard SAN (`*.m.wikipedia.org`) proves a zone exists but names no host. Wil
 
 **Semantics:** returns `{ names, gap: null }` on success and `{ names: [], gap: { source: 'crt.sh', reason, detail } }` on any failure, retrying up to `attempts`. It never throws into the pipeline. `name_value` is newline-separated and may contain wildcards, so parsing splits and hands everything to `classifyCandidate`. Verified 2026-08-21: this service returns 502 often enough that the degradation path is the common path, not the edge case.
 
-- [ ] **Step 1:** Write failing tests — multi-name `name_value` splitting; 502 producing a gap after N attempts; a timeout producing a gap; malformed JSON producing a gap; success returning names.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Write failing tests — multi-name `name_value` splitting; 502 producing a gap after N attempts; a timeout producing a gap; malformed JSON producing a gap; success returning names.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -192,33 +192,53 @@ bounty recon status <bundle> [--json]
 
 **Semantics:** loads the sealed scope from the bundle and gates every candidate against it — the recon command cannot be pointed at a host the perimeter does not already permit. Reads `rate_limit_rps` from the sealed scope to build the limiter. Prints the `PARTIAL` status and the gap list prominently, because a quiet gap is how an incomplete sweep gets mistaken for a clean one.
 
-- [ ] **Step 1:** Write failing tests — an out-of-scope seed is refused and never probed; the limiter is constructed from the sealed rate limit; a failing source yields `PARTIAL` with the gap recorded; inventory persists and reloads; `recon status` reports without re-probing.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement plus CLI wiring. **Step 4:** Green. **Step 5:** Wire test files into `test:platform`. **Step 6:** Commit.
+- [x] **Step 1:** Write failing tests — an out-of-scope seed is refused and never probed; the limiter is constructed from the sealed rate limit; a failing source yields `PARTIAL` with the gap recorded; inventory persists and reloads; `recon status` reports without re-probing.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement plus CLI wiring. **Step 4:** Green. **Step 5:** Wire test files into `test:platform`. **Step 6:** Commit.
 
 ---
 
 ### Task 9: Live verification
 
-- [ ] Seal a scope for a host we are permitted to touch, run recon, and confirm real SANs land in the inventory.
-- [ ] Confirm an out-of-scope seed is refused with the kernel's reason and never probed.
-- [ ] Confirm the rate limiter measurably paces real requests.
-- [ ] Confirm a dead crt.sh produces `PARTIAL` with a recorded gap rather than a crash or a silent pass.
-- [ ] Record results in the exit gate.
+- [x] Seal a scope for a host we are permitted to touch, run recon, and confirm real SANs land in the inventory.
+- [x] Confirm an out-of-scope seed is refused with the kernel's reason and never probed.
+- [x] Confirm the rate limiter measurably paces real requests.
+- [x] Confirm a dead crt.sh produces `PARTIAL` with a recorded gap rather than a crash or a silent pass.
+- [x] Record results in the exit gate.
 
 ---
 
 ## P1 Exit Gate
 
-- [ ] `npm.cmd test` shows no new failures beyond the two known pre-existing ones
-- [ ] Purity grep clean for ratelimit, candidate, and gate modules
-- [ ] No new entry in `package.json` `dependencies`
-- [ ] **No probe function accepts an unbranded input** — every one calls `assertApproved`
-- [ ] An out-of-scope seed is refused before any socket opens, with the kernel's reason recorded
-- [ ] The sealed `rate_limit_rps` measurably paces live requests
-- [ ] A failed source produces `PARTIAL` plus a recorded gap; no path emits `COMPLETE`
-- [ ] Redirects are recorded and never followed
-- [ ] Wildcard SANs are recorded as zone hints and never probed
-- [ ] Live run against a permitted host yields real SANs in the inventory
+Verified 2026-08-21.
+
+- [x] `npm test` — **1687 tests, 1682 pass, 2 fail, 3 skipped.** The 2 failures are the same pre-existing pair (`canonical-ordering.test.mjs:126`, `http-authed-credential.test.mjs:355`); zero recon, bounty, or OOB failures. Baseline at end of P7 was 1615, P1 added exactly 72, and 1615 + 72 = 1687. **The suite does not pass clean, and this checkbox does not claim it does.**
+- [x] Purity grep clean for the ratelimit, candidate, and gate modules
+- [x] No new entry in `package.json` `dependencies` — still `acorn`, `ajv`, `yaml`
+- [x] **No probe function accepts an unbranded input** — `harvestTlsSans` and `probeHost` both call `assertApproved`; tests assert hand-forged approval objects are refused
+- [x] **An out-of-scope seed is refused before any socket opens** — the live run reported `0 requests`, and a unit test asserts `connectImpl` is never reached
+- [x] The sealed `rate_limit_rps` measurably paces live requests — 2 requests at 2/s took 1.74s live, and pacing is asserted exactly on a virtual clock in tests
+- [x] A failed source produces `PARTIAL` plus a recorded gap, and no path emits `COMPLETE` — including an assertion that finding hosts does not clear a gap
+- [x] Redirects are recorded and never followed — live: `wikipedia.org` returned 301 with its Location captured, from a single request
+- [x] Wildcard SANs are recorded as zone hints and never probed — live: 26 zone hints, none probed
+- [x] Live run against a permitted host yields real SANs — 41 SANs from `www.wikipedia.org` became 2 in-scope hosts, 26 zone hints, and 14 refusals
+- [x] 72 recon tests across 7 files, all passing; 244 bounty tests in total across P0, P1, and P7
+
+### The defect the live run caught
+
+The first live run reported  where two were expected. The seed was
+only probed if it happened to appear in its own certificate's SAN list, and
+ does not appear in its own SANs — so the most obviously
+interesting host in the sweep silently carried no liveness data at all.
+
+Fixed by probing gated seeds explicitly, deduped against discovery by
+ so nothing is requested twice. Two regression tests added. One
+existing pacing test legitimately moved from 3 probes to 4.
+
+**Third phase, third live-only defect.** P0 had a silently-ignored schema
+constraint, P7 had a callback-id format mismatch, P1 had an unprobed seed. All
+three passed a fully green unit suite, because in each case the tests encoded
+the same wrong assumption as the implementation. Keep a live smoke path in every
+remaining phase.
 
 ## Deferred
 
