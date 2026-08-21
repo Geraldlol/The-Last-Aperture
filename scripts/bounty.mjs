@@ -21,6 +21,7 @@ import {
 } from './lib/bounty-authz-controller.mjs'
 import { loadIdentifierMap } from './lib/bounty-authz-identifier.mjs'
 import { draftAuthzReports } from './lib/bounty-report-controller.mjs'
+import { loadScanRequests, runScan, scanStatus } from './lib/bounty-scan-controller.mjs'
 import { loadRoleRegistry } from './lib/bounty-authz-roles.mjs'
 import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
@@ -44,6 +45,27 @@ Usage:
   bounty authz run <bundle> --roles <registry.json> [--identifiers <ids.json>] [--json]
   bounty authz status <bundle> [--json]
   bounty report draft <bundle> --roles <registry.json> [--out <dir>] [--json]
+  bounty scan run <bundle> --roles <registry.json> --as <role-id> [--classes error-injection,ssrf-oob,passive] [--json]
+  bounty scan status <bundle> [--json]
+
+Scanner (design spec section 10):
+  Deliberately narrow. No mass XSS or SQLi fuzzing and no CVE template sweep --
+  nuclei does breadth better, and breadth on a picked-over program is a
+  duplicate-and-N/A factory. Depth on a few classes with a real oracle pays.
+
+  Classes:
+    error-injection  probes that provoke a parser error, judged against an
+                     INERT CONTROL payload. If the control also changes the
+                     response the endpoint reacts to any input and the result
+                     is UNPROVEN_VOLATILE, not a finding.
+    ssrf-oob         only for insertion points whose name or value shape says
+                     they carry a URL. Mints a correlated OOB host, so a
+                     callback names the exact parameter that fetched it.
+    passive          reads responses already collected. Secrets are matched on
+                     high-confidence shapes only and NEVER recorded verbatim.
+
+  Requires active_testing in the sealed permissions, because this sends
+  crafted payloads. Absence of a callback is inconclusive, never a clearance.
 
 Report drafting (design spec section 14):
   Turns reportable findings into YesWeHack-shaped markdown with a runnable
@@ -439,6 +461,47 @@ async function commandReport(positionals, options) {
   throw new Error(`unknown report action: ${action ?? '(none)'}`)
 }
 
+async function commandScan(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'run') {
+    const registry = await loadRoleRegistry(requireOption(options, 'roles'))
+    const requests = await loadScanRequests(bundle)
+    const classes = typeof options.classes === 'string'
+      ? options.classes.split(',').map((entry) => entry.trim()).filter(Boolean)
+      : undefined
+    const summary = await runScan({
+      bundlePath: bundle,
+      requests,
+      registry,
+      roleId: typeof options.as === 'string' ? options.as : null,
+      now: new Date(),
+      ...(classes === undefined ? {} : { classes }),
+    })
+    emit({
+      command: 'scan run',
+      ...summary,
+      summary: `candidates=${summary.candidates} unproven=${summary.unproven} of ${summary.total} probes, passive=${summary.passive.total} leads (${summary.paced.issued} requests)`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'status') {
+    const status = await scanStatus({ bundlePath: bundle })
+    const indent = '\n  '
+    const detail = status.candidateDetail.length > 0
+      ? `${indent}${status.candidateDetail.join(indent)}`
+      : ''
+    emit({
+      command: 'scan status',
+      ...status,
+      summary: `candidates=${status.candidates} unproven=${status.unproven}${detail}`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown scan action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -452,6 +515,7 @@ export async function runBountyCli(argv) {
     if (command === 'recon') return await commandRecon(positionals, options)
     if (command === 'authz') return await commandAuthz(positionals, options)
     if (command === 'report') return await commandReport(positionals, options)
+    if (command === 'scan') return await commandScan(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       // Currency is reported, not enforced: an expired bundle must stay readable

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Resolver } from 'node:dns'
 import { createServer } from 'node:http'
 
 // A three-role app with DELIBERATE, KNOWN authorization bugs. Its purpose is to
@@ -47,8 +48,15 @@ function send(response, status, payload) {
   response.end(body)
 }
 
-export function startAuthzTestbed() {
+// dnsServer lets a test point the planted SSRF handler at its own listener, so a
+// blind vector can be proven end to end instead of simulated.
+export function startAuthzTestbed({ dnsServer = null } = {}) {
   let volatileCounter = 0
+  let ssrfResolver = null
+  if (dnsServer !== null) {
+    ssrfResolver = new Resolver()
+    ssrfResolver.setServers([dnsServer])
+  }
   const server = createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost')
     const user = identify(request)
@@ -75,6 +83,50 @@ export function startAuthzTestbed() {
       return send(response, 200, {
         users: [...USERS.values()].map((u) => ({ id: u.id, role: u.role })),
       })
+    }
+
+    // --- scanner ground truth ---
+
+    if (path === '/api/search') {
+      // PLANTED: a quote in the query reaches a SQL layer and leaks the error.
+      const q = url.searchParams.get('q') ?? ''
+      if (/['"\\]/.test(q)) {
+        return send(response, 500, {
+          error: `You have an error in your SQL syntax; check the manual near '${q}'`,
+        })
+      }
+      return send(response, 200, { results: [], query: 'normalized' })
+    }
+
+    if (path === '/api/stable') {
+      // Control case: ignores input entirely. Must classify NO_SIGNAL.
+      return send(response, 200, { results: 3 })
+    }
+
+    if (path === '/api/echo') {
+      // Control case: reflects ANY input change, including an inert payload.
+      // Must classify UNPROVEN_VOLATILE -- a scanner without a control payload
+      // would report a differential finding here for every probe it sent.
+      return send(response, 200, { echo: url.searchParams.get('q') ?? '' })
+    }
+
+    if (path === '/api/fetch') {
+      // PLANTED SSRF: resolves whatever host it is handed. The resolver is
+      // pointed at a caller-supplied DNS server so a test can observe the
+      // lookup, which is what makes this a real end-to-end blind proof rather
+      // than a simulated one.
+      const target = url.searchParams.get('url') ?? ''
+      let host = null
+      try {
+        host = new URL(target).hostname
+      } catch {
+        host = /^[a-z0-9.-]+$/i.test(target) ? target : null
+      }
+      if (host === null) return send(response, 400, { error: 'bad url' })
+      if (ssrfResolver === null) return send(response, 200, { fetched: false, reason: 'no resolver configured' })
+      ssrfResolver.resolve4(host, () => {})
+      // Deliberately blind: the caller learns nothing in-band about the result.
+      return send(response, 202, { queued: true })
     }
 
     if (path === '/api/invoices') {
