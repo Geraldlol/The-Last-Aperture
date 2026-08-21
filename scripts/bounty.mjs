@@ -20,6 +20,7 @@ import {
   runAuthzMatrix,
 } from './lib/bounty-authz-controller.mjs'
 import { loadIdentifierMap } from './lib/bounty-authz-identifier.mjs'
+import { draftAuthzReports } from './lib/bounty-report-controller.mjs'
 import { loadRoleRegistry } from './lib/bounty-authz-roles.mjs'
 import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
@@ -42,6 +43,20 @@ Usage:
   bounty authz import <bundle> --har <file> --owner-role <id> [--json]
   bounty authz run <bundle> --roles <registry.json> [--identifiers <ids.json>] [--json]
   bounty authz status <bundle> [--json]
+  bounty report draft <bundle> --roles <registry.json> [--out <dir>] [--json]
+
+Report drafting (design spec section 14):
+  Turns reportable findings into YesWeHack-shaped markdown with a runnable
+  repro. Credentials appear as shell variable references, never values -- a
+  report is a document you hand to someone else.
+
+  Only AUTHZ_BYPASS_CANDIDATE is drafted. UNPROVEN_VOLATILE, ACCESS_DENIED,
+  NOT_FOUND, DIFFERENT_CONTENT, SERVER_ERROR and ABSENT_PROBE are declined
+  with a stated reason, because submitting those is how a researcher destroys
+  the signal that earns private invites.
+
+  Severity is a SUGGESTION with a stated rationale per metric, never an
+  assertion. Nothing is submitted automatically.
 
 Authorization grinder (design spec section 9):
   Replays captured requests as every other role plus unauthenticated. Import a
@@ -399,6 +414,31 @@ async function commandAuthz(positionals, options) {
   throw new Error(`unknown authz action: ${action ?? '(none)'}`)
 }
 
+async function commandReport(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'draft') {
+    const registry = await loadRoleRegistry(requireOption(options, 'roles'))
+    const result = await draftAuthzReports({
+      bundlePath: bundle,
+      registry,
+      now: new Date(),
+      ...(typeof options.out === 'string' ? { outDir: options.out } : {}),
+    })
+    const declinedNote = result.declined.length === 0
+      ? ''
+      : ` (${result.declined.length} findings declined as unreportable)`
+    emit({
+      command: 'report draft',
+      ...result,
+      summary: `${result.status} drafted=${result.drafted}${declinedNote} authorization=${result.authorization}`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown report action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -411,6 +451,7 @@ export async function runBountyCli(argv) {
     if (command === 'oob') return await commandOob(positionals, options)
     if (command === 'recon') return await commandRecon(positionals, options)
     if (command === 'authz') return await commandAuthz(positionals, options)
+    if (command === 'report') return await commandReport(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       // Currency is reported, not enforced: an expired bundle must stay readable
