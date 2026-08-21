@@ -22,6 +22,7 @@ import {
 import { loadIdentifierMap } from './lib/bounty-authz-identifier.mjs'
 import { draftAuthzReports } from './lib/bounty-report-controller.mjs'
 import { loadScanRequests, runScan, scanStatus } from './lib/bounty-scan-controller.mjs'
+import { flowsToAuthzRequests, ingestFlows, queryFlows } from './lib/bounty-proxy-ingest.mjs'
 import { loadRoleRegistry } from './lib/bounty-authz-roles.mjs'
 import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
@@ -47,6 +48,34 @@ Usage:
   bounty report draft <bundle> --roles <registry.json> [--out <dir>] [--json]
   bounty scan run <bundle> --roles <registry.json> --as <role-id> [--classes error-injection,ssrf-oob,passive] [--json]
   bounty scan status <bundle> [--json]
+  bounty proxy ingest <bundle> [--json]
+  bounty proxy flows <bundle> [--where <sql-filter>] [--limit <n>] [--json]
+  bounty proxy to-authz <bundle> --owner-role <id> [--json]
+
+Proxy capture (design spec section 8):
+  The mitmproxy addon lives in proxy/. It enforces the SAME sealed perimeter
+  using a Python port of the scope kernel, proven to decide identically to the
+  Node one on every shared fixture (npm run conformance:bounty-kernel,
+  asserted in the test suite too).
+
+  A denied request is BLOCKED before forwarding, not observed after -- a proxy
+  that notices an out-of-scope request once it has already been sent has caused
+  the exact thing the perimeter exists to prevent. An unconfigured proxy fails
+  closed and forwards nothing.
+
+  Start it yourself. It needs mitmproxy, and its CA must be trusted by your
+  browser; installing a root CA is your decision, not this tool to make:
+
+    py -m pip install mitmproxy
+    mitmdump -s proxy/bounty_addon.py --set bounty_scope=<bundle>/scope.json --set bounty_flows=<bundle>/flows.jsonl
+
+  Then ingest what it captured. The proxy only appends JSONL and only Node
+  touches SQLite, so there is no cross-language locking and the raw capture
+  stays replayable.
+
+  proxy to-authz feeds captured traffic into the grinder and skips anything the
+  perimeter blocked: a blocked request is evidence about the perimeter, not
+  something to replay.
 
 Scanner (design spec section 10):
   Deliberately narrow. No mass XSS or SQLi fuzzing and no CVE template sweep --
@@ -502,6 +531,50 @@ async function commandScan(positionals, options) {
   throw new Error(`unknown scan action: ${action ?? '(none)'}`)
 }
 
+async function commandProxy(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'ingest') {
+    const result = await ingestFlows({ bundlePath: bundle })
+    emit({
+      command: 'proxy ingest',
+      ...result,
+      summary: `${result.status} ingested=${result.ingested} blocked=${result.blocked} skipped=${result.skipped.length}`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'flows') {
+    const rows = queryFlows({
+      bundlePath: bundle,
+      ...(typeof options.where === 'string' ? { where: options.where } : {}),
+      ...(typeof options.limit === 'string' ? { limit: Number.parseInt(options.limit, 10) } : {}),
+    })
+    const newline = String.fromCharCode(10)
+    const lines = rows.map((row) => `${row.scope_decision} ${row.status ?? '-'} ${row.method} ${row.url}`)
+    emit({
+      command: 'proxy flows',
+      count: rows.length,
+      rows,
+      summary: lines.length === 0 ? 'no matching flows' : lines.join(newline),
+    }, asJson)
+    return 0
+  }
+  if (action === 'to-authz') {
+    const result = await flowsToAuthzRequests({
+      bundlePath: bundle,
+      ownerRole: requireOption(options, 'owner-role'),
+    })
+    emit({
+      command: 'proxy to-authz',
+      ...result,
+      summary: `${result.status} imported=${result.imported}`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown proxy action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -516,6 +589,7 @@ export async function runBountyCli(argv) {
     if (command === 'authz') return await commandAuthz(positionals, options)
     if (command === 'report') return await commandReport(positionals, options)
     if (command === 'scan') return await commandScan(positionals, options)
+    if (command === 'proxy') return await commandProxy(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       // Currency is reported, not enforced: an expired bundle must stay readable
