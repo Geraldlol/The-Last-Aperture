@@ -13,6 +13,7 @@ import {
   openOobSession,
   pollOobSession,
 } from './lib/bounty-oob-controller.mjs'
+import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
 import { PLATFORM_VERSION } from './lib/run-engine.mjs'
 
@@ -28,6 +29,29 @@ Usage:
   bounty oob poll <bundle> [--json]
   bounty oob status <bundle> [--json]
   bounty oob close <bundle> [--json]
+  bounty recon run <bundle> --seed <host> [--seed <host>...] [--sources tls,ctlog] [--json]
+  bounty recon status <bundle> [--json]
+
+Recon (design spec section 11):
+  Discovers surface inside the sealed perimeter. Every candidate -- seeds and
+  everything a source discovers -- passes the Scope Kernel before anything
+  touches it, so an out-of-scope name is refused before a socket opens.
+
+  Request pacing comes from the sealed rate_limit_rps and cannot be overridden
+  by a flag: the program's stated limit is the authorization, not a setting.
+
+  Sources:
+    tls    peer certificate SANs. No third party involved. The primary source.
+    ctlog  crt.sh certificate transparency search. High yield when reachable and
+           frequently returns 502; failure is recorded as a gap, never hidden.
+
+  Wildcard SANs are recorded as zone hints and never probed -- a wildcard proves
+  a zone exists but names no host. Redirects are recorded, never followed; the
+  target becomes a new candidate that must pass the gate on its own.
+
+  Inventory status is OBSERVED or PARTIAL. There is no COMPLETE: any source that
+  failed leaves a gap, and gaps force PARTIAL permanently, so a large haul never
+  launders an incomplete sweep into a clean one.
 
 Out-of-band interaction (design spec section 17):
   Blind SSRF, blind XXE, blind RCE, out-of-band SQLi and most blind SSTI are
@@ -244,6 +268,41 @@ async function commandOob(positionals, options) {
   throw new Error(`unknown oob action: ${action ?? '(none)'}`)
 }
 
+async function commandRecon(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'run') {
+    const sources = typeof options.sources === 'string'
+      ? options.sources.split(',').map((s) => s.trim()).filter(Boolean)
+      : undefined
+    const summary = await runRecon({
+      bundlePath: bundle,
+      seeds: list(options.seed),
+      ...(sources === undefined ? {} : { sources }),
+      now: new Date(),
+    })
+    emit({
+      command: 'recon run',
+      ...summary,
+      summary: `${summary.status} hosts=${summary.hosts} zoneHints=${summary.zoneHints} refused=${summary.refused} gaps=${summary.gaps} (rate ${summary.rateLimitRps}/s, ${summary.paced.issued} requests)`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'status') {
+    const status = await reconStatus({ bundlePath: bundle })
+    emit({
+      command: 'recon status',
+      ...status,
+      summary: `${status.status} hosts=${status.hosts} zoneHints=${status.zoneHints} refused=${status.refused} gaps=${status.gaps}${
+        status.gaps > 0 ? ` [${status.gapDetail.map((g) => `${g.source}:${g.reason}`).join(', ')}]` : ''
+      }`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown recon action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -254,6 +313,7 @@ export async function runBountyCli(argv) {
   try {
     if (command === 'plan') return await commandPlan(options)
     if (command === 'oob') return await commandOob(positionals, options)
+    if (command === 'recon') return await commandRecon(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       emit({
