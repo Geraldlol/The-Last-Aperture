@@ -89,13 +89,12 @@ These are not tiers. A tier is what evidence you have; a rail is what you do not
 
 Never a remote host. Never a staging URL. Never "just curl it to check". And specifically: **never a hostname read from configuration.** A `DATABASE_URL`, an `API_BASE`, a Terraform backend address, an org login URL, an entry in a `baa_approved_hosts.yml` allowlist — every one of those is an input to a *static* assertion and never a destination. Reading the value out of the repository is the audit; connecting to it is the violation. That the value came from a file in the checkout does not make the host it names a permitted target.
 
-This rail remains absolute for every lens recipe and every T0-T3 proof. The
-separate `http-recon-v1` controller documented in
-`docs/http-recon-protocol.md` is not a lens recipe or proof tier. It can perform
-only exact, separately sealed, bounded HTTPS reconnaissance under either an
-operator-attested or externally signed authorization mode; it creates no
-repository coverage or closure and cannot verify or raise the tier of a
-repository finding. A remote response can never turn that route into T2.
+This rail remains absolute for every lens recipe and T0-T3 proof. The separate
+`http-recon-v1` and `http-authed-v1` controllers documented in
+`docs/http-recon-protocol.md` and ADRs 0016/0017 are not lens recipes or proof tiers.
+They execute only their separately authorized, controller-sealed external
+actions and create no repository coverage or closure. A remote response cannot
+raise a repository finding's proof tier.
 
 **2. No destructive payloads.**
 
@@ -125,7 +124,7 @@ Before running anything that could open a socket, install the guard from `## Soc
 
 `salesforce-platform`'s guest-access recipe originally instructed the auditor to send unauthenticated requests to a live Experience Cloud site. That reaches a remote host and violates rail 1 outright. It was rewritten as a computation over the checkout: resolve the guest profile by its license, compute its effective object and field permissions from the profile plus any permission set assigned to it, intersect that with the Apex classes it can call, read each object's sharing model, and assert the reachable set is a subset of a committed allowlist of objects the site is *intended* to publish. That runs offline, and it is **T1**.
 
-**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Unauthenticated probing of a running site is authorized-penetration-test activity governed by a scope agreement — it requires **written authorization naming the site, scoped and dated, obtained before the first request** — and it happens outside these proof recipes. If the separate `http-recon-v1` route is used, its observations stay outside the finding proof tiers; operator-attested mode records a declaration but does not independently verify that written authorization.
+**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site is governed by a scope agreement and happens outside these proof recipes. Use only the canonical skill's separate external controller: `http-recon-v1` for bounded credential-free observation or `http-authed-v1` for an operator-attested or document-bound authenticated campaign. Neither route changes finding proof tiers.
 
 **The T2 consent prompt is not that authorization and must never be presented as if it were.** Asking "may I boot the app locally?" and receiving yes does not authorize a request to a hosted endpoint. Treating the prompt as authorization would have the skill walk an auditor into unauthorized testing while showing them a consent dialog.
 

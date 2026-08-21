@@ -83,11 +83,14 @@ never needed this.
 
 Attestation, a declared target class, a named operator, impact counters and a
 kill switch are floors for this class. `PRODUCTION` requires an explicit
-acknowledgment; `THIRD_PARTY` routes through the existing higher-assurance
-signed-artifact mode, which this adapter neither creates nor approves.
+acknowledgment. Until the higher-assurance signed-artifact controller is
+available, `THIRD_PARTY` also requires `--acknowledge-third-party`; this is an
+interim operator-attested route and remains limited to controller-built
+read-only operations.
 
 Attestation is a recorded operator declaration, not independently verified
-owner permission.
+owner permission. The interim `THIRD_PARTY` acknowledgment does not change that
+assurance level and does not authorize mutation or exploitation.
 
 ## Impact counters and stop
 

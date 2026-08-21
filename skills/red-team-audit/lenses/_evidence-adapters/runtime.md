@@ -62,8 +62,11 @@ confirmation**. Attestation at plan time is not enough for this class:
 authorization can lapse between planning and running, and this is the tier
 where that difference has consequences.
 
-`PRODUCTION` requires an explicit acknowledgment; `THIRD_PARTY` routes through
-the existing higher-assurance signed-artifact mode.
+`PRODUCTION` requires an explicit acknowledgment. Until the higher-assurance
+signed-artifact controller is available, `THIRD_PARTY` also requires
+`--acknowledge-third-party`. This interim route is operator-attested, not
+independently verified, and remains restricted to controller-built read-only
+inspection; it does not authorize mutation or exploitation.
 
 ## Impact counters and stop
 

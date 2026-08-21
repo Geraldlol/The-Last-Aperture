@@ -104,11 +104,23 @@ export async function runAcquisition({
   if (routed.authorization.operator_identity && !operatorId) {
     throw new AcquisitionError('ACQUISITION_OPERATOR_REQUIRED', 'this class requires a named operator')
   }
-  if (routed.authorization.attestation && !authorizationConfirmed) {
+  if (routed.authorization.attestation && authorizationConfirmed !== true) {
     throw new AcquisitionError(
       'ACQUISITION_AUTHORIZATION_REQUIRED',
       'this class requires --confirm-authorization-current at run time',
     )
+  }
+  if (record.plan.target_class === 'THIRD_PARTY') {
+    const gate = record.plan.authorization_gate
+    if (
+      gate?.mode !== 'INTERIM_OPERATOR_ACKNOWLEDGED_THIRD_PARTY'
+      || gate.acknowledge_third_party !== true
+    ) {
+      throw new AcquisitionError(
+        'ACQUISITION_THIRD_PARTY_PLAN_ACKNOWLEDGMENT_MISSING',
+        'THIRD_PARTY acquisition plan is missing its exact sealed interim acknowledgment',
+      )
+    }
   }
 
   const adapter = ADAPTER_FACTORIES.get(record.adapter_id)({ env, resolver })
@@ -122,6 +134,17 @@ export async function runAcquisition({
     state: 'ACQUIRED',
     operator_id: operatorId ?? null,
     root_sha256: written.root_sha256,
+    ...(record.plan.authorization_gate
+      ? {
+          run_authorization: {
+            mode: record.plan.authorization_gate.mode,
+            current_authorization_confirmed: authorizationConfirmed === true,
+            third_party_acknowledged:
+              record.plan.authorization_gate.acknowledge_third_party === true,
+            confirmed_by: operatorId ?? null,
+          },
+        }
+      : {}),
   })
   return written
 }

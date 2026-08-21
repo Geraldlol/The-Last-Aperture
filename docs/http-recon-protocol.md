@@ -2,14 +2,16 @@
 
 Protocol: `http-recon-v1`
 
-Platform release: 0.11.0
+Current platform release: 0.12.0 (protocol introduced in 0.11.0)
 
 This is a narrow external-target observation protocol. It is not a repository
 audit, the `remote_static` provider gateway, a T2 proof recipe, a crawler, or an
 exploitation engine. See
 [`ADR 0013`](adr/0013-authorized-external-http-recon.md) and its
 [`ADR 0014`](adr/0014-operator-attested-http-recon.md) and
-[`ADR 0015`](adr/0015-url-first-pkix-http-recon.md) amendments.
+[`ADR 0015`](adr/0015-url-first-pkix-http-recon.md) and
+[`ADR 0018`](adr/0018-controller-governed-diagnostic-http-recon-headers.md)
+amendments.
 
 ## Authorization modes
 
@@ -33,7 +35,9 @@ Both modes seal the exact target, TLS verification policy, method, URL,
 validity, limits, and action IDs before network access. Target content and
 responses cannot add actions or change authority. Signed mode remains exactly
 SPKI-pinned. Operator-attested mode may optionally add the same advance pin,
-but does not require one.
+but does not require one. Operator-attested schema `1.1.0` may additionally seal
+one finite controller-owned diagnostic request-header profile. It never accepts
+a raw header name or value.
 
 ## Commands
 
@@ -75,7 +79,9 @@ The default method is `HEAD`. Use `--method OPTIONS` when needed. For `GET`,
 use `--method GET --safe-to-get`; that acknowledgment is not proof that a
 broken target has no side effects. An operator-attested plan may add
 `--tls-spki-sha256 <64-lowercase-hex>` when an independently obtained pin is
-available.
+available. A reviewed diagnostic experiment may add
+`--request-header-profile <controller-profile>`. The profile is immutable after
+planning and is unavailable to signed-mode target-proof requests.
 
 The optional signed mode uses `plan-signed` with `--roe`,
 `--authorization-document`, and `--owner-public-key`. Its later `next`, `run`,
@@ -83,7 +89,7 @@ The optional signed mode uses `plan-signed` with `--roe`,
 described by ADR 0013. Those options are rejected for operator-attested bundles.
 
 `next` returns the next legal sealed action. `run` accepts only that
-`action-id`; no URL, target, method, TLS policy, header, credential, payload,
+`action-id`; no URL, target, method, TLS policy, header profile, credential, payload,
 proof URL, retry, or limit can be changed after planning. Operator-attested `run`
 requires the same operator ID that created the attestation and
 `--confirm-authorization-current` before every dispatch. It makes zero
@@ -112,9 +118,13 @@ records the leaf certificate and SPKI SHA-256 values from that same connection
 before sending the request; it does not make a certificate-discovery preflight
 and does not silently promote the observed hash into a future pin.
 
-The request headers are fixed by the controller and credential-free. There is
-no request body, authentication, cookies, client certificate, token, custom
-authorization header, or ambient proxy credential. The controller neither
+Request headers are controller-owned and credential-free. Legacy schema `1.0.0`
+uses only the fixed baseline set. Operator-attested schema `1.1.0` may add one
+sealed named diagnostic profile whose exact values exist only in controller
+code; durable evidence retains the profile, header names, and binding digest,
+not values. Arbitrary headers, `Host`, authentication, cookies, client
+certificates, tokens, custom authorization headers, and ambient proxy
+credentials remain refused. There is no request body. The controller neither
 crawls nor parses links. Status, bounded response headers, timing, byte count,
 and a streaming body digest may be recorded. A normal response body is never
 exposed to the agent, parsed, searched, reported, or retained; it is discarded
@@ -147,7 +157,7 @@ raise either mode's sealed limits. Response-header projection retains at most
 the current operation and closes future dispatch.
 
 The controller performs no path discovery, crawling, authentication, body
-analysis, mutation, exploitation, fuzzing, brute force, persistence, lateral
+analysis, mutation, fuzzing, brute force, persistence, lateral
 movement, data exfiltration, social engineering, or load testing. `GET`,
 `HEAD`, and `OPTIONS` names do not establish that a target implementation is
 side-effect free. Any `3xx`, `429`, or `5xx` response is recorded and stops
@@ -244,13 +254,14 @@ used to raise a repository finding's proof tier.
 
 ## No implicit exploitation tier
 
-`http-recon-v1` has no exploit transition. A future exploitation protocol must
-define a separate typed action and schema, exact payload and cleanup rules,
-fresh authorization and live control checks, monotonic action and cumulative
-impact counters, and a fresh human countersignature for every exploit action.
-The reconnaissance signature or operator attestation, rationale, live proof,
-response, and completion state cannot satisfy that countersignature. No
-response-driven or automatic chaining is allowed.
+`http-recon-v1` has no exploit transition. ADR 0017 defines the separate
+operator-attested `http-authed-v1` route; ADR 0016 defines its shared campaign
+mechanics and the document-bound route. Both use their own scope, credential,
+ledger, mutation, rollback, and countersignature contracts. A reconnaissance
+signature, reconnaissance attestation, rationale, response, or completion state
+cannot authorize either authenticated route. Response-driven chaining remains
+forbidden here; authenticated discovery is revalidated only inside its selected,
+separately authorized campaign.
 
 ## Standards posture
 

@@ -1,0 +1,822 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/http-authed-scope.schema.json",
+  "title": "Red Team Audit authenticated HTTP action scope (http-authed-v1)",
+  "description": "The released http-authed-v1 controller scope for authenticated operator-attested or document-bound HTTP campaigns and declared reversible mutations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "engagement_id",
+    "environment",
+    "data_class",
+    "authorization",
+    "credential",
+    "evidence_handling",
+    "liveness",
+    "target",
+    "validity",
+    "limits",
+    "stop_conditions",
+    "requests"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0", "1.1.0", "1.2.0", "1.3.0"] },
+    "kind": { "const": "red-team-audit/http-authed-scope" },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "environment": { "enum": ["production", "non_production"] },
+    "data_class": { "enum": ["phi", "non_phi", "unknown"] },
+    "discovery": { "$ref": "#/$defs/discoveryPolicy" },
+    "response_observation": { "$ref": "#/$defs/responseObservation" },
+
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "authorization_id",
+        "statement",
+        "operator_id",
+        "authorized_by",
+        "authorization_reference",
+        "attested_at",
+        "independently_verified"
+      ],
+      "properties": {
+        "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] },
+        "authorization_id": { "$ref": "#/$defs/id" },
+        "statement": { "$ref": "#/$defs/humanText" },
+        "operator_id": { "$ref": "#/$defs/id" },
+        "authorized_by": { "$ref": "#/$defs/humanText" },
+        "authorization_reference": { "$ref": "#/$defs/referenceText" },
+        "attested_at": { "$ref": "#/$defs/timestamp" },
+        "independently_verified": { "type": "boolean" },
+        "signed_roe_sha256": { "$ref": "#/$defs/sha256" },
+        "document_sha256": { "$ref": "#/$defs/sha256" },
+        "owner_key_id": { "$ref": "#/$defs/keyId" },
+        "written_authorization_sha256": { "$ref": "#/$defs/sha256" },
+        "document_issuer": { "$ref": "#/$defs/humanText" },
+        "document_issued_at": { "$ref": "#/$defs/timestamp" },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["active_testing", "production", "third_party", "phi", "mutation"],
+          "properties": {
+            "active_testing": { "type": "boolean" },
+            "production": { "type": "boolean" },
+            "third_party": { "type": "boolean" },
+            "phi": { "type": "boolean" },
+            "mutation": { "type": "boolean" }
+          }
+        },
+        "authorized_scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origins", "path_prefixes", "methods", "test_categories"],
+          "properties": {
+            "origins": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/httpsOrigin" }
+            },
+            "path_prefixes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1024,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/pathPrefix" }
+            },
+            "methods": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/httpMethod" }
+            },
+            "test_categories": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/testCategory" }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "EXTERNAL_SIGNED_AUTHED" } } },
+          "then": {
+            "required": ["signed_roe_sha256", "document_sha256", "owner_key_id"],
+            "properties": { "independently_verified": { "const": true } }
+          },
+          "else": {
+            "if": { "properties": { "mode": { "const": "WRITTEN_AUTHORIZATION_AUTHED" } } },
+            "then": {
+              "required": [
+                "written_authorization_sha256",
+                "document_issuer",
+                "document_issued_at",
+                "permissions",
+                "authorized_scope"
+              ],
+              "properties": {
+                "statement": {
+                  "const": "I attest that the supplied written authorization permits authenticated HTTP testing throughout the sealed engagement scope."
+                },
+                "independently_verified": { "const": false }
+              },
+              "not": { "anyOf": [
+                { "required": ["signed_roe_sha256"] },
+                { "required": ["document_sha256"] },
+                { "required": ["owner_key_id"] }
+              ] }
+            },
+            "else": {
+              "required": ["permissions", "authorized_scope"],
+              "properties": {
+                "statement": {
+                  "const": "I confirm that I am authorized by the asset owner to perform these exact bounded authenticated HTTP actions."
+                },
+                "independently_verified": { "const": false }
+              },
+              "not": { "anyOf": [
+                { "required": ["signed_roe_sha256"] },
+                { "required": ["document_sha256"] },
+                { "required": ["owner_key_id"] },
+                { "required": ["written_authorization_sha256"] },
+                { "required": ["document_issuer"] },
+                { "required": ["document_issued_at"] }
+              ] }
+            }
+          }
+        }
+      ]
+    },
+
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "ownership", "tls"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/httpsOrigin" },
+        "ownership": { "enum": ["operator_owned", "third_party_owned"] },
+        "tls": { "$ref": "#/$defs/tlsPolicy" }
+      }
+    },
+
+    "credential": {
+      "description": "Authentication is either an explicitly bound secret reference or a Chrome-held active-tab session whose cookie values never enter the controller.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref", "kind", "binding_sha256"],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 256,
+              "pattern": "^(?:(env|keychain|file):[^\\u0000-\\u001f\\u007f]{1,247}|stdin:PIPE)$"
+            },
+            "kind": { "enum": ["cookie", "bearer"] },
+            "binding_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "extension_id", "origin"],
+          "properties": {
+            "mode": { "const": "CHROME_ACTIVE_TAB_SESSION" },
+            "extension_id": {
+              "type": "string",
+              "pattern": "^[a-p]{32}$"
+            },
+            "origin": { "$ref": "#/$defs/httpsOrigin" }
+          }
+        }
+      ]
+    },
+
+    "evidence_handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "persist_request_bodies",
+        "persist_response_bodies",
+        "persist_credential_values",
+        "persist_header_values",
+        "stop_on_sensitive_data",
+        "test_data"
+      ],
+      "properties": {
+        "persist_request_bodies": { "const": false },
+        "persist_response_bodies": { "const": false },
+        "persist_credential_values": { "const": false },
+        "persist_header_values": { "const": false },
+        "stop_on_sensitive_data": { "const": true },
+        "test_data": { "const": "synthetic_only" }
+      }
+    },
+
+    "approver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mechanism", "key_id", "public_key", "enrollment"],
+      "properties": {
+        "mechanism": { "enum": ["webauthn_passkey", "ed25519_file"] },
+        "key_id": { "$ref": "#/$defs/keyId" },
+        "public_key": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "value_base64"],
+          "properties": {
+            "format": { "enum": ["spki_der_b64", "cose_b64"] },
+            "value_base64": { "$ref": "#/$defs/base64" }
+          }
+        },
+        "enrollment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enrolled_by", "enrolled_at", "provenance"],
+          "properties": {
+            "enrolled_by": { "$ref": "#/$defs/humanText" },
+            "enrolled_at": { "$ref": "#/$defs/timestamp" },
+            "provenance": { "$ref": "#/$defs/referenceText" },
+            "four_eyes_by": { "$ref": "#/$defs/humanText" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mechanism": { "const": "webauthn_passkey" } } },
+          "then": { "properties": { "public_key": { "properties": { "format": { "const": "cose_b64" } } } } },
+          "else": { "properties": { "public_key": { "properties": { "format": { "const": "spki_der_b64" } } } } }
+        }
+      ]
+    },
+
+    "liveness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential_preflight"],
+      "properties": {
+        "credential_preflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "url"],
+          "properties": {
+            "method": { "const": "GET" },
+            "url": { "$ref": "#/$defs/httpsUrl" }
+          }
+        },
+        "target_control_proof": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["proof_url", "challenge_nonce", "max_age_ms"],
+          "properties": {
+            "proof_url": { "$ref": "#/$defs/httpsUrl" },
+            "challenge_nonce": { "$ref": "#/$defs/nonce" },
+            "max_age_ms": { "type": "integer", "minimum": 1000, "maximum": 300000 }
+          }
+        }
+      }
+    },
+
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["not_before", "not_after", "cleanup_not_after"],
+      "properties": {
+        "not_before": { "$ref": "#/$defs/timestamp" },
+        "not_after": { "$ref": "#/$defs/timestamp" },
+        "cleanup_not_after": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_timeout_ms",
+        "max_response_bytes",
+        "min_interval_ms",
+        "concurrency"
+      ],
+      "properties": {
+        "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 30000 },
+        "max_response_bytes": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "min_interval_ms": { "type": "integer", "minimum": 0, "maximum": 60000 },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 16 }
+      }
+    },
+
+    "stop_conditions": {
+      "type": "array",
+      "minItems": 9,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "AUTHORIZATION_WITHDRAWN",
+          "EMERGENCY_STOP_REQUESTED",
+          "AUTHORIZATION_WINDOW_CLOSED",
+          "TARGET_IDENTITY_CHANGED",
+          "LIMIT_REACHED",
+          "UNEXPECTED_SIDE_EFFECT",
+          "VERIFICATION_MISMATCH",
+          "ROLLBACK_REQUIRED",
+          "CREDENTIAL_INVALID"
+        ]
+      }
+    },
+
+    "requests": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/action" }
+    }
+  },
+
+  "allOf": [
+    {
+      "$comment": "Ordinary JSON shape observation is the explicit v1.1 extension.",
+      "if": {
+        "properties": {
+          "response_observation": {
+            "properties": { "mode": { "const": "JSON_SHAPE_ONLY" } },
+            "required": ["mode"]
+          }
+        },
+        "required": ["response_observation"]
+      },
+      "then": { "properties": { "schema_version": { "const": "1.1.0" } } }
+    },
+    {
+      "if": { "properties": { "schema_version": { "const": "1.1.0" } }, "required": ["schema_version"] },
+      "then": {
+        "required": ["response_observation"],
+        "properties": {
+          "response_observation": {
+            "properties": { "mode": { "const": "JSON_SHAPE_ONLY" } },
+            "required": ["mode"]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "One-level ASP.NET d JSON-string projection is the explicit v1.2 extension.",
+      "if": {
+        "properties": {
+          "response_observation": {
+            "properties": { "mode": { "const": "ASPNET_D_JSON_SHAPE_ONLY" } },
+            "required": ["mode"]
+          }
+        },
+        "required": ["response_observation"]
+      },
+      "then": { "properties": { "schema_version": { "const": "1.2.0" } } }
+    },
+    {
+      "if": { "properties": { "schema_version": { "const": "1.2.0" } }, "required": ["schema_version"] },
+      "then": {
+        "required": ["response_observation"],
+        "properties": {
+          "response_observation": {
+            "properties": { "mode": { "const": "ASPNET_D_JSON_SHAPE_ONLY" } },
+            "required": ["mode"]
+          }
+        }
+      }
+    },
+    {
+      "$comment": "A controller-defined value-free response profile is the explicit v1.3 extension and is sealed on exactly one probe action.",
+      "if": {
+        "properties": {
+          "requests": { "contains": { "required": ["response_observation"] } }
+        },
+        "required": ["requests"]
+      },
+      "then": { "properties": { "schema_version": { "const": "1.3.0" } } }
+    },
+    {
+      "if": { "properties": { "schema_version": { "const": "1.3.0" } }, "required": ["schema_version"] },
+      "then": {
+        "not": { "anyOf": [
+          { "required": ["response_observation"] },
+          { "required": ["discovery"] }
+        ] },
+        "properties": {
+          "requests": {
+            "minItems": 1,
+            "maxItems": 1,
+            "items": { "required": ["response_observation"] }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "A mutation-capable campaign requires a pinned approver. Probe-only attested or written campaigns use campaign-level authorization and do not need a per-action mutation approver.",
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "authorization": {
+                "properties": {
+                  "permissions": {
+                    "properties": { "mutation": { "const": true } },
+                    "required": ["mutation"]
+                  }
+                },
+                "required": ["permissions"]
+              }
+            },
+            "required": ["authorization"]
+          },
+          {
+            "properties": {
+              "requests": {
+                "contains": {
+                  "properties": { "kind": { "const": "mutate" } },
+                  "required": ["kind"]
+                }
+              }
+            },
+            "required": ["requests"]
+          }
+        ]
+      },
+      "then": { "required": ["approver"] }
+    },
+    {
+      "$comment": "Routing matrix: production is permitted under explicitly labeled operator-attested, document-bound written, or externally signed authorization.",
+      "if": { "properties": { "environment": { "const": "production" } } },
+      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+    },
+    {
+      "$comment": "Routing matrix: PHI classification is permitted only when the selected mode carries its matching explicit permission semantics.",
+      "if": { "properties": { "data_class": { "const": "phi" } } },
+      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+    },
+    {
+      "$comment": "Routing matrix: third-party ownership is permitted under the selected mode's truthful assurance label and explicit permission semantics.",
+      "if": { "properties": { "target": { "properties": { "ownership": { "const": "third_party_owned" } }, "required": ["ownership"] } } },
+      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+    },
+    {
+      "$comment": "Any mutate action retains explicit mutation permission, pinned approver, countersignature, observation, and rollback requirements in every authorization mode.",
+      "if": {
+        "properties": {
+          "requests": { "contains": { "properties": { "kind": { "const": "mutate" } }, "required": ["kind"] } }
+        }
+      },
+      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+    },
+    {
+      "$comment": "PROD FOUR-EYES: when environment=production, owner_key_id must differ from approver.key_id. JSON Schema (without $data) cannot express cross-field inequality, so this is enforced in http-authed-contracts.mjs assertValidHttpAuthedScope()."
+    }
+  ],
+
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "keyId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 200,
+      "pattern": "^(ed25519:[a-f0-9]{64}|passkey:[A-Za-z0-9._~+/=-]{8,180})$"
+    },
+    "humanText": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "referenceText": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "syntheticIdentifier": {
+      "type": "string",
+      "minLength": 14,
+      "maxLength": 138,
+      "pattern": "^SYNTHETIC_[A-Z0-9_-]{4,128}$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "base64": { "type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
+    "nonce": { "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9._~-]+$" },
+    "pathPrefix": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+    },
+    "testCategory": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]+$"
+    },
+    "httpMethod": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$"
+    },
+    "jsonPointer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?:/(?:[^~/\\u0000-\\u001f\\u007f]|~[01])*)+$"
+    },
+    "statusList": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+    },
+    "jsonObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "json_pointer"],
+      "properties": {
+        "format": { "const": "JSON" },
+        "json_pointer": { "$ref": "#/$defs/jsonPointer" }
+      }
+    },
+    "discoveryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "origin",
+        "path_prefixes",
+        "sources",
+        "candidate_methods",
+        "test_category",
+        "synthetic_query_values",
+        "synthetic_path_values",
+        "max_response_bytes"
+      ],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "origin": { "$ref": "#/$defs/httpsOrigin" },
+        "path_prefixes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/pathPrefix" }
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "link_header",
+              "location_header",
+              "allow_header",
+              "html_links",
+              "html_forms",
+              "json_links",
+              "openapi_paths",
+              "sitemap_xml"
+            ]
+          }
+        },
+        "candidate_methods": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/httpMethod" }
+        },
+        "test_category": { "$ref": "#/$defs/testCategory" },
+        "synthetic_query_values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.~-]{0,63}$" },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^SYNTHETIC_[A-Z0-9_-]{4,128}$"
+          }
+        },
+        "synthetic_path_values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^SYNTHETIC_[A-Z0-9_-]{4,128}$"
+          }
+        },
+        "max_response_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      }
+    },
+    "responseObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "max_depth", "safe_key_names"],
+      "properties": {
+        "mode": { "enum": ["JSON_SHAPE_ONLY", "ASPNET_D_JSON_SHAPE_ONLY"] },
+        "max_depth": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "safe_key_names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_$@][A-Za-z0-9_$@.-]{0,127}$"
+          }
+        }
+      }
+    },
+    "boundedResponseObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "profile_binding_sha256"],
+      "properties": {
+        "profile": { "const": "credible-bundle-src-v1" },
+        "profile_binding_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 2048,
+      "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "httpsOrigin": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 512,
+      "pattern": "^https://[^\\u0000-\\u0020\\u007f/]+$"
+    },
+    "tlsPolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "PKIX_HOSTNAME" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "spki_sha256"],
+          "properties": {
+            "mode": { "const": "PKIX_HOSTNAME_AND_SPKI_PIN" },
+            "spki_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "expectedMutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declared effect, expressed as digests so field values (which may be PHI) are never stored in the scope.",
+      "required": ["resource_ref", "field", "representation", "before_digest", "after_digest"],
+      "properties": {
+        "resource_ref": { "$ref": "#/$defs/syntheticIdentifier" },
+        "field": { "$ref": "#/$defs/jsonPointer" },
+        "representation": { "const": "CANONICAL_JSON_VALUE_SHA256" },
+        "before_digest": { "$ref": "#/$defs/sha256" },
+        "after_digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "url",
+        "expected_after_digest",
+        "idempotent_restore",
+        "success_statuses",
+        "verification_read"
+      ],
+      "properties": {
+        "method": { "$ref": "#/$defs/httpMethod" },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "expected_after_digest": { "$ref": "#/$defs/sha256" },
+        "idempotent_restore": { "const": true },
+        "success_statuses": { "$ref": "#/$defs/statusList" },
+        "verification_read": { "$ref": "#/$defs/readSubRequest" },
+        "request_body": { "$ref": "#/$defs/requestBody" }
+      }
+    },
+    "requestBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Metadata for a synthetic request body. Raw bytes are supplied transiently at dispatch and are never stored in scope or evidence.",
+      "required": ["body_id", "sha256", "byte_length", "content_type", "data_class"],
+      "properties": {
+        "body_id": { "$ref": "#/$defs/syntheticIdentifier" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byte_length": { "type": "integer", "minimum": 0, "maximum": 16777216 },
+        "content_type": { "$ref": "#/$defs/humanText" },
+        "data_class": { "const": "synthetic_non_phi" }
+      }
+    },
+    "readSubRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "url", "expected_statuses", "observation"],
+      "properties": {
+        "method": { "const": "GET" },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "expected_statuses": { "$ref": "#/$defs/statusList" },
+        "observation": { "$ref": "#/$defs/jsonObservation" }
+      }
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "An active HTTP probe whose method is admitted by the sealed authenticated engagement scope. It declares no expected state change; any observed side effect triggers the campaign stop condition.",
+          "required": ["kind", "sequence", "test_category", "method", "url", "expected_effect"],
+          "properties": {
+            "kind": { "const": "probe" },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "test_category": { "$ref": "#/$defs/testCategory" },
+            "method": { "$ref": "#/$defs/httpMethod" },
+            "url": { "$ref": "#/$defs/httpsUrl" },
+            "request_body": { "$ref": "#/$defs/requestBody" },
+            "response_observation": { "$ref": "#/$defs/boundedResponseObservation" },
+            "expected_effect": { "const": "none" }
+          },
+          "allOf": [
+            {
+              "if": { "required": ["response_observation"] },
+              "then": {
+                "properties": { "method": { "const": "GET" } },
+                "not": { "required": ["request_body"] }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "sequence",
+            "test_category",
+            "method",
+            "url",
+            "success_statuses",
+            "expected_mutation",
+            "before_read",
+            "after_read",
+            "rollback",
+            "rollback_policy",
+            "requires_countersignature"
+          ],
+          "properties": {
+            "kind": { "const": "mutate" },
+            "sequence": { "type": "integer", "minimum": 1 },
+            "test_category": { "$ref": "#/$defs/testCategory" },
+            "method": { "$ref": "#/$defs/httpMethod" },
+            "url": { "$ref": "#/$defs/httpsUrl" },
+            "success_statuses": { "$ref": "#/$defs/statusList" },
+            "expected_mutation": { "$ref": "#/$defs/expectedMutation" },
+            "request_body": { "$ref": "#/$defs/requestBody" },
+            "before_read": { "$ref": "#/$defs/readSubRequest" },
+            "after_read": { "$ref": "#/$defs/readSubRequest" },
+            "rollback": { "$ref": "#/$defs/rollback" },
+            "rollback_policy": { "const": "ALWAYS" },
+            "requires_countersignature": { "const": true }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "method": { "enum": ["POST", "PUT", "PATCH"] } },
+                "required": ["method"]
+              },
+              "then": { "required": ["request_body"] }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -189,9 +189,12 @@ An adapter may exceed its class floor. It may never fall below it.
 Credential **values** never appear in a bundle — only a `credential_ref`. This
 mirrors `_database-adapters/contract.md:48`.
 
-`PRODUCTION` and `THIRD_PARTY` target classes require explicit acknowledgment.
-`THIRD_PARTY` routes through the existing higher-assurance signed-artifact
-mode; this contract neither creates nor approves those artifacts.
+`PRODUCTION` and `THIRD_PARTY` target classes require separate explicit
+acknowledgments. `THIRD_PARTY` deployed/runtime acquisition may use
+`--acknowledge-third-party`; that route remains operator-attested, read-only,
+and not independently verified. It does not authorize active testing or
+mutation. Operator-attested and document-bound authenticated campaigns belong
+only to the separate `http-authed-v1` controller and never widen this adapter.
 
 **Impact counters exist for read-only classes.** They count commands executed,
 bytes read, and distinct objects touched per target, each with a cap that halts

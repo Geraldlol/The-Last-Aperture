@@ -1,0 +1,136 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+}
+
+main {
+  padding: 16px;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: 1.2rem;
+  margin-bottom: 4px;
+}
+
+h2 {
+  font-size: 1rem;
+  margin-top: 16px;
+}
+
+.lede,
+.hint {
+  color: #6b7280;
+}
+
+.hint,
+.warning,
+#notice {
+  font-size: 0.82rem;
+}
+
+form,
+.actions {
+  display: grid;
+  gap: 8px;
+}
+
+label,
+dt {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+input,
+button {
+  box-sizing: border-box;
+  font: inherit;
+  min-height: 36px;
+  width: 100%;
+}
+
+input {
+  border: 1px solid #9ca3af;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+output {
+  border: 1px solid #9ca3af;
+  border-radius: 4px;
+  display: block;
+  min-height: 36px;
+  padding: 7px 8px;
+}
+
+.binding-value {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+button {
+  background: #155eef;
+  border: 0;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  padding: 7px 10px;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+button.danger {
+  background: #b42318;
+}
+
+button.secondary {
+  background: #475467;
+}
+
+dl {
+  display: grid;
+  gap: 3px 8px;
+  grid-template-columns: 110px minmax(0, 1fr);
+  margin: 8px 0 12px;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.prepared {
+  border: 1px solid #f79009;
+  border-radius: 5px;
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.warning {
+  color: #b54708;
+  margin-bottom: 0;
+}
+
+#notice {
+  min-height: 1.2em;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.hidden {
+  display: none;
+}

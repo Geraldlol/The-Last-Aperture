@@ -8,6 +8,7 @@ import {
   requestAcquisitionStop,
   runAcquisition,
 } from '../scripts/lib/evidence-acquire-controller.mjs'
+import { main as acquireMain } from '../scripts/acquire.mjs'
 import { resolveEvidenceLocator } from '../scripts/lib/evidence-locator.mjs'
 import { stubCli } from './helpers/stub-cli.mjs'
 
@@ -55,6 +56,37 @@ test('all four adapters are reachable through the controller', async () => {
   assert.equal(planned.plan.evidence_context_seed.evidence_class, 'deployed-state')
 })
 
+test('the CLI accepts and plumbs --acknowledge-third-party into a deployed plan', async () => {
+  const out = await scratch()
+  await assert.rejects(
+    () => acquireMain([
+      'deployed',
+      'plan',
+      '--context',
+      'client-cluster',
+      '--evidence-id',
+      'client-third-party-cluster',
+      '--operation',
+      'not-allowlisted:',
+      '--target-class',
+      'THIRD_PARTY',
+      '--phi-scope',
+      'none',
+      '--operator-id',
+      'gmaida',
+      '--authorized-by',
+      'client-owner',
+      '--authorization-reference',
+      'SOW-42',
+      '--attest-authorized',
+      '--acknowledge-third-party',
+      '--out',
+      out,
+    ]),
+    /not allowlisted/i,
+  )
+})
+
 test('a class requiring attestation refuses to run without the confirmation', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
@@ -63,6 +95,23 @@ test('a class requiring attestation refuses to run without the confirmation', as
     () => runAcquisition({ bundle: out, operatorId: 'gmaida', resolver: stub.resolver }),
     /authorization/i,
   )
+})
+
+test('the controller rejects truthy non-boolean current-authorization confirmations', async () => {
+  const stub = await kubectlStub()
+  for (const authorizationConfirmed of ['yes', {}]) {
+    const out = await scratch()
+    await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+    await assert.rejects(
+      () => runAcquisition({
+        bundle: out,
+        operatorId: 'gmaida',
+        authorizationConfirmed,
+        resolver: stub.resolver,
+      }),
+      /authorization/i,
+    )
+  }
 })
 
 test('stop halts an acquisition that is already planned', async () => {
@@ -145,4 +194,11 @@ test('the acquisition plan records what was executed for the report', async () =
   assert.equal(executed.length, 1)
   assert.equal(executed[0].operation_id, 'k8s.resource')
   assert.equal(executed[0].payload_prefix, '00')
+  const record = JSON.parse(await readFile(join(out, 'acquisition-plan.json'), 'utf8'))
+  assert.deepEqual(record.run_authorization, {
+    mode: 'OPERATOR_ATTESTED',
+    current_authorization_confirmed: true,
+    third_party_acknowledged: false,
+    confirmed_by: 'gmaida',
+  })
 })

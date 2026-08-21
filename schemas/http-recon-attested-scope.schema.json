@@ -19,7 +19,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0.0"
+      "enum": ["1.0.0", "1.1.0", "1.2.0"]
     },
     "kind": {
       "const": "red-team-audit/http-recon-attested-scope"
@@ -184,6 +184,25 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "requests": { "contains": { "required": ["response_observation"] } }
+        }
+      },
+      "then": { "properties": { "schema_version": { "const": "1.2.0" } } },
+      "else": {
+        "if": {
+          "properties": {
+            "requests": { "contains": { "required": ["request_headers"] } }
+          }
+        },
+        "then": { "properties": { "schema_version": { "const": "1.1.0" } } },
+        "else": { "properties": { "schema_version": { "const": "1.0.0" } } }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",
@@ -251,6 +270,60 @@
         }
       ]
     },
+    "requestHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "names", "header_set_sha256"],
+      "properties": {
+        "profile": {
+          "enum": [
+            "cors-hostile-origin-get-v1",
+            "forwarded-loopback-https-v1",
+            "x-forwarded-for-loopback-v1",
+            "x-http-method-override-get-v1",
+            "x-original-url-admin-securitymatrix-v1",
+            "x-original-url-order-programs-v1",
+            "x-original-url-tabaccess-getall-v1",
+            "x-real-ip-loopback-v1",
+            "x-rewrite-url-admin-securitymatrix-v1",
+            "x-rewrite-url-order-programs-v1",
+            "x-rewrite-url-tabaccess-getall-v1"
+          ]
+        },
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "forwarded",
+              "origin",
+              "x-forwarded-for",
+              "x-http-method-override",
+              "x-original-url",
+              "x-real-ip",
+              "x-rewrite-url"
+            ]
+          }
+        },
+        "header_set_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "responseObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "profile_binding_sha256"],
+      "properties": {
+        "profile": {
+          "enum": [
+            "credible-bundle-src-v1",
+            "credible-cross-origin-js-ast-v1"
+          ]
+        },
+        "profile_binding_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
     "request": {
       "type": "object",
       "additionalProperties": false,
@@ -268,6 +341,12 @@
         },
         "url": {
           "$ref": "#/$defs/httpsUrl"
+        },
+        "request_headers": {
+          "$ref": "#/$defs/requestHeaders"
+        },
+        "response_observation": {
+          "$ref": "#/$defs/responseObservation"
         },
         "safe_to_get": {
           "const": true
@@ -295,6 +374,16 @@
               "required": [
                 "safe_to_get"
               ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["response_observation"]
+          },
+          "then": {
+            "properties": {
+              "method": { "const": "GET" }
             }
           }
         }

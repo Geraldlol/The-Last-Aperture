@@ -92,6 +92,14 @@ export function createRuntimeAdapter({
           authorization_reference: request.authorization_reference,
           attested_on: clock(),
         },
+        authorization_gate: {
+          mode: request.target_class === 'THIRD_PARTY'
+            ? 'INTERIM_OPERATOR_ACKNOWLEDGED_THIRD_PARTY'
+            : 'OPERATOR_ATTESTED',
+          attest_authorized: true,
+          acknowledge_production: request.acknowledge_production === true,
+          acknowledge_third_party: request.acknowledge_third_party === true,
+        },
         target_class: request.target_class,
         phi_scope: phi.scope,
         dependency: { name: requiredCli(operations).join('|'), present: true, version: null },
@@ -102,7 +110,7 @@ export function createRuntimeAdapter({
       // Attestation at plan time is not enough for this class: authorization can
       // lapse between planning and running, and this is the tier where that
       // difference has consequences.
-      if (!authorizationConfirmed) {
+      if (authorizationConfirmed !== true) {
         throw new Error(
           'live-runtime acquisition requires --confirm-authorization-current at run time',
         )

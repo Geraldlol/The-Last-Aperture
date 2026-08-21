@@ -1645,7 +1645,7 @@ Two sharpenings worth keeping verbatim:
 
 That assertion runs offline against the repository and is **T1**. It is also the only guest proof this skill performs.
 
-**Do not probe a deployed site.** Sending unauthenticated requests to a live Experience Cloud endpoint reaches a remote host, which this project's hard rails forbid outright — the same rule that puts every Apex recipe at T3 — and it does not become permissible by being a scratch org, a sandbox, or an org the auditor believes they own. Unauthenticated probing of a running site is authorized-penetration-test activity governed by a scope agreement, not audit activity: it requires **written authorization naming the site, scoped and dated, obtained before the first request**, and it happens outside this skill. Do not run it here, and do not present the tier's ask-the-user prompt as if it were that authorization — it is not, and treating it as one would have this lens instruct an auditor into unauthorized testing. Where the dynamic evidence is genuinely needed, report the static result and record the dynamic half as out of scope with the authorization requirement stated.
+**Do not probe a deployed site from this lens.** A live Experience Cloud endpoint is a remote host, and that remains forbidden for every repository proof recipe regardless of scratch-org, sandbox, or ownership claims. Where live evidence is needed, keep it outside this lens and proof tiers and use only the canonical skill's separately authorized external controller. The T2 consent prompt is not authorization for a hosted endpoint.
 
 ### R2 — Injection into the secondary interpreter (Apex; T3 UNPROVEN unless the user runs it)
 

@@ -31,10 +31,13 @@ export function assertLivePlanAuthorization(request, label) {
   if (request.target_class === 'PRODUCTION' && request.acknowledge_production !== true) {
     throw new Error('a PRODUCTION target requires --acknowledge-production')
   }
-  if (request.target_class === 'THIRD_PARTY' && !request.signed_authorization) {
+  if (
+    request.target_class === 'THIRD_PARTY'
+    && request.acknowledge_third_party !== true
+  ) {
     throw new Error(
-      'a THIRD_PARTY target routes through the existing higher-assurance signed-artifact '
-      + 'mode; this adapter neither creates nor approves those artifacts',
+      'a THIRD_PARTY target requires --acknowledge-third-party while the '
+      + 'higher-assurance signed-artifact controller is unavailable',
     )
   }
   return resolvePhiPolicy({
@@ -42,6 +45,25 @@ export function assertLivePlanAuthorization(request, label) {
     captureContents: request.capture_contents === true,
     acknowledged: request.acknowledge_phi === true,
   })
+}
+
+export function assertLivePlannedAuthorization(planned) {
+  if (!planned?.attestation?.operator_id || planned?.authorization_gate?.attest_authorized !== true) {
+    throw new Error('live acquisition plan is missing its sealed authorization attestation')
+  }
+  if (
+    planned.target_class === 'PRODUCTION'
+    && planned.authorization_gate.acknowledge_production !== true
+  ) {
+    throw new Error('live acquisition plan is missing its sealed PRODUCTION acknowledgment')
+  }
+  if (
+    planned.target_class === 'THIRD_PARTY'
+    && planned.authorization_gate.acknowledge_third_party !== true
+  ) {
+    throw new Error('live acquisition plan is missing its sealed THIRD_PARTY acknowledgment')
+  }
+  return planned
 }
 
 export async function probeRequiredClis(operations, { env, resolver, label }) {
@@ -71,6 +93,7 @@ export async function runLiveAcquisition({
   capture,
   shouldStop,
 }) {
+  assertLivePlannedAuthorization(planned)
   const cliLimits = { ...DEFAULT_CLI_LIMITS, ...limits }
   const cliOptions = resolver ? { resolver } : {}
   const counters = new ImpactCounters({
@@ -103,7 +126,6 @@ export async function runLiveAcquisition({
         counters,
         ...cliOptions,
       })
-      counters.record({ objects: operation.objects }).assertWithinCaps()
     } catch (error) {
       // A cap is a halt, not a crash: what was already acquired stays, and the
       // stopping point is named.
@@ -116,13 +138,15 @@ export async function runLiveAcquisition({
       break
     }
 
-    executed.push({
+    const execution = {
       index,
       operation_id: operation.operation_id,
       payload_prefix: prefix,
       exit_code: result.code,
-      objects: operation.objects,
-    })
+      estimated_objects: operation.objects,
+      objects: 0,
+    }
+    executed.push(execution)
     if (result.code !== 0) {
       gaps.push({
         area: operation.operation_id,
@@ -132,6 +156,19 @@ export async function runLiveAcquisition({
     }
 
     const captured = capture(operation, result, planned.phi_policy, prefix)
+    const observedObjects = captured.acquired ?? 0
+    execution.objects = observedObjects
+    try {
+      counters.record({ objects: observedObjects }).assertWithinCaps()
+    } catch (error) {
+      gaps.push({
+        area: operation.operation_id,
+        reason: error instanceof ImpactCapExceededError
+          ? `acquisition halted at an observed-object impact cap: ${error.message}`
+          : `operation accounting failed: ${redactForLog(String(error.message)).slice(0, 400)}`,
+      })
+      break
+    }
     for (const gap of captured.gaps ?? []) gaps.push(gap)
     for (const entry of captured.payload ?? []) payload.push(entry)
     acquired += captured.acquired ?? 0

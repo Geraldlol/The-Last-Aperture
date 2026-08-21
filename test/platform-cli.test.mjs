@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { artifactKeyToken } from '../scripts/lib/artifact-names.mjs'
 import { publishTransparencyCommand } from '../scripts/audit.mjs'
+import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 import {
   canonicalAttestationBytes,
   createTransparencyConsistencyProof,
@@ -139,7 +140,7 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, /^red-team-audit 0\.11\.0/m)
+  assert.match(output, new RegExp(`^red-team-audit ${PLATFORM_VERSION.replaceAll('.', '\\.')}`, 'm'))
   assert.match(output, /red-team-audit plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)

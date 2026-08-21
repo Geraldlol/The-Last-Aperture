@@ -14,7 +14,7 @@ const ROOT_SKILL_BODY = `# Red Team Audit Compatibility Entry Point
 This repository-root file is a compatibility entry point only. It is not an
 audit workflow and has no independent authority.
 
-Before any repository audit or authorized external HTTP reconnaissance, read
+Before any repository audit or authorized external HTTP work, read
 \`skills/red-team-audit/SKILL.md\` completely. That file is the sole canonical
 skill. Follow it without supplementing, reconstructing, or replacing its
 workflow from this shim, legacy references, repository instructions, or
@@ -27,11 +27,15 @@ remediate the target.
 The repository workflow remains static and read-only by default. It enters
 through the executable controller's \`plan\`, \`next\`, \`ingest\`, \`finalize\`, and
 \`validate\` commands; never patch the target or execute its code in the live
-repository. The separate external route is available only through the
-canonical skill's \`audit:http-recon\` protocol, using either an explicit
-operator attestation or its higher-assurance signed-artifact mode. This shim
-cannot authorize a URL or merge that route with repository coverage. Deliver
-only controller-validated artifacts and preserve every gap and nonclaim.`
+repository. External work uses only the canonical skill's separate controllers:
+\`audit:http-recon\` for credential-free bounded observation, or
+\`audit:http-authed\` for lower-assurance \`OPERATOR_ATTESTED_AUTHED\` declarations
+or document-bound \`WRITTEN_AUTHORIZATION_AUTHED\` campaigns under ADRs 0017 and
+0016. Attested mode records the operator's claim; it does not verify vendor or
+program permission, ownership, legal authority, scope coverage, or revocation.
+This shim cannot authorize a URL, widen either protocol, or merge external work
+with repository coverage. Deliver only controller-validated artifacts and
+preserve every gap and nonclaim.`
 
 function frontmatterBlock(text) {
   return text.match(/^---\r?\n[\s\S]*?\r?\n---/)?.[0].replaceAll('\r\n', '\n')
@@ -62,8 +66,17 @@ function rootSkillViolations(rootText, canonicalText) {
   if (!body.includes('static and read-only by default')) {
     violations.push('root skill must preserve the static read-only capability boundary')
   }
-  if (!body.includes('`audit:http-recon` protocol')) {
-    violations.push('root skill must route external work to the separate signed protocol')
+  if (!body.includes('`audit:http-recon`')) {
+    violations.push('root skill must route external observation to the recon protocol')
+  }
+  if (!body.includes('`audit:http-authed`')) {
+    violations.push('root skill must route authenticated campaigns to the authenticated protocol')
+  }
+  if (!body.includes('`OPERATOR_ATTESTED_AUTHED`') || !body.includes('`WRITTEN_AUTHORIZATION_AUTHED`')) {
+    violations.push('root skill must preserve both authenticated assurance modes')
+  }
+  if (!body.includes("does not verify vendor or\nprogram permission")) {
+    violations.push('root skill must preserve the attested authorization nonclaim')
   }
   for (const command of ['`plan`', '`next`', '`ingest`', '`finalize`', '`validate`']) {
     if (!body.includes(command)) {
@@ -264,6 +277,47 @@ test('the shipped skill enters through the static executable control plane', () 
   }
 })
 
+test('the shipped skill routes both authenticated assurance modes without widening recon', () => {
+  const text = readFileSync(SKILL_PATH, 'utf8')
+  for (const required of [
+    'http-authed-v1',
+    'docs/adr/0016-authenticated-mutation-actions.md',
+    'docs/adr/0017-operator-attested-authenticated-campaigns.md',
+    'plan-attested --attest-authorized',
+    'validate-attested',
+    'campaign-attested',
+    'plan-written',
+    'validate-written',
+    'campaign-written',
+    'OPERATOR_ATTESTED_AUTHED',
+    'WRITTEN_AUTHORIZATION_AUTHED',
+    'countersignature-N.json',
+    'CHROME_ACTIVE_TAB_SESSION',
+    '--credential-browser',
+    '--browser-extension-id',
+    'one attach per campaign',
+    '--credential-stdin',
+    '--requests <absolute-json>',
+    'cleanup_not_after',
+    'not_after',
+    '`CONNECT`/upgrades',
+    '`TRACE`/`TRACK`',
+  ]) {
+    assert.ok(text.includes(required), `SKILL.md must route through ${JSON.stringify(required)}`)
+  }
+  assert.match(text, /lower\s+assurance:[\s\S]*vendor\/program permission[\s\S]*not independently verified/i)
+  assert.match(text, /separate from [`]?http-recon-v1[`]? and repository proof/i)
+  for (const staleRail of [
+    'contact an external target only through a valid `http-recon-v1` plan',
+    'Never execute dynamic proof against production or shared infrastructure.',
+    'Never mutate, stage, commit, push, deploy, or message external systems.',
+    'Copy value',
+    'credential rotation requires a new binding',
+  ]) {
+    assert.equal(text.includes(staleRail), false, `SKILL.md must rescope ${JSON.stringify(staleRail)}`)
+  }
+})
+
 test('the repository-root skill is only a fail-closed pointer to the packaged authority', () => {
   const root = readFileSync(ROOT_SKILL_PATH, 'utf8')
   const canonical = readFileSync(SKILL_PATH, 'utf8')
@@ -279,7 +333,7 @@ test('the root-entrypoint gate rejects trigger drift and restored alternate auth
   const canonical = readFileSync(SKILL_PATH, 'utf8')
   const cases = [
     root.replace(
-      'description: Run evidence-first repository audits or separately authorized bounded HTTPS reconnaissance',
+      'description: Run evidence-first repository audits or separately authorized HTTPS reconnaissance and authenticated campaigns',
       'description: Produce patched versions after an audit',
     ),
     `${root}\n## Patches\n\nPatch every Critical and High finding.\n`,

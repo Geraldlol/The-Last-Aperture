@@ -75,11 +75,53 @@ test('plan refuses PRODUCTION without an explicit acknowledgment', async () => {
   )
 })
 
-test('plan refuses THIRD_PARTY without a signed authorization artifact', async () => {
+test('plan accepts a THIRD_PARTY read-only operation with an explicit interim acknowledgment', async () => {
+  const adapter = await adapterWithStub()
+  const planned = await adapter.plan({
+    ...REQUEST,
+    target_class: 'THIRD_PARTY',
+    acknowledge_third_party: true,
+  })
+  assert.equal(planned.target_class, 'THIRD_PARTY')
+  assert.deepEqual(planned.authorization_gate, {
+    mode: 'INTERIM_OPERATOR_ACKNOWLEDGED_THIRD_PARTY',
+    attest_authorized: true,
+    acknowledge_production: true,
+    acknowledge_third_party: true,
+  })
+  assert.deepEqual(planned.operations[0].args, [
+    'get', 'secrets', '-n', 'clinical', '-o', 'json',
+  ])
+})
+
+test('plan refuses THIRD_PARTY without the explicit interim acknowledgment', async () => {
   const adapter = await adapterWithStub()
   await assert.rejects(
     () => adapter.plan({ ...REQUEST, target_class: 'THIRD_PARTY' }),
-    /signed|higher-assurance/i,
+    /THIRD_PARTY|acknowledge-third-party/i,
+  )
+})
+
+test('arbitrary signed_authorization truthiness cannot replace the interim acknowledgment', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(
+    () => adapter.plan({
+      ...REQUEST,
+      target_class: 'THIRD_PARTY',
+      signed_authorization: {},
+    }),
+    /THIRD_PARTY|acknowledge-third-party/i,
+  )
+})
+
+test('run revalidates the sealed THIRD_PARTY acknowledgment after plan tampering', async () => {
+  const adapter = await adapterWithStub()
+  const planned = await adapter.plan(REQUEST)
+  planned.target_class = 'THIRD_PARTY'
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  await assert.rejects(
+    () => adapter.run(planned, { out }),
+    /sealed THIRD_PARTY acknowledgment/i,
   )
 })
 
@@ -159,6 +201,32 @@ test('impact counters halt acquisition when a cap is exceeded', async () => {
   const written = await adapter.run(planned, { out })
   assert.equal(written.profile.coverage_state, 'PARTIAL')
   assert.ok(written.profile.coverage_gaps.some(({ reason }) => /cap/i.test(reason)))
+})
+
+test('collection object caps use the observed item count, not the allowlist estimate', async () => {
+  const body = JSON.stringify({
+    apiVersion: 'v1',
+    kind: 'List',
+    items: Array.from({ length: 65 }, (_unused, index) => ({
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: `synthetic-${index}`, namespace: 'clinical' },
+    })),
+  })
+  const stub = await kubectlStub(body)
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: stub.resolver,
+    limits: { maxObjects: 64 },
+  })
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-')), 'ev')
+  const planned = await adapter.plan({
+    ...REQUEST,
+    operations: [{ operation_id: 'k8s.resources', params: { kind: 'pods', namespace: 'clinical' } }],
+  })
+  const written = await adapter.run(planned, { out })
+  assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /object|cap/i.test(reason)))
 })
 
 test('a stop request halts the loop before the next operation', async () => {

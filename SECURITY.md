@@ -15,6 +15,79 @@ details of an unfixed vulnerability in a public issue.
 
 ## Supported security boundary
 
+Version 0.12.0 adds the separate `http-authed-v1` controller for authenticated
+campaigns. It exposes two distinct, non-interchangeable runtime modes.
+
+`plan-attested --attest-authorized`, `validate-attested`, and
+`campaign-attested` select lower-assurance `OPERATOR_ATTESTED_AUTHED`. They bind
+the operator's exact declared authorizer/reference, validity, classification,
+permissions, origin, paths, methods, categories, and actions. The mode is always
+`independently_verified: false`. The controller does not fetch program terms or
+independently verify vendor/program permission, ownership, legal authority,
+external scope coverage, or revocation. The authorization binding proves only
+that execution used the same sealed declaration; the CLI attestation records a
+claim and does not create permission.
+
+`plan-written`, `validate-written`, and `campaign-written` select document-bound
+`WRITTEN_AUTHORIZATION_AUTHED`. They rehash the bounded authorization document
+and check its sealed permission extraction, but do not cryptographically verify
+issuer identity or judge legal sufficiency. Both planners and validators are
+offline. Both campaign routes bind execution to the caller-retained
+`campaign_grant_sha256` and revalidate the scope before each send. New work must
+remain before `validity.not_after`; only ledger-proven rollback and rollback
+verification may continue before `validity.cleanup_not_after`. Neither route can
+invent authorization, credentials, or target boundaries.
+
+Attested public summaries and ledgers contain `authorization_binding_sha256` and
+never invent or persist an `authorization_document_sha256`. Written results may
+add the actual supplied document digest. Commands reject scopes and authority
+inputs from the other mode.
+
+Authentication has three mutually exclusive forms. `env:NAME` supports controlled
+automation; redirected `--credential-stdin` reads, bounds, and binds one exported
+secret without printing or persisting it. A live stdin invocation must receive the
+same bytes; offline validation needs none.
+
+`--credential-browser` instead seals `{ mode: CHROME_ACTIVE_TAB_SESSION,
+extension_id, origin }` and no secret hash. The companion under
+`browser/http-authed-chrome` uses only `activeTab`, `scripting`, and a loopback host
+permission. It has no cookie, storage, debugger, request-observer, broad target-host,
+or profile access. A random one-use pairing capability binds one controller process,
+the expected extension ID, one operator-selected HTTPS origin/tab/document, and one
+campaign. The controller never reads cookie or Authorization values. The extension
+does not call cookie APIs, `document.cookie`, CDP, profile databases, or HAR export.
+
+After one explicit attach per campaign, each prepared action is re-bound at commit
+and executed in the tab's isolated same-origin world with browser-held credentials,
+redirect refusal, and no automatic retry. Chrome applies its current session and
+processes cookie rotation internally on every request. Only bounded transient
+response material needed by discovery or mutation verification crosses the
+loopback; existing evidence rules exclude bodies and header values from durable
+scope, ledger, result, report, and command output. Tab, origin, document, action,
+pairing, or protocol drift fails before send. Browser mode uses Chrome-managed
+PKIX/hostname TLS and refuses the controller's SPKI-pin mode.
+
+The authenticated controller admits predeclared canonical uppercase application
+methods. Native transport refuses `CONNECT` and protocol upgrades; browser
+transport also refuses `TRACE` and `TRACK`. Write-capable or body-bearing probes
+require explicit mutation permission. Automated discovery
+can add only scope-valid `GET`, `HEAD`, or `OPTIONS` probes and cannot construct a
+mutation. Declared mutations require before/after JSON observations, a fresh
+one-use Ed25519 countersignature, an inverse rollback, and rollback verification.
+Mutation and rollback requests are never retried after ambiguous delivery.
+
+Campaign state is an immutable external hash-chained ledger. There is no
+campaign action-count or cumulative-impact ceiling. `validity.not_after` is the
+exclusive deadline for new work. A later `validity.cleanup_not_after` authorizes
+only rollback and rollback verification for a ledger-proven, approval-consumed
+mutation; the runtime records `CLEANUP_SESSION_CONFIRMED` and never enqueues or
+sends a new action on that path. Per-request timeout, response-size, and interval
+controls remain. Credentials,
+request/response bodies, header values, arbitrary target-controlled header
+names, and rejected discovery values are excluded from durable results. This is
+a controlled non-persistence boundary, not a universal PHI classifier: use only
+synthetic non-PHI identifiers and bodies.
+
 Version 0.11.0 adds a separate authorized external HTTP-reconnaissance
 controller for engagements where the asset owner supplies permission but no
 repository. It does not weaken or reuse the repository audit's coverage or T2
@@ -39,22 +112,24 @@ payloads. An out-of-band stop marker is checked before dispatch and while a
 request is in flight. A request whose delivery cannot be resolved is terminal
 and is never replayed automatically.
 
-This mode records controller-observed transport metadata only. It does not
-provide repository inventory, source closure, code coverage, authenticated
-authorization testing, exploitation, browser execution, fuzzing, brute force,
-bulk access, or load testing. Broader active techniques require a future typed
-capability with a fresh action-specific authorization; neither an HTTP-recon
-signature nor an operator attestation can enable them.
+This recon mode records controller-observed transport metadata only. It does not
+provide repository inventory, source closure, code coverage, authentication,
+mutation, browser execution, fuzzing, brute force, bulk access, or load testing.
+Its authority cannot be reused to enable `http-authed-v1`; authenticated work
+requires a fresh attested or written scope and campaign grant. Mutation still
+requires its separate technical approval gates.
 
 Version 0.10.0 supports static, read-only planning, externally produced job
 results, and an opt-in sealed provider runner. It never executes target code or
 grants the provider a target mount, host network, credentials, or arbitrary
 host process authority.
 
-Three feature families open an outbound network connection, and all are opt-in.
+Four feature families open an outbound network connection, and all are opt-in.
 HTTP reconnaissance sends only its sealed action. Its default operator-attested
 mode uses runtime-configured CA trust and hostname validation and records the
 observed SPKI; its signed mode remains externally verified and SPKI-pinned.
+Authenticated campaigns send only scope-verified ledger actions under the
+current sealed attested or written authorization and transient sealed credential.
 Signed remote-gateway execution sends one Ed25519-signed request to a single
 TLS-SPKI-pinned, DNS-scope-restricted HTTPS endpoint.
 Transparency publication sends only the canonical detached root attestation to
@@ -174,9 +249,17 @@ when the repository may be modified by a hostile local process.
 - Treat `OPERATOR_ATTESTED` as lower assurance. Its locally sealed scope and
   declared authorization reference do not cryptographically verify permission
   and cannot provide a live revocation signal.
+- Treat `OPERATOR_ATTESTED_AUTHED` the same way: its binding preserves the exact
+  declaration but does not verify the named vendor, program, ownership, legal
+  authority, external scope coverage, or revocation.
 - Use only owner-approved exact URLs whose GET behavior is explicitly known to
   be non-mutating. A nominally safe HTTP method can still trigger application
   side effects.
+- Keep authenticated scope, campaign ledger, synthetic bodies, countersignatures,
+  and any written authorization outside the target and repository. Prefer
+  `--credential-browser` for a rotating Chrome session; exported `env:` and
+  redirected `--credential-stdin` remain fallbacks. Never place PHI in scope
+  labels, URLs, identifiers, or bodies.
 - Do not use T1/T2 proof against production or shared infrastructure.
 - Use the abort command if scope, environment, or authorization becomes
   uncertain.

@@ -11,6 +11,14 @@ import { isIP } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { stableJson } from './run-engine.mjs'
+import {
+  createHttpReconRequestHeaderDescriptor,
+  resolveHttpReconRequestHeaders,
+} from './http-recon-request-headers.mjs'
+import {
+  createHttpReconResponseObservationDescriptor,
+  resolveHttpReconResponseObservation,
+} from './http-recon-response-observations.mjs'
 
 const ROE_SCHEMA_URL = new URL('../../schemas/http-recon-roe.schema.json', import.meta.url)
 const PROOF_SCHEMA_URL = new URL(
@@ -542,6 +550,38 @@ function assertAttestedScopeSemantics(
     { originOnly: true },
   )
   const requestUrl = parseExactHttpsUrl(scope.requests[0].url, 'requests[0].url')
+  if (scope.requests[0].request_headers !== undefined) {
+    try {
+      resolveHttpReconRequestHeaders({
+        descriptor: scope.requests[0].request_headers,
+        method: scope.requests[0].method,
+      })
+    } catch (cause) {
+      throw contractError(
+        'HTTP_RECON_HEADER_DESCRIPTOR_INVALID',
+        'operator-attested diagnostic request-header descriptor is invalid',
+        [],
+        { cause },
+      )
+    }
+  }
+  if (scope.requests[0].response_observation !== undefined) {
+    try {
+      resolveHttpReconResponseObservation({
+        descriptor: scope.requests[0].response_observation,
+        method: scope.requests[0].method,
+        url: scope.requests[0].url,
+        maxResponseBytes: scope.limits.max_response_bytes,
+      })
+    } catch (cause) {
+      throw contractError(
+        'HTTP_RECON_RESPONSE_OBSERVATION_DESCRIPTOR_INVALID',
+        'operator-attested response-observation descriptor is invalid',
+        [],
+        { cause },
+      )
+    }
+  }
   if (requestUrl.origin !== targetOrigin.origin) {
     throw contractError(
       'HTTP_RECON_ACTION_ORIGIN_MISMATCH',
@@ -615,6 +655,8 @@ export function createOperatorAttestedHttpReconScope({
   tlsSpkiSha256,
   method = 'HEAD',
   safeToGet = false,
+  requestHeaderProfile,
+  responseObservationProfile,
   operatorId,
   authorizedBy,
   authorizationReference,
@@ -636,10 +678,30 @@ export function createOperatorAttestedHttpReconScope({
   const request = {
     method: normalizedMethod,
     url: parsedTarget.href,
+    ...(requestHeaderProfile === undefined
+      ? {}
+      : {
+          request_headers: createHttpReconRequestHeaderDescriptor({
+            profile: requestHeaderProfile,
+            method: normalizedMethod,
+          }),
+        }),
+    ...(responseObservationProfile === undefined
+      ? {}
+      : {
+          response_observation: createHttpReconResponseObservationDescriptor({
+            profile: responseObservationProfile,
+            method: normalizedMethod,
+            url: parsedTarget.href,
+            maxResponseBytes: OPERATOR_ATTESTED_LIMITS.max_response_bytes,
+          }),
+        }),
     ...(normalizedMethod === 'GET' ? { safe_to_get: safeToGet } : {}),
   }
   const scope = {
-    schema_version: '1.0.0',
+    schema_version: responseObservationProfile === undefined
+      ? (requestHeaderProfile === undefined ? '1.0.0' : '1.1.0')
+      : '1.2.0',
     kind: 'red-team-audit/http-recon-attested-scope',
     engagement_id: engagementId,
     environment,
@@ -693,6 +755,12 @@ export function buildOperatorAttestedHttpReconPlan(scope) {
     sequence: 1,
     method: request.method,
     url: request.url,
+    ...(request.request_headers === undefined
+      ? {}
+      : { request_headers: structuredClone(request.request_headers) }),
+    ...(request.response_observation === undefined
+      ? {}
+      : { response_observation: structuredClone(request.response_observation) }),
     safe_to_get: request.method === 'GET',
   }
   const actions = [{
@@ -700,7 +768,7 @@ export function buildOperatorAttestedHttpReconPlan(scope) {
     ...projection,
   }]
   const plan = {
-    schema_version: '1.0.0',
+    schema_version: scope.schema_version,
     kind: 'red-team-audit/http-recon-plan',
     authorization_mode: 'OPERATOR_ATTESTED',
     engagement_id: scope.engagement_id,

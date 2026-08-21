@@ -1,7 +1,8 @@
 # Red Team Audit
 
 Red Team Audit is an evidence-first, agent-assisted source audit platform with
-a separate, narrowly authorized external HTTPS reconnaissance controller. Its
+separate controllers for bounded HTTPS observation and operator-attested or
+document-bound authenticated campaigns. Its
 security lenses supply domain judgment; a deterministic Node.js control plane
 owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
@@ -17,10 +18,32 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-Version 0.11.0 adds separately authorized, bounded external HTTP reconnaissance
-to the v0.10 externally anchored transparency, bounded coverage, detached
-root-attestation, sealed-provider, remote-gateway, database-conformance, and
-controller-owned store-synthesis foundation:
+Version 0.12.0 adds authenticated HTTP campaigns to the v0.11
+authorized-reconnaissance and v0.10 repository-audit foundation:
+
+- A separate `http-authed-v1` protocol and `audit:http-authed` CLI. The released
+  runtime has distinct lower-assurance `OPERATOR_ATTESTED_AUTHED` and
+  document-bound `WRITTEN_AUTHORIZATION_AUTHED` routes. The former records an
+  operator declaration only; it does not independently verify vendor/program
+  permission, ownership, legal authority, external scope coverage, or revocation.
+  The latter rechecks supplied document bytes and extracted permissions without
+  verifying issuer identity or judging legal sufficiency.
+- Canonical uppercase application methods explicitly admitted by the sealed
+  scope, including body-bearing and write methods. Native transport refuses
+  `CONNECT` and protocol upgrades; browser transport also refuses `TRACE`/`TRACK`.
+- An immutable external campaign ledger with monotonic sequencing, no campaign
+  action-count ceiling, no redirect or automatic retry, scope-bounded synthetic
+  discovery, and immediate pre-send authorization revalidation.
+- Declared mutations with credential preflight, before/after JSON observation,
+  a fresh one-use Ed25519 countersignature, an always-on inverse rollback, and
+  rollback verification. Ambiguous mutation or rollback delivery is never
+  retried.
+- Metadata-only durable results: credential values, request/response bodies,
+  header values, arbitrary target-controlled header names, and rejected
+  discovery values are not persisted. Operators must use synthetic non-PHI
+  identifiers and bodies.
+
+It retains the separately authorized `http-recon-v1` observation protocol:
 
 - A separate `http-recon-v1` protocol with no repository, lens, closure, code
   coverage, or T0-T3 proof-tier claim.
@@ -177,7 +200,10 @@ lookup or advance SPKI value is needed: execution validates the certificate
 chain with the runtime-configured CA trust, validates the hostname, and records
 the certificate and SPKI hashes from that same connection before dispatch. Add
 `--tls-spki-sha256 <64-lowercase-hex>` only when an advance pin is available.
-After planning, the CLI accepts no target, URL, method, TLS policy, header,
+Operator-attested plans may also seal one reviewed controller-owned diagnostic
+request-header profile with `--request-header-profile`; raw header names and
+values remain unavailable. After planning, the CLI accepts no target, URL,
+method, TLS policy, header profile,
 credential, body, proof endpoint, retry, or limit override. Operator-attested
 mode makes zero proof requests and may execute only its one sealed action.
 `run` must use the operator ID that created the plan. Its permission claim is
@@ -200,7 +226,136 @@ report states that repository inventory, lens activation, source closure, and
 code coverage are not applicable. See
 [`docs/http-recon-protocol.md`](docs/http-recon-protocol.md) and
 [`ADR 0014`](docs/adr/0014-operator-attested-http-recon.md), as amended by
-[`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md).
+[`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md) and
+[`ADR 0018`](docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md).
+
+### Authorized authenticated HTTP campaign
+
+This path is separate from both repository proof and `http-recon-v1`. Choose one
+authorization mode; commands never convert or fall back between them.
+
+`plan-attested --attest-authorized` creates lower-assurance
+`OPERATOR_ATTESTED_AUTHED` from the operator's explicit declaration and exact
+scope. It is suitable only when the operator actually holds authorization, such
+as an applicable bug-bounty or security-testing engagement. The controller does
+not fetch or interpret that program, and does not independently verify
+vendor/program permission, ownership, legal authority, external scope coverage,
+or revocation. The declared authorizer and reference are audit fields, not proof
+of vendor approval.
+
+Planning is offline and requires no authorization document:
+
+```powershell
+npm.cmd run audit:http-authed -- plan-attested `
+  --scope C:\trusted\scope.json `
+  --engagement-id <engagement-id> --authorization-id <authorization-id> `
+  --operator-id <operator-id> --authorized-by <declared-authorizer> `
+  --authorization-reference <operator-held-reference> --attest-authorized `
+  --not-before <timestamp> --not-after <timestamp> `
+  --cleanup-not-after <timestamp> `
+  --target-origin https://target.example --environment production `
+  --data-class phi --ownership third_party_owned `
+  --credential-browser --browser-extension-id <extension-id> `
+  --path-prefix / --method HEAD --method GET --method OPTIONS `
+  --test-category api_security --seed-url https://target.example/start `
+  --enable-discovery --json
+```
+
+For simple probes, use repeatable `--seed-url`. For a complete probe/mutation
+plan, replace the seed shortcuts with
+`--requests C:\trusted\requests.json`; the bounded JSON array carries the full
+declared action envelopes. `--cleanup-not-after` defaults to `--not-after`. A
+later value extends only ledger-proven rollback and rollback verification, never
+discovery, probes, or a new mutation.
+
+The plan and validation expose `authorization_binding_sha256`,
+`authorization_mode: OPERATOR_ATTESTED_AUTHED`, and
+`independently_verified: false`. They do not invent a null or synthetic
+`authorization_document_sha256`.
+
+Use `plan-written` instead when supplying bounded authorization-document bytes.
+`WRITTEN_AUTHORIZATION_AUTHED` binds the document digest, declared issuer/date,
+and extracted permissions, but still does not cryptographically verify the issuer
+or judge legal sufficiency. Its planner uses the same scope flags plus
+`--authorization-document`, `--document-issuer`, and `--document-issued-at`.
+
+For a rotating Chrome session, load the unpacked extension from
+`browser/http-authed-chrome` into a dedicated testing profile and copy its
+32-character ID from `chrome://extensions`. The extension has only `activeTab`,
+`scripting`, and loopback-host access: it has no cookie, storage, debugger,
+request-observer, broad target-host, or profile permission. Browser mode creates
+`CHROME_ACTIVE_TAB_SESSION`; no cookie value or credential digest enters the
+scope. It uses Chrome's PKIX/hostname validation and cannot be combined with
+`--tls-spki-sha256`.
+
+Probe-only plans need no per-mutation approver. Add `--mutation-authorized` plus
+the approver public-key and enrollment flags shown by `--help` when the sealed
+permissions include write-capable probes or declared reversible mutations. The
+planner does not create synthetic bodies or countersignatures. Validate with the
+matching command and retain the returned grant hash:
+
+```powershell
+npm.cmd run audit:http-authed -- validate-attested `
+  --scope C:\trusted\scope.json `
+  --json
+
+npm.cmd run audit:http-authed -- validate-written `
+  --scope C:\trusted\written-scope.json `
+  --authorization-document C:\trusted\authorization.pdf `
+  --json
+```
+
+Run the campaign with an absolute ledger outside the target; the runtime creates
+the ledger when that path does not yet exist. Mutating actions also require an
+absolute materials directory containing the declared synthetic bodies and
+`countersignature-N.json` approvals:
+
+```powershell
+npm.cmd run audit:http-authed -- campaign-attested `
+  --scope C:\trusted\scope.json `
+  --campaign-grant-sha256 <hash-from-validation> `
+  --ledger C:\trusted\campaign-ledger `
+  --materials C:\trusted\campaign-materials `
+  --operator-id <operator-id> `
+  --confirm-authorization-current `
+  --credential-browser `
+  --json
+```
+
+For written mode, use `campaign-written` with the written scope and add
+`--authorization-document`. An attested command rejects document flags, and a
+written command rejects an attested scope.
+
+Ordinary actions stop at `validity.not_after`. If a previously dispatched,
+approval-consumed mutation remains incomplete, restarting the matching campaign
+before `validity.cleanup_not_after` opens the existing ledger in cleanup-only
+mode and can send only the sealed rollback and rollback-verification requests.
+It writes `CLEANUP_SESSION_CONFIRMED` before cleanup dispatch, does not write a
+new ordinary session confirmation, and never queues or sends new work.
+
+The browser campaign prints a loopback port and one-time pairing capability. In
+the exact logged-in target tab, open the companion, enter those values, select
+**Load controller binding**, and verify the exact origin and full campaign grant.
+Then select **Attach and start campaign**. That is one extension attach per
+campaign. The companion automatically prepares and executes each
+controller-authorized action; only emergency stop or detach remains manual. Chrome
+applies the current session and processes normal cookie rotation on every sealed
+same-origin request. Cookie and Authorization values never cross into the
+controller, ledger, command output, or agent context. Origin, tab, document,
+action-binding, or protocol drift fails closed, and ambiguous delivery is never
+retried.
+
+Sealed `env:NAME` and redirected `--credential-stdin` remain explicit fallbacks
+for exported credentials. Stdin is read once per process and must match the
+binding at live execution; it does not provide automatic rotation. Never put an
+exported credential in chat, argv, or a file. Validation needs no credential.
+
+Use synthetic non-PHI test data even when the target data class is PHI. Discovery
+can enqueue only scope-valid
+`GET`/`HEAD`/`OPTIONS` probes; it never synthesizes mutation envelopes. See
+[`ADR 0016`](docs/adr/0016-authenticated-mutation-actions.md),
+[`ADR 0017`](docs/adr/0017-operator-attested-authenticated-campaigns.md), and
+[`schemas/http-authed-scope.schema.json`](schemas/http-authed-scope.schema.json).
 
 ### Disposable database conformance
 
@@ -667,9 +822,12 @@ variants after the v1 result and lifecycle contracts have operational history.
 ## Project boundaries
 
 - Do not upload source, evidence, secrets, PII, or PHI by default.
-- Do not run dynamic proof against production.
+- Do not run repository T1/T2 proof against production. Production HTTP actions
+  require a separate `http-authed-v1` campaign and actual authorization; an
+  operator attestation records a claim but does not verify it.
 - Do not infer completeness from zero findings.
-- Do not automatically apply patches; mutation requires separate authorization.
+- Do not automatically apply patches; external mutation requires its declared
+  reversible action and fresh countersignature.
 - Do not claim unsupported frameworks or engines were assessed.
 - Do not treat this tool as a compliance attestation or a replacement for a
   qualified penetration test.

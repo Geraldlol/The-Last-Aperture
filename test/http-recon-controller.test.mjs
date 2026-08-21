@@ -225,6 +225,7 @@ function baseTransport({
 function preDispatchMetadata({
   url,
   method,
+  request_headers: requestHeaders,
   tlsVerification = 'PKIX_HOSTNAME_AND_SPKI_PIN',
   spkiSha256 = SPKI_SHA256,
 }) {
@@ -232,6 +233,7 @@ function preDispatchMetadata({
   return {
     url,
     method,
+    request_headers: requestHeaders ?? null,
     dns: {
       answer_sha256: DNS_SHA256,
       answer_count: 1,
@@ -764,6 +766,66 @@ test('operator-attested mode needs no authority files and performs zero proof re
   })
   assert.equal(validation.valid, true)
   assert.deepEqual(validation.errors, [])
+})
+
+test('operator-attested diagnostic header profile is sealed, dispatched, and value-redacted', async (t) => {
+  const value = await attestedFixture(t, {
+    targetUrl: 'https://target.example/api/TabAccess/GetAll',
+    method: 'GET',
+    safeToGet: true,
+    requestHeaderProfile: 'x-original-url-order-programs-v1',
+  })
+  assert.equal(value.planned.run.schema_version, '1.1.0')
+  const action = value.planned.run.actions[0]
+  assert.equal(action.request_headers.profile, 'x-original-url-order-programs-v1')
+
+  const probeImpl = async (options) => {
+    assert.deepEqual(options.requestHeaderProfile, action.request_headers)
+    await options.beforeSend(preDispatchMetadata({
+      url: options.url,
+      method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
+      spkiSha256: SPKI_SHA256,
+      request_headers: action.request_headers,
+    }))
+    return baseTransport({
+      url: options.url,
+      method: options.method,
+      headers: [{ name: 'content-type', value: 'application/json' }],
+      tlsVerification: 'PKIX_HOSTNAME',
+      spkiSha256: SPKI_SHA256,
+      body: {
+        bytes: null,
+        sha256: EMPTY_SHA256,
+        size: 0,
+        retained_size: 0,
+        retained: false,
+        truncated: false,
+        digest_scope: 'complete',
+      },
+    })
+  }
+  const result = await runHttpReconAction({
+    bundle: value.out,
+    actionId: action.action_id,
+    operatorId: 'operator-001',
+    rationale: 'authorized sealed proxy-routing differential',
+    authorizationConfirmed: true,
+    now: value.clock.now,
+    probeImpl,
+  })
+  assert.equal(result.action.state, 'COMMITTED')
+
+  const runText = await readFile(join(value.out, 'run.json'), 'utf8')
+  const eventText = await readFile(join(value.out, 'events.jsonl'), 'utf8')
+  assert.match(runText, /x-original-url-order-programs-v1/)
+  assert.match(eventText, /x-original-url-order-programs-v1/)
+  assert.doesNotMatch(runText, /\/api\/Order\/GetPrograms/)
+  assert.doesNotMatch(eventText, /\/api\/Order\/GetPrograms/)
+
+  await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  const validation = await validateHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(validation.valid, true)
 })
 
 test('operator-attested mode may explicitly seal and enforce an advance SPKI pin', async (t) => {

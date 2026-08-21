@@ -11,12 +11,12 @@ import {
   validateHttpReconBundle,
 } from './lib/http-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
-import { stableJson } from './lib/run-engine.mjs'
+import { PLATFORM_VERSION, stableJson } from './lib/run-engine.mjs'
 
-const HELP = `red-team-audit authorized HTTP reconnaissance 0.11.0
+const HELP = `red-team-audit authorized HTTP reconnaissance ${PLATFORM_VERSION}
 
 Usage:
-  http-recon plan --target-url <exact-https-url> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--tls-spki-sha256 <hex>] [--json]
+  http-recon plan --target-url <exact-https-url> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--response-observation-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]
   http-recon plan-signed --roe <signed-roe.json> --authorization-document <document> --owner-public-key <ed25519-public.pem> --out <bundle> [--json]
   http-recon next <bundle> [--authorization-document <document> --owner-public-key <ed25519-public.pem>] [--json]
   http-recon run <bundle> <action-id> --operator-id <id> --rationale <text> [--confirm-authorization-current] [--authorization-document <document> --owner-public-key <ed25519-public.pem>] [--json]
@@ -28,8 +28,10 @@ Usage:
 Boundary:
   The default plan seals one exact operator-attested HTTPS HEAD, GET, or OPTIONS
   action without requiring authorization files or an owner public-key file.
-  Signed RoE mode remains available through plan-signed. Neither mode accepts a
-  target, URL, method, TLS policy, header, credential, or payload after planning.
+  Signed RoE mode remains available through plan-signed. Operator-attested planning
+  may seal one controller-owned diagnostic request-header profile or narrow response-
+  observation profile; arbitrary names and values remain refused. Neither mode accepts
+  a target, URL, method, TLS policy, profile, credential, or payload after planning.
 
   Planning performs no network activity. Operator-attested authorization is a
   recorded declaration, not independently verified owner permission. Every run
@@ -74,6 +76,8 @@ const VALUE_OPTIONS = new Set([
   'target-url',
   'tls-spki-sha256',
   'method',
+  'request-header-profile',
+  'response-observation-profile',
   'authorized-by',
   'authorization-reference',
   'environment',
@@ -105,6 +109,8 @@ const COMMANDS = {
       'environment',
       'method',
       'safe-to-get',
+      'request-header-profile',
+      'response-observation-profile',
       'tls-spki-sha256',
       'json',
     ],
@@ -215,6 +221,8 @@ export async function main(argv = process.argv.slice(2)) {
       tlsSpkiSha256: options['tls-spki-sha256'],
       method: options.method ?? 'HEAD',
       safeToGet: options['safe-to-get'] === true,
+      requestHeaderProfile: options['request-header-profile'],
+      responseObservationProfile: options['response-observation-profile'],
       operatorId: options['operator-id'],
       authorizedBy: options['authorized-by'],
       authorizationReference: options['authorization-reference'],

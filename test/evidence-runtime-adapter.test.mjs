@@ -70,6 +70,27 @@ test('plan binds one named container and refuses a cluster-wide operation', asyn
   )
 })
 
+test('plan accepts a THIRD_PARTY read-only operation with an explicit interim acknowledgment', async () => {
+  const adapter = await adapterWithStub()
+  const planned = await adapter.plan({
+    ...REQUEST,
+    target_class: 'THIRD_PARTY',
+    acknowledge_third_party: true,
+  })
+  assert.equal(planned.target_class, 'THIRD_PARTY')
+  assert.deepEqual(planned.operations[0].args.slice(0, 6), [
+    'exec', '-n', 'clinical', 'api-0', '-c', 'api',
+  ])
+})
+
+test('plan refuses THIRD_PARTY without the explicit interim acknowledgment', async () => {
+  const adapter = await adapterWithStub()
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, target_class: 'THIRD_PARTY' }),
+    /THIRD_PARTY|acknowledge-third-party/i,
+  )
+})
+
 test('run refuses without a current authorization confirmation', async () => {
   const adapter = await adapterWithStub()
   const out = join(await mkdtemp(join(tmpdir(), 'rta-runtime-')), 'ev')
@@ -78,6 +99,18 @@ test('run refuses without a current authorization confirmation', async () => {
     () => adapter.run(planned, { out }),
     /confirm-authorization-current|authorization/i,
   )
+})
+
+test('run rejects truthy non-boolean authorization confirmations', async () => {
+  const adapter = await adapterWithStub()
+  const planned = await adapter.plan(REQUEST)
+  for (const authorizationConfirmed of ['yes', {}]) {
+    const out = join(await mkdtemp(join(tmpdir(), 'rta-runtime-')), 'ev')
+    await assert.rejects(
+      () => adapter.run(planned, { out, authorizationConfirmed }),
+      /confirm-authorization-current|authorization/i,
+    )
+  }
 })
 
 test('run with a current confirmation produces a verifiable bundle', async () => {

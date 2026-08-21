@@ -8,15 +8,15 @@ import {
   validateAcquisition,
 } from './lib/evidence-acquire-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
-import { stableJson } from './lib/run-engine.mjs'
+import { PLATFORM_VERSION, stableJson } from './lib/run-engine.mjs'
 
-const HELP = `red-team-audit evidence acquisition 0.11.0
+const HELP = `red-team-audit evidence acquisition ${PLATFORM_VERSION}
 
 Usage:
   audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
   audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
-  audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--capture-contents --acknowledge-phi] [--json]
-  audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--capture-contents --acknowledge-phi] [--json]
+  audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--acknowledge-third-party] [--capture-contents --acknowledge-phi] [--json]
+  audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--acknowledge-third-party] [--capture-contents --acknowledge-phi] [--json]
   audit:acquire <adapter> run <bundle> --operator-id <id> [--confirm-authorization-current] [--json]
   audit:acquire <adapter> finalize <bundle> [--json]
   audit:acquire <adapter> validate <bundle> [--json]
@@ -31,8 +31,10 @@ Boundary:
   idempotent. A bundle carries a credential reference,
   never a credential value. Bundles are written outside their target and are
   refused by \`audit -- plan\` if a single byte does not verify. This control
-  plane mutates nothing. Exploitation is a separate tier that does not exist in
-  this release.
+  plane mutates nothing. Active authenticated HTTP testing is handled by the
+  separate audit:http-authed tier and never bypasses this collector's read-only
+  boundary. THIRD_PARTY deployed/runtime access is temporarily operator-
+  attested with --acknowledge-third-party; it is not independently verified.
 
 Exit codes:
   0  command succeeded
@@ -87,6 +89,7 @@ const FLAG_OPTIONS = new Set([
   'confirm-authorization-current',
   'attest-authorized',
   'acknowledge-production',
+  'acknowledge-third-party',
   'acknowledge-phi',
   'capture-contents',
 ])
@@ -115,12 +118,12 @@ const PLAN_SHAPES = {
   deployed: {
     required: ['evidence-id', 'context', 'operation', 'target-class', 'phi-scope', 'operator-id', 'authorized-by', 'authorization-reference', 'out'],
     requiredFlags: ['attest-authorized'],
-    optional: ['acknowledge-production', 'acknowledge-phi', 'capture-contents', 'json'],
+    optional: ['acknowledge-production', 'acknowledge-third-party', 'acknowledge-phi', 'capture-contents', 'json'],
   },
   runtime: {
     required: ['evidence-id', 'context', 'operation', 'target-class', 'phi-scope', 'operator-id', 'authorized-by', 'authorization-reference', 'out', 'namespace', 'pod', 'container'],
     requiredFlags: ['attest-authorized'],
-    optional: ['acknowledge-production', 'acknowledge-phi', 'capture-contents', 'json'],
+    optional: ['acknowledge-production', 'acknowledge-third-party', 'acknowledge-phi', 'capture-contents', 'json'],
   },
 }
 
@@ -221,6 +224,7 @@ export async function main(argv = process.argv.slice(2)) {
         container: options.container,
         operations: parseOperations(options.operation),
         acknowledge_production: options['acknowledge-production'] === true,
+        acknowledge_third_party: options['acknowledge-third-party'] === true,
         acknowledge_phi: options['acknowledge-phi'] === true,
         capture_contents: options['capture-contents'] === true,
         target_class: options['target-class'] ?? (adapter === 'registry' ? 'NONPROD' : 'LAB'),

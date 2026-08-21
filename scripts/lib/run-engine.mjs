@@ -41,8 +41,9 @@ import {
   validateWorkShardLimits,
 } from './work-shards.mjs'
 import { MAX_STORE_CONTRIBUTIONS } from './store-synthesis.mjs'
+import { PLATFORM_VERSION } from './version.mjs'
 
-export const PLATFORM_VERSION = '0.11.0'
+export { PLATFORM_VERSION }
 export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
 

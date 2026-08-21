@@ -2620,7 +2620,7 @@ Shared harness components are referenced by name and not restated here: the **re
 
 **Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository already boots. T2 requires the auditor to stand up infrastructure the repository does not, and the user is asked every time. **This lens is unusually well served by T1** — almost every recipe below runs under `pytest` or `npm test` against the application's own test client, with no network. Say so in the coverage block, because the contrast with the platform lenses is the reason a web finding can carry a higher tier than a Salesforce one for the same class of defect.
 
-**One hard rail, not a tier:** no recipe here sends a request to a host the repository does not start. No probing of a deployed environment, no scanning, no "just curl the staging URL". Where dynamic evidence against a running system is genuinely needed, report the static result and record the dynamic half as out of scope with the authorization requirement stated — that activity is governed by a scope agreement and happens outside this skill.
+**One hard rail, not a tier:** no recipe here sends a request to a host the repository does not start. No probing of a deployed environment, no scanning, no "just curl the staging URL". Where live evidence is needed, keep it outside this lens and repository-proof workflow and use only the canonical skill's separately authorized external controller.
 
 ### R1 — Two-subject authorization sweep (T1)
 

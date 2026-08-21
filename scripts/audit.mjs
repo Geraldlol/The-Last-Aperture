@@ -108,6 +108,7 @@ import {
 } from './lib/resource-limits.mjs'
 import {
   createRunPlan,
+  PLATFORM_VERSION,
   providerPolicyProjection,
   stableJson,
   summarizePlan,
@@ -201,7 +202,7 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit 0.11.0
+const HELP = `red-team-audit ${PLATFORM_VERSION}
 
 Usage:
   red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
@@ -1535,7 +1536,7 @@ export async function verifyControlBundle(
     !['static', 'remote_static', 'test'].includes(policy.mode)
     || !['STATIC', 'TEST_EXECUTION'].includes(run.capability_mode)
   ) {
-    throw new Error('0.11.0 can dispatch and ingest only STATIC and TEST_EXECUTION runs')
+    throw new Error(`${PLATFORM_VERSION} can dispatch and ingest only STATIC and TEST_EXECUTION runs`)
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -3232,7 +3233,7 @@ async function planCommand(positionals, options) {
     })
     if (!['static', 'remote_static', 'test'].includes(policy.mode)) {
       throw new Error(
-        'local_dynamic Rules of Engagement require the T2 boot broker, which is not available in 0.11.0',
+        `local_dynamic Rules of Engagement require the T2 boot broker, which is not available in ${PLATFORM_VERSION}`,
       )
     }
     if (policy.mode === 'remote_static' && !sealSource) {

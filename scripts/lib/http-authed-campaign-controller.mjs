@@ -1,0 +1,678 @@
+import { discoverHttpAuthedCandidates } from './http-authed-discovery.mjs'
+import {
+  canonicalJson,
+  httpAuthedAuthorizationEvidence,
+  sha256Hex,
+  verifyHttpAuthedAuthorization,
+  verifyHttpAuthedCandidate,
+  verifyHttpAuthedCleanupCandidate,
+} from './http-authed-contracts.mjs'
+import { httpAuthedCandidateIdentity } from './http-authed-campaign-ledger.mjs'
+import { sanitizeHttpAuthedJsonShape } from './http-authed-json-shape.mjs'
+import {
+  HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE,
+  assertHttpAuthedResponseByteBucket,
+  sanitizeHttpAuthedHeaderNames,
+} from './http-authed-response-metadata.mjs'
+
+const CLEANUP_RECOVERY_STATES = new Set([
+  'MUTATION_SETTLED',
+  'MUTATION_FAILED',
+  'AFTER_READ_SETTLED',
+  'AFTER_READ_FAILED',
+  'AFTER_READ_VERIFIED',
+  'ROLLBACK_SETTLED',
+  'ROLLBACK_FAILED',
+])
+
+export class HttpAuthedCampaignControllerError extends Error {
+  constructor(code, message, options = {}) {
+    super(message, options.cause ? { cause: options.cause } : undefined)
+    this.name = 'HttpAuthedCampaignControllerError'
+    this.code = code
+    this.request_may_have_been_sent = options.requestMayHaveBeenSent === true
+  }
+}
+
+function campaignError(code, message, options) {
+  return new HttpAuthedCampaignControllerError(code, message, options)
+}
+
+function exactFunction(value, label) {
+  if (typeof value !== 'function') {
+    throw campaignError('HTTP_AUTHED_CAMPAIGN_CALLBACK_REQUIRED', `${label} callback is required`)
+  }
+  return value
+}
+
+function requestBindingSha256(action) {
+  return sha256Hex(Buffer.from(
+    `red-team-audit/http-authed-request-binding/v1\0${canonicalJson(action)}`,
+    'utf8',
+  ))
+}
+
+function publicLedger(snapshot) {
+  return {
+    record_count: snapshot.record_count,
+    head_sha256: snapshot.head_sha256,
+    queued_actions: snapshot.queued_actions,
+    terminal_actions: snapshot.terminal_actions,
+    stopped: snapshot.stopped,
+  }
+}
+
+function responseMetadata(response, requestMayHaveBeenSent = true, observation) {
+  if (
+    response === null
+    || typeof response !== 'object'
+    || !Number.isSafeInteger(response.status)
+    || response.status < 100
+    || response.status > 599
+    || !Array.isArray(response.header_names)
+  ) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+      'campaign executor returned invalid response metadata',
+      { requestMayHaveBeenSent },
+    )
+  }
+  let headerNames
+  try {
+    headerNames = sanitizeHttpAuthedHeaderNames(response.header_names)
+  } catch (cause) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+      'campaign executor returned invalid response header-name metadata',
+      { cause, requestMayHaveBeenSent },
+    )
+  }
+  const hasFailureStage = Object.hasOwn(response, 'failure_stage_code')
+  const hasResponseByteBucket = Object.hasOwn(response, 'response_byte_bucket')
+  if (hasFailureStage || hasResponseByteBucket) {
+    let responseByteBucket
+    try {
+      responseByteBucket = assertHttpAuthedResponseByteBucket(response.response_byte_bucket)
+    } catch (cause) {
+      throw campaignError(
+        'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+        'campaign executor returned invalid observation-failure metadata',
+        { cause, requestMayHaveBeenSent },
+      )
+    }
+    if (
+      !hasFailureStage
+      || !hasResponseByteBucket
+      || observation === undefined
+      || response.failure_stage_code !== HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE
+      || response.bytes !== undefined
+      || response.json_shape !== undefined
+    ) {
+      throw campaignError(
+        'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+        'campaign executor returned invalid observation-failure metadata',
+        { requestMayHaveBeenSent },
+      )
+    }
+    return {
+      status: response.status,
+      headerNames,
+      responseByteBucket,
+      failureStageCode: HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE,
+      requestMayHaveBeenSent,
+    }
+  }
+  if (!Number.isSafeInteger(response.bytes) || response.bytes < 0) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+      'campaign executor returned invalid response metadata',
+      { requestMayHaveBeenSent },
+    )
+  }
+  let jsonShape
+  try {
+    if (response.json_shape !== undefined && observation === undefined) {
+      throw new TypeError('unsealed JSON shape metadata')
+    }
+    jsonShape = response.json_shape === undefined
+      ? undefined
+      : sanitizeHttpAuthedJsonShape(response.json_shape, {
+          safeKeyNames: observation.safe_key_names,
+          mode: observation.mode,
+        })
+  } catch (cause) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_RESPONSE_INVALID',
+      'campaign executor returned invalid JSON shape metadata',
+      { cause, requestMayHaveBeenSent },
+    )
+  }
+  return {
+    status: response.status,
+    bytes: response.bytes,
+    headerNames,
+    requestMayHaveBeenSent,
+    ...(jsonShape === undefined ? {} : { jsonShape }),
+  }
+}
+
+function expiredCleanupTarget({ scope, ledger, campaignGrantSha256 }) {
+  if (
+    typeof ledger?.actionState !== 'function'
+    || typeof ledger?.snapshot !== 'function'
+    || ledger.snapshot().stopped !== true
+  ) return null
+  const matches = []
+  for (const action of scope.requests) {
+    if (action.kind !== 'mutate') continue
+    const identity = httpAuthedCandidateIdentity({
+      campaignGrantSha256,
+      candidateDraft: action,
+    })
+    const state = ledger.actionState(identity.actionId)
+    if (
+      state
+      && !state.terminal
+      && state.provenance === 'SEALED_PLAN'
+      && state.action_kind === 'mutate'
+      && state.approval_consumed === true
+      && typeof state.lease_id === 'string'
+      && CLEANUP_RECOVERY_STATES.has(state.state)
+    ) {
+      matches.push({ action, state })
+    }
+  }
+  return matches.length === 1 ? matches[0] : null
+}
+
+/**
+ * Drain an operator-attested or document-bound authenticated campaign sequentially. The ledger is the
+ * authoritative exact-once history; candidate bytes live only in the sealed
+ * scope or in this process for response-derived, synthetic-safe discoveries.
+ */
+export async function runHttpAuthedCampaign({
+  scope,
+  documentBytes,
+  expectedCampaignGrantSha256,
+  operatorId,
+  authorizationConfirmed,
+  ledger,
+  executeProbe,
+  executeMutation,
+  executeMutationRecovery,
+  reauthorize,
+  now = () => new Date(),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+}) {
+  if (authorizationConfirmed !== true) {
+    throw campaignError(
+      'HTTP_AUTHED_CURRENT_AUTHORIZATION_REQUIRED',
+      'campaign execution requires current authorization confirmation',
+    )
+  }
+  if (
+    !ledger
+    || typeof ledger.enqueueCandidate !== 'function'
+    || typeof ledger.confirmCampaignSession !== 'function'
+    || typeof ledger.snapshot !== 'function'
+    || typeof ledger.actionState !== 'function'
+  ) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_LEDGER_REQUIRED',
+      'campaign execution requires an open durable campaign ledger',
+    )
+  }
+  exactFunction(reauthorize, 'campaign reauthorization')
+  exactFunction(executeProbe, 'campaign probe executor')
+  exactFunction(wait, 'campaign interval wait')
+  if (executeMutation !== undefined) exactFunction(executeMutation, 'campaign mutation executor')
+  if (executeMutationRecovery !== undefined) {
+    exactFunction(executeMutationRecovery, 'campaign mutation recovery executor')
+  }
+  if (typeof now !== 'function') {
+    throw campaignError('HTTP_AUTHED_CAMPAIGN_CLOCK_INVALID', 'campaign clock must be a function')
+  }
+
+  let verified
+  let entryCleanupTarget = null
+  try {
+    verified = verifyHttpAuthedAuthorization({
+      scope,
+      documentBytes,
+      now: now(),
+    })
+  } catch (cause) {
+    if (cause?.code !== 'HTTP_AUTHED_AUTHORIZATION_EXPIRED') throw cause
+    const cleanupCandidate = scope.requests?.find((action) => action.kind === 'mutate')
+    if (cleanupCandidate === undefined) throw cause
+    const cleanupVerified = verifyHttpAuthedCleanupCandidate({
+      scope,
+      action: cleanupCandidate,
+      documentBytes,
+      expectedCampaignGrantSha256,
+      now: now(),
+    })
+    entryCleanupTarget = expiredCleanupTarget({
+      scope,
+      ledger,
+      campaignGrantSha256: cleanupVerified.campaignGrantSha256,
+    })
+    if (entryCleanupTarget === null) throw cause
+    verified = cleanupVerified
+  }
+  if (verified.campaignGrantSha256 !== expectedCampaignGrantSha256) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_GRANT_MISMATCH',
+      'campaign scope does not match the controller-held campaign grant',
+    )
+  }
+  if (operatorId !== scope.authorization.operator_id) {
+    throw campaignError(
+      'HTTP_AUTHED_OPERATOR_MISMATCH',
+      'campaign operator does not match the sealed authorization',
+    )
+  }
+  const initialLedger = ledger.snapshot()
+  const authorizationEvidence = httpAuthedAuthorizationEvidence(scope)
+  if (
+    initialLedger.campaign_grant_sha256 !== expectedCampaignGrantSha256
+    || initialLedger.authorization_binding_sha256 !== verified.authorizationBindingSha256
+    || initialLedger.authorization_mode !== authorizationEvidence.authorizationMode
+    || initialLedger.independently_verified !== authorizationEvidence.independentlyVerified
+    || initialLedger.operator_id !== operatorId
+  ) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_LEDGER_BINDING_MISMATCH',
+      'campaign ledger is bound to a different authorization grant',
+    )
+  }
+  if (entryCleanupTarget === null) {
+    await ledger.confirmCampaignSession({
+      operatorId,
+      authorizationMode: scope.authorization.mode,
+    })
+  } else {
+    if (typeof ledger.confirmCleanupSession !== 'function') {
+      throw campaignError(
+        'HTTP_AUTHED_CAMPAIGN_CLEANUP_LEDGER_INVALID',
+        'expired campaign cleanup requires a cleanup-only ledger confirmation API',
+      )
+    }
+    await ledger.confirmCleanupSession({
+      operatorId,
+      authorizationMode: scope.authorization.mode,
+    })
+  }
+
+  const counts = {
+    completed: 0,
+    discovered: 0,
+    duplicates: 0,
+    rejected: 0,
+    failed: 0,
+    uncertain: 0,
+    already_terminal: 0,
+  }
+  const jsonShapes = []
+  const observationFailures = []
+  const queue = []
+  const queuedIds = new Set()
+  let executedActions = 0
+
+  const enqueue = async (candidateDraft, provenance) => {
+    const enqueued = await ledger.enqueueCandidate({ candidateDraft, provenance })
+    const state = ledger.actionState(enqueued.actionId)
+    if (!enqueued.created) counts.duplicates += 1
+    if (state?.terminal) {
+      counts.already_terminal += 1
+      return enqueued
+    }
+    if (!queuedIds.has(enqueued.actionId)) {
+      queuedIds.add(enqueued.actionId)
+      queue.push({ candidateDraft, enqueued })
+    }
+    return enqueued
+  }
+
+  if (entryCleanupTarget === null) {
+    for (const action of scope.requests) await enqueue(action, 'SEALED_PLAN')
+  } else {
+    const { action, state } = entryCleanupTarget
+    queuedIds.add(state.action_id)
+    queue.push({
+      candidateDraft: structuredClone(action),
+      enqueued: {
+        created: false,
+        actionId: state.action_id,
+        candidateSha256: state.candidate_sha256,
+        actionSequence: state.action_sequence,
+        allocatedAction: {
+          ...structuredClone(action),
+          sequence: state.action_sequence,
+        },
+        headSha256: ledger.snapshot().head_sha256,
+      },
+    })
+  }
+
+  while (queue.length > 0) {
+    const queued = queue.shift()
+    queuedIds.delete(queued.enqueued.actionId)
+    const currentState = ledger.actionState(queued.enqueued.actionId)
+    if (currentState?.terminal) continue
+    const cleanupRecovery = currentState?.action_kind === 'mutate'
+      && currentState.state !== 'QUEUED'
+    if (ledger.snapshot().stopped && !cleanupRecovery) break
+    if (cleanupRecovery) {
+      const recoveryLease = {
+        actionId: currentState.action_id,
+        candidateSha256: currentState.candidate_sha256,
+        actionSequence: currentState.action_sequence,
+        allocatedAction: queued.enqueued.allocatedAction,
+        leaseId: currentState.lease_id,
+        headSha256: ledger.snapshot().head_sha256,
+      }
+      if (executeMutationRecovery === undefined) {
+        await ledger.terminalizeAction({
+          actionId: recoveryLease.actionId,
+          leaseId: recoveryLease.leaseId,
+          outcome: 'MANUAL_INTERVENTION_REQUIRED',
+          reasonCode: 'MUTATION_RECOVERY_EXECUTOR_UNAVAILABLE',
+        })
+        counts.uncertain += 1
+        break
+      }
+      try {
+        verifyHttpAuthedCleanupCandidate({
+          scope,
+          action: recoveryLease.allocatedAction,
+          documentBytes,
+          expectedCampaignGrantSha256,
+          now: now(),
+        })
+        const recovery = await executeMutationRecovery({
+          action: recoveryLease.allocatedAction,
+          lease: recoveryLease,
+          ledger,
+          reauthorize,
+        })
+        if (recovery?.outcome === 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED') {
+          counts.uncertain += 1
+        } else if (recovery?.outcome === 'MUTATION_VERIFIED_ROLLBACK_VERIFIED') {
+          counts.completed += 1
+        } else {
+          counts.uncertain += 1
+        }
+      } catch {
+        const recoveryState = ledger.actionState(recoveryLease.actionId)
+        if (!recoveryState?.terminal) {
+          await ledger.terminalizeAction({
+            actionId: recoveryLease.actionId,
+            leaseId: recoveryLease.leaseId,
+            outcome: 'MANUAL_INTERVENTION_REQUIRED',
+            reasonCode: 'MUTATION_RECOVERY_FAILED',
+          })
+        }
+        counts.uncertain += 1
+      }
+      break
+    }
+    if (executedActions > 0 && scope.limits.min_interval_ms > 0) {
+      await wait(scope.limits.min_interval_ms)
+    }
+    executedActions += 1
+    const lease = await ledger.leaseAction({
+      candidateDraft: queued.candidateDraft,
+      operatorId,
+    })
+    const action = lease.allocatedAction
+    verifyHttpAuthedCandidate({
+      scope,
+      action,
+      documentBytes,
+      expectedCampaignGrantSha256,
+      now: now(),
+    })
+
+    if (action.kind === 'mutate') {
+      if (executeMutation === undefined) {
+        await ledger.terminalizeAction({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          outcome: 'FAILED_BEFORE_MUTATION',
+          reasonCode: 'MUTATION_EXECUTOR_UNAVAILABLE',
+        })
+        counts.failed += 1
+        continue
+      }
+      let stopReason = null
+      try {
+        const outcome = await executeMutation({ action, lease, ledger, reauthorize })
+        const terminalOutcome = outcome?.terminal_outcome ?? outcome?.outcome
+        if (terminalOutcome === 'MUTATION_VERIFIED_ROLLBACK_VERIFIED') {
+          counts.completed += 1
+        } else if ([
+          'DELIVERY_UNCERTAIN',
+          'MANUAL_INTERVENTION_REQUIRED',
+        ].includes(terminalOutcome)) {
+          counts.uncertain += 1
+          stopReason = 'MUTATION_OUTCOME_UNCERTAIN'
+        } else {
+          counts.failed += 1
+          stopReason = terminalOutcome === 'ROLLBACK_VERIFIED_AFTER_FAILURE'
+            ? 'VERIFICATION_MISMATCH'
+            : 'MUTATION_ACTION_FAILED'
+        }
+      } catch (cause) {
+        const state = ledger.actionState(lease.actionId)
+        if (!state?.terminal) {
+          const postWrite = state?.approval_consumed === true && (
+            state?.pending_phase !== null
+            || state?.settled_phases?.some((phase) => [
+              'MUTATION', 'AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY',
+            ].includes(phase))
+          )
+          const deliveryUncertain = postWrite
+            || cause?.request_may_have_been_sent === true
+          await ledger.terminalizeAction({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            outcome: postWrite
+              ? 'MANUAL_INTERVENTION_REQUIRED'
+              : deliveryUncertain
+                ? 'DELIVERY_UNCERTAIN'
+              : state?.approval_consumed
+                ? 'FAILED_BEFORE_SEND'
+                : 'FAILED_BEFORE_MUTATION',
+            reasonCode: deliveryUncertain
+              ? 'MUTATION_EXECUTOR_DELIVERY_UNCERTAIN'
+              : 'MUTATION_EXECUTOR_REJECTED',
+          })
+          if (deliveryUncertain) counts.uncertain += 1
+          else counts.failed += 1
+        }
+        stopReason = 'MUTATION_EXECUTOR_FAILED'
+      }
+      if (stopReason !== null) {
+        if (!ledger.snapshot().stopped) await ledger.stopCampaign(stopReason)
+        break
+      }
+      continue
+    }
+
+    let preDispatchRecorded = false
+    const beforeSend = async () => {
+      if (preDispatchRecorded) {
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_PRE_DISPATCH_REPLAY',
+          'campaign executor invoked pre-dispatch more than once',
+        )
+      }
+      await reauthorize({ action: structuredClone(action) })
+      verifyHttpAuthedCandidate({
+        scope,
+        action,
+        documentBytes,
+        expectedCampaignGrantSha256,
+        now: now(),
+      })
+      await ledger.markPreDispatch({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase: 'PROBE',
+        requestBindingSha256: requestBindingSha256(action),
+      })
+      preDispatchRecorded = true
+    }
+
+    try {
+      const execution = await executeProbe({ action: structuredClone(action), beforeSend })
+      if (!preDispatchRecorded) {
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_PRE_DISPATCH_MISSING',
+          'campaign executor returned without invoking durable pre-dispatch',
+        )
+      }
+      const settledResponse = responseMetadata(
+        execution?.response,
+        true,
+        scope.response_observation,
+      )
+      await ledger.markOutcome({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase: 'PROBE',
+        outcome: 'SETTLED',
+        responseMetadata: settledResponse,
+      })
+      if (settledResponse.failureStageCode !== undefined) {
+        observationFailures.push({
+          action_sequence: action.sequence,
+          method: action.method,
+          status: settledResponse.status,
+          header_names: [...settledResponse.headerNames],
+          response_byte_bucket: settledResponse.responseByteBucket,
+          failure_stage_code: settledResponse.failureStageCode,
+        })
+        await ledger.terminalizeAction({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          outcome: 'PROBE_OBSERVATION_FAILED',
+          reasonCode: 'PROBE_JSON_SHAPE_OBSERVATION_FAILED',
+        })
+        counts.failed += 1
+        continue
+      }
+      if (settledResponse.jsonShape !== undefined) {
+        jsonShapes.push({
+          action_sequence: action.sequence,
+          method: action.method,
+          json_shape: structuredClone(settledResponse.jsonShape),
+        })
+      }
+
+      if (scope.discovery?.enabled === true) {
+        const transientChunks = execution?.discoveryInput?.bodyChunks ?? []
+        let discovered
+        try {
+          discovered = discoverHttpAuthedCandidates({
+            policy: scope.discovery,
+            sourceAction: action,
+            headers: execution?.discoveryInput?.headers ?? [],
+            bodyChunks: transientChunks,
+          })
+        } finally {
+          for (const chunk of transientChunks) {
+            if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
+          }
+        }
+        let createdCount = 0
+        let duplicateCount = 0
+        for (const candidateDraft of discovered.candidates) {
+          const candidate = await enqueue(candidateDraft, 'DISCOVERED')
+          if (candidate.created) {
+            createdCount += 1
+            counts.discovered += 1
+          } else {
+            duplicateCount += 1
+          }
+        }
+        const rejectedCount = Object.values(discovered.summary.rejected_by_code)
+          .reduce((sum, value) => sum + value, 0)
+        counts.rejected += rejectedCount
+        await ledger.recordDiscoverySummary({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          acceptedCount: createdCount,
+          duplicateCount,
+          rejectedCount,
+        })
+      }
+      await ledger.terminalizeAction({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        outcome: 'PROBE_COMPLETED',
+      })
+      counts.completed += 1
+    } catch (cause) {
+      const requestMayHaveBeenSent = cause?.request_may_have_been_sent === true
+      if (preDispatchRecorded) {
+        await ledger.markOutcome({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          phase: 'PROBE',
+          outcome: 'FAILED',
+          responseMetadata: {
+            status: null,
+            bytes: 0,
+            headerNames: [],
+            requestMayHaveBeenSent,
+          },
+        })
+      }
+      await ledger.terminalizeAction({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        outcome: requestMayHaveBeenSent ? 'DELIVERY_UNCERTAIN' : 'FAILED_BEFORE_SEND',
+        reasonCode: requestMayHaveBeenSent
+          ? 'PROBE_DELIVERY_UNCERTAIN'
+          : 'PROBE_FAILED_BEFORE_SEND',
+      })
+      if (requestMayHaveBeenSent) {
+        counts.uncertain += 1
+        if (!ledger.snapshot().stopped) {
+          await ledger.stopCampaign('PROBE_DELIVERY_UNCERTAIN')
+        }
+        break
+      }
+      counts.failed += 1
+    }
+  }
+
+  return {
+    kind: 'red-team-audit/http-authed-campaign-result',
+    schema_version: observationFailures.length > 0
+      ? '1.3.0'
+      : scope.response_observation === undefined
+      ? '1.0.0'
+      : scope.response_observation.mode === 'ASPNET_D_JSON_SHAPE_ONLY'
+        ? '1.2.0'
+        : '1.1.0',
+    authorization_mode: scope.authorization.mode,
+    independently_verified: scope.authorization.independently_verified,
+    authorization_assurance: authorizationEvidence.authorizationAssurance,
+    authorization_nonclaim: authorizationEvidence.authorizationNonclaim,
+    authorization_binding_sha256: verified.authorizationBindingSha256,
+    ...(verified.authorizationDocumentSha256 === undefined
+      ? {}
+      : { authorization_document_sha256: verified.authorizationDocumentSha256 }),
+    campaign_grant_sha256: verified.campaignGrantSha256,
+    ...(entryCleanupTarget === null ? {} : { cleanup_only: true }),
+    actions: counts,
+    ...(scope.response_observation === undefined ? {} : { json_shapes: jsonShapes }),
+    ...(observationFailures.length === 0
+      ? {}
+      : { observation_failures: observationFailures }),
+    ledger: publicLedger(ledger.snapshot()),
+  }
+}
