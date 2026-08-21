@@ -43,3 +43,9 @@ node_modules/
 # skills/ are the tracked output. The repository-root SKILL.md is now a tracked
 # compatibility pointer to the canonical skill under skills/.
 /references/
+
+# Python bytecode cache from the proxy-side scope kernel. Build output, and it is
+# regenerated on every conformance run, so tracking it dirties the tree
+# constantly and would let a stale .pyc masquerade as reviewed source.
+__pycache__/
+*.pyc
