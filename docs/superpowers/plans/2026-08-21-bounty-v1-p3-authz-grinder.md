@@ -37,9 +37,11 @@ A naive grinder fails in one of two directions:
 1. Replay R as A. Call it `A1`.
 2. Replay R as A again. Call it `A2`.
 3. `normalize(A1) == normalize(A2)` → the endpoint is **stable** under normalization, so any cross-role equivalence is meaningful.
-4. `normalize(A1) != normalize(A2)` → the endpoint is **volatile**; equality comparison cannot support a claim, and every cross-role result for it is reported `UNPROVEN_VOLATILE`.
+4. `normalize(A1) != normalize(A2)` → the endpoint is **volatile**; no content comparison can support a claim, and every cross-role *content* result for it is reported `UNPROVEN_VOLATILE`. Status verdicts (401/403/404/5xx) still stand, because a 403 means the same thing whether or not the body is reproducible.
 
 Step 4 is the honest half and the reason this design is worth the extra requests: it converts "we don't know" from a silent false negative into a recorded nonclaim.
+
+Note the direction of step 4, which is easy to get wrong and was got wrong here first: instability invalidates a **non-match** exactly as much as a match. If the owner's own two replays disagree, a tester's differing response is no evidence of per-role scoping — it may be nothing but volatility.
 
 ## Classification
 
@@ -48,7 +50,7 @@ For request R owned by A, replayed as tester B:
 | Verdict | Condition | Meaning |
 |---|---|---|
 | `AUTHZ_BYPASS_CANDIDATE` | baseline stable **and** `normalize(B) == normalize(A1)` | B received content specific to A |
-| `UNPROVEN_VOLATILE` | baseline unstable and B matched | Cannot support a claim either way |
+| `UNPROVEN_VOLATILE` | baseline unstable, **whether or not B matched** | Cannot support a claim in either direction |
 | `ACCESS_DENIED` | B status 401 or 403 | Correct-looking behavior for this one request |
 | `NOT_FOUND` | B status 404 | Ambiguous: proper scoping, or an existence oracle |
 | `DIFFERENT_CONTENT` | B 2xx, not equivalent | Usually correct per-role scoping — B seeing B's own data is not a bug |
@@ -88,8 +90,8 @@ For request R owned by A, replayed as tester B:
 
 **Semantics:** HAR is the ingestion path that makes P3 usable before the P2 proxy exists — Chrome DevTools exports it directly. Imported requests carry an owner role supplied by the operator, because a HAR cannot know whose session it captured. Redaction happens before anything is persisted, so a bundle never contains a live credential.
 
-- [ ] **Step 1:** Failing tests — HAR entry with headers array and `postData.text` imported; non-http entry skipped with a reason; redaction removes every sensitive header while keeping the rest; signature stable across header reordering and differing on method or path.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
+- [x] **Step 1:** Failing tests — HAR entry with headers array and `postData.text` imported; non-http entry skipped with a reason; redaction removes every sensitive header while keeping the rest; signature stable across header reordering and differing on method or path.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
 
 ---
 
@@ -111,8 +113,8 @@ JSON bodies are parsed and re-serialized with sorted keys so key order cannot ma
 
 **The deliberate limit:** normalization cannot strip a rendered username or account number, so two roles seeing genuinely different data still differ — which is correct. It only removes machine noise.
 
-- [ ] **Step 1:** Failing tests — each substitution class; JSON key-order insensitivity; volatile headers dropped and stable ones kept; two responses differing only in a UUID normalize identical; two responses differing in an account number stay different; malformed JSON falls back without throwing.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
+- [x] **Step 1:** Failing tests — each substitution class; JSON key-order insensitivity; volatile headers dropped and stable ones kept; two responses differing only in a UUID normalize identical; two responses differing in an account number stay different; malformed JSON falls back without throwing.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
 
 ---
 
@@ -128,8 +130,8 @@ JSON bodies are parsed and re-serialized with sorted keys so key order cannot ma
 
 **Semantics:** `confidence` is `high` only when the baseline is stable and the digests match exactly; `low` whenever the baseline is unstable. `rationale` is a human sentence naming the comparison that produced the verdict, because a finding without a stated basis is unsubmittable.
 
-- [ ] **Step 1:** Failing tests — stable baseline plus matching tester yields `AUTHZ_BYPASS_CANDIDATE` at high confidence; unstable baseline plus matching tester yields `UNPROVEN_VOLATILE` at low confidence; 401/403 yields `ACCESS_DENIED`; 404 yields `NOT_FOUND`; 2xx non-matching yields `DIFFERENT_CONTENT`; 5xx yields `SERVER_ERROR`; transport error yields `REPLAY_FAILED`; no verdict string contains "VULNERABLE" or "SECURE".
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
+- [x] **Step 1:** Failing tests — stable baseline plus matching tester yields `AUTHZ_BYPASS_CANDIDATE` at high confidence; unstable baseline plus matching tester yields `UNPROVEN_VOLATILE` at low confidence; 401/403 yields `ACCESS_DENIED`; 404 yields `NOT_FOUND`; 2xx non-matching yields `DIFFERENT_CONTENT`; 5xx yields `SERVER_ERROR`; transport error yields `REPLAY_FAILED`; no verdict string contains "VULNERABLE" or "SECURE".
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Purity grep. **Step 6:** Commit.
 
 ---
 
@@ -146,8 +148,8 @@ JSON bodies are parsed and re-serialized with sorted keys so key order cannot ma
 
 **Semantics:** a role carries an `id`, a `label`, and an `auth` block of `{ kind: 'header' | 'cookie' | 'none', name, value_env }`. **Credential values are read from environment variables named by `value_env`, never stored in the registry file**, so a registry can be committed and a bundle can be shared without leaking a session. A missing environment variable is a hard error at load, not a silent unauthenticated replay — silently dropping auth would make every result a false `ACCESS_DENIED`.
 
-- [ ] **Step 1:** Failing tests — schema accepts a valid registry and rejects an inline credential value; `applyRole` sets a header or cookie; anonymous strips auth entirely; a missing env var throws naming the variable; `rolesToTest` excludes the owner and includes anonymous.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement plus schema. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Failing tests — schema accepts a valid registry and rejects an inline credential value; `applyRole` sets a header or cookie; anonymous strips auth entirely; a missing env var throws naming the variable; `rolesToTest` excludes the owner and includes anonymous.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement plus schema. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -160,8 +162,8 @@ JSON bodies are parsed and re-serialized with sorted keys so key order cannot ma
 
 **Semantics:** derives the target host from the request url and runs it through `gateCandidates`; a request whose host is out of scope is refused before any socket opens, exactly as in P1. Calls `limiter.acquire()` unconditionally. Sends no redirect following. Captures status, headers, and a length-capped body.
 
-- [ ] **Step 1:** Failing tests — out-of-scope request refused with the kernel reason and no fetch; limiter called once per replay; role auth applied to the outgoing headers; redirect not followed; transport error returned as a `REPLAY_FAILED`-shaped result rather than thrown; body cap enforced.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
+- [x] **Step 1:** Failing tests — out-of-scope request refused with the kernel reason and no fetch; limiter called once per replay; role auth applied to the outgoing headers; redirect not followed; transport error returned as a `REPLAY_FAILED`-shaped result rather than thrown; body cap enforced.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement. **Step 4:** Green. **Step 5:** Commit.
 
 ---
 
@@ -182,7 +184,7 @@ A three-role app on loopback with **known** answers, so the grinder is measured 
 
 The `/api/volatile` endpoint exists specifically to prove the calibration path fires. Any grinder that reports a bypass there is over-stripping.
 
-- [ ] **Step 1:** Implement the testbed with an ephemeral port and a `close()`. **Step 2:** Commit.
+- [x] **Step 1:** Implement the testbed with an ephemeral port and a `close()`. **Step 2:** Commit.
 
 ---
 
@@ -204,23 +206,50 @@ bounty authz status <bundle> [--json]
 
 **Semantics:** for each request, two owner replays then one replay per other role. Persists `authz-findings.json` with every verdict retained — `ACCESS_DENIED` results are kept, because the shape of what was denied is what makes a bypass elsewhere credible. Prints candidates and unproven counts separately so a volatile endpoint can never inflate the candidate number.
 
-- [ ] **Step 1:** Failing tests against the testbed — `/api/orders/2` yields `AUTHZ_BYPASS_CANDIDATE`; `/api/orders/1` yields `ACCESS_DENIED`; `/api/admin/users` yields a candidate for anonymous; `/api/me` yields `DIFFERENT_CONTENT` and **not** a candidate; `/api/volatile` yields `UNPROVEN_VOLATILE`; request count equals `requests × (2 + otherRoles)`.
-- [ ] **Step 2:** Confirm failure. **Step 3:** Implement plus CLI. **Step 4:** Green. **Step 5:** Wire tests into `test:platform`. **Step 6:** Commit.
+- [x] **Step 1:** Failing tests against the testbed — `/api/orders/2` yields `AUTHZ_BYPASS_CANDIDATE`; `/api/orders/1` yields `ACCESS_DENIED`; `/api/admin/users` yields a candidate for anonymous; `/api/me` yields `DIFFERENT_CONTENT` and **not** a candidate; `/api/volatile` yields `UNPROVEN_VOLATILE`; request count equals `requests × (2 + otherRoles)`.
+- [x] **Step 2:** Confirm failure. **Step 3:** Implement plus CLI. **Step 4:** Green. **Step 5:** Wire tests into `test:platform`. **Step 6:** Commit.
 
 ---
 
 ## P3 Exit Gate
 
-- [ ] `npm test` shows no new failures beyond the two known pre-existing ones
-- [ ] Purity grep clean for request, normalize, and classify modules
-- [ ] No new entry in `package.json` `dependencies`
-- [ ] **Against the testbed with known answers:** the two planted bugs are found, and the three clean endpoints produce no candidate
-- [ ] `/api/volatile` classifies `UNPROVEN_VOLATILE`, proving calibration fires rather than over-stripping
-- [ ] `/api/me` classifies `DIFFERENT_CONTENT` and is not counted as a candidate
-- [ ] An out-of-scope request is refused before any socket opens
-- [ ] No credential value appears anywhere in the persisted bundle
-- [ ] No verdict string reads as a confirmed or cleared finding
-- [ ] Replay pacing honours the sealed `rate_limit_rps`
+Verified 2026-08-21.
+
+- [x] `npm test` — **1769 tests, 1764 pass, 2 fail, 3 skipped.** The 2 failures are the same pre-existing pair (`canonical-ordering.test.mjs:126`, `http-authed-credential.test.mjs:355`); zero authz, recon, bounty, or OOB failures. Baseline at end of P1 was 1687, P3 added exactly 82, and 1687 + 82 = 1769. **The suite does not pass clean, and this checkbox does not claim it does.**
+- [x] Purity grep clean for the request, normalize, and classify modules
+- [x] No new entry in `package.json` `dependencies` — still `acorn`, `ajv`, `yaml`
+- [x] **Against the testbed with known answers: both planted bugs found, all three clean endpoints produced no candidate.** End-to-end CLI run: `candidates=3 unproven=2 of 10 comparisons over 5 requests (20 replays)` — `/api/orders/2` as bob, `/api/admin/users` as bob and as anonymous. Zero false positives.
+- [x] `/api/volatile` classifies `UNPROVEN_VOLATILE`, proving calibration fires rather than over-stripping
+- [x] `/api/me` classifies `DIFFERENT_CONTENT` and is not counted as a candidate
+- [x] An out-of-scope captured request is refused before any socket opens — asserted with a counting `fetchImpl` that records zero calls
+- [x] No credential value appears anywhere in the persisted bundle — asserted against the raw findings JSON for both tokens and the string `Bearer`
+- [x] No verdict string reads as a confirmed or cleared finding — asserted over the frozen verdict list
+- [x] Replay pacing honours the sealed `rate_limit_rps` — the limiter is constructed from the sealed scope and issues exactly `requests × (2 + otherRoles)` tokens
+- [x] 81 authz tests across 6 files, all passing; 325 bounty tests in total across P0, P1, P3, and P7
+
+### The defect the ground-truth testbed caught
+
+`/api/volatile` returned `DIFFERENT_CONTENT` where `UNPROVEN_VOLATILE` was required.
+
+Cause: `classifyAuthzOutcome` checked the content match *before* baseline
+stability. On a volatile endpoint where the tester's response also differed, that
+ordering produced a confident `DIFFERENT_CONTENT` — a claim of correct per-role
+scoping on an endpoint that simply changes every call.
+
+Instability poisons the content comparison in **both** directions: when the
+owner's own two replays disagree, a non-match is exactly as meaningless as a
+match. The baseline check now precedes the match check. Status verdicts are
+deliberately unaffected, because a 403 means the same thing whether or not the
+body is reproducible.
+
+Two regression tests were added: one for the non-match case, one asserting a
+status verdict still survives an unstable baseline.
+
+**Fourth phase, fourth defect found by measuring against reality rather than
+against the implementation's own assumptions.** The difference here is that
+reality was a fixture with planted bugs and known answers, which is far cheaper
+than a live target and gives the same falsifying power. Ground-truth fixtures are
+the pattern worth carrying into P4.
 
 ## Deferred
 
