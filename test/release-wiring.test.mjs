@@ -492,3 +492,168 @@ test('the v0.10 externally anchored checkpoint-continuity slice is release-wired
     /test\/transparency-checkpoint-journal\.test\.mjs/,
   )
 })
+
+test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship together', () => {
+  const sourcePaths = [
+    'docs/adr/0019-bounty-program-perimeter-protocol.md',
+    'docs/superpowers/specs/2026-08-20-bounty-v1-design.md',
+    'schemas/bounty-scope.schema.json',
+    'schemas/bounty-surface-inventory.schema.json',
+    'schemas/bounty-authz-roles.schema.json',
+    'schemas/bounty-authz-identifiers.schema.json',
+    'schemas/bounty-oob-session.schema.json',
+    'fixtures/bounty/scope-kernel-cases.json',
+    'scripts/bounty.mjs',
+    'scripts/lib/bounty-target.mjs',
+    'scripts/lib/bounty-scope-kernel.mjs',
+    'scripts/lib/bounty-contracts.mjs',
+    'scripts/lib/bounty-planner.mjs',
+    'scripts/lib/bounty-controller.mjs',
+    'scripts/lib/bounty-recon-ratelimit.mjs',
+    'scripts/lib/bounty-recon-candidate.mjs',
+    'scripts/lib/bounty-recon-gate.mjs',
+    'scripts/lib/bounty-recon-tls.mjs',
+    'scripts/lib/bounty-recon-ctlog.mjs',
+    'scripts/lib/bounty-recon-probe.mjs',
+    'scripts/lib/bounty-recon-inventory.mjs',
+    'scripts/lib/bounty-recon-controller.mjs',
+    'scripts/lib/bounty-authz-request.mjs',
+    'scripts/lib/bounty-authz-normalize.mjs',
+    'scripts/lib/bounty-authz-classify.mjs',
+    'scripts/lib/bounty-authz-roles.mjs',
+    'scripts/lib/bounty-authz-replay.mjs',
+    'scripts/lib/bounty-authz-identifier.mjs',
+    'scripts/lib/bounty-authz-controller.mjs',
+    'scripts/lib/bounty-scan-insertion.mjs',
+    'scripts/lib/bounty-scan-oracle.mjs',
+    'scripts/lib/bounty-scan-passive.mjs',
+    'scripts/lib/bounty-scan-controller.mjs',
+    'scripts/lib/bounty-intensity.mjs',
+    'scripts/lib/bounty-report-cvss.mjs',
+    'scripts/lib/bounty-report-curl.mjs',
+    'scripts/lib/bounty-report.mjs',
+    'scripts/lib/bounty-report-controller.mjs',
+    'scripts/lib/bounty-oob-payload.mjs',
+    'scripts/lib/bounty-oob-correlator.mjs',
+    'scripts/lib/bounty-oob-crypto.mjs',
+    'scripts/lib/bounty-oob-hosted.mjs',
+    'scripts/lib/bounty-oob-dns.mjs',
+    'scripts/lib/bounty-oob-http.mjs',
+    'scripts/lib/bounty-oob-controller.mjs',
+    'scripts/lib/bounty-proxy-ingest.mjs',
+    'proxy/bounty_scope_kernel.py',
+    'proxy/bounty_addon.py',
+    'proxy/conformance.py',
+    'test/fixtures/authz-testbed.mjs',
+  ]
+  const bountyTests = [
+    'test/bounty-target.test.mjs',
+    'test/bounty-scope-kernel.test.mjs',
+    'test/bounty-scope-kernel-adversarial.test.mjs',
+    'test/bounty-contracts.test.mjs',
+    'test/bounty-planner.test.mjs',
+    'test/bounty-controller.test.mjs',
+    'test/bounty-cli.test.mjs',
+    'test/bounty-scope-currency.test.mjs',
+    'test/bounty-recon-ratelimit.test.mjs',
+    'test/bounty-recon-candidate.test.mjs',
+    'test/bounty-recon-gate.test.mjs',
+    'test/bounty-recon-inventory.test.mjs',
+    'test/bounty-recon-tls.test.mjs',
+    'test/bounty-recon-probe.test.mjs',
+    'test/bounty-recon-controller.test.mjs',
+    'test/bounty-authz-request.test.mjs',
+    'test/bounty-authz-normalize.test.mjs',
+    'test/bounty-authz-classify.test.mjs',
+    'test/bounty-authz-roles.test.mjs',
+    'test/bounty-authz-replay.test.mjs',
+    'test/bounty-authz-identifier.test.mjs',
+    'test/bounty-authz-controller.test.mjs',
+    'test/bounty-authz-mutation.test.mjs',
+    'test/bounty-scan-passive.test.mjs',
+    'test/bounty-scan-oracle.test.mjs',
+    'test/bounty-scan-controller.test.mjs',
+    'test/bounty-intensity.test.mjs',
+    'test/bounty-report-cvss.test.mjs',
+    'test/bounty-report.test.mjs',
+    'test/bounty-report-controller.test.mjs',
+    'test/bounty-oob-payload.test.mjs',
+    'test/bounty-oob-correlator.test.mjs',
+    'test/bounty-oob-crypto.test.mjs',
+    'test/bounty-oob-hosted.test.mjs',
+    'test/bounty-oob-dns.test.mjs',
+    'test/bounty-oob-http.test.mjs',
+    'test/bounty-oob-controller.test.mjs',
+    'test/bounty-proxy-ingest.test.mjs',
+  ]
+  for (const path of [...sourcePaths, ...bountyTests]) {
+    assert.ok(readFileSync(path).length > 0, `${path} must ship with bounty-v1`)
+  }
+
+  const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.equal(packageDocument.scripts['audit:bounty'], 'node scripts/bounty.mjs')
+  assert.equal(packageDocument.scripts['conformance:bounty-kernel'], 'py proxy/conformance.py')
+  const platformTests = new Set(packageDocument.scripts['test:platform'].split(/\s+/))
+  for (const path of bountyTests) {
+    assert.ok(platformTests.has(path), `${path} must run in test:platform`)
+  }
+  // bounty-v1 adds no dependency. If this ever fails, something was installed to
+  // make a phase work and the three-dependency discipline has been lost.
+  assert.deepEqual(Object.keys(packageDocument.dependencies).sort(), ['acorn', 'ajv', 'yaml'])
+
+  const help = spawnSync(process.execPath, ['scripts/bounty.mjs', '--help'], {
+    encoding: 'utf8',
+    shell: false,
+    windowsHide: true,
+  })
+  assert.equal(help.status, 0)
+
+  // The boundary language is part of the release, not decoration. Each of these is
+  // a nonclaim or a refusal a reader must not be able to miss.
+  for (const required of [
+    // Fragments rather than whole sentences: the help text is hard-wrapped, and a
+    // test that breaks when a paragraph is re-flowed tests formatting, not substance.
+    /it does not verify enrollment/i,
+    /never produces repository coverage/i,
+    /audit clearance/i,
+    /It never handles PHI/,
+    /Intensity changes how hard we hunt inside the sealed perimeter/,
+    /There is no flag that widens scope_rules after sealing/,
+    /the program.s stated limit is the authorization/i,
+    /There is no COMPLETE/,
+    /is inconclusive and is never proof that a target is sound/i,
+    /nothing here asserts a vulnerability/i,
+    /enumerating undeclared ids means reading a stranger.s data/i,
+    /Severity is a SUGGESTION/,
+    /Nothing is submitted automatically/,
+    /installing a root CA is your decision/i,
+    /BLOCKED before forwarding, not observed after/,
+  ]) {
+    assert.match(help.stdout, required, `--help must carry: ${required}`)
+  }
+
+  // Every command group reachable from the one entry point.
+  for (const usage of [
+    /bounty plan --platform/,
+    /bounty validate <bundle>/,
+    /bounty revalidate <bundle>/,
+    /bounty scope <bundle> --check/,
+    /bounty recon run <bundle>/,
+    /bounty authz import <bundle>/,
+    /bounty authz run <bundle>/,
+    /bounty scan run <bundle>/,
+    /bounty report draft <bundle>/,
+    /bounty oob open <bundle>/,
+    /bounty proxy ingest <bundle>/,
+  ]) {
+    assert.match(help.stdout, usage, `--help must document: ${usage}`)
+  }
+
+  // The perimeter is enforced by two implementations, so the fixture suite they
+  // both answer to must ship, and the Python side must keep its explicit ranges.
+  const fixtures = JSON.parse(readFileSync('fixtures/bounty/scope-kernel-cases.json', 'utf8'))
+  assert.equal(fixtures.kind, 'red-team-audit/bounty-scope-kernel-cases')
+  assert.ok(fixtures.cases.length >= 35, 'the shared kernel fixture suite must ship')
+  const pythonKernel = readFileSync('proxy/bounty_scope_kernel.py', 'utf8')
+  assert.match(pythonKernel, /deliberately NOT ipaddress\.is_private/)
+})
