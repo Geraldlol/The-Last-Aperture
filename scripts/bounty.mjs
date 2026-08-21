@@ -13,6 +13,13 @@ import {
   openOobSession,
   pollOobSession,
 } from './lib/bounty-oob-controller.mjs'
+import {
+  authzStatus,
+  importAuthzRequests,
+  loadAuthzRequests,
+  runAuthzMatrix,
+} from './lib/bounty-authz-controller.mjs'
+import { loadRoleRegistry } from './lib/bounty-authz-roles.mjs'
 import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
 import { PLATFORM_VERSION } from './lib/run-engine.mjs'
@@ -31,6 +38,29 @@ Usage:
   bounty oob close <bundle> [--json]
   bounty recon run <bundle> --seed <host> [--seed <host>...] [--sources tls,ctlog] [--json]
   bounty recon status <bundle> [--json]
+  bounty authz import <bundle> --har <file> --owner-role <id> [--json]
+  bounty authz run <bundle> --roles <registry.json> [--json]
+  bounty authz status <bundle> [--json]
+
+Authorization grinder (design spec section 9):
+  Replays captured requests as every other role plus unauthenticated. Import a
+  HAR straight from Chrome DevTools (Network, then Export HAR) -- no proxy needed.
+
+  Each request is first replayed TWICE as its owning role to establish a noise
+  floor. Differences between two identical-role runs are volatile by definition,
+  so only differences beyond that floor mean anything. If the two baseline runs
+  disagree, the endpoint is volatile and every comparison for it is reported
+  UNPROVEN_VOLATILE rather than guessed at.
+
+  Verdicts: AUTHZ_BYPASS_CANDIDATE, UNPROVEN_VOLATILE, ACCESS_DENIED, NOT_FOUND,
+  DIFFERENT_CONTENT, SERVER_ERROR, REPLAY_FAILED. The strongest is a CANDIDATE
+  needing human proof; nothing here asserts a vulnerability, and a denial is
+  never a clearance. DIFFERENT_CONTENT is not a finding: on /api/me another role
+  correctly sees its own data.
+
+  Role credentials are read from environment variables named in the registry and
+  are never stored in it, so a registry is safe to commit. A missing variable is
+  a hard error rather than a silent unauthenticated replay.
 
 Recon (design spec section 11):
   Discovers surface inside the sealed perimeter. Every candidate -- seeds and
@@ -303,6 +333,49 @@ async function commandRecon(positionals, options) {
   throw new Error(`unknown recon action: ${action ?? '(none)'}`)
 }
 
+async function commandAuthz(positionals, options) {
+  const action = positionals[1]
+  const bundle = positionals[2]
+  const asJson = options.json === true
+  if (action === 'import') {
+    const result = await importAuthzRequests({
+      bundlePath: bundle,
+      harPath: requireOption(options, 'har'),
+      ownerRole: requireOption(options, 'owner-role'),
+    })
+    emit({
+      command: 'authz import',
+      ...result,
+      summary: `IMPORTED ${result.imported} unique requests from ${result.rawEntries} entries (${result.skipped.length} skipped)`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'run') {
+    const registry = await loadRoleRegistry(requireOption(options, 'roles'))
+    const requests = await loadAuthzRequests(bundle)
+    const summary = await runAuthzMatrix({ bundlePath: bundle, requests, registry, now: new Date() })
+    emit({
+      command: 'authz run',
+      ...summary,
+      summary: `candidates=${summary.candidates} unproven=${summary.unproven} of ${summary.total} comparisons over ${summary.requests} requests (${summary.paced.issued} replays)`,
+    }, asJson)
+    return 0
+  }
+  if (action === 'status') {
+    const status = await authzStatus({ bundlePath: bundle })
+    const detail = status.candidateDetail.length > 0
+      ? `\n  ${status.candidateDetail.join('\n  ')}`
+      : ''
+    emit({
+      command: 'authz status',
+      ...status,
+      summary: `candidates=${status.candidates} unproven=${status.unproven}${detail}`,
+    }, asJson)
+    return 0
+  }
+  throw new Error(`unknown authz action: ${action ?? '(none)'}`)
+}
+
 export async function runBountyCli(argv) {
   const { positionals, options } = parseArguments(argv)
   const command = positionals[0]
@@ -314,6 +387,7 @@ export async function runBountyCli(argv) {
     if (command === 'plan') return await commandPlan(options)
     if (command === 'oob') return await commandOob(positionals, options)
     if (command === 'recon') return await commandRecon(positionals, options)
+    if (command === 'authz') return await commandAuthz(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
       emit({
