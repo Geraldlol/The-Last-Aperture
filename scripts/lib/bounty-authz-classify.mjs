@@ -11,6 +11,10 @@ export const AUTHZ_VERDICTS = Object.freeze([
   'DIFFERENT_CONTENT',
   'SERVER_ERROR',
   'REPLAY_FAILED',
+  // Not a judgment. Records the status returned for a declared-absent object so
+  // it can be compared against the not-yours status; a difference between them is
+  // an enumeration oracle, which a human reads off the pair.
+  'ABSENT_PROBE',
 ])
 
 // Replay the request twice as its owning role. Anything that differs between two

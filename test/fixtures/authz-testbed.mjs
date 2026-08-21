@@ -23,6 +23,9 @@ const USERS = new Map([
 const ORDERS = new Map([
   ['1', { id: '1', owner: 'alice', item: 'widget', total: 1200 }],
   ['2', { id: '2', owner: 'alice', item: 'gadget', total: 3400 }],
+  // Bob's own order, for horizontal IDOR testing. Order 1's handler checks
+  // ownership correctly, so alice must NOT be able to read order 5 through it.
+  ['5', { id: '5', owner: 'bob', item: 'sprocket', total: 900 }],
 ])
 
 function identify(request) {
@@ -71,6 +74,23 @@ export function startAuthzTestbed() {
       // PLANTED BUG: no authorization check whatsoever.
       return send(response, 200, {
         users: [...USERS.values()].map((u) => ({ id: u.id, role: u.role })),
+      })
+    }
+
+    if (path === '/api/invoices') {
+      // PLANTED BUG reachable only by identifier mutation: the referenced order
+      // is looked up with no ownership check at all. Role replay alone tests
+      // "can bob read the invoice for alice's order"; proving the other
+      // direction -- alice reading bob's invoice -- requires substituting bob's
+      // order id into alice's own request.
+      const referenced = ORDERS.get(url.searchParams.get('order'))
+      if (referenced === undefined) return send(response, 404, { error: 'not found' })
+      if (user === null) return send(response, 401, { error: 'unauthenticated' })
+      return send(response, 200, {
+        invoice: `INV-${referenced.id}`,
+        item: referenced.item,
+        total: referenced.total,
+        owner: referenced.owner,
       })
     }
 

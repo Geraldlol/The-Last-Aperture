@@ -19,6 +19,7 @@ import {
   loadAuthzRequests,
   runAuthzMatrix,
 } from './lib/bounty-authz-controller.mjs'
+import { loadIdentifierMap } from './lib/bounty-authz-identifier.mjs'
 import { loadRoleRegistry } from './lib/bounty-authz-roles.mjs'
 import { reconStatus, runRecon } from './lib/bounty-recon-controller.mjs'
 import { isMainModule } from './lib/main-module.mjs'
@@ -39,7 +40,7 @@ Usage:
   bounty recon run <bundle> --seed <host> [--seed <host>...] [--sources tls,ctlog] [--json]
   bounty recon status <bundle> [--json]
   bounty authz import <bundle> --har <file> --owner-role <id> [--json]
-  bounty authz run <bundle> --roles <registry.json> [--json]
+  bounty authz run <bundle> --roles <registry.json> [--identifiers <ids.json>] [--json]
   bounty authz status <bundle> [--json]
 
 Authorization grinder (design spec section 9):
@@ -61,6 +62,23 @@ Authorization grinder (design spec section 9):
   Role credentials are read from environment variables named in the registry and
   are never stored in it, so a registry is safe to commit. A missing variable is
   a hard error rather than a silent unauthenticated replay.
+
+  --identifiers adds horizontal IDOR testing. You declare object ids and which of
+  YOUR OWN roles owns each, and the grinder substitutes same-kind ids between
+  them: swap your second account's order id into your first account's request and
+  see whose order comes back. This reaches bugs role replay structurally cannot --
+  proving alice can read bob's object needs bob's id in alice's request.
+
+  A mutated request is baselined against the id's OWN owner, since after
+  substitution it targets a different object and only that object's owner defines
+  a correct response.
+
+  There is no range, wildcard, or increment form, and there never will be:
+  enumerating undeclared ids means reading a stranger's data to prove a bug. That
+  is out of bounds on every program and makes a weaker report than "I accessed my
+  own second account's object". Mark an id "absent": true to compare its status
+  against the not-yours status -- a difference between them is an enumeration
+  oracle.
 
 Recon (design spec section 11):
   Discovers surface inside the sealed perimeter. Every candidate -- seeds and
@@ -353,7 +371,12 @@ async function commandAuthz(positionals, options) {
   if (action === 'run') {
     const registry = await loadRoleRegistry(requireOption(options, 'roles'))
     const requests = await loadAuthzRequests(bundle)
-    const summary = await runAuthzMatrix({ bundlePath: bundle, requests, registry, now: new Date() })
+    const identifierMap = typeof options.identifiers === 'string'
+      ? await loadIdentifierMap(options.identifiers)
+      : null
+    const summary = await runAuthzMatrix({
+      bundlePath: bundle, requests, registry, identifierMap, now: new Date(),
+    })
     emit({
       command: 'authz run',
       ...summary,

@@ -3,6 +3,12 @@ import { join } from 'node:path'
 import { calibrateBaseline, classifyAuthzOutcome, summarizeMatrix } from './bounty-authz-classify.mjs'
 import { replayAsRole } from './bounty-authz-replay.mjs'
 import { findRole, rolesToTest } from './bounty-authz-roles.mjs'
+import {
+  describeOccurrence,
+  identifiersInRequest,
+  mutationPlan,
+  substituteIdentifier,
+} from './bounty-authz-identifier.mjs'
 import { importHarEntries, redactRequest, requestSignature } from './bounty-authz-request.mjs'
 import { createRateLimiter } from './bounty-recon-ratelimit.mjs'
 
@@ -42,6 +48,7 @@ export async function runAuthzMatrix({
   requests,
   registry,
   now,
+  identifierMap = null,
   fetchImpl = fetch,
   env = process.env,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -101,6 +108,85 @@ export async function runAuthzMatrix({
         baseline_stable: baseline.stable,
         baseline_reason: baseline.reason,
       })
+    }
+  }
+
+  // Horizontal IDOR. Where a captured request carries a declared identifier, swap
+  // in each same-kind identifier owned by a DIFFERENT operator-controlled role,
+  // then ask whether a role that should not own the object can read it.
+  //
+  // The mutated request is baselined against the identifier's own owner rather
+  // than the capture's owner: after substitution the request targets a different
+  // object, so the only meaningful "correct" response is the one its real owner
+  // gets. Reusing the original baseline here would compare against the wrong
+  // object entirely.
+  if (identifierMap !== null) {
+    for (const request of requests) {
+      for (const { identifier, occurrence } of identifiersInRequest({
+        request,
+        identifiers: identifierMap.identifiers,
+      })) {
+        for (const target of mutationPlan({ identifiers: identifierMap.identifiers, sourceIdentifier: identifier })) {
+          const mutated = substituteIdentifier(request, occurrence, target.value)
+
+          if (target.absent === true) {
+            // Existence-oracle check: no baseline, because a declared-absent
+            // object has no owner and no correct content. Only the status matters.
+            const probeRole = findRole(registry, request.owner_role)
+            const probe = await replayAsRole({
+              request: mutated, role: probeRole, sealedScope: scope, limiter, fetchImpl, env,
+            })
+            results.push({
+              request_id: request.request_id,
+              url: mutated.url,
+              method: mutated.method,
+              owner_role: probeRole.id,
+              tester_role: probeRole.id,
+              mutation: `${describeOccurrence(occurrence)} ${identifier.id} -> ${target.id} (declared absent)`,
+              tester_status: probe.status,
+              verdict: 'ABSENT_PROBE',
+              confidence: 'none',
+              rationale: `status ${probe.status} for a declared-absent ${target.kind}; compare against the not-yours status to spot an enumeration oracle`,
+              baseline_stable: false,
+              baseline_reason: 'absent-object-has-no-owner',
+            })
+            continue
+          }
+
+          const targetOwner = findRole(registry, target.owner_role)
+          const firstOwned = await replayAsRole({
+            request: mutated, role: targetOwner, sealedScope: scope, limiter, fetchImpl, env,
+          })
+          const secondOwned = await replayAsRole({
+            request: mutated, role: targetOwner, sealedScope: scope, limiter, fetchImpl, env,
+          })
+          const mutatedBaseline = calibrateBaseline({ first: firstOwned, second: secondOwned })
+
+          if (firstOwned.refusal !== null) continue
+
+          for (const testerRole of rolesToTest(registry, targetOwner.id)) {
+            const testerResponse = await replayAsRole({
+              request: mutated, role: testerRole, sealedScope: scope, limiter, fetchImpl, env,
+            })
+            const outcome = classifyAuthzOutcome({ baseline: mutatedBaseline, testerResponse, testerRole })
+            results.push({
+              request_id: request.request_id,
+              url: mutated.url,
+              method: mutated.method,
+              owner_role: targetOwner.id,
+              tester_role: testerRole.id,
+              mutation: `${describeOccurrence(occurrence)} ${identifier.id} -> ${target.id}`,
+              owner_status: firstOwned.status,
+              tester_status: testerResponse.status,
+              verdict: outcome.verdict,
+              confidence: outcome.confidence,
+              rationale: outcome.rationale,
+              baseline_stable: mutatedBaseline.stable,
+              baseline_reason: mutatedBaseline.reason,
+            })
+          }
+        }
+      }
     }
   }
 

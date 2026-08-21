@@ -253,6 +253,6 @@ the pattern worth carrying into P4.
 
 ## Deferred
 
-- **Identifier mutation (horizontal IDOR).** Substituting role A's known object ids into role B's requests. Higher yield than role replay alone but needs a declared map of role-owned identifiers; it belongs in a follow-on once the matrix is proven.
+- ~~**Identifier mutation (horizontal IDOR).**~~ **Built 2026-08-21**, once the matrix was proven. Operator-declared identifiers only -- no range, wildcard, or increment form, because enumerating undeclared ids means reading a stranger's data to prove a bug. A mutated request is baselined against the identifier's own owner. Live A/B on the testbed: 2 candidates without --identifiers, 3 with, the extra one being an IDOR role replay structurally cannot reach. 28 tests across bounty-authz-identifier and bounty-authz-mutation.
 - Stateful multi-step flows, where authorization depends on prior requests in a sequence.
 - Automatic session refresh on expiry — for now an expired credential surfaces as `ACCESS_DENIED` across the board, which the operator must notice. Worth a heuristic warning when *every* result for a role is denied.

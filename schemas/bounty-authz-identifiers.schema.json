@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/bounty-authz-identifiers.schema.json",
+  "title": "Red Team Audit bounty-v1 declared object identifiers",
+  "description": "Object identifiers the operator declares and controls, used for horizontal IDOR testing. Every identifier must name an owning role the operator holds, or be explicitly marked absent. There is no wildcard, range, or pattern form: enumerating undeclared identifiers would mean reading a stranger's data to prove a bug, which is out of bounds on every program and produces a weaker report than demonstrating access to your own second account's object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "identifiers"],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0"] },
+    "kind": { "const": "red-team-audit/bounty-authz-identifiers" },
+    "identifiers": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "value", "kind", "owner_role"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+          "value": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Object class, e.g. 'order'. Only identifiers of the same kind are substituted for one another; swapping an order id into a user id slot yields a meaningless 404."
+          },
+          "owner_role": {
+            "type": ["string", "null"],
+            "maxLength": 64,
+            "description": "Role id that owns this object, or null when the identifier is declared absent."
+          },
+          "absent": {
+            "type": "boolean",
+            "description": "Declared not to exist on the target. Used only to compare status codes for an enumeration oracle; never used to fish for real objects."
+          },
+          "note": { "type": "string", "maxLength": 512 }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "absent": { "const": true } }, "required": ["absent"] },
+            "then": { "properties": { "owner_role": { "type": "null" } } },
+            "else": { "properties": { "owner_role": { "type": "string", "minLength": 1 } } }
+          }
+        ]
+      }
+    }
+  }
+}
