@@ -1,6 +1,13 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { assertScopeCurrent } from './bounty-contracts.mjs'
+import {
+  describeIntensity,
+  resolveIntensityProfile,
+  selectInsertionPoints,
+  selectProbes,
+  selectRequests,
+} from './bounty-intensity.mjs'
 import { replayAsRole } from './bounty-authz-replay.mjs'
 import { ANONYMOUS_ROLE, findRole } from './bounty-authz-roles.mjs'
 import { createRateLimiter } from './bounty-recon-ratelimit.mjs'
@@ -66,10 +73,20 @@ export async function runScan({
   })
   const role = roleId === null ? ANONYMOUS_ROLE : findRole(registry, roleId)
 
+  // The sealed tier decides breadth. An explicit --classes still wins, so an
+  // operator can narrow a HAM scope for one run without re-sealing it; what
+  // they cannot do is widen beyond what the tier permits.
+  const profile = resolveIntensityProfile(scope)
+  const activeClasses = (classes ?? profile.classes).filter((entry) => profile.classes.includes(entry))
+  const coverageNotes = []
+
   const results = []
   const passive = []
 
-  for (const request of requests) {
+  const requestPlan = selectRequests(requests, profile)
+  if (requestPlan.note !== null) coverageNotes.push(requestPlan.note)
+
+  for (const request of requestPlan.items) {
     const send = (candidate) => replayAsRole({
       request: candidate, role, sealedScope: scope, limiter, fetchImpl, env,
     })
@@ -94,7 +111,7 @@ export async function runScan({
     const baseline = calibrateProbeBaseline({ first, second })
     const baselineBody = first.normalized?.normalizedBody ?? ''
 
-    if (classes.includes('passive')) {
+    if (activeClasses.includes('passive')) {
       for (const observation of scanResponse({
         url: request.url,
         status: first.status,
@@ -105,17 +122,26 @@ export async function runScan({
       }
     }
 
-    const points = findInsertionPoints(request)
+    const pointPlan = selectInsertionPoints(findInsertionPoints(request), profile)
+    if (pointPlan.note !== null) coverageNotes.push(`${request.url} ${pointPlan.note}`)
+    const points = pointPlan.items
 
     for (const point of points) {
-      if (classes.includes('error-injection')) {
+      if (activeClasses.includes('error-injection')) {
         // One control per insertion point, reused across that point's probes: the
         // control answers "does this endpoint react to any change at all", which
         // is a property of the point, not of each payload.
         const controlProbe = CONTROL_PROBES[0]
         const control = await send(applyPayload(request, point, controlProbe.payload, { mode: controlProbe.mode }))
 
-        for (const probeSpec of ERROR_PROBES) {
+        const probePlan = selectProbes(ERROR_PROBES, profile)
+        if (probePlan.note !== null) coverageNotes.push(`${request.url} ${probePlan.note}`)
+        let signalFound = false
+        for (const probeSpec of probePlan.items) {
+          // normal tier stops at the first signal for a point; higher tiers
+          // exhaust it, because a second signal on the same parameter is
+          // often the one that characterises the bug.
+          if (signalFound && profile.earlyExitOnSignal) break
           const probe = await send(applyPayload(request, point, probeSpec.payload, { mode: probeSpec.mode }))
           const outcome = classifyProbe({
             baseline: { ...baseline, normalizedBody: baselineBody },
@@ -124,6 +150,7 @@ export async function runScan({
             insertionPoint: point,
             probeId: probeSpec.id,
           })
+          if (outcome.verdict.endsWith('_CANDIDATE')) signalFound = true
           results.push({
             url: request.url,
             method: request.method,
@@ -139,7 +166,7 @@ export async function runScan({
       // Narrow by construction: only points whose name or value shape says they
       // carry a URL. Spraying an SSRF payload at a numeric id burns requests
       // against the sealed rate limit and produces results nobody should read.
-      if (classes.includes('ssrf-oob') && oob !== null && isSsrfCandidate(point)) {
+      if (activeClasses.includes('ssrf-oob') && oob !== null && isSsrfCandidate(point)) {
         const minted = await oob.mint({
           label: `ssrf ${describeInsertion(point)}`,
           bugClass: 'ssrf',
@@ -169,13 +196,21 @@ export async function runScan({
     }
   }
 
-  const summary = { ...summarizeScan(results), passive: summarizePassive(passive) }
+  const summary = {
+    ...summarizeScan(results),
+    passive: summarizePassive(passive),
+    intensity: describeIntensity(profile),
+    // Never silent: a truncated sweep must not read as a complete one.
+    coverageNotes,
+    coverage: coverageNotes.length === 0 ? 'FULL_AT_THIS_INTENSITY' : 'CAPPED_BY_INTENSITY',
+  }
   await writeFile(join(bundlePath, FINDINGS_FILE), `${JSON.stringify({
     schema_version: '1.0.0',
     kind: 'red-team-audit/bounty-scan-findings',
     engagement_id: scope.engagement_id,
     created_at: now.toISOString(),
-    classes,
+    classes: activeClasses,
+    intensity: profile.tier,
     results,
     passive,
     summary,
