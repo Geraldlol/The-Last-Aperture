@@ -1,6 +1,7 @@
 import { isIP } from 'node:net'
 import {
   BOUNTY_SCOPE_SCHEMA_VERSION,
+  assertScopeCurrent,
   PROGRAM_POLICY_SEALED_STATEMENT,
   assertValidBountyScope,
   digestPolicySnapshot,
@@ -111,6 +112,11 @@ export function createProgramSealedScope(options) {
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
     throw new Error('now must be a valid Date; the planner never reads the ambient clock')
   }
+
+  // Sealing an attestation outside its own validity window is incoherent: the
+  // operator would be declaring authorization for a period that does not include
+  // the moment of declaration. Mirrors the http-authed attestation-window rule.
+  assertScopeCurrent({ scope: { validity: { not_before: notBefore.toISOString(), not_after: notAfter.toISOString() } }, now })
 
   const scope = {
     schema_version: BOUNTY_SCOPE_SCHEMA_VERSION,

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { calibrateBaseline, classifyAuthzOutcome, summarizeMatrix } from './bounty-authz-classify.mjs'
+import { assertScopeCurrent } from './bounty-contracts.mjs'
 import { replayAsRole } from './bounty-authz-replay.mjs'
 import { findRole, rolesToTest } from './bounty-authz-roles.mjs'
 import {
@@ -58,6 +59,8 @@ export async function runAuthzMatrix({
     throw new Error('no captured requests to grind; import a HAR first')
   }
   const scope = await loadSealedScope(bundlePath)
+  // An expired grant makes every replay unauthorized, in scope or not.
+  assertScopeCurrent({ scope, now })
   const limiter = createRateLimiter({
     ratePerSecond: scope.authorization.permissions.rate_limit_rps,
     now: clock,

@@ -413,10 +413,18 @@ export async function runBountyCli(argv) {
     if (command === 'authz') return await commandAuthz(positionals, options)
     if (command === 'validate') {
       const result = await validateBountyBundle(positionals[1])
+      // Currency is reported, not enforced: an expired bundle must stay readable
+      // so past evidence can be inspected. Enforcement lives on the commands
+      // that contact a target.
       emit({
         command: 'validate',
         status: result.status,
-        summary: `VALID ${positionals[1]}`,
+        currency: result.currency,
+        summary: `VALID ${positionals[1]} authorization=${result.currency.status}${
+          result.currency.status === 'CURRENT'
+            ? ''
+            : ` (window ${result.currency.notBefore} to ${result.currency.notAfter}) -- recon and authz will refuse to run`
+        }`,
       }, options.json === true)
       return 0
     }

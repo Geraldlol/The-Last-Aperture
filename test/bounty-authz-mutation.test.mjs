@@ -41,6 +41,8 @@ async function workspace(port) {
   await writeFile(join(dir, 'scope.json'), JSON.stringify({
     engagement_id: 'authz-mutation',
     authorization: { permissions: { rate_limit_rps: 50 } },
+    // Fixed on purpose: NOW is injected, so this stays deterministic forever.
+    validity: { not_before: '2026-08-21T00:00:00.000Z', not_after: '2026-08-22T00:00:00.000Z' },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [port] }],
       deny: [],

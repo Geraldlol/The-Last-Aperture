@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { assertScopeCurrent } from './bounty-contracts.mjs'
 import { classifyCandidate, dedupeCandidates } from './bounty-recon-candidate.mjs'
 import { fetchCtLogNames } from './bounty-recon-ctlog.mjs'
 import { gateCandidates } from './bounty-recon-gate.mjs'
@@ -53,6 +54,9 @@ export async function runRecon({
     throw new Error('now must be a valid Date')
   }
   const scope = await loadSealedScope(bundlePath)
+  // Before any candidate is gated, before any socket: an expired grant makes
+  // every in-scope request unauthorized too.
+  assertScopeCurrent({ scope, now })
   // The rate limit comes from the sealed scope, never from a flag: a caller must
   // not be able to out-argue the program's stated limit.
   const limiter = createRateLimiter({

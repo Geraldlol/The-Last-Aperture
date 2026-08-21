@@ -1,6 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { assertValidBountyScope, digestPolicySnapshot } from './bounty-contracts.mjs'
+import {
+  assertValidBountyScope,
+  describeScopeCurrency,
+  digestPolicySnapshot,
+} from './bounty-contracts.mjs'
 import { createProgramSealedScope } from './bounty-planner.mjs'
 import { decideScope } from './bounty-scope-kernel.mjs'
 
@@ -65,9 +69,14 @@ async function readBundle(bundlePath) {
   return { manifest, scope }
 }
 
-export async function validateBountyBundle(bundlePath) {
+export async function validateBountyBundle(bundlePath, { now = new Date() } = {}) {
   const { scope } = await readBundle(bundlePath)
-  return { status: 'VALID', scope }
+  // Reports currency rather than enforcing it. Inspecting an old bundle must stay
+  // possible after the grant lapses -- the evidence outlives the authorization,
+  // and refusing to open it would make past findings unreadable. Enforcement
+  // belongs on the commands that contact a target.
+  const currency = describeScopeCurrency({ scope, now })
+  return { status: 'VALID', scope, currency }
 }
 
 export async function revalidateBountyBundle(bundlePath, policyPath) {

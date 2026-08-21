@@ -12,7 +12,17 @@ async function workspace() {
   return { dir, policyPath }
 }
 
-function planArgv(dir, policyPath) {
+// The CLI stamps attested_at from the ambient clock and now refuses to seal a
+// window that does not contain it, so this window must follow real time. A fixed
+// window would pass until its end date and then fail forever -- exactly the time
+// bomb removed from http-authed-credential.
+function relativeWindow(reference = new Date()) {
+  const HOUR = 60 * 60 * 1000
+  const at = (offsetMs) => new Date(reference.getTime() + offsetMs).toISOString()
+  return { notBefore: at(-HOUR), notAfter: at(90 * 24 * HOUR) }
+}
+
+function planArgv(dir, policyPath, window = relativeWindow()) {
   return [
     'plan',
     '--platform', 'yeswehack',
@@ -25,8 +35,8 @@ function planArgv(dir, policyPath) {
     '--allow', '*.acme.example',
     '--deny', 'legacy.acme.example',
     '--rate-limit-rps', '5',
-    '--not-before', '2026-08-20T00:00:00.000Z',
-    '--not-after', '2026-11-20T00:00:00.000Z',
+    '--not-before', window.notBefore,
+    '--not-after', window.notAfter,
     '--attest-enrolled',
     '--out', dir,
   ]
