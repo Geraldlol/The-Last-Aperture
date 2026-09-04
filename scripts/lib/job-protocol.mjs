@@ -28,6 +28,7 @@ import {
   measureCoverageClosure,
   refreshCategoryDenominators,
 } from './coverage-model.mjs'
+import { isSurvivingFinding } from './findings.mjs'
 import {
   assertValidFinding,
   assertValidFindingTransition,
@@ -67,7 +68,6 @@ ajv.addSchema(jobResultSchema)
 const validateJobResultSchema = ajv.getSchema(jobResultSchema.$id)
 
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
-const ACTIVE_FINDING_DISPOSITIONS = new Set(['queued', 'elevated'])
 const EXPECTED_PHASE = {
   LENS: 'FANOUT',
   TRIAGE: 'TRIAGE',
@@ -867,10 +867,30 @@ function applyFindings(run, job, findings, options = {}) {
   const candidateIds = []
   const evidence = evidenceEnforcementContext(run)
 
-  for (const finding of findings) {
+  for (const providerFinding of findings) {
+    const existingIndex = byId.get(providerFinding.candidate_id)
+    const previous = existingIndex === undefined
+      ? undefined
+      : run.findings[existingIndex]
+    let finding = job.kind === 'TRIAGE'
+      ? {
+          ...clone(providerFinding),
+          triage_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+        }
+      : job.kind === 'PROOF' && providerFinding.verification_status !== undefined
+      ? {
+          ...clone(providerFinding),
+          verification_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+        }
+      : clone(providerFinding)
+    if (job.kind !== 'LENS' && previous?.triage_authority !== undefined) {
+      finding.triage_authority = previous.triage_authority
+    }
+    if (job.kind !== 'LENS' && previous?.verification_authority !== undefined) {
+      finding.verification_authority = previous.verification_authority
+    }
     candidateIds.push(finding.candidate_id)
     ensureDatabaseProfileBinding(run, finding)
-    const existingIndex = byId.get(finding.candidate_id)
     if (job.kind === 'LENS') {
       assertValidFinding(finding, { stage: 1, evidence })
       ensureFindingLocations(run, job, finding, options)
@@ -938,7 +958,6 @@ function applyFindings(run, job, findings, options = {}) {
       if (existingIndex === undefined) {
         throw resultError(`proof job ${job.job_id} references unknown candidate ${finding.candidate_id}`)
       }
-      const previous = run.findings[existingIndex]
       if (job.job_id.startsWith('proof-existence:')) {
         if (previous.existence_check !== undefined) {
           throw resultError(
@@ -1140,6 +1159,25 @@ function updateCoverage(run, job, sidecar, jobResult) {
 }
 
 export function applyJobResult(run, jobResult, options = {}) {
+  if (Array.isArray(jobResult?.findings)) {
+    const existingById = new Map(
+      (run?.findings ?? []).map((finding) => [finding.candidate_id, finding]),
+    )
+    for (const finding of jobResult.findings) {
+      const previous = existingById.get(finding?.candidate_id)
+      for (const field of ['triage_authority', 'verification_authority']) {
+        if (
+          Object.hasOwn(finding ?? {}, field)
+          && finding[field] !== previous?.[field]
+        ) {
+          throw resultError(
+            'providers cannot supply or change triage_authority or verification_authority; '
+              + 'only the accepting controller may stamp decision provenance',
+          )
+        }
+      }
+    }
+  }
   assertValidJobResult(jobResult)
   if (
     typeof options.expectedPacketSha256 !== 'string'
@@ -1240,7 +1278,7 @@ function jobsTerminal(run, kind) {
 
 function proofExistenceJobs(run, findings) {
   return findings
-    .filter((finding) => ACTIVE_FINDING_DISPOSITIONS.has(finding.triage_disposition))
+    .filter(isSurvivingFinding)
     .map((finding) => ({
       job_id: `proof-existence:${finding.candidate_id}`,
       kind: 'PROOF',
@@ -1252,7 +1290,7 @@ function proofExistenceJobs(run, findings) {
 
 function proofVerificationJobs(run, findings) {
   return findings
-    .filter((finding) => ACTIVE_FINDING_DISPOSITIONS.has(finding.triage_disposition))
+    .filter(isSurvivingFinding)
     .map((finding) => ({
       job_id: `proof-verification:${finding.candidate_id}`,
       kind: 'PROOF',
@@ -1411,7 +1449,7 @@ function activeProofCandidatesWithout(run, prefix) {
       .flatMap(({ candidate_ids: candidateIds = [] }) => candidateIds),
   )
   return run.findings.filter((finding) =>
-    ACTIVE_FINDING_DISPOSITIONS.has(finding.triage_disposition)
+    isSurvivingFinding(finding)
     && !scheduled.has(finding.candidate_id))
 }
 

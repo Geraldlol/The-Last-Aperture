@@ -1,5 +1,14 @@
 # Evidence acquisition adapter contract
 
+> **Release gate (2026-09-03):** The entire public acquisition CLI, and audit
+> evidence-bundle import, are disabled before caller-path, bundle, process, or
+> target access. The
+> adapter contracts below describe retained kernels, not current execution
+> authority. Re-enablement requires controller-sealed immutable plans and semantic
+> manifests, one-handle bounded/no-follow reads, enrolled source roots,
+> controller-enrolled executable and target identities, fail-closed durable stop
+> state with descendant termination, and protected output.
+
 Contract version: `1`
 
 Verified: `2026-08-08`
@@ -189,12 +198,13 @@ An adapter may exceed its class floor. It may never fall below it.
 Credential **values** never appear in a bundle — only a `credential_ref`. This
 mirrors `_database-adapters/contract.md:48`.
 
-`PRODUCTION` and `THIRD_PARTY` target classes require separate explicit
-acknowledgments. `THIRD_PARTY` deployed/runtime acquisition may use
-`--acknowledge-third-party`; that route remains operator-attested, read-only,
-and not independently verified. It does not authorize active testing or
-mutation. Operator-attested and document-bound authenticated campaigns belong
-only to the separate `http-authed-v1` controller and never widen this adapter.
+For any re-enabled live adapter, the authenticated operator target/scope
+statement is the sole authorization primitive. Target class, acknowledgments,
+credentials, impact limits, and stop state are controller-bound execution
+parameters; none is an independent authority source. A controller-sealed permit
+must bind the exact plan and be durably consumed before dispatch. Changing the
+target or scope requires a new operator statement. The separate
+`http-authed-v1` controller never widens this adapter.
 
 **Impact counters exist for read-only classes.** They count commands executed,
 bytes read, and distinct objects touched per target, each with a cap that halts

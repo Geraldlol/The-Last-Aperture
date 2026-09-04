@@ -157,8 +157,9 @@ defers:
   trust-boundary-inventory: threat-modeling
 frameworks:
   - owasp-mobile-top-10
-  - owasp-masvs
-  - owasp-mastg
+  - owasp-masvs-2.1.0
+  - owasp-maswe-1.0.0
+  - owasp-mastg-2.0.0
   - cwe
 severity_floor: low
 ---
@@ -173,12 +174,14 @@ Three facts drive everything below.
 - **Configuration decides more than code does.** Cleartext policy, backup inclusion, component export, trust anchors and file protection are decided in the manifest, the plist and the network security config — and the values that matter are the ones in the **merged, release-variant** artifact, not the ones in the file you happened to open.
 - **What ships is not what is in the repository.** Build variants, product flavors, source sets, the minifier, `__DEV__` elimination and the OTA channel all sit between the checkout and the binary. State which artifact your evidence came from, every time.
 
+Use the OWASP mobile standards as a traceable chain, not interchangeable labels: **MASVS 2.1.0** states the control objective, **MASWE 1.0.0** names the concrete weakness, and **MASTG 2.0.0** supplies a test where one exists. A report records the exact identifiers it applied and one of `tested`, `not-tested`, `not-applicable`, or `unsupported-by-current-MASTG`; a missing MASTG test is a coverage statement, never evidence that the MASVS control passed. These mappings support individual findings and test coverage only. They do not establish whole-profile MASVS conformance, and source-only evidence cannot substitute for a release APK/IPA or an on-device test when the requirement depends on what shipped.
+
 ### Coverage this lens does not have
 
 Say this in the coverage block rather than letting silence read as a clean result.
 
 - **Flutter and Dart are not covered.** There is no Flutter content in this lens — no `flutter_secure_storage` accessibility check, no `--obfuscate`/`--split-debug-info` check, no platform-channel validation, no Dart HTTP client trust-callback check. If the repository under audit is a Flutter app, report its mobile surface as **unaudited**, name the missing checks, and do not emit a clean mobile result. **Expect to activate on a Flutter repository anyway:** the `*.dart` and `pubspec.yaml` path globs are gone, but the signals `flutter_secure_storage`, `dio` and `badCertificateCallback` are still live and `dio` alone is enough, and a Flutter project additionally matches the `AndroidManifest.xml`, `Info.plist`, `*.swift` and `*.{kt,kts,java}` anchors. Those anchors are real coverage — manifest, plist, IPC and keystore items all run. Dart is not. Matching is not coverage, and the three Dart signals are the ones with nothing behind them.
-- **The shipped binary is not in scope, only the source of it.** Nothing here proves that the IPA or APK in the store was built from this checkout.
+- **Store-binary identity is not implied.** An APK or IPA is in scope when the controller explicitly supplies it as consumed built-artifact evidence; findings then name that artifact and its digest. In a source-only run, conclusions stop at source and build configuration. Even when an APK or IPA is consumed, nothing proves it is the version distributed by an app store or built from this checkout unless a separate provenance or store-release attestation establishes that identity.
 - **iOS device-side proofs need macOS and Xcode** and are simply unavailable on a Windows or Linux audit host. See `## Proof recipes`.
 
 ### Owns

@@ -1,12 +1,23 @@
 # ADR 0013: Separate protocol for authorized external HTTP reconnaissance
 
-- Status: Accepted for the v0.11 authorized-reconnaissance slice
+- Status: Superseded for authorization mechanics by ADR 0021; retained as a
+  historical record of the v0.11 externally signed route
 - Date: 2026-08-04
 - Owners: Red Team Audit platform
 - Extends: ADR 0001; does not extend the repository proof tiers
-- Amended by: ADR 0014 adds a lower-assurance operator-attested one-action mode;
-  ADR 0015 makes that mode URL-first under PKIX; this decision remains
-  authoritative for `EXTERNAL_SIGNED`
+- Amended by: ADR 0014 added an operator-attested one-action mode; ADR 0015 made
+  that mode URL-first under PKIX; ADR 0021 retired `EXTERNAL_SIGNED` as an
+  authorization mode
+
+> **Supersession notice (2026-09-04):** The signed RoE, authorization document,
+> owner key, and target-proof requirements below are historical. ADR 0021 makes
+> the authenticated operator target/scope statement the sole authorization
+> primitive. Transport, redirect, evidence, budget, stop, and uncertain-delivery
+> mechanics remain relevant where the current controller retains them.
+>
+> **Current 0.12.0 execution status: active through the bounded
+> operator-statement controller.** This status does not reactivate the historical
+> signed authority path.
 
 ## Context
 
@@ -143,15 +154,23 @@ evidence, legal sufficiency, trusted time, exploitation, or APTS/NIST
 conformance. Controller observations are not repository findings and cannot
 raise a repository finding's T0-T3 tier.
 
-## Future exploit actions
+## Original exploit-action boundary and later L3 qualification
 
-Exploitation is not a flag or continuation of `http-recon-v1`. Any future
-capability requires a separate typed action tier and schema, new monotonic
-action and cumulative-impact counters, exact payload and cleanup semantics,
-fresh scope and target-control validation, and a fresh human countersignature
-binding each exploit action. A reconnaissance signature, operator rationale,
-response, or successful completion cannot be reused as that countersignature,
-and automated chaining remains prohibited.
+When this ADR was accepted, exploitation was not a flag or continuation of
+`http-recon-v1`. Any future capability required a separate typed action tier and
+schema, new monotonic action and cumulative-impact counters, exact payload and
+cleanup semantics, fresh scope and target-control validation, and a fresh human
+countersignature binding each exploit action. A reconnaissance signature,
+operator rationale, response, or successful completion could not be reused as
+that countersignature, and automated chaining remained prohibited.
+
+ADR 0020 later supersedes only that per-action approval cadence for a separate,
+target-bound `L3_MAXIMUM_AUTHORIZED` campaign: one signed campaign envelope may
+authorize adaptive actions inside that envelope once its controller services
+exist. It does not convert reconnaissance authorization into exploit authority
+or permit cross-target or unscoped chaining. Generic public L3 remains
+unavailable, and any scope expansion must name the new asset and await operator
+approval.
 
 ## Consequences
 

@@ -16,6 +16,7 @@ const WIKIPEDIA_SAN = [
 
 function approvalFor(host) {
   const scope = {
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [
         { rule_id: 'a1', host_kind: 'wildcard', host: 'wikipedia.org' },

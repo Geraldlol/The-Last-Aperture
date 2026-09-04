@@ -178,6 +178,10 @@
         "elevated"
       ]
     },
+    "triage_authority": {
+      "description": "Controller-stamped provenance for a provider's triage decision. This release exposes no authenticated triage authority.",
+      "const": "UNAUTHENTICATED_PROVIDER_ASSERTION"
+    },
     "drop_reason": {
       "$ref": "#/$defs/nonEmptyString"
     },
@@ -216,6 +220,10 @@
         "UNPROVEN"
       ]
     },
+    "verification_authority": {
+      "description": "Controller-stamped provenance for a provider's proof decision. This release exposes no authenticated semantic-oracle authority.",
+      "const": "UNAUTHENTICATED_PROVIDER_ASSERTION"
+    },
     "disproof_basis": {
       "enum": [
         "falsified-code-premise",
@@ -233,6 +241,9 @@
     },
     "post_result": {
       "$ref": "#/$defs/postResult"
+    },
+    "remediation": {
+      "$ref": "#/$defs/remediation"
     },
     "reason": {
       "$ref": "#/$defs/nonEmptyString"
@@ -425,6 +436,11 @@
           },
           {
             "required": [
+              "remediation"
+            ]
+          },
+          {
+            "required": [
               "reason"
             ]
           },
@@ -527,8 +543,28 @@
         "required": [
           "artifact",
           "command",
-          "pre_result",
-          "post_result"
+          "pre_result"
+        ],
+        "anyOf": [
+          {
+            "properties": {
+              "pre_result": {
+                "properties": {
+                  "control_status": {
+                    "const": "passed"
+                  }
+                },
+                "required": [
+                  "control_status"
+                ]
+              }
+            }
+          },
+          {
+            "required": [
+              "post_result"
+            ]
+          }
         ]
       }
     },
@@ -1108,6 +1144,12 @@
         "control": {
           "$ref": "#/$defs/nonEmptyString"
         },
+        "control_status": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
         "detail": {
           "$ref": "#/$defs/nonEmptyString"
         }
@@ -1132,6 +1174,27 @@
         },
         "regressions": {
           "$ref": "#/$defs/nonEmptyString"
+        },
+        "detail": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "detail"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "NOT_ATTEMPTED",
+            "FIX_VERIFIED",
+            "FIX_FAILED",
+            "REGRESSION_FAILED"
+          ]
         },
         "detail": {
           "$ref": "#/$defs/nonEmptyString"

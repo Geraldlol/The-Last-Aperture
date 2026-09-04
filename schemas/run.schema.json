@@ -1111,6 +1111,9 @@
         "denominators": {
           "$ref": "#/$defs/coverageDenominators"
         },
+        "completeness_inputs": {
+          "$ref": "#/$defs/completenessInputs"
+        },
         "inventory": {
           "type": "array",
           "uniqueItems": true,
@@ -1723,6 +1726,205 @@
         }
       ],
       "items": false
+    },
+    "completenessInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "high_value_flows",
+        "selected_framework_requirements"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "1.0.0"
+        },
+        "high_value_flows": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "$ref": "#/$defs/highValueFlow"
+              }
+            }
+          ]
+        },
+        "selected_framework_requirements": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "maxItems": 65536,
+              "items": {
+                "$ref": "#/$defs/selectedFrameworkRequirement"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "highValueFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "flow_id",
+        "title",
+        "entry_points"
+      ],
+      "properties": {
+        "flow_id": {
+          "$ref": "#/$defs/name"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "entry_points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "authoritative_invariant": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "disposition": {
+          "enum": [
+            "finding",
+            "executed-proof",
+            "examined-and-clean",
+            "unresolved-invariant"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "examined-and-clean",
+                  "unresolved-invariant"
+                ]
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence"
+            ]
+          }
+        }
+      ]
+    },
+    "selectedFrameworkRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "framework_id",
+        "version",
+        "profile",
+        "requirement_id"
+      ],
+      "properties": {
+        "framework_id": {
+          "$ref": "#/$defs/name"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "profile": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "requirement_id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "disposition": {
+          "enum": [
+            "mapped-and-tested",
+            "mapped-not-tested",
+            "not-applicable",
+            "not-repository-provable",
+            "not-assessed"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "required_external_evidence": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "not-applicable"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "not-repository-provable"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "required_external_evidence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "not-assessed"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
     },
     "workShardMetadata": {
       "type": "object",

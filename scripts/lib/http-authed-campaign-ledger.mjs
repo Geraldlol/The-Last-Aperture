@@ -29,15 +29,19 @@ import { stableJson } from './run-engine.mjs'
 const RECORD_KIND = 'red-team-audit/http-authed-campaign-record'
 const JSON_SHAPE_RECORD_SCHEMA_VERSION = '1.3.0'
 const CURRENT_RECORD_SCHEMA_VERSION = '1.4.0'
+const VERIFICATION_FAILURE_RECORD_SCHEMA_VERSION = '1.5.0'
 const SUPPORTED_RECORD_SCHEMA_VERSIONS = new Set([
   '1.2.0',
   JSON_SHAPE_RECORD_SCHEMA_VERSION,
   CURRENT_RECORD_SCHEMA_VERSION,
+  VERIFICATION_FAILURE_RECORD_SCHEMA_VERSION,
 ])
 const RECORD_NAME = /^(\d{16})\.http-authed-campaign\.json$/
 const TEMPORARY_NAME = /^\.(\d{16}\.http-authed-campaign\.json)\.tmp-\d+-[a-f0-9]{24}$/
 const LOCK_DIRECTORY = '.http-authed-campaign.lock'
 const LOCK_OWNER = 'owner.json'
+const STOP_REQUEST_NAME = '.http-authed-campaign-stop.json'
+const STOP_REQUEST_KIND = 'red-team-audit/http-authed-campaign-stop-request'
 const SESSION_CONFIRMATION = 'CURRENT_AUTHORIZATION_CONFIRMED'
 const CLEANUP_SESSION_CONFIRMATION = 'CLEANUP_ONLY_CONFIRMED'
 const DISCOVERED_CANDIDATE_IDENTITY_DOMAIN = Buffer.from(
@@ -202,14 +206,10 @@ function normalizeTrustedHead(input) {
 }
 
 function normalizeAuthorizationEvidence(options) {
-  const authorizationMode = options.authorizationMode
-    ?? (options.authorizationDocumentSha256 === undefined
-      ? undefined
-      : 'WRITTEN_AUTHORIZATION_AUTHED')
   let evidence
   try {
     evidence = httpAuthedAuthorizationEvidence({
-      authorization: { mode: authorizationMode },
+      authorization: { mode: options.authorizationMode },
     })
   } catch (cause) {
     throw ledgerError(
@@ -322,8 +322,7 @@ function validateEvent(event, {
       'CAMPAIGN_SESSION_CONFIRMED event',
     )
     exactIdentifier(event.operator_id, 'campaign session operator')
-    if (!['OPERATOR_ATTESTED_AUTHED', 'WRITTEN_AUTHORIZATION_AUTHED']
-      .includes(event.authorization_mode)
+    if (event.authorization_mode !== 'OPERATOR_ATTESTED_AUTHED'
       || event.confirmation !== SESSION_CONFIRMATION) {
       throw ledgerError(
         'HTTP_AUTHED_LEDGER_RECORD_INVALID',
@@ -339,8 +338,7 @@ function validateEvent(event, {
       'CLEANUP_SESSION_CONFIRMED event',
     )
     exactIdentifier(event.operator_id, 'cleanup session operator')
-    if (!['OPERATOR_ATTESTED_AUTHED', 'WRITTEN_AUTHORIZATION_AUTHED']
-      .includes(event.authorization_mode)
+    if (event.authorization_mode !== 'OPERATOR_ATTESTED_AUTHED'
       || event.confirmation !== CLEANUP_SESSION_CONFIRMATION) {
       throw ledgerError(
         'HTTP_AUTHED_LEDGER_RECORD_INVALID',
@@ -380,13 +378,13 @@ function validateEvent(event, {
     exactIdentifier(event.operator_id, 'lease operator')
     return event
   }
-  if (event.type === 'APPROVAL_CONSUMED') {
+  if (event.type === 'AUTHORIZATION_CONSUMED') {
     exactKeys(event, [
-      'type', 'action_id', 'lease_id', 'approval_nonce_sha256',
-      'countersignature_binding_sha256',
-    ], 'APPROVAL_CONSUMED event')
-    exactSha256(event.approval_nonce_sha256, 'approval nonce digest')
-    exactSha256(event.countersignature_binding_sha256, 'countersignature binding')
+      'type', 'action_id', 'lease_id', 'authorization_nonce_sha256',
+      'dispatch_permit_sha256',
+    ], 'AUTHORIZATION_CONSUMED event')
+    exactSha256(event.authorization_nonce_sha256, 'authorization nonce digest')
+    exactSha256(event.dispatch_permit_sha256, 'dispatch permit binding')
     return event
   }
   if (event.type === 'REQUEST_PRE_DISPATCH') {
@@ -477,6 +475,18 @@ function validateEvent(event, {
       || typeof event.value_match !== 'boolean'
       || typeof event.context_match !== 'boolean') {
       throw ledgerError('HTTP_AUTHED_LEDGER_RECORD_INVALID', 'verification event is invalid')
+    }
+    return event
+  }
+  if (event.type === 'VERIFICATION_FAILED') {
+    exactKeys(event, [
+      'type', 'action_id', 'lease_id', 'phase', 'reason_code',
+    ], 'VERIFICATION_FAILED event')
+    if (
+      !['BEFORE_READ', 'AFTER_READ', 'ROLLBACK_VERIFY'].includes(event.phase)
+      || event.reason_code !== 'TRANSIENT_OBSERVATION_FAILED'
+    ) {
+      throw ledgerError('HTTP_AUTHED_LEDGER_RECORD_INVALID', 'verification failure event is invalid')
     }
     return event
   }
@@ -743,6 +753,135 @@ function recordName(sequence) {
   return `${String(sequence).padStart(16, '0')}.http-authed-campaign.json`
 }
 
+async function canonicalExistingLedgerDirectory(directory) {
+  if (!isAbsolute(directory ?? '')) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_DIRECTORY_INVALID',
+      'campaign ledger directory must be absolute',
+    )
+  }
+  const requested = resolve(directory)
+  await assertNoLinkedAncestor(requested)
+  const [info, alias, canonical] = await Promise.all([
+    stat(requested),
+    lstat(requested),
+    realpath(requested),
+  ])
+  if (
+    !info.isDirectory()
+    || !alias.isDirectory()
+    || alias.isSymbolicLink()
+    || comparablePath(requested) !== comparablePath(canonical)
+  ) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_DIRECTORY_INVALID',
+      'campaign ledger directory must be an existing non-link local directory',
+    )
+  }
+  return canonical
+}
+
+function validateStopRequest(value) {
+  exactKeys(value, [
+    'schema_version',
+    'kind',
+    'campaign_grant_sha256',
+    'operator_id',
+    'requested_at',
+    'reason_code',
+  ], 'campaign stop request')
+  if (value.schema_version !== '1.0.0' || value.kind !== STOP_REQUEST_KIND) {
+    throw ledgerError('HTTP_AUTHED_LEDGER_STOP_REQUEST_INVALID', 'campaign stop request type is invalid')
+  }
+  exactSha256(value.campaign_grant_sha256, 'campaign stop request grant')
+  exactIdentifier(value.operator_id, 'campaign stop request operator')
+  if (value.requested_at !== exactInstant(value.requested_at, 'campaign stop request time')) {
+    throw ledgerError('HTTP_AUTHED_LEDGER_STOP_REQUEST_INVALID', 'campaign stop request time is not canonical')
+  }
+  if (value.reason_code !== 'OPERATOR_REQUESTED') {
+    throw ledgerError('HTTP_AUTHED_LEDGER_STOP_REQUEST_INVALID', 'campaign stop request reason is invalid')
+  }
+  return value
+}
+
+async function readCampaignStopRequest(directory) {
+  const path = join(directory, STOP_REQUEST_NAME)
+  let bytes
+  try {
+    const loaded = await readExactFile(path, 4096, 'campaign stop request')
+    bytes = loaded.bytes
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+  let value
+  try {
+    value = JSON.parse(bytes.toString('utf8'))
+  } catch (cause) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_STOP_REQUEST_INVALID',
+      'campaign stop request is not valid JSON',
+      { cause },
+    )
+  }
+  validateStopRequest(value)
+  if (!bytes.equals(Buffer.from(stableJson(value), 'utf8'))) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_STOP_REQUEST_INVALID',
+      'campaign stop request is not canonical JSON',
+    )
+  }
+  return value
+}
+
+export async function requestHttpAuthedCampaignStop({
+  directory,
+  campaignGrantSha256,
+  operatorId,
+  now = () => new Date(),
+}) {
+  const canonicalDirectory = await canonicalExistingLedgerDirectory(directory)
+  const request = validateStopRequest({
+    schema_version: '1.0.0',
+    kind: STOP_REQUEST_KIND,
+    campaign_grant_sha256: exactSha256(campaignGrantSha256, 'campaign grant'),
+    operator_id: exactIdentifier(operatorId, 'campaign operator'),
+    requested_at: exactInstant(now(), 'campaign stop request time'),
+    reason_code: 'OPERATOR_REQUESTED',
+  })
+  const path = join(canonicalDirectory, STOP_REQUEST_NAME)
+  let handle
+  let created = false
+  try {
+    handle = await open(path, 'wx', 0o600)
+    await handle.writeFile(Buffer.from(stableJson(request), 'utf8'))
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await syncDirectory(canonicalDirectory)
+    created = true
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (error.code !== 'EEXIST') throw error
+  }
+  const persisted = await readCampaignStopRequest(canonicalDirectory)
+  if (
+    persisted.campaign_grant_sha256 !== request.campaign_grant_sha256
+    || persisted.operator_id !== request.operator_id
+  ) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_STOP_REQUEST_MISMATCH',
+      'existing campaign stop request is bound to a different grant or operator',
+    )
+  }
+  return Object.freeze({
+    status: created ? 'STOP_REQUESTED' : 'ALREADY_REQUESTED',
+    ledger: canonicalDirectory,
+    campaign_grant_sha256: request.campaign_grant_sha256,
+    operator_id: request.operator_id,
+  })
+}
+
 async function installRecord(ledger, name, bytes, sequence) {
   const temporaryName = `.${name}.tmp-${process.pid}-${randomBytes(12).toString('hex')}`
   const temporaryPath = join(ledger.directory, temporaryName)
@@ -817,10 +956,41 @@ function emptyProjection() {
     lastCleanupSessionConfirmation: null,
     actions: new Map(),
     candidates: new Map(),
-    consumedApprovals: new Set(),
+    consumedAuthorizations: new Set(),
     nextActionSequence: 1,
     stopped: false,
+    stopReason: null,
   }
+}
+
+function responseStopReason(status) {
+  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
+  if (status === 429) return 'LIMIT_REACHED'
+  if (Number.isSafeInteger(status) && status >= 300 && status <= 399) {
+    return 'UNEXPECTED_REDIRECT'
+  }
+  if (Number.isSafeInteger(status) && status >= 500) return 'TARGET_HEALTH_DEGRADED'
+  return null
+}
+
+function durableActionStopReason(action) {
+  const phases = action.action_kind === 'mutate'
+    ? [
+        'CREDENTIAL_PREFLIGHT',
+        'BEFORE_READ',
+        'MUTATION',
+        'AFTER_READ',
+        'ROLLBACK',
+        'ROLLBACK_VERIFY',
+      ]
+    : ['PROBE']
+  for (const phase of phases) {
+    const outcome = action.phase_outcomes[phase]
+    if (outcome?.outcome !== 'SETTLED') continue
+    const reason = responseStopReason(outcome.status)
+    if (reason !== null) return reason
+  }
+  return null
 }
 
 function assertPhaseAllowedForAction(action, phase) {
@@ -853,14 +1023,19 @@ function assertPhasePredecessor(projection, action, phase) {
   } else if (phase === 'BEFORE_READ') {
     allowedStates = new Set(['CREDENTIAL_PREFLIGHT_SETTLED'])
   } else if (phase === 'MUTATION') {
-    allowedStates = new Set(['APPROVAL_CONSUMED'])
+    allowedStates = new Set(['AUTHORIZATION_CONSUMED'])
   } else if (phase === 'AFTER_READ') {
     allowedStates = new Set(['MUTATION_SETTLED'])
     if (action.phase_outcomes.MUTATION?.request_may_have_been_sent === true) {
       allowedStates.add('MUTATION_FAILED')
     }
   } else if (phase === 'ROLLBACK') {
-    allowedStates = new Set(['AFTER_READ_SETTLED', 'AFTER_READ_FAILED', 'AFTER_READ_VERIFIED'])
+    allowedStates = new Set([
+      'AFTER_READ_SETTLED',
+      'AFTER_READ_FAILED',
+      'AFTER_READ_VERIFIED',
+      'AFTER_READ_VERIFICATION_FAILED',
+    ])
     if (projection.stopped) {
       allowedStates.add('MUTATION_SETTLED')
       if (action.phase_outcomes.MUTATION?.request_may_have_been_sent === true) {
@@ -980,6 +1155,7 @@ function applyEvent(projection, record) {
       throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'campaign is already stopped')
     }
     projection.stopped = true
+    projection.stopReason = event.reason_code
     return
   }
   if (event.type === 'CANDIDATE_ENQUEUED') {
@@ -1004,7 +1180,8 @@ function applyEvent(projection, record) {
       phase_outcomes: {},
       terminal: false,
       outcome: null,
-      approval_consumed: false,
+      terminal_reason_code: null,
+      authorization_consumed: false,
     }
     projection.actions.set(event.action_id, action)
     projection.candidates.set(event.candidate_sha256, event.action_id)
@@ -1030,29 +1207,29 @@ function applyEvent(projection, record) {
   if (event.lease_id !== action.lease_id || action.terminal) {
     throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'event lease is stale or action is terminal')
   }
-  if (event.type === 'APPROVAL_CONSUMED') {
+  if (event.type === 'AUTHORIZATION_CONSUMED') {
     if (
       action.action_kind !== 'mutate'
-      || action.approval_consumed
+      || action.authorization_consumed
       || action.pending_phase !== null
       || action.state !== 'BEFORE_READ_VERIFIED'
       || action.last_verification?.value_match !== true
       || action.last_verification?.context_match !== true
     ) {
       throw ledgerError(
-        'HTTP_AUTHED_LEDGER_APPROVAL_STATE_INVALID',
-        'mutation approval can be consumed only after exact before-state verification',
+        'HTTP_AUTHED_LEDGER_AUTHORIZATION_STATE_INVALID',
+        'mutation authorization can be consumed only after exact before-state verification',
       )
     }
-    if (projection.consumedApprovals.has(event.approval_nonce_sha256)) {
+    if (projection.consumedAuthorizations.has(event.authorization_nonce_sha256)) {
       throw ledgerError(
-        'HTTP_AUTHED_LEDGER_APPROVAL_REPLAY',
-        'mutation approval nonce was already consumed',
+        'HTTP_AUTHED_LEDGER_AUTHORIZATION_REPLAY',
+        'mutation authorization nonce was already consumed',
       )
     }
-    projection.consumedApprovals.add(event.approval_nonce_sha256)
-    action.approval_consumed = true
-    action.state = 'APPROVAL_CONSUMED'
+    projection.consumedAuthorizations.add(event.authorization_nonce_sha256)
+    action.authorization_consumed = true
+    action.state = 'AUTHORIZATION_CONSUMED'
     return
   }
   if (event.type === 'REQUEST_PRE_DISPATCH') {
@@ -1060,13 +1237,16 @@ function applyEvent(projection, record) {
     if (action.pending_phase !== null || action.settled_phases.includes(event.phase)) {
       throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'request pre-dispatch would replay a phase')
     }
-    if (projection.stopped && !['ROLLBACK', 'ROLLBACK_VERIFY'].includes(event.phase)) {
+    if (projection.stopped && !['AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY'].includes(event.phase)) {
       throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'stopped campaign permits cleanup phases only')
     }
-    if (event.phase === 'MUTATION' && action.approval_consumed !== true) {
+    if (
+      event.phase === 'MUTATION'
+      && action.authorization_consumed !== true
+    ) {
       throw ledgerError(
-        'HTTP_AUTHED_LEDGER_APPROVAL_REQUIRED',
-        'mutation pre-dispatch requires a durably consumed countersignature approval',
+        'HTTP_AUTHED_LEDGER_AUTHORIZATION_REQUIRED',
+        'mutation pre-dispatch requires a durably consumed controller authorization permit',
       )
     }
     assertPhasePredecessor(projection, action, event.phase)
@@ -1082,6 +1262,7 @@ function applyEvent(projection, record) {
     action.settled_phases.push(event.phase)
     action.phase_outcomes[event.phase] = {
       outcome: event.outcome,
+      status: event.status,
       request_may_have_been_sent: event.request_may_have_been_sent,
       ...(event.json_shape === undefined
         ? {}
@@ -1117,6 +1298,24 @@ function applyEvent(projection, record) {
     }
     return
   }
+  if (event.type === 'VERIFICATION_FAILED') {
+    if (
+      action.action_kind !== 'mutate'
+      || action.state !== `${event.phase}_SETTLED`
+      || action.phase_outcomes[event.phase]?.outcome !== 'SETTLED'
+    ) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_VERIFICATION_STATE_INVALID',
+        'verification failure requires the exact settled read phase and cannot replay',
+      )
+    }
+    action.state = `${event.phase}_VERIFICATION_FAILED`
+    action.last_verification = {
+      failed: true,
+      reason_code: event.reason_code,
+    }
+    return
+  }
   if (event.type === 'DISCOVERY_SUMMARY') {
     action.discovery_summary = {
       accepted_count: event.accepted_count,
@@ -1129,6 +1328,7 @@ function applyEvent(projection, record) {
     assertTerminalOutcomeAllowed(action, event.outcome)
     action.terminal = true
     action.outcome = event.outcome
+    action.terminal_reason_code = event.reason_code
     action.state = event.outcome
     action.pending_phase = null
     return
@@ -1141,7 +1341,7 @@ async function loadProjection(ledger) {
   const names = await readdir(ledger.directory)
   const recordNames = []
   for (const name of names) {
-    if (name === LOCK_DIRECTORY) continue
+    if (name === LOCK_DIRECTORY || name === STOP_REQUEST_NAME) continue
     if (RECORD_NAME.test(name)) {
       recordNames.push(name)
       continue
@@ -1238,18 +1438,8 @@ export class HttpAuthedCampaignLedger {
     }
     this.directory = resolve(options.directory)
     this.campaignGrantSha256 = exactSha256(options.campaignGrantSha256, 'campaign grant')
-    if (
-      options.authorizationBindingSha256 !== undefined
-      && options.authorizationDocumentSha256 !== undefined
-      && options.authorizationBindingSha256 !== options.authorizationDocumentSha256
-    ) {
-      throw ledgerError(
-        'HTTP_AUTHED_LEDGER_BINDING_AMBIGUOUS',
-        'campaign ledger received conflicting authorization bindings',
-      )
-    }
     this.authorizationBindingSha256 = exactSha256(
-      options.authorizationBindingSha256 ?? options.authorizationDocumentSha256,
+      options.authorizationBindingSha256,
       'authorization binding',
     )
     const evidence = normalizeAuthorizationEvidence(options)
@@ -1394,7 +1584,9 @@ export class HttpAuthedCampaignLedger {
   async _append(event) {
     validateEvent(event)
     const sequence = this._projection.records.length
-    const recordSchemaVersion = event.type === 'REQUEST_SETTLED'
+    const recordSchemaVersion = event.type === 'VERIFICATION_FAILED'
+      ? VERIFICATION_FAILURE_RECORD_SCHEMA_VERSION
+      : event.type === 'REQUEST_SETTLED'
       && event.failure_stage_code !== undefined
       ? CURRENT_RECORD_SCHEMA_VERSION
       : event.type === 'REQUEST_SETTLED' && event.json_shape !== undefined
@@ -1419,11 +1611,32 @@ export class HttpAuthedCampaignLedger {
       throw ledgerError('HTTP_AUTHED_LEDGER_RECORD_TOO_LARGE', 'campaign ledger record exceeds its byte limit')
     }
     applyEvent(this._projection, record)
-    try {
-      await installRecord(this, recordName(sequence), bytes, sequence)
-    } catch (error) {
-      this._projection = await loadProjection(this)
-      throw error
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await installRecord(this, recordName(sequence), bytes, sequence)
+        break
+      } catch (error) {
+        this._projection = await loadProjection(this)
+        assertTrustedHead(this._projection, this.trustedHead)
+        // installRecord may report a fault after the target record was linked.
+        // loadProjection reconciles the linked temporary and fsyncs the
+        // directory, so an exact recovered record is a completed append, not
+        // an invitation for the caller to append a conflicting settlement.
+        // This is especially important after a mutation response: cleanup must
+        // continue from the durable state without replaying the write.
+        const recovered = this._projection.records[sequence]
+        if (
+          recovered !== undefined
+          && Buffer.from(stableJson(recovered), 'utf8').equals(bytes)
+        ) {
+          return recovered
+        }
+        if (attempt > 0 || this._projection.records.length !== sequence) throw error
+        // A failure before the target link left no event behind. Reapply the
+        // validated transition and make one bounded retry of the same bytes.
+        // This never repeats target I/O; it only finishes ledger custody.
+        applyEvent(this._projection, record)
+      }
     }
     this._projection.records.push(record)
     this._projection.headSha256 = sha256(bytes)
@@ -1431,7 +1644,20 @@ export class HttpAuthedCampaignLedger {
   }
 
   async _recoverInterruptedDispatches() {
-    const interrupted = [...this._projection.actions.values()]
+    const actions = [...this._projection.actions.values()]
+    // A response-derived stop must survive either crash tail: after the
+    // settlement record or after action terminalization. Import the stop
+    // before recovering any action so no later queued request can be leased.
+    if (!this._projection.stopped) {
+      const stopCause = actions
+        .sort((left, right) => left.action_sequence - right.action_sequence)
+        .map((action) => durableActionStopReason(action))
+        .find((reasonCode) => reasonCode !== null)
+      if (stopCause !== undefined) {
+        await this._append({ type: 'CAMPAIGN_STOPPED', reason_code: stopCause })
+      }
+    }
+    const interrupted = actions
       .filter((action) => (
         !action.terminal
         && (action.state !== 'QUEUED' || action.provenance === 'DISCOVERED')
@@ -1441,7 +1667,7 @@ export class HttpAuthedCampaignLedger {
       let reasonCode
       if (
         action.action_kind === 'mutate'
-        && action.approval_consumed === true
+        && action.authorization_consumed === true
         && ['MUTATION', 'AFTER_READ', 'ROLLBACK'].includes(action.pending_phase)
       ) {
         // A durable write/cleanup pre-dispatch record is consumed. Convert the
@@ -1468,7 +1694,7 @@ export class HttpAuthedCampaignLedger {
       }
       if (
         action.action_kind === 'mutate'
-        && action.approval_consumed === true
+        && action.authorization_consumed === true
         && action.pending_phase === null
         && ['MUTATION', 'AFTER_READ', 'ROLLBACK'].some(
           (phase) => action.settled_phases.includes(phase),
@@ -1531,7 +1757,10 @@ export class HttpAuthedCampaignLedger {
       ) {
         outcome = 'MANUAL_INTERVENTION_REQUIRED'
         reasonCode = 'INTERRUPTED_MUTATION_REQUIRES_REVIEW'
-      } else if (action.action_kind === 'mutate' && !action.approval_consumed) {
+      } else if (
+        action.action_kind === 'mutate'
+        && action.authorization_consumed !== true
+      ) {
         outcome = 'FAILED_BEFORE_MUTATION'
         reasonCode = 'INTERRUPTED_BEFORE_MUTATION'
       } else {
@@ -1572,6 +1801,7 @@ export class HttpAuthedCampaignLedger {
       queued_actions: actions.filter((action) => action.state === 'QUEUED').length,
       terminal_actions: actions.filter((action) => action.terminal).length,
       stopped: this._projection.stopped,
+      stop_reason: this._projection.stopReason,
     }
   }
 
@@ -1703,11 +1933,11 @@ export class HttpAuthedCampaignLedger {
     })
   }
 
-  async consumeApproval({
+  async consumeAuthorization({
     actionId,
     leaseId,
     nonce,
-    countersignatureBindingSha256,
+    dispatchPermitSha256,
   }) {
     return this._runExclusive(async () => {
       this._assertOpen()
@@ -1718,21 +1948,21 @@ export class HttpAuthedCampaignLedger {
         || !/^[A-Za-z0-9._~-]+$/.test(nonce)
       ) {
         throw ledgerError(
-          'HTTP_AUTHED_LEDGER_APPROVAL_NONCE_INVALID',
-          'mutation approval nonce is invalid',
+          'HTTP_AUTHED_LEDGER_AUTHORIZATION_NONCE_INVALID',
+          'mutation authorization nonce is invalid',
         )
       }
       await this._append({
-        type: 'APPROVAL_CONSUMED',
+        type: 'AUTHORIZATION_CONSUMED',
         action_id: actionId,
         lease_id: leaseId,
-        approval_nonce_sha256: sha256(Buffer.from(
-          `red-team-audit/http-authed-approval-nonce/v1\0${nonce}`,
+        authorization_nonce_sha256: sha256(Buffer.from(
+          `red-team-audit/http-authed-authorization-nonce/v1\0${nonce}`,
           'utf8',
         )),
-        countersignature_binding_sha256: exactSha256(
-          countersignatureBindingSha256,
-          'countersignature binding',
+        dispatch_permit_sha256: exactSha256(
+          dispatchPermitSha256,
+          'dispatch permit binding',
         ),
       })
       return { consumed: true, headSha256: this._projection.headSha256 }
@@ -1837,6 +2067,25 @@ export class HttpAuthedCampaignLedger {
     })
   }
 
+  async recordVerificationFailure({
+    actionId,
+    leaseId,
+    phase,
+    reasonCode = 'TRANSIENT_OBSERVATION_FAILED',
+  }) {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      await this._append({
+        type: 'VERIFICATION_FAILED',
+        action_id: actionId,
+        lease_id: leaseId,
+        phase,
+        reason_code: reasonCode,
+      })
+      return { headSha256: this._projection.headSha256 }
+    })
+  }
+
   async recordDiscoverySummary({
     actionId,
     leaseId,
@@ -1876,6 +2125,35 @@ export class HttpAuthedCampaignLedger {
     return this._runExclusive(async () => {
       this._assertOpen()
       await this._append({ type: 'CAMPAIGN_STOPPED', reason_code: reasonCode })
+      return this.snapshot()
+    })
+  }
+
+  async observeStopRequest() {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      const request = await readCampaignStopRequest(this.directory)
+      if (request === null) return false
+      if (
+        request.campaign_grant_sha256 !== this.campaignGrantSha256
+        || request.operator_id !== this.operatorId
+      ) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_STOP_REQUEST_MISMATCH',
+          'campaign stop request does not match the open ledger grant and operator',
+        )
+      }
+      if (!this._projection.stopped) {
+        await this._append({ type: 'CAMPAIGN_STOPPED', reason_code: request.reason_code })
+      }
+      return true
+    })
+  }
+
+  async reconcileInterruptedDispatches() {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      await this._recoverInterruptedDispatches()
       return this.snapshot()
     })
   }

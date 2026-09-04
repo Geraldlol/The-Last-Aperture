@@ -1,6 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  symlinkSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -64,6 +71,19 @@ test('materializeFiles refuses a path escaping the mirror', async () => {
     () => materializeFiles(mirror, [{ path: '../escape.js', contents: 'x' }]),
     /escapes the mirror/,
   )
+})
+
+test('materializeFiles refuses a copied directory symlink before writing outside the mirror', async () => {
+  const mirror = mkdtempSync(join(tmpdir(), 'rta-symlink-mirror-'))
+  const outside = mkdtempSync(join(tmpdir(), 'rta-symlink-outside-'))
+  symlinkSync(outside, join(mirror, 'test'), 'junction')
+  await assert.rejects(
+    () => materializeFiles(mirror, [
+      { path: 'test/security/escape.test.mjs', contents: 'outside\n' },
+    ]),
+    /symbolic link|reparse|symlink/i,
+  )
+  assert.equal(existsSync(join(outside, 'security', 'escape.test.mjs')), false)
 })
 
 test('an unchanged target passes the digest re-check', async () => {

@@ -215,12 +215,7 @@ defers:
   dependency-pinning-and-lockfiles: cicd-and-supply-chain
   phi-access-audit-controls: hipaa-and-phi
   phi-severity-uplift: hipaa-and-phi
-frameworks:
-  - owasp-database-security
-  - owasp-nosql-security
-  - cis-benchmarks
-  - cwe
-  - stride
+frameworks: []
 severity_floor: low
 ---
 

@@ -31,16 +31,17 @@ const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 const INPUT_LIMITS = Object.freeze({
   scope: 64 * 1024 * 1024,
-  authorization: 16 * 1024 * 1024,
   body: 16 * 1024 * 1024,
-  countersignature: 1024 * 1024,
 })
+const MAX_PUBLIC_FIXED_CAMPAIGN_ACTIONS = 256
+const STARTUP_STOP_POLL_MS = 20
 const CLEANUP_ROLLBACK_STATES = new Set([
   'MUTATION_SETTLED',
   'MUTATION_FAILED',
   'AFTER_READ_SETTLED',
   'AFTER_READ_FAILED',
   'AFTER_READ_VERIFIED',
+  'AFTER_READ_VERIFICATION_FAILED',
   'ROLLBACK_SETTLED',
   'ROLLBACK_FAILED',
 ])
@@ -55,6 +56,68 @@ export class HttpAuthedCampaignRuntimeError extends Error {
 
 function runtimeError(code, message, options) {
   return new HttpAuthedCampaignRuntimeError(code, message, options)
+}
+
+function waitForStartupPoll(signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    let timer
+    const finish = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, STARTUP_STOP_POLL_MS)
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
+
+async function waitForStartupStop(ledger, signal) {
+  while (!signal.aborted) {
+    if (ledger.snapshot().stopped || await ledger.observeStopRequest()) return true
+    await waitForStartupPoll(signal)
+  }
+  return false
+}
+
+async function raceStartupOperationWithStop({
+  ledger,
+  operation,
+  disposeLateValue,
+}) {
+  if (ledger.snapshot().stopped || await ledger.observeStopRequest()) {
+    return { stopped: true, value: undefined }
+  }
+  const polling = new AbortController()
+  const operationPromise = Promise.resolve().then(() => operation(polling.signal))
+  const completed = operationPromise.then(
+    (value) => ({ kind: 'COMPLETED', value }),
+    (error) => ({ kind: 'FAILED', error }),
+  )
+  const stopped = waitForStartupStop(ledger, polling.signal)
+    .then((value) => ({ kind: 'STOPPED', value }))
+  const winner = await Promise.race([completed, stopped])
+  polling.abort()
+  if (winner.kind === 'FAILED') throw winner.error
+  if (winner.kind === 'COMPLETED') return { stopped: false, value: winner.value }
+  if (winner.value !== true) {
+    throw runtimeError(
+      'HTTP_AUTHED_CAMPAIGN_STARTUP_MONITOR_FAILED',
+      'campaign startup stop monitor ended without a stop request',
+    )
+  }
+  // The underlying provider may not support cancellation. If it resolves
+  // after the stop wins, destroy any returned secret/session immediately.
+  if (typeof disposeLateValue === 'function') {
+    operationPromise.then(
+      async (value) => { await disposeLateValue(value) },
+      () => {},
+    ).catch(() => {})
+  }
+  return { stopped: true, value: undefined }
 }
 
 async function readStableBoundedFile(path, label, maximum, { minimum = 1 } = {}) {
@@ -108,7 +171,7 @@ function requireMaterialsDirectory(materialsDirectory) {
   if (!isAbsolute(materialsDirectory ?? '')) {
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_MATERIALS_REQUIRED',
-      'synthetic bodies and countersignatures require an absolute materials directory',
+      'synthetic bodies require an absolute materials directory',
     )
   }
   return materialsDirectory
@@ -124,16 +187,6 @@ async function resolveBody(materialsDirectory, metadata, label) {
     INPUT_LIMITS.body,
     { minimum: 0 },
   )
-}
-
-async function resolveCountersignature(materialsDirectory, sequence) {
-  const directory = requireMaterialsDirectory(materialsDirectory)
-  const bytes = await readStableBoundedFile(
-    join(directory, `countersignature-${sequence}.json`),
-    'mutation countersignature',
-    INPUT_LIMITS.countersignature,
-  )
-  return parseJson(bytes, 'mutation countersignature')
 }
 
 function credentialHeaders(scope, bytes) {
@@ -237,7 +290,7 @@ function recoverableSealedMutation({ scope, ledger, campaignGrantSha256 }) {
       && !state.terminal
       && state.provenance === 'SEALED_PLAN'
       && state.action_kind === 'mutate'
-      && state.approval_consumed === true
+      && state.authorization_consumed === true
       && typeof state.lease_id === 'string'
       && state.lease_id.length > 0
       && CLEANUP_ROLLBACK_STATES.has(state.state)
@@ -281,9 +334,6 @@ function cleanupCampaignResult({ scope, verified, recovery, ledger }) {
     authorization_assurance: evidence.authorizationAssurance,
     authorization_nonclaim: evidence.authorizationNonclaim,
     authorization_binding_sha256: verified.authorizationBindingSha256,
-    ...(verified.authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorization_document_sha256: verified.authorizationDocumentSha256 }),
     campaign_grant_sha256: verified.campaignGrantSha256,
     cleanup_only: true,
     actions: {
@@ -301,13 +351,13 @@ function cleanupCampaignResult({ scope, verified, recovery, ledger }) {
       queued_actions: snapshot.queued_actions,
       terminal_actions: snapshot.terminal_actions,
       stopped: snapshot.stopped,
+      stop_reason: snapshot.stop_reason,
     },
   }
 }
 
 async function runHttpAuthedCampaignRuntime({
   scopePath,
-  authorizationDocumentPath,
   expectedCampaignGrantSha256,
   ledgerDirectory,
   materialsDirectory,
@@ -324,10 +374,9 @@ async function runHttpAuthedCampaignRuntime({
   clock = () => new Date(),
   protectedTransport,
   mutationDependencies = {},
-}, requiredAuthorizationMode) {
-  const commandName = requiredAuthorizationMode === 'OPERATOR_ATTESTED_AUTHED'
-    ? 'campaign-attested'
-    : 'campaign-written'
+  fixedCampaignOnly = false,
+}) {
+  const commandName = 'campaign-attested'
   if (!isAbsolute(ledgerDirectory ?? '')) {
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_LEDGER_DIRECTORY_INVALID',
@@ -339,6 +388,7 @@ async function runHttpAuthedCampaignRuntime({
     || (browserTransportFactory !== undefined && typeof browserTransportFactory !== 'function')
     || (onBrowserPairing !== undefined && typeof onBrowserPairing !== 'function')
     || typeof clock !== 'function'
+    || typeof fixedCampaignOnly !== 'boolean'
   ) {
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_DEPENDENCY_INVALID',
@@ -351,23 +401,10 @@ async function runHttpAuthedCampaignRuntime({
     INPUT_LIMITS.scope,
   )
   const scope = parseJson(scopeBytes, 'http-authed scope')
-  if (scope.authorization?.mode !== requiredAuthorizationMode) {
+  if (scope.authorization?.mode !== 'OPERATOR_ATTESTED_AUTHED') {
     throw runtimeError(
       'HTTP_AUTHED_AUTHORIZATION_MODE_MISMATCH',
-      `${commandName} requires ${requiredAuthorizationMode} scope`,
-    )
-  }
-  let documentBytes
-  if (requiredAuthorizationMode === 'WRITTEN_AUTHORIZATION_AUTHED') {
-    documentBytes = await readStableBoundedFile(
-      authorizationDocumentPath,
-      'written authorization document',
-      INPUT_LIMITS.authorization,
-    )
-  } else if (authorizationDocumentPath !== undefined) {
-    throw runtimeError(
-      'HTTP_AUTHED_ATTESTED_DOCUMENT_REFUSED',
-      'campaign-attested does not accept a written authorization document',
+      `${commandName} requires OPERATOR_ATTESTED_AUTHED scope`,
     )
   }
   let verified
@@ -375,7 +412,6 @@ async function runHttpAuthedCampaignRuntime({
   try {
     verified = verifyHttpAuthedAuthorization({
       scope,
-      documentBytes,
       now: clock(),
     })
   } catch (cause) {
@@ -385,7 +421,6 @@ async function runHttpAuthedCampaignRuntime({
     verified = verifyHttpAuthedCleanupCandidate({
       scope,
       action: sealedMutation,
-      documentBytes,
       expectedCampaignGrantSha256,
       now: clock(),
     })
@@ -400,13 +435,25 @@ async function runHttpAuthedCampaignRuntime({
   if (authorizationConfirmed !== true) {
     throw runtimeError(
       'HTTP_AUTHED_CURRENT_AUTHORIZATION_REQUIRED',
-      `${commandName} requires --confirm-authorization-current`,
+      `${commandName} requires explicit controller launch confirmation`,
     )
   }
   if (typeof operatorId !== 'string' || operatorId !== scope.authorization.operator_id) {
     throw runtimeError(
       'HTTP_AUTHED_OPERATOR_MISMATCH',
       `${commandName} operator must match the sealed campaign operator`,
+    )
+  }
+  if (fixedCampaignOnly && !cleanupOnly && scope.discovery?.enabled === true) {
+    throw runtimeError(
+      'HTTP_AUTHED_PUBLIC_DISCOVERY_REQUIRES_ADAPTIVE_CONTROLLER',
+      'public campaign execution accepts only its fixed sealed request list',
+    )
+  }
+  if (fixedCampaignOnly && scope.requests.length > MAX_PUBLIC_FIXED_CAMPAIGN_ACTIONS) {
+    throw runtimeError(
+      'HTTP_AUTHED_PUBLIC_CAMPAIGN_ACTION_LIMIT',
+      `public fixed campaigns may contain at most ${MAX_PUBLIC_FIXED_CAMPAIGN_ACTIONS} sealed actions`,
     )
   }
 
@@ -498,7 +545,7 @@ async function runHttpAuthedCampaignRuntime({
           INPUT_LIMITS.scope,
         )
         const currentScope = parseJson(currentScopeBytes, 'http-authed scope')
-        if (currentScope.authorization?.mode !== requiredAuthorizationMode) {
+        if (currentScope.authorization?.mode !== 'OPERATOR_ATTESTED_AUTHED') {
           throw runtimeError(
             'HTTP_AUTHED_AUTHORIZATION_MODE_MISMATCH',
             'campaign authorization mode changed before cleanup dispatch',
@@ -510,25 +557,12 @@ async function runHttpAuthedCampaignRuntime({
             'campaign operator changed before cleanup dispatch',
           )
         }
-        let currentDocumentBytes
-        try {
-          currentDocumentBytes = requiredAuthorizationMode === 'WRITTEN_AUTHORIZATION_AUTHED'
-            ? await readStableBoundedFile(
-              authorizationDocumentPath,
-              'written authorization document',
-              INPUT_LIMITS.authorization,
-            )
-            : undefined
-          return verifyHttpAuthedCleanupCandidate({
-            scope: currentScope,
-            action,
-            documentBytes: currentDocumentBytes,
-            expectedCampaignGrantSha256,
-            now: clock(),
-          })
-        } finally {
-          currentDocumentBytes?.fill(0)
-        }
+        return verifyHttpAuthedCleanupCandidate({
+          scope: currentScope,
+          action,
+          expectedCampaignGrantSha256,
+          now: clock(),
+        })
       }
 
       let cleanupCredentialValue
@@ -547,7 +581,6 @@ async function runHttpAuthedCampaignRuntime({
           scope,
           action: recoveryTarget.action,
           existingLease: recoveryTarget.lease,
-          documentBytes,
           expectedCampaignGrantSha256,
           credentialValue: cleanupCredentialValue,
           rollbackBodyBytes,
@@ -577,11 +610,7 @@ async function runHttpAuthedCampaignRuntime({
         try {
           cleanupCredential?.fill(0)
         } finally {
-          try {
-            documentBytes?.fill(0)
-          } finally {
-            await cleanupBrowserTransportSession?.close()
-          }
+          await cleanupBrowserTransportSession?.close()
         }
       }
     }
@@ -590,52 +619,11 @@ async function runHttpAuthedCampaignRuntime({
   let masterCredential
   let browserTransportSession
   let activeTransport = protectedTransport
-  if (browserSession) {
-    if (activeTransport === undefined) {
-      try {
-        if (typeof browserTransportFactory !== 'function') {
-          throw runtimeError(
-            'HTTP_AUTHED_BROWSER_COMPANION_REQUIRED',
-            'Chrome active-tab campaign execution requires the browser companion bridge',
-          )
-        }
-        browserTransportSession = await browserTransportFactory({
-          extensionId: scope.credential.extension_id,
-          targetOrigin: scope.credential.origin,
-          campaignGrantSha256: verified.campaignGrantSha256,
-          timeoutMs: scope.limits.request_timeout_ms,
-        })
-        if (
-          typeof browserTransportSession?.transport !== 'function'
-          || typeof browserTransportSession?.waitForAttach !== 'function'
-          || typeof browserTransportSession?.close !== 'function'
-        ) {
-          throw runtimeError(
-            'HTTP_AUTHED_BROWSER_COMPANION_INVALID',
-            'the browser companion bridge did not provide a valid transport session',
-          )
-        }
-        await onBrowserPairing?.(structuredClone(browserTransportSession.pairing))
-        await browserTransportSession.waitForAttach()
-        activeTransport = browserTransportSession.transport
-      } catch (error) {
-        await browserTransportSession?.close?.()
-        throw error
-      }
-    }
-  } else {
-    activeTransport ??= createHttpAuthedHttpsTransport()
-    masterCredential = await resolveHttpAuthedCredential({
-      credential: scope.credential,
-      env,
-      transientCredential,
-      credentialInput,
-      readStdin: credentialStdinReader,
-    })
-  }
-
   let ledger
   try {
+    // Create and bind the durable control surface before credential input or a
+    // browser attach can block. The operator can therefore request a stop for
+    // the entire startup window, not only after target dispatch is ready.
     ledger = await openHttpAuthedCampaignLedger({
       directory: ledgerDirectory,
       campaignGrantSha256: verified.campaignGrantSha256,
@@ -647,6 +635,72 @@ async function runHttpAuthedCampaignRuntime({
       trustedHead: trustedLedgerHead,
       now: clock,
     })
+    let startupStopped = ledger.snapshot().stopped
+    if (browserSession) {
+      if (activeTransport === undefined && !startupStopped) {
+        if (typeof browserTransportFactory !== 'function') {
+          throw runtimeError(
+            'HTTP_AUTHED_BROWSER_COMPANION_REQUIRED',
+            'Chrome active-tab campaign execution requires the browser companion bridge',
+          )
+        }
+        const created = await raceStartupOperationWithStop({
+          ledger,
+          operation: () => browserTransportFactory({
+            extensionId: scope.credential.extension_id,
+            targetOrigin: scope.credential.origin,
+            campaignGrantSha256: verified.campaignGrantSha256,
+            timeoutMs: scope.limits.request_timeout_ms,
+          }),
+          disposeLateValue: async (session) => { await session?.close?.() },
+        })
+        startupStopped = created.stopped
+        if (!startupStopped) {
+          browserTransportSession = created.value
+          if (
+            typeof browserTransportSession?.transport !== 'function'
+            || typeof browserTransportSession?.waitForAttach !== 'function'
+            || typeof browserTransportSession?.close !== 'function'
+          ) {
+            throw runtimeError(
+              'HTTP_AUTHED_BROWSER_COMPANION_INVALID',
+              'the browser companion bridge did not provide a valid transport session',
+            )
+          }
+          const paired = await raceStartupOperationWithStop({
+            ledger,
+            operation: async () => {
+              await onBrowserPairing?.(structuredClone(browserTransportSession.pairing))
+            },
+          })
+          startupStopped = paired.stopped
+        }
+        if (!startupStopped) {
+          const attached = await raceStartupOperationWithStop({
+            ledger,
+            operation: () => browserTransportSession.waitForAttach(),
+          })
+          startupStopped = attached.stopped
+        }
+        if (!startupStopped) activeTransport = browserTransportSession.transport
+      }
+    } else if (!startupStopped) {
+      activeTransport ??= createHttpAuthedHttpsTransport()
+      const credential = await raceStartupOperationWithStop({
+        ledger,
+        operation: (signal) => resolveHttpAuthedCredential({
+          credential: scope.credential,
+          env,
+          transientCredential,
+          credentialInput,
+          readStdin: credentialStdinReader,
+          signal,
+        }),
+        disposeLateValue: (value) => { value?.fill?.(0) },
+      })
+      startupStopped = credential.stopped
+      if (!startupStopped) masterCredential = credential.value
+    }
     const reauthorizeForPurpose = async ({ action, cleanup }) => {
       const currentScopeBytes = await readStableBoundedFile(
         scopePath,
@@ -654,7 +708,7 @@ async function runHttpAuthedCampaignRuntime({
         INPUT_LIMITS.scope,
       )
       const currentScope = parseJson(currentScopeBytes, 'http-authed scope')
-      if (currentScope.authorization?.mode !== requiredAuthorizationMode) {
+      if (currentScope.authorization?.mode !== 'OPERATOR_ATTESTED_AUTHED') {
         throw runtimeError(
           'HTTP_AUTHED_AUTHORIZATION_MODE_MISMATCH',
           `campaign authorization mode changed before ${cleanup ? 'cleanup' : 'request'} dispatch`,
@@ -666,35 +720,21 @@ async function runHttpAuthedCampaignRuntime({
           `campaign operator changed before ${cleanup ? 'cleanup' : 'request'} dispatch`,
         )
       }
-      let currentDocumentBytes
-      try {
-        currentDocumentBytes = requiredAuthorizationMode === 'WRITTEN_AUTHORIZATION_AUTHED'
-          ? await readStableBoundedFile(
-            authorizationDocumentPath,
-            'written authorization document',
-            INPUT_LIMITS.authorization,
-          )
-          : undefined
-        const verifier = cleanup
-          ? verifyHttpAuthedCleanupCandidate
-          : verifyHttpAuthedCandidate
-        return verifier({
-          scope: currentScope,
-          action,
-          documentBytes: currentDocumentBytes,
-          expectedCampaignGrantSha256,
-          now: clock(),
-        })
-      } finally {
-        currentDocumentBytes?.fill(0)
-      }
+      const verifier = cleanup
+        ? verifyHttpAuthedCleanupCandidate
+        : verifyHttpAuthedCandidate
+      return verifier({
+        scope: currentScope,
+        action,
+        expectedCampaignGrantSha256,
+        now: clock(),
+      })
     }
     const reauthorize = ({ action }) => reauthorizeForPurpose({ action, cleanup: false })
     const reauthorizeCleanup = ({ action }) => reauthorizeForPurpose({ action, cleanup: true })
 
     return await runHttpAuthedCampaign({
       scope,
-      documentBytes,
       expectedCampaignGrantSha256,
       operatorId,
       authorizationConfirmed,
@@ -717,7 +757,6 @@ async function runHttpAuthedCampaignRuntime({
           const result = await dispatchHttpAuthedProbe({
             scope,
             action,
-            documentBytes,
             expectedCampaignGrantSha256,
             credentialValue,
             requestBodyBytes,
@@ -739,10 +778,6 @@ async function runHttpAuthedCampaignRuntime({
         let requestBodyBytes
         let rollbackBodyBytes
         try {
-          const countersignature = await resolveCountersignature(
-            materialsDirectory,
-            action.sequence,
-          )
           requestBodyBytes = await resolveBody(
             materialsDirectory,
             action.request_body,
@@ -761,10 +796,8 @@ async function runHttpAuthedCampaignRuntime({
             scope,
             action,
             existingLease: lease,
-            documentBytes,
             expectedCampaignGrantSha256,
             operatorId,
-            countersignature,
             credentialValue,
             requestBodyBytes,
             rollbackBodyBytes,
@@ -803,7 +836,6 @@ async function runHttpAuthedCampaignRuntime({
             scope,
             action,
             existingLease: lease,
-            documentBytes,
             expectedCampaignGrantSha256,
             credentialValue,
             rollbackBodyBytes,
@@ -829,20 +861,12 @@ async function runHttpAuthedCampaignRuntime({
       try {
         masterCredential?.fill(0)
       } finally {
-        try {
-          documentBytes?.fill(0)
-        } finally {
-          await browserTransportSession?.close()
-        }
+        await browserTransportSession?.close()
       }
     }
   }
 }
 
-export function runHttpAuthedWrittenCampaign(options) {
-  return runHttpAuthedCampaignRuntime(options, 'WRITTEN_AUTHORIZATION_AUTHED')
-}
-
 export function runHttpAuthedAttestedCampaign(options) {
-  return runHttpAuthedCampaignRuntime(options, 'OPERATOR_ATTESTED_AUTHED')
+  return runHttpAuthedCampaignRuntime(options)
 }

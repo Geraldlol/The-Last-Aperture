@@ -720,6 +720,28 @@ test('N findings dispatch as candidate-bound proof waves with a global existence
   assert.doesNotThrow(() => beginJob(run, lastVerification.job_id))
 })
 
+test('an unauthenticated provider drop cannot remove a candidate from proof scheduling', () => {
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: [stageOne()],
+  }), { sidecar: lensSidecar })
+  ;({ run } = advanceRun(run))
+  run = beginJob(run, 'triage:business-logic')
+  run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
+    findings: [triaged({
+      triage_disposition: 'dropped',
+      drop_reason: 'provider claims the route is unreachable',
+    })],
+  }))
+  ;({ run } = advanceRun(run))
+
+  assert.equal(run.findings[0].triage_authority, 'UNAUTHENTICATED_PROVIDER_ASSERTION')
+  assert.ok(run.jobs.some(({ job_id: jobId, state }) =>
+    jobId === 'proof-existence:authz-object-level:a3f19c2e'
+    && state === 'PENDING'))
+})
+
 test('one failed existence result fails an N-finding proof wave before verification', () => {
   let { run } = runManyToProof(5)
   const failed = run.jobs.filter(({ job_id: jobId }) =>
@@ -780,6 +802,10 @@ test('full provider-neutral state machine reaches a validated static final repor
   run = applyJobResult(run, jobResult(run, 'proof-verification:authz-object-level:a3f19c2e', {
     findings: [staticProof()],
   }))
+  assert.equal(
+    run.findings[0].verification_authority,
+    'UNAUTHENTICATED_PROVIDER_ASSERTION',
+  )
 
   ;({ run } = advanceRun(run))
   assert.equal(run.phase, 'PATCH')
@@ -945,6 +971,30 @@ test('a verification proof cannot consume its job without recording a decision',
   assert.equal(
     run.jobs.find(({ job_id: jobId }) => jobId === verificationJobId).state,
     'RUNNING',
+  )
+  assert.equal(run.findings[0].verification_status, undefined)
+})
+
+test('a provider cannot self-assign verification authority', () => {
+  let run = runToProof()
+  const candidateId = stageOne().candidate_id
+  const existenceJobId = `proof-existence:${candidateId}`
+  run = beginJob(run, existenceJobId)
+  run = applyJobResult(run, jobResult(run, existenceJobId, {
+    findings: [withExistence()],
+  }))
+  ;({ run } = advanceRun(run))
+
+  const verificationJobId = `proof-verification:${candidateId}`
+  run = beginJob(run, verificationJobId)
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, verificationJobId, {
+      findings: [staticProof({
+        verification_status: 'CONFIRMED',
+        verification_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+      })],
+    })),
+    /providers cannot supply or change .*verification_authority/,
   )
   assert.equal(run.findings[0].verification_status, undefined)
 })

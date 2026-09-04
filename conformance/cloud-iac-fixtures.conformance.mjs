@@ -40,11 +40,10 @@ function extractContinuedCommand(startsWith, label) {
 
 function resolveBash() {
   const candidates = [
-    process.env.GIT_BASH,
     process.platform === 'win32' ? String.raw`C:\Program Files\Git\bin\bash.exe` : undefined,
-    process.env.BASH,
-    'bash',
+    process.platform === 'win32' ? String.raw`C:\Program Files\Git\usr\bin\bash.exe` : undefined,
     process.platform === 'win32' ? undefined : '/bin/bash',
+    process.platform === 'win32' ? undefined : '/usr/bin/bash',
   ].filter(Boolean)
 
   for (const candidate of new Set(candidates)) {

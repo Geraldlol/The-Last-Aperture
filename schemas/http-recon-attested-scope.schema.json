@@ -54,7 +54,7 @@
           "$ref": "#/$defs/id"
         },
         "statement": {
-          "const": "I confirm that I am authorized by the asset owner to perform this exact bounded HTTP reconnaissance action."
+          "const": "I confirm that I am authorized to perform this exact bounded HTTP reconnaissance action."
         },
         "operator_id": {
           "$ref": "#/$defs/id"

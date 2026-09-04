@@ -42,6 +42,7 @@ const COMMON_PACKET_FIELDS = new Set([
   'database_conformance',
   'findings',
   'coverage',
+  'completeness_inputs',
   'candidate_ids',
 ])
 // Docker's default mask lists grow between daemon versions, so these assert the

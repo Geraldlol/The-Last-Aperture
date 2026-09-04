@@ -40,6 +40,10 @@ export async function fetchCtLogNames({
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await fetchImpl(url, {
+        // Deliberately NOT the program mandated marker. crt.sh is a third-party
+        // log, not a program asset: the marker exists to identify us to the
+        // program, and sending it here would tell an uninvolved party which
+        // program we are hunting.
         headers: { 'User-Agent': 'red-team-audit-bounty-recon/1.0' },
         signal: AbortSignal.timeout(timeoutMs),
       })

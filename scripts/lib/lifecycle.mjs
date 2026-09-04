@@ -3,8 +3,6 @@ import { isSurvivingFinding } from './findings.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { filterResolvedCoverageGaps } from './coverage-gaps.mjs'
 
-const ACTIVE_DISPOSITIONS = new Set(['queued', 'elevated'])
-
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -20,12 +18,7 @@ function stableValue(value) {
 }
 
 function activeFindings(run) {
-  return (run.findings ?? []).filter((finding) =>
-    isSurvivingFinding(finding)
-    && (
-      finding.triage_disposition === undefined
-      || ACTIVE_DISPOSITIONS.has(finding.triage_disposition)
-    ))
+  return (run.findings ?? []).filter(isSurvivingFinding)
 }
 
 function locationPath(location) {
@@ -377,15 +370,25 @@ export function compareRuns(baseline, current) {
     }
     for (const { finding, matched } of previous) {
       if (matched) continue
+      const comparableCoverage = (
+        compatibility.comparable
+        && coverageSupportsResolution(current, finding)
+      )
       results.push({
         fingerprint,
         candidate_id: finding.candidate_id,
-        state: compatibility.comparable && coverageSupportsResolution(current, finding)
-          ? 'fixed'
+        // Comparable coverage can establish only that the current provider did
+        // not return the prior semantic finding. None of the currently enrolled
+        // coverage authorities authenticates that the vulnerability is fixed.
+        state: comparableCoverage
+          ? 'claimed-fixed'
           : 'not-observed',
         finding: null,
         baseline_finding: finding,
         resolution_authority: coverageAuthorityForFinding(current, finding),
+        semantic_resolution_authority: comparableCoverage
+          ? 'UNAUTHENTICATED_COVERAGE_ABSENCE'
+          : 'NO_RESOLUTION_CLAIM',
       })
     }
   }
@@ -395,7 +398,8 @@ export function compareRuns(baseline, current) {
     ['updated', 1],
     ['unchanged', 2],
     ['not-observed', 3],
-    ['fixed', 4],
+    ['claimed-fixed', 4],
+    ['fixed', 5],
   ])
   results.sort((left, right) =>
     order.get(left.state) - order.get(right.state) ||
@@ -429,7 +433,7 @@ export function compareRuns(baseline, current) {
     comparability_reasons: compatibility.reasons,
     resolution_authority: resolutionAuthority,
     counts: Object.fromEntries(
-      ['new', 'updated', 'unchanged', 'fixed', 'not-observed']
+      ['new', 'updated', 'unchanged', 'claimed-fixed', 'fixed', 'not-observed']
         .map((state) => [state, results.filter((entry) => entry.state === state).length]),
     ),
     results,

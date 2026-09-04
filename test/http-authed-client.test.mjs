@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
 import { X509Certificate } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   createHttpAuthedHttpsTransport,
@@ -11,20 +8,18 @@ import {
 } from '../scripts/lib/http-authed-client.mjs'
 import {
   sha256Hex,
-  verifyHttpAuthedWrittenAuthorization,
+  verifyHttpAuthedAuthorization,
 } from '../scripts/lib/http-authed-contracts.mjs'
-import { writtenScope } from './helpers/http-authed-fixtures.mjs'
+import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 import { httpAuthedResponseByteBucket } from '../scripts/lib/http-authed-response-metadata.mjs'
 import { REFERENCE_TLS_CERTIFICATE } from './fixtures/reference-transparency-tls.mjs'
-import { main as httpAuthedMain } from '../scripts/http-authed.mjs'
 
-const DOCUMENT_BYTES = Buffer.from('synthetic authorization fixture')
 const NOW = new Date('2026-08-16T12:00:00.000Z')
 const CREDENTIAL = Buffer.from('synthetic-credential-value')
 const VERIFY_BEFORE_SEND = async () => {}
 
 function campaign({ method = 'PROPFIND', action = {} } = {}) {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
   if (!scope.authorization.authorized_scope.methods.includes(method)) {
     scope.authorization.authorized_scope.methods.push(method)
   }
@@ -38,21 +33,20 @@ function campaign({ method = 'PROPFIND', action = {} } = {}) {
     expected_effect: 'none',
     ...action,
   }
-  const expectedCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+  scope.requests = [{ ...candidate, sequence: 1 }]
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: DOCUMENT_BYTES,
     now: NOW,
   }).campaignGrantSha256
   return { scope, candidate, expectedCampaignGrantSha256 }
 }
 
-test('method-complete written probe reaches one injected transport without an action-count gate', async () => {
+test('method-complete operator-attested probe reaches one injected transport without an action-count gate', async () => {
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign()
   const calls = []
   const result = await dispatchHttpAuthedProbe({
     scope,
     action: candidate,
-    documentBytes: DOCUMENT_BYTES,
     expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     now: NOW,
@@ -102,15 +96,13 @@ test('JSON schema-only observation works with bearer and cookie credentials with
       max_depth: 4,
       safe_key_names: ['id', 'label', 'records'],
     }
-    const expectedCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+    const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
       scope,
-      documentBytes: DOCUMENT_BYTES,
       now: NOW,
     }).campaignGrantSha256
     const result = await dispatchHttpAuthedProbe({
       scope,
       action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: CREDENTIAL,
       now: NOW,
@@ -158,15 +150,13 @@ test('ASP.NET d JSON projection is scope-bound and retains only inner shape meta
     max_depth: 4,
     safe_key_names: ['id', 'label', 'records'],
   }
-  const expectedCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: DOCUMENT_BYTES,
     now: NOW,
   }).campaignGrantSha256
   const result = await dispatchHttpAuthedProbe({
     scope,
     action: candidate,
-    documentBytes: DOCUMENT_BYTES,
     expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     now: NOW,
@@ -206,9 +196,8 @@ test('ASP.NET d JSON projection reports a settled bounded observation failure', 
     max_depth: 4,
     safe_key_names: ['d', 'value'],
   }
-  const expectedCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: DOCUMENT_BYTES,
     now: NOW,
   }).campaignGrantSha256
 
@@ -216,7 +205,6 @@ test('ASP.NET d JSON projection reports a settled bounded observation failure', 
   const result = await dispatchHttpAuthedProbe({
     scope,
     action: candidate,
-    documentBytes: DOCUMENT_BYTES,
     expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     now: NOW,
@@ -260,15 +248,13 @@ test('claimed malformed JSON reports only bounded observation-failure telemetry'
     max_depth: 4,
     safe_key_names: ['value'],
   }
-  const observationCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+  const observationCampaignGrantSha256 = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: DOCUMENT_BYTES,
     now: NOW,
   }).campaignGrantSha256
   const result = await dispatchHttpAuthedProbe({
     scope,
     action: candidate,
-    documentBytes: DOCUMENT_BYTES,
     expectedCampaignGrantSha256: observationCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     now: NOW,
@@ -322,9 +308,8 @@ test('a downstream response observer failure remains delivery-uncertain', async 
     max_depth: 4,
     safe_key_names: ['value'],
   }
-  const expectedCampaignGrantSha256 = verifyHttpAuthedWrittenAuthorization({
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: DOCUMENT_BYTES,
     now: NOW,
   }).campaignGrantSha256
 
@@ -332,7 +317,6 @@ test('a downstream response observer failure remains delivery-uncertain', async 
     () => dispatchHttpAuthedProbe({
       scope,
       action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: CREDENTIAL,
       now: NOW,
@@ -356,24 +340,24 @@ test('a downstream response observer failure remains delivery-uncertain', async 
   )
 })
 
-test('document, campaign, and scope drift fail before the transport boundary', async () => {
+test('candidate, campaign, and operator-attested scope drift fail before the transport boundary', async () => {
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign()
+  const widenedScope = structuredClone(scope)
+  widenedScope.authorization.authorized_scope.methods.push('SEARCH')
   let calls = 0
   const transport = async () => { calls += 1 }
   const attempts = [
     {
       action: { ...candidate, method: 'SEARCH' },
-      documentBytes: DOCUMENT_BYTES,
+      expectedCampaignGrantSha256,
+    },
+    {
+      scope: widenedScope,
+      action: candidate,
       expectedCampaignGrantSha256,
     },
     {
       action: candidate,
-      documentBytes: Buffer.from('substituted authorization'),
-      expectedCampaignGrantSha256,
-    },
-    {
-      action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256: 'f'.repeat(64),
     },
   ]
@@ -388,7 +372,7 @@ test('document, campaign, and scope drift fail before the transport boundary', a
         transport,
         ...attempt,
       }),
-      /method|document|campaign|grant|digest|scope/i,
+      /method|campaign|grant|digest|scope/i,
     )
   }
   assert.equal(calls, 0)
@@ -418,7 +402,6 @@ test('credential and synthetic body bytes must match their sealed bindings', asy
     () => dispatchHttpAuthedProbe({
       scope,
       action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: Buffer.from('wrong credential'),
       requestBodyBytes: body,
@@ -432,7 +415,6 @@ test('credential and synthetic body bytes must match their sealed bindings', asy
     () => dispatchHttpAuthedProbe({
       scope,
       action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: CREDENTIAL,
       requestBodyBytes: Buffer.from('changed body'),
@@ -447,7 +429,6 @@ test('credential and synthetic body bytes must match their sealed bindings', asy
   const result = await dispatchHttpAuthedProbe({
     scope,
     action: candidate,
-    documentBytes: DOCUMENT_BYTES,
     expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     requestBodyBytes: body,
@@ -461,13 +442,17 @@ test('credential and synthetic body bytes must match their sealed bindings', asy
 })
 
 test('declared mutation actions stay out of the probe dispatcher', async () => {
-  const { scope, expectedCampaignGrantSha256 } = campaign()
+  const scope = attestedScope({ actionCount: 1 })
+  scope.credential.binding_sha256 = sha256Hex(CREDENTIAL)
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({
+    scope,
+    now: NOW,
+  }).campaignGrantSha256
   let calls = 0
   await assert.rejects(
     () => dispatchHttpAuthedProbe({
       scope,
       action: scope.requests[0],
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: CREDENTIAL,
       requestBodyBytes: Buffer.alloc(64),
@@ -487,7 +472,6 @@ test('live probe dispatch requires an immediate pre-send verifier', async () => 
     () => dispatchHttpAuthedProbe({
       scope,
       action: candidate,
-      documentBytes: DOCUMENT_BYTES,
       expectedCampaignGrantSha256,
       credentialValue: CREDENTIAL,
       now: NOW,
@@ -634,50 +618,37 @@ test('protected HTTPS transport sends every authorized non-tunneling method once
   assert.doesNotMatch(JSON.stringify(results), /secret-response-cookie|synthetic-secret|synthetic-body/)
 })
 
-test('probe-written CLI executes a verified custom method without printing sensitive values', async (t) => {
-  const { scope, candidate, expectedCampaignGrantSha256 } = campaign()
+test('operator-attested dispatcher executes a verified custom method without returning sensitive values', async () => {
   const urlMarker = 'SYNTHETIC_PATIENT_IDENTIFIER_8675309'
-  candidate.url = `https://peerstar-test.example.test/discovered/${urlMarker}?subject=${urlMarker}`
-  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-probe-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
-  const scopePath = join(directory, 'scope.json')
-  const documentPath = join(directory, 'authorization.txt')
-  const candidatePath = join(directory, 'candidate.json')
-  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  await writeFile(documentPath, DOCUMENT_BYTES)
-  await writeFile(candidatePath, JSON.stringify(candidate), 'utf8')
+  const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
+    action: {
+      url: `https://peerstar-test.example.test/discovered/${urlMarker}?subject=${urlMarker}`,
+    },
+  })
   let calls = 0
-  let output = ''
-
-  await httpAuthedMain([
-    'probe-written',
-    '--scope', scopePath,
-    '--authorization-document', documentPath,
-    '--candidate', candidatePath,
-    '--campaign-grant-sha256', expectedCampaignGrantSha256,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    '--json',
-  ], {
-    clock: () => NOW,
-    env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL.toString('utf8') },
+  const result = await dispatchHttpAuthedProbe({
+    scope,
+    action: candidate,
+    expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    now: NOW,
+    beforeSend: VERIFY_BEFORE_SEND,
     transport: async (request) => {
       await request.beforeSend()
       calls += 1
       return { status: 200, responseBytes: 42, responseHeaderNames: ['content-type'] }
     },
-    write: (text) => { output += text },
   })
 
   assert.equal(calls, 1)
-  const result = JSON.parse(output)
   assert.equal(result.action.method, 'PROPFIND')
   assert.equal(result.response.bytes, 42)
-  assert.doesNotMatch(output, /synthetic-credential|SYNTHETIC_TEST_CREDENTIAL/)
-  assert.doesNotMatch(output, new RegExp(urlMarker))
+  const serialized = JSON.stringify(result)
+  assert.doesNotMatch(serialized, /synthetic-credential|SYNTHETIC_TEST_CREDENTIAL/)
+  assert.doesNotMatch(serialized, new RegExp(urlMarker))
 })
 
-test('probe-written supports an explicitly sealed empty synthetic request body', async (t) => {
+test('operator-attested dispatcher supports an explicitly sealed empty synthetic request body', async () => {
   const emptyBody = Buffer.alloc(0)
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
     method: 'POST',
@@ -691,118 +662,76 @@ test('probe-written supports an explicitly sealed empty synthetic request body',
       },
     },
   })
-  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-empty-body-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
-  const scopePath = join(directory, 'scope.json')
-  const documentPath = join(directory, 'authorization.txt')
-  const candidatePath = join(directory, 'candidate.json')
-  const bodyPath = join(directory, 'body.bin')
-  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  await writeFile(documentPath, DOCUMENT_BYTES)
-  await writeFile(candidatePath, JSON.stringify(candidate), 'utf8')
-  await writeFile(bodyPath, emptyBody)
   let sent = 0
 
-  await httpAuthedMain([
-    'probe-written',
-    '--scope', scopePath,
-    '--authorization-document', documentPath,
-    '--candidate', candidatePath,
-    '--request-body', bodyPath,
-    '--campaign-grant-sha256', expectedCampaignGrantSha256,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    '--json',
-  ], {
-    clock: () => NOW,
-    env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL.toString('utf8') },
+  await dispatchHttpAuthedProbe({
+    scope,
+    action: candidate,
+    requestBodyBytes: emptyBody,
+    expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    now: NOW,
+    beforeSend: VERIFY_BEFORE_SEND,
     transport: async (request) => {
       await request.beforeSend()
       assert.equal(request.body.length, 0)
       sent += 1
       return { status: 204, responseBytes: 0, responseHeaderNames: [] }
     },
-    write: () => {},
   })
   assert.equal(sent, 1)
 })
 
-test('probe-written rereads the campaign grant immediately before transport send', async (t) => {
+test('operator-attested dispatcher propagates a failed authorization recheck before send', async () => {
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign()
-  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-presend-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
-  const scopePath = join(directory, 'scope.json')
-  const documentPath = join(directory, 'authorization.txt')
-  const candidatePath = join(directory, 'candidate.json')
-  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  await writeFile(documentPath, DOCUMENT_BYTES)
-  await writeFile(candidatePath, JSON.stringify(candidate), 'utf8')
+  const widened = structuredClone(scope)
+  widened.authorization.authorized_scope.methods.push('SEARCH')
   let sent = 0
 
   await assert.rejects(
-    () => httpAuthedMain([
-      'probe-written',
-      '--scope', scopePath,
-      '--authorization-document', documentPath,
-      '--candidate', candidatePath,
-      '--campaign-grant-sha256', expectedCampaignGrantSha256,
-      '--operator-id', scope.authorization.operator_id,
-      '--confirm-authorization-current',
-      '--json',
-    ], {
-      clock: () => NOW,
-      env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL.toString('utf8') },
+    () => dispatchHttpAuthedProbe({
+      scope,
+      action: candidate,
+      expectedCampaignGrantSha256,
+      credentialValue: CREDENTIAL,
+      now: NOW,
+      beforeSend: async () => {
+        const rechecked = verifyHttpAuthedAuthorization({ scope: widened, now: NOW })
+        assert.equal(rechecked.campaignGrantSha256, expectedCampaignGrantSha256)
+      },
       transport: async (request) => {
-        const widened = structuredClone(scope)
-        widened.authorization.authorized_scope.methods.push('SEARCH')
-        await writeFile(scopePath, JSON.stringify(widened), 'utf8')
         await request.beforeSend()
         sent += 1
       },
-      write: () => {},
     }),
-    /campaign|grant|digest|scope/i,
+    (error) => error.code === 'HTTP_AUTHED_BEFORE_SEND_REJECTED',
   )
   assert.equal(sent, 0)
 })
 
-test('probe-written refuses candidate drift immediately before transport send', async (t) => {
+test('operator-attested dispatcher propagates controller candidate-binding rejection before send', async () => {
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign()
-  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-candidate-presend-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
-  const scopePath = join(directory, 'scope.json')
-  const documentPath = join(directory, 'authorization.txt')
-  const candidatePath = join(directory, 'candidate.json')
-  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  await writeFile(documentPath, DOCUMENT_BYTES)
-  await writeFile(candidatePath, JSON.stringify(candidate), 'utf8')
+  const driftedCandidate = {
+    ...candidate,
+    sequence: candidate.sequence + 1,
+    url: 'https://peerstar-test.example.test/discovered/other-authorized-path',
+  }
   let sent = 0
 
   await assert.rejects(
-    () => httpAuthedMain([
-      'probe-written',
-      '--scope', scopePath,
-      '--authorization-document', documentPath,
-      '--candidate', candidatePath,
-      '--campaign-grant-sha256', expectedCampaignGrantSha256,
-      '--operator-id', scope.authorization.operator_id,
-      '--confirm-authorization-current',
-      '--json',
-    ], {
-      clock: () => NOW,
-      env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL.toString('utf8') },
+    () => dispatchHttpAuthedProbe({
+      scope,
+      action: candidate,
+      expectedCampaignGrantSha256,
+      credentialValue: CREDENTIAL,
+      now: NOW,
+      beforeSend: async () => assert.deepEqual(driftedCandidate, candidate),
       transport: async (request) => {
-        await writeFile(candidatePath, JSON.stringify({
-          ...candidate,
-          sequence: candidate.sequence + 1,
-          url: 'https://peerstar-test.example.test/discovered/other-authorized-path',
-        }), 'utf8')
         await request.beforeSend()
         sent += 1
       },
-      write: () => {},
     }),
-    /candidate|action|changed|binding/i,
+    (error) => error.code === 'HTTP_AUTHED_BEFORE_SEND_REJECTED',
   )
   assert.equal(sent, 0)
 })

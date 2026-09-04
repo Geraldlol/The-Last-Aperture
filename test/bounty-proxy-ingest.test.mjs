@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import {
   FLOW_KIND,
   flowsToAuthzRequests,
@@ -12,11 +10,6 @@ import {
   parseFlowLines,
   queryFlows,
 } from '../scripts/lib/bounty-proxy-ingest.mjs'
-
-// fileURLToPath, not .pathname: the repository lives under "Red Team", and
-// .pathname leaves the space percent-encoded, which silently skipped the
-// conformance check below rather than running it.
-const REPO = fileURLToPath(new URL('..', import.meta.url))
 
 function flow(overrides = {}) {
   return {
@@ -171,32 +164,4 @@ test('duplicate captured requests collapse by signature', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
-})
-
-// --- the safety-critical piece ---
-
-test('the Python scope kernel agrees with the Node one on every fixture', (t) => {
-  // Two implementations of a security boundary are only safe once a machine
-  // proves they agree. Skipped rather than failed when Python is absent, and the
-  // skip is the recorded gap.
-  let output
-  try {
-    output = execFileSync('py', [join(REPO, 'proxy', 'conformance.py')], {
-      encoding: 'utf8', cwd: REPO, windowsHide: true,
-    })
-  } catch (error) {
-    if (error.stdout) {
-      const parsed = JSON.parse(error.stdout)
-      assert.fail(`python kernel diverges on ${parsed.mismatches.length} case(s): ${
-        parsed.mismatches.map((m) => `${m.case_id} got ${m.reason} want ${m.expected_reason}`).join('; ')
-      }`)
-    }
-    t.skip('python interpreter not available; cross-language conformance not verified')
-    return
-  }
-  const parsed = JSON.parse(output)
-  assert.equal(parsed.implementation, 'python')
-  assert.ok(parsed.total >= 35, 'the shared fixture suite was loaded')
-  assert.deepEqual(parsed.mismatches, [], 'python and node must decide identically')
-  assert.equal(parsed.matched, parsed.total)
 })

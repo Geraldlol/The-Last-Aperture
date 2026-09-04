@@ -150,8 +150,6 @@ frameworks:
   - salesforce-secure-coding-guide
   - salesforce-lightning-web-security
   - appexchange-security-review
-  - owasp-api-top-10
-  - cwe
 severity_floor: low
 ---
 

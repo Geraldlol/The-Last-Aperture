@@ -165,11 +165,14 @@ defers:
   trust-boundary-inventory: threat-modeling
   attacker-profile-model: threat-modeling
 frameworks:
-  - nist-ssdf
-  - slsa
+  - nist-ssdf-1.1
+  - slsa-1.2
+  - openssf-osps-baseline-2026-08-28
+  - owasp-scvs-1.0
+  - owasp-asvs-5.0.0
   - cyclonedx
   - spdx
-  - owasp-top-10
+  - owasp-top-10-2025
   - cwe
 severity_floor: low
 ---
@@ -228,21 +231,33 @@ Do not raise findings on these. Where the code shows one, record it in the candi
 
 ### Frameworks this lens may and may not cite
 
-`nist-ssdf`, `slsa`, `cyclonedx`, `spdx`, `owasp-top-10`, `cwe`. Nothing else, and each only where an artifact in the checkout supports it.
+`nist-ssdf-1.1`, `slsa-1.2`, `openssf-osps-baseline-2026-08-28`, `owasp-scvs-1.0`, `cyclonedx`, `spdx`, `owasp-top-10-2025`, `cwe`. Nothing else, and each only where an artifact in a consumed evidence class supports it. This lens does not consume provider settings or deployed state; those requirements remain `UNVERIFIED` unless a separately scoped evidence adapter is used.
 
 - **NIST SSDF (SP 800-218)** — cite a practice only where the repository shows the artifact behind it. The organizational-process questions this lens inherited — "are there documented security requirements for code", "is there a threat-modeling step in the design process", "are patch SLAs documented", "is there a process for triaging reported vulnerabilities" — are **not answerable from a repository and are not findings here.** Where a report template asks for them, answer *N/A — org-level, not visible in source*. The practices that survive are the ones with files behind them: an advisory scanner and a secret scanner wired into the pipeline, a `SECURITY.md` carrying a reporting channel, provenance emission, and dependency-update automation.
-- **SLSA Build Track** — use the current Build-level terminology, never the older single 0–4 model.
+- **SLSA 1.2 Build and Source Tracks** — assess the tracks independently and use their qualified names, never the obsolete single unqualified 0–4 model.
   - **Build L0** — no provenance and no build-integrity guarantees.
   - **Build L1** — provenance exists, so the artifact can be traced to the process that built it.
   - **Build L2** — a hosted build platform emits *signed* provenance, so a consumer can validate its authenticity.
   - **Build L3** — hardened build platform: runs cannot influence each other, and signing material is kept out of user-controlled build steps.
 
-  Derive the target from the repository rather than importing a house policy: **L1** is adequate for an artifact never consumed outside the organization; **L2** is the minimum for anything published to a public registry or shipped to a customer; **L3** is the bar where a third party executes the artifact with elevated privilege or it carries regulatory weight. Say which of those the repository is, from evidence — a publish step to a public registry, a customer-facing installer, an image pushed to a public tag — and grade against that.
+  The 1.2 Source Track covers the revision before the build: **Source L1** uses version control; **Source L2** preserves change history and emits source provenance; **Source L3** continuously enforces the organization's declared technical controls; **Source L4** requires two-party review. A checkout can show version control and workflow intent, but it cannot by itself prove source-control-system enforcement, continuity, source VSAs/provenance issuance, branch protection, or non-author approval. Those require separately scoped source-control settings evidence and the applicable attestations; they cannot be claimed by this source-focused lens. Never infer Source L3/L4 from a `CODEOWNERS` file or a pull-request template.
+
+  Select the target level as an explicit engagement or organizational policy and record its rationale; do not present an invented artifact-class matrix as SLSA. The SLSA 1.2 Build Track describes Build L3 as the intended level for most software releases, while leaving adopters to choose requirements appropriate to their needs. Repository evidence such as a public-registry publish step, customer installer, or privileged image can inform that choice, but it does not silently set the target.
 - **CycloneDX / SPDX** — name the format actually produced (`*.cdx.json`, `*.spdx.json`) rather than asserting a preference between them. Executive Order 14028 (2021) is the usual reason an SBOM is contractually required; cite it as the driver, not as a control.
+- **OpenSSF OSPS Baseline 2026.08.28** — use only for an open-source project and select the maturity level from its published applicability: Level 1 for any project, Level 2 for a code project with at least two maintainers and a small consistent user base, Level 3 for a code project with a large consistent user base. Requirement identifiers such as `OSPS-BR-01.01` (untrusted CI metadata), `OSPS-BR-01.03` (untrusted code must not reach privileged assets), `OSPS-BR-06.01` (signed release or signed manifest), `OSPS-QA-02.02` (release SBOM), and `OSPS-VM-05.03` / `OSPS-VM-06.02` (policy-gated dependency and code scanning) may be cited only when applicable. Repository settings such as MFA, direct-push prevention, and required reviews remain `UNVERIFIED` in this lens and require separately scoped settings evidence.
+- **OWASP SCVS 1.0** — use as the stable component-verification baseline. It can organize component inventory, provenance, analysis, and risk-management questions, but it does not turn the existence of an SBOM or scanner into proof that a vulnerable component is reachable. Later draft material can inform a question but is not a conformance baseline for this lens.
 - **OWASP Top 10** — `A03:2025 Software Supply Chain Failures` is the mapping anchor for this domain, superseding `A08:2021 Software and Data Integrity Failures`. A category name is not a severity.
 - **CWE** — `CWE-78` (OS command injection) and `CWE-94` (code injection) for expression injection; `CWE-494` (download of code without integrity check) for unpinned fetches; `CWE-829` (inclusion of functionality from an untrusted control sphere) for unpinned refs and dependency confusion; `CWE-798` (hard-coded credentials) when routing to the crypto lens; `CWE-532` (sensitive information in a log file) for secret leakage; `CWE-1104` (use of unmaintained third-party components).
-- **Do not cite ASVS.** No requirement in this lens's inherited source is traceable to an ASVS requirement identifier.
-- **There is no "SANS Top 25" framework.** The list is MITRE's **CWE Top 25**; SANS co-branding ended after the 2011 edition and every edition since is a scripted, NVD-data-driven process. Where a template or a report names it, correct it rather than reproducing it.
+- **OWASP ASVS 5.0.0** may be cited only for its directly applicable
+  supply-chain requirements: `v5.0.0-15.1.2` for a maintained component
+  inventory/SBOM, `v5.0.0-15.2.1` for supported and remediated dependencies,
+  and `v5.0.0-15.2.4` for dependency-confusion defenses. These mappings do not
+  establish whole-standard or ASVS-level conformance.
+- **There is no "SANS Top 25" framework.** The list is MITRE's **CWE Top
+  25**; SANS co-branding ended after the 2011 edition. The 2019–2024 rankings
+  used an NVD-centered methodology; the 2025 edition moved to CVE List/CNA and
+  CISA Vulnrichment mappings with NVD cross-checking. Always name the edition
+  rather than treating one methodology or membership list as timeless.
 
 ### What cannot be determined from a repository
 

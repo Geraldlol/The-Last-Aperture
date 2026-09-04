@@ -958,11 +958,10 @@ test('a later transition cannot append a store profile without a database result
 test('run merge lineage must resolve within the topic and cannot cycle', () => {
   const survivor = confirmed()
   const merged = {
-    ...stageOne({
+    ...confirmed({
       candidate_id: 'authz-object-level:b82d1190',
       location: ['src/routes/invoice-export.ts:31'],
     }),
-    effective_severity: 'High',
     triage_disposition: 'merged',
     merged_into_candidate_id: survivor.candidate_id,
   }

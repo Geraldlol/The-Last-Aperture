@@ -1,5 +1,13 @@
 import { findingFingerprint } from './lifecycle.mjs'
-import { isSurvivingFinding } from './findings.mjs'
+import {
+  displayTriageDisposition,
+  displayVerificationStatus,
+  hasAuthenticatedTriage,
+  hasAuthenticatedVerification,
+  isSurvivingFinding,
+  triageAuthorityOf,
+  verificationAuthorityOf,
+} from './findings.mjs'
 import { evidenceConflicts } from './contracts.mjs'
 import {
   filterResolvedCoverageGaps,
@@ -47,7 +55,9 @@ const MARKDOWN_PUNCTUATION = new Set([
 // finding is if it is real. Reporting only the former tells a reader a claimed
 // Critical is moderate, when what is actually true is that it is unproven.
 function severityOf(finding) {
-  return finding.effective_severity ?? finding.claimed_impact_severity ?? 'Info'
+  return hasAuthenticatedTriage(finding)
+    ? finding.effective_severity ?? finding.claimed_impact_severity ?? 'Info'
+    : finding.claimed_impact_severity ?? finding.effective_severity ?? 'Info'
 }
 
 function claimedSeverityOf(finding) {
@@ -66,7 +76,7 @@ function sortedFindings(findings) {
 function singleLine(value, fallback = '—') {
   const normalized = String(value ?? '')
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
-    .replace(/[\u202a-\u202e\u2066-\u2069]/gu, '�')
+    .replace(/[\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/gu, '�')
     .replace(/\s+/gu, ' ')
     .trim()
   return normalized || fallback
@@ -120,7 +130,7 @@ function tableCell(value) {
 function codeBlock(value) {
   return String(value ?? '')
     .replace(/\r\n?/g, '\n')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/gu, '�')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/gu, '�')
     .split(/\r?\n/)
     .map((line) => `    ${line}`)
     .join('\n')
@@ -128,24 +138,25 @@ function codeBlock(value) {
 
 function proofStatusDetail(finding) {
   if (finding.triage_disposition === 'dropped') {
-    return `DROPPED before proof: ${finding.drop_reason ?? 'reason not recorded'}`
+    return `${hasAuthenticatedTriage(finding) ? 'DROPPED' : 'CLAIMED DROPPED'} before proof: ${finding.drop_reason ?? 'reason not recorded'}`
   }
   if (finding.triage_disposition === 'merged') {
-    return `MERGED into ${finding.merged_into_candidate_id ?? 'candidate not recorded'}`
+    return `${hasAuthenticatedTriage(finding) ? 'MERGED' : 'CLAIMED MERGED'} into ${finding.merged_into_candidate_id ?? 'candidate not recorded'}`
   }
+  const authenticated = hasAuthenticatedVerification(finding)
   if (finding.verification_status === 'CONFIRMED') {
-    return finding.post_result?.status
-      ? `CONFIRMED; proof result ${finding.post_result.status}`
-      : 'CONFIRMED'
+    return authenticated
+      ? 'CONFIRMED'
+      : 'CLAIMED CONFIRMED; semantic proof authority is not authenticated'
   }
   if (finding.verification_status === 'DISPROVED') {
     const basis = finding.disproof_basis
       ? ` (${finding.disproof_basis})`
       : ''
-    return `DISPROVED${basis}: ${finding.reason ?? 'reason not recorded'}`
+    return `${authenticated ? 'DISPROVED' : 'CLAIMED DISPROVED'}${basis}: ${finding.reason ?? 'reason not recorded'}`
   }
   if (finding.verification_status === 'NOT_REPRODUCED') {
-    return `NOT REPRODUCED: ${finding.reason ?? 'reason not recorded'}`
+    return `${authenticated ? 'NOT REPRODUCED' : 'CLAIMED NOT REPRODUCED'}: ${finding.reason ?? 'reason not recorded'}`
   }
   if (finding.verification_status === 'INCONCLUSIVE') {
     return `INCONCLUSIVE: ${finding.reason ?? 'reason not recorded'}`
@@ -156,9 +167,43 @@ function proofStatusDetail(finding) {
   return 'NOT ASSESSED'
 }
 
+function remediationDetail(finding) {
+  if (
+    finding.remediation
+    && typeof finding.remediation.status === 'string'
+    && typeof finding.remediation.detail === 'string'
+  ) {
+    return finding.remediation.status === 'FIX_VERIFIED'
+      && !hasAuthenticatedVerification(finding)
+      ? {
+          status: 'CLAIMED_FIX_VERIFIED',
+          detail: `${finding.remediation.detail}; semantic verification authority is not authenticated`,
+        }
+      : finding.remediation
+  }
+  if (finding.post_result?.status === 'passed') {
+    return {
+      status: hasAuthenticatedVerification(finding)
+        ? 'FIX_VERIFIED'
+        : 'CLAIMED_FIX_VERIFIED',
+      detail: `legacy post-result passed; regressions: ${finding.post_result.regressions}; semantic verification authority ${hasAuthenticatedVerification(finding) ? 'authenticated' : 'not authenticated'}`,
+    }
+  }
+  if (finding.post_result?.status === 'failed') {
+    return {
+      status: 'FIX_FAILED',
+      detail: `legacy post-result failed; regressions: ${finding.post_result.regressions}`,
+    }
+  }
+  return null
+}
+
 function isUnverifiedHighImpactClaim(finding) {
   return HIGH_IMPACT_SEVERITIES.has(finding.claimed_impact_severity)
-    && finding.verification_status !== 'CONFIRMED'
+    && !(
+      finding.verification_status === 'CONFIRMED'
+      && hasAuthenticatedVerification(finding)
+    )
 }
 
 // Counted by claimed impact, so the summary states the risk profile. The
@@ -181,15 +226,18 @@ function countBySeverity(findings) {
 // one of these is dropped instead of rendered.
 const CONFIDENCE_LABEL = new Map([
   ['CONFIRMED', 'confirmed'],
+  ['CLAIMED_CONFIRMED', 'claimed confirmed'],
   ['NOT_REPRODUCED', 'not reproduced'],
+  ['CLAIMED_NOT_REPRODUCED', 'claimed not reproduced'],
   ['INCONCLUSIVE', 'inconclusive'],
   ['DISPROVED', 'disproved'],
+  ['CLAIMED_DISPROVED', 'claimed disproved'],
   ['UNPROVEN', 'unproven'],
 ])
 
 function headingSeverity(finding) {
   const claimed = markdownText(claimedSeverityOf(finding))
-  const label = CONFIDENCE_LABEL.get(finding.verification_status)
+  const label = CONFIDENCE_LABEL.get(displayVerificationStatus(finding))
   return label === undefined ? claimed : `${claimed} (${label})`
 }
 
@@ -559,17 +607,17 @@ export function renderMarkdownReport(run) {
     )
   } else {
     lines.push(
-      'These are provider claims whose claimed impact is Critical or High but whose proof status is not CONFIRMED. They do not imply confirmed or effective severity.',
+      'These are provider claims whose claimed impact is Critical or High but whose semantic proof is not authenticated by a controller-owned oracle receipt. They do not imply confirmed or effective severity.',
       '',
-      '| Candidate | Claimed | Effective | Disposition | Verification | Proof tier | Status detail |',
+      '| Candidate | Claimed | Provider effective | Disposition | Verification | Proof tier | Status detail |',
       '|---|---|---|---|---|---|---|',
     )
     for (const finding of unverifiedHighImpact) {
       lines.push(
         `| ${tableCell(finding.candidate_id)} | ${tableCell(finding.claimed_impact_severity)} | ` +
         `${tableCell(finding.effective_severity ?? 'not assigned')} | ` +
-        `${tableCell(finding.triage_disposition ?? 'not triaged')} | ` +
-        `${tableCell(finding.verification_status ?? 'NOT ASSESSED')} | ` +
+        `${tableCell(displayTriageDisposition(finding) ?? 'not triaged')} | ` +
+        `${tableCell(displayVerificationStatus(finding) ?? 'NOT ASSESSED')} | ` +
         `${tableCell(finding.proof_tier ?? 'NOT ASSESSED')} | ` +
         `${tableCell(proofStatusDetail(finding))} |`,
       )
@@ -592,6 +640,7 @@ export function renderMarkdownReport(run) {
   }
 
   for (const finding of survivors) {
+    const remediation = remediationDetail(finding)
     lines.push(
       `### ${headingSeverity(finding)} — ${markdownText(finding.title)}`,
       '',
@@ -600,11 +649,18 @@ export function renderMarkdownReport(run) {
       `Location: ${(finding.location ?? []).map((location) => inlineCode(location)).join(', ')}  `,
       `Reachability: ${inlineCode(finding.reachable_from)}  `,
       `Claimed severity: ${inlineCode(finding.claimed_impact_severity)}  `,
-      `Priority (confidence-gated): ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
+      `Report priority (authenticated gates only): ${inlineCode(severityOf(finding))}  `,
+      `Provider-claimed effective severity: ${inlineCode(finding.effective_severity ?? 'not assigned')}  `,
+      `Triage disposition: ${inlineCode(displayTriageDisposition(finding) ?? 'not triaged')}  `,
+      `Triage authority: ${inlineCode(triageAuthorityOf(finding))}  `,
       `Existence: ${inlineCode(finding.existence_check?.status ?? 'NOT ASSESSED')}  `,
       `Proof tier: ${inlineCode(finding.proof_tier ?? 'NOT ASSESSED')}  `,
-      `Verification: ${inlineCode(finding.verification_status ?? 'NOT ASSESSED')}  `,
+      `Verification: ${inlineCode(displayVerificationStatus(finding) ?? 'NOT ASSESSED')}  `,
+      `Verification authority: ${inlineCode(verificationAuthorityOf(finding))}  `,
       `Proof status: ${markdownText(proofStatusDetail(finding))}`,
+      ...(remediation
+        ? [`Remediation: ${inlineCode(remediation.status)} — ${markdownText(remediation.detail)}`]
+        : []),
       '',
       markdownText(finding.impact),
       '',
@@ -994,8 +1050,8 @@ export function renderMarkdownReport(run) {
       lines.push(
         `| ${tableCell(finding.candidate_id)} | ${tableCell(finding.claimed_impact_severity)} | ` +
         `${tableCell(finding.effective_severity ?? 'not assigned')} | ` +
-        `${tableCell(finding.triage_disposition ?? 'not triaged')} | ` +
-        `${tableCell(finding.verification_status)} | ` +
+        `${tableCell(displayTriageDisposition(finding) ?? 'not triaged')} | ` +
+        `${tableCell(displayVerificationStatus(finding))} | ` +
         `${tableCell(finding.proof_tier ?? 'NOT ASSESSED')} | ` +
         `${tableCell(proofStatusDetail(finding))} | ` +
         `${tableCell(finding.merged_into_candidate_id)} |`,
@@ -1118,6 +1174,7 @@ export function renderSarif(run, options = {}) {
   const sarifResult = (finding) => {
     const fingerprint = findingFingerprint(finding)
     const lifecycle = lifecycleByFinding.get(`${fingerprint}\0${finding.candidate_id}`)
+    const remediation = remediationDetail(finding)
     const locations = (finding.location ?? [])
       .map(parseLocation)
       .filter(Boolean)
@@ -1153,8 +1210,22 @@ export function renderSarif(run, options = {}) {
         lens: finding.lens,
         claimed_impact_severity: finding.claimed_impact_severity,
         effective_severity: finding.effective_severity ?? null,
-        verification_status: finding.verification_status ?? null,
+        report_priority_severity: severityOf(finding),
+        triage_disposition: displayTriageDisposition(finding) ?? null,
+        provider_claimed_triage_disposition: finding.triage_disposition ?? null,
+        triage_authority: triageAuthorityOf(finding),
+        merged_into_candidate_id: finding.merged_into_candidate_id ?? null,
+        drop_reason: finding.drop_reason ?? null,
+        verification_status: displayVerificationStatus(finding) ?? null,
+        provider_claimed_verification_status: finding.verification_status ?? null,
+        verification_authority: verificationAuthorityOf(finding),
         proof_tier: finding.proof_tier ?? null,
+        ...(remediation
+          ? {
+              remediation_status: remediation.status,
+              remediation_detail: remediation.detail,
+            }
+          : {}),
         reachability: finding.reachable_from,
         coverage_authority: [...new Set(
           producedJobs

@@ -628,15 +628,19 @@ test('closure LENS retry records an exact Stage-1 replay without rewriting accum
     run = advanceOnce(run)
     assert.equal(run.phase, 'TRIAGE')
     let triaged = false
-    const triagedFinding = closureFinding({
+    const triagedClaim = closureFinding({
       effective_severity: 'High',
       triage_disposition: 'queued',
     })
+    const triagedFinding = {
+      ...triagedClaim,
+      triage_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+    }
     for (const job of run.jobs.filter((candidate) =>
       candidate.kind === 'TRIAGE' && candidate.closure_round === undefined)) {
       run = completeJob(run, plan, job.job_id, [], triaged
         ? {}
-        : { findings: [triagedFinding] })
+        : { findings: [triagedClaim] })
       triaged = true
     }
     assert.equal(triaged, true)
@@ -661,19 +665,23 @@ test('closure LENS retry records an exact Stage-1 replay without rewriting accum
     )
     run = advanceOnce(run)
     assert.equal(run.phase, 'PROOF')
-    const provedFinding = {
+    const provedClaim = {
       ...existenceFinding,
       effective_severity: 'Medium',
       proof_tier: 'T0',
       verification_status: 'UNPROVEN',
       blocking_reason: 'Static coverage closure cannot execute a two-tenant harness.',
     }
+    const provedFinding = {
+      ...provedClaim,
+      verification_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+    }
     run = completeJob(
       run,
       plan,
       `proof-verification:${candidateId}`,
       [],
-      { findings: [provedFinding] },
+      { findings: [provedClaim] },
     )
     run = advanceOnce(run)
     assert.equal(run.phase, 'PATCH')

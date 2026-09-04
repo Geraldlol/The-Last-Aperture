@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { isIP } from 'node:net'
+import { tmpdir } from 'node:os'
 import {
   basename,
   dirname,
@@ -23,24 +24,24 @@ import {
   assertValidHttpReconObservation,
   assertValidHttpReconRun,
   assertValidOperatorAttestedHttpReconScope,
-  buildHttpReconPlan,
   buildOperatorAttestedHttpReconPlan,
   canonicalJson,
   createOperatorAttestedHttpReconScope,
-  readAndVerifyHttpReconRoe,
   sha256Hex,
-  verifyHttpReconTargetProof,
 } from './http-recon-contracts.mjs'
 import {
-  fetchHttpsProof,
   isPublicHttpReconAddress,
   probeHttps,
 } from './http-recon-client.mjs'
+import {
+  bindPrePlanOperatorAuthorization,
+  verifyOperatorAuthorizationReceipt,
+  verifyPrePlanHttpsOperatorAuthorization,
+} from './operator-authorization.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const PROJECT_ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const RUN_FILE = 'run.json'
-const ROE_FILE = 'signed-roe.json'
 const ATTESTED_SCOPE_FILE = 'attested-scope.json'
 const EVENTS_FILE = 'events.jsonl'
 const REPORT_FILE = 'report.md'
@@ -48,10 +49,7 @@ const OBSERVATIONS_DIRECTORY = 'observations'
 const STOP_FILE = '.http-recon.stop'
 const LOCK_FILE = '.http-recon.lock'
 const MAX_RUN_BYTES = 4 * 1024 * 1024
-const MAX_ROE_BYTES = 1024 * 1024
 const MAX_ATTESTED_SCOPE_BYTES = 1024 * 1024
-const MAX_KEY_BYTES = 64 * 1024
-const MAX_AUTHORIZATION_DOCUMENT_BYTES = 16 * 1024 * 1024
 const MAX_EVENT_BYTES = 16 * 1024 * 1024
 const MAX_OBSERVATION_BYTES = 1024 * 1024
 const MAX_REPORT_BYTES = 4 * 1024 * 1024
@@ -74,12 +72,6 @@ function controllerError(code, message, options) {
 }
 
 function tlsPolicyForRun(run) {
-  if (run.authorization.mode === 'EXTERNAL_SIGNED') {
-    return {
-      mode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
-      spki_sha256: run.target.tls_spki_sha256,
-    }
-  }
   return structuredClone(run.target.tls)
 }
 
@@ -268,19 +260,9 @@ function assertReturnedTransportIdentity({
 }
 
 function unsettledPreDispatchEvent(events, actionId) {
-  const actionPreDispatch = events.find((event) =>
+  return events.find((event) =>
     event.type === 'ACTION_REQUEST_PRE_DISPATCH'
-    && event.details?.action_id === actionId)
-  if (actionPreDispatch) return actionPreDispatch
-  const proofPreDispatch = events.find((event) =>
-    event.type === 'PROOF_REQUEST_PRE_DISPATCH'
-    && event.details?.action_id === actionId)
-  if (!proofPreDispatch) return null
-  const settled = events.some((event) =>
-    event.type === 'TARGET_PROOF_VERIFIED'
-    && event.details?.action_id === actionId
-    && event.sequence > proofPreDispatch.sequence)
-  return settled ? null : proofPreDispatch
+    && event.details?.action_id === actionId) ?? null
 }
 
 function hasUnsettledPreDispatch(events, actionId) {
@@ -538,105 +520,6 @@ async function saveRun(loaded) {
   await atomicReplace(loaded.runPath, stableJson(loaded.run))
 }
 
-async function loadExternalTrust({
-  loaded,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
-  now,
-  requireCurrentValidity = true,
-}) {
-  if (
-    typeof authorizationDocumentPath !== 'string'
-    || typeof ownerPublicKeyPath !== 'string'
-  ) {
-    throw controllerError(
-      'HTTP_RECON_SIGNED_AUTHORITY_REQUIRED',
-      'externally signed runs require --authorization-document and --owner-public-key',
-    )
-  }
-  const publicKeyBytes = await readBoundedNoFollow(
-    resolve(ownerPublicKeyPath),
-    MAX_KEY_BYTES,
-    'externally pinned owner public key',
-  )
-  const authorizationDocumentBytes = await readBoundedNoFollow(
-    resolve(authorizationDocumentPath),
-    MAX_AUTHORIZATION_DOCUMENT_BYTES,
-    'external authorization document',
-  )
-  const roePath = join(loaded.directory, ROE_FILE)
-  const verified = await readAndVerifyHttpReconRoe({
-    roePath,
-    ownerPublicKeyBytes: publicKeyBytes,
-    authorizationDocumentBytes,
-    now: now(),
-    requireCurrentValidity,
-  })
-  const plan = buildHttpReconPlan(verified.roe)
-  const expected = loaded.run.authorization
-  for (const [label, actual, committed] of [
-    ['signed RoE', verified.roeSha256, expected.signed_roe_sha256],
-    ['RoE payload', verified.payloadSha256, expected.payload_sha256],
-    [
-      'authorization document',
-      verified.authorizationDocumentSha256,
-      expected.document_sha256,
-    ],
-    ['owner key', verified.ownerKeyId, expected.owner_key_id],
-    ['plan', plan.plan_sha256, loaded.run.plan_sha256],
-  ]) {
-    if (actual !== committed) {
-      throw controllerError(
-        'HTTP_RECON_TRUST_BINDING_MISMATCH',
-        `${label} does not match the hash-bound planned engagement`,
-      )
-    }
-  }
-  const immutableRunProjection = {
-    engagement_id: loaded.run.engagement_id,
-    authorization_id: loaded.run.authorization.authorization_id,
-    valid_from: loaded.run.authorization.valid_from,
-    valid_until: loaded.run.authorization.valid_until,
-    target: loaded.run.target,
-    limits: loaded.run.limits,
-    actions: loaded.run.actions.map((action) => ({
-      action_id: action.action_id,
-      sequence: action.sequence,
-      method: action.method,
-      url: action.url,
-      ...(action.request_headers === undefined
-        ? {}
-        : { request_headers: structuredClone(action.request_headers) }),
-      ...(action.response_observation === undefined
-        ? {}
-        : { response_observation: structuredClone(action.response_observation) }),
-      safe_to_get: action.safe_to_get,
-    })),
-  }
-  const signedProjection = {
-    engagement_id: verified.roe.engagement_id,
-    authorization_id: verified.roe.authorization.authorization_id,
-    valid_from: verified.roe.validity.not_before,
-    valid_until: verified.roe.validity.not_after,
-    target: verified.roe.target,
-    limits: verified.roe.limits,
-    actions: plan.actions,
-  }
-  if (canonicalJson(immutableRunProjection) !== canonicalJson(signedProjection)) {
-    throw controllerError(
-      'HTTP_RECON_IMMUTABLE_SCOPE_MISMATCH',
-      'mutable run scope, target, actions, validity, or limits differ from the signed RoE',
-    )
-  }
-  return {
-    mode: 'EXTERNAL_SIGNED',
-    ...verified,
-    plan,
-    publicKeyBytes,
-    authorizationDocumentBytes,
-  }
-}
-
 async function loadOperatorAttestedTrust({
   loaded,
   now,
@@ -716,28 +599,11 @@ async function loadOperatorAttestedTrust({
 
 async function loadAuthorizationContext({
   loaded,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
   now,
   requireCurrentValidity = true,
 }) {
-  if (loaded.run.authorization.mode === 'OPERATOR_ATTESTED') {
-    if (authorizationDocumentPath !== undefined || ownerPublicKeyPath !== undefined) {
-      throw controllerError(
-        'HTTP_RECON_AUTHORITY_MODE_CONFLICT',
-        'operator-attested runs do not accept signed-authority file options',
-      )
-    }
-    return loadOperatorAttestedTrust({
-      loaded,
-      now,
-      requireCurrentValidity,
-    })
-  }
-  return loadExternalTrust({
+  return loadOperatorAttestedTrust({
     loaded,
-    authorizationDocumentPath,
-    ownerPublicKeyPath,
     now,
     requireCurrentValidity,
   })
@@ -831,61 +697,6 @@ async function withRunLock(loaded, now, operation) {
   }
 }
 
-function initialRun({ verified, plan, now, randomBytesImpl }) {
-  const roe = verified.roe
-  const createdAt = timestamp(now)
-  return {
-    schema_version: '1.0.0',
-    kind: 'red-team-audit/http-recon-run',
-    capability_mode: 'AUTHORIZED_HTTP_RECON',
-    run_id: makeRunId(roe.engagement_id, now, randomBytesImpl),
-    engagement_id: roe.engagement_id,
-    created_at: createdAt,
-    updated_at: createdAt,
-    state: 'PLANNED',
-    authorization: {
-      mode: 'EXTERNAL_SIGNED',
-      authorization_id: roe.authorization.authorization_id,
-      signed_roe_sha256: verified.roeSha256,
-      payload_sha256: verified.payloadSha256,
-      document_sha256: verified.authorizationDocumentSha256,
-      owner_key_id: verified.ownerKeyId,
-      valid_from: roe.validity.not_before,
-      valid_until: roe.validity.not_after,
-    },
-    target: {
-      ...structuredClone(roe.target),
-    },
-    plan_sha256: plan.plan_sha256,
-    limits: structuredClone(roe.limits),
-    budget: {
-      proof_requests_used: 0,
-      probe_requests_used: 0,
-      response_bytes_used: 0,
-      started_at: null,
-      last_request_at: null,
-    },
-    target_proof: null,
-    actions: plan.actions.map((action) => ({
-      ...structuredClone(action),
-      state: 'PENDING',
-      attempt_count: 0,
-      leased_at: null,
-      sent_at: null,
-      completed_at: null,
-      observation_path: null,
-      observation_sha256: null,
-      error: null,
-    })),
-    stop: null,
-    report: null,
-    event_chain: {
-      count: 0,
-      last_sha256: ZERO_SHA256,
-    },
-  }
-}
-
 function initialOperatorAttestedRun({ scope, plan, now, randomBytesImpl }) {
   const createdAt = timestamp(now)
   return {
@@ -913,7 +724,6 @@ function initialOperatorAttestedRun({ scope, plan, now, randomBytesImpl }) {
       started_at: null,
       last_request_at: null,
     },
-    target_proof: null,
     actions: plan.actions.map((action) => ({
       ...structuredClone(action),
       state: 'PENDING',
@@ -934,74 +744,6 @@ function initialOperatorAttestedRun({ scope, plan, now, randomBytesImpl }) {
   }
 }
 
-export async function planHttpReconBundle({
-  roePath,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
-  out,
-  now = () => new Date(),
-  randomBytesImpl = randomBytes,
-}) {
-  const ownerPublicKeyBytes = await readBoundedNoFollow(
-    resolve(ownerPublicKeyPath),
-    MAX_KEY_BYTES,
-    'externally pinned owner public key',
-  )
-  const authorizationDocumentBytes = await readBoundedNoFollow(
-    resolve(authorizationDocumentPath),
-    MAX_AUTHORIZATION_DOCUMENT_BYTES,
-    'external authorization document',
-  )
-  const verified = await readAndVerifyHttpReconRoe({
-    roePath: resolve(roePath),
-    ownerPublicKeyBytes,
-    authorizationDocumentBytes,
-    now: now(),
-  })
-  const plan = buildHttpReconPlan(verified.roe)
-  const run = initialRun({ verified, plan, now, randomBytesImpl })
-  assertValidHttpReconRun(run)
-
-  const { target, staging } = await createStagingDirectory(out)
-  try {
-    await mkdir(join(staging, OBSERVATIONS_DIRECTORY), {
-      recursive: false,
-      mode: 0o700,
-    })
-    const roeBytes = await readBoundedNoFollow(resolve(roePath), MAX_ROE_BYTES, 'signed RoE')
-    if (sha256Hex(roeBytes) !== verified.roeSha256) {
-      throw controllerError(
-        'HTTP_RECON_ROE_CHANGED',
-        'signed RoE changed after authorization verification',
-      )
-    }
-    await exclusiveWrite(join(staging, ROE_FILE), roeBytes.toString('utf8'))
-    await exclusiveWrite(join(staging, EVENTS_FILE), '')
-    const staged = {
-      directory: staging,
-      runPath: join(staging, RUN_FILE),
-      run,
-    }
-    await appendEvent(staged, 'PLAN_CREATED', {
-      authorization_mode: 'EXTERNAL_SIGNED',
-      plan_sha256: run.plan_sha256,
-      tls_policy: tlsPolicyForRun(run),
-      action_count: run.actions.length,
-      signed_roe_sha256: run.authorization.signed_roe_sha256,
-      authorization_document_sha256: run.authorization.document_sha256,
-      owner_key_id: run.authorization.owner_key_id,
-      network_activity: false,
-    }, now)
-    assertValidHttpReconRun(run)
-    await exclusiveWrite(join(staging, RUN_FILE), stableJson(run))
-    await rename(staging, target)
-    return { directory: target, run }
-  } catch (error) {
-    await rm(staging, { recursive: true, force: true })
-    throw error
-  }
-}
-
 export async function planOperatorAttestedHttpReconBundle({
   targetUrl,
   tlsSpkiSha256,
@@ -1013,38 +755,62 @@ export async function planOperatorAttestedHttpReconBundle({
   authorizedBy,
   authorizationReference,
   environment = 'production',
-  attestationConfirmed = false,
+  operatorAuthorization,
   out,
   now = () => new Date(),
   randomBytesImpl = randomBytes,
 }) {
-  if (attestationConfirmed !== true) {
+  if (operatorAuthorization === undefined) {
     throw controllerError(
       'HTTP_RECON_AUTHORIZATION_ATTESTATION_REQUIRED',
-      'operator-attested planning requires an explicit authorization confirmation',
+      'operator-attested planning requires one operator authorization declaration',
     )
   }
-  const normalizedOperatorId = normalizeOperatorId(operatorId)
+  const ingressTime = timestamp(now)
+  const declaration = verifyPrePlanHttpsOperatorAuthorization({
+    value: operatorAuthorization,
+    targetUrl,
+    now: ingressTime,
+    fail: (code, message) => {
+      throw controllerError(`HTTP_RECON_OPERATOR_AUTHORIZATION_${code}`, message)
+    },
+  })
+  if (operatorId !== undefined && operatorId !== declaration.operator_id) {
+    throw controllerError(
+      'HTTP_RECON_OPERATOR_AUTHORIZATION_IDENTITY_MISMATCH',
+      'operator authorization identity differs from the planning identity',
+    )
+  }
+  if (
+    authorizationReference !== undefined
+    && authorizationReference !== declaration.authorization_reference
+  ) {
+    throw controllerError(
+      'HTTP_RECON_OPERATOR_AUTHORIZATION_REFERENCE_MISMATCH',
+      'operator authorization reference differs from the planning reference',
+    )
+  }
+  const normalizedOperatorId = normalizeOperatorId(declaration.operator_id)
   const normalizedAuthorizedBy = normalizeHumanReason(
-    authorizedBy,
+    authorizedBy ?? declaration.operator_id,
     'authorized_by',
     3,
   )
   const normalizedReference = normalizeHumanReason(
-    authorizationReference,
+    declaration.authorization_reference,
     'authorization_reference',
   )
-  const attestedAt = timestamp(now)
+  const attestedAt = declaration.declared_at
   const ids = makeOperatorAttestedIds({
     operatorId: normalizedOperatorId,
-    targetUrl,
+    targetUrl: declaration.target.url,
     at: attestedAt,
     randomBytesImpl,
   })
   const scope = createOperatorAttestedHttpReconScope({
     engagementId: ids.engagementId,
     authorizationId: ids.authorizationId,
-    targetUrl,
+    targetUrl: declaration.target.url,
     tlsSpkiSha256,
     method,
     safeToGet,
@@ -1062,6 +828,11 @@ export async function planOperatorAttestedHttpReconBundle({
     plan,
     now,
     randomBytesImpl,
+  })
+  const operatorAuthorizationReceipt = bindPrePlanOperatorAuthorization({
+    value: declaration,
+    planSha256: run.plan_sha256,
+    scopeRevisionSha256: run.authorization.scope_sha256,
   })
   assertValidHttpReconRun(run)
 
@@ -1087,16 +858,131 @@ export async function planOperatorAttestedHttpReconBundle({
       action_count: 1,
       operator_id: run.authorization.operator_id,
       independently_verified: false,
+      operator_authorization_receipt: operatorAuthorizationReceipt,
       network_activity: false,
     }, now)
     assertValidHttpReconRun(run)
     await exclusiveWrite(join(staging, RUN_FILE), stableJson(run))
     await rename(staging, target)
-    return { directory: target, run, scope }
+    return {
+      directory: target,
+      run,
+      scope,
+      operator_authorization_receipt: operatorAuthorizationReceipt,
+    }
   } catch (error) {
     await rm(staging, { recursive: true, force: true })
     throw error
   }
+}
+
+export async function goOperatorAttestedHttpRecon({
+  targetUrl,
+  tlsSpkiSha256,
+  method = 'HEAD',
+  safeToGet = false,
+  requestHeaderProfile,
+  responseObservationProfile,
+  operatorId,
+  authorizedBy,
+  authorizationReference,
+  environment = 'production',
+  operatorAuthorization,
+  rationale,
+  out,
+  now = () => new Date(),
+  randomBytesImpl = randomBytes,
+  planImpl = planOperatorAttestedHttpReconBundle,
+  runImpl = runHttpReconAction,
+  finalizeImpl = finalizeHttpReconBundle,
+  onPlanned,
+}) {
+  const directedAt = timestamp(now)
+  if (operatorAuthorization === undefined) {
+    throw controllerError(
+      'HTTP_RECON_LIVE_EXECUTION_AUTHORIZATION_REQUIRED',
+      'target-and-go requires one operator authorization declaration',
+    )
+  }
+  const declaration = verifyPrePlanHttpsOperatorAuthorization({
+    value: operatorAuthorization,
+    targetUrl,
+    now: directedAt,
+    fail: (code, message) => {
+      throw controllerError(`HTTP_RECON_OPERATOR_AUTHORIZATION_${code}`, message)
+    },
+  })
+  if (operatorId !== undefined && operatorId !== declaration.operator_id) {
+    throw controllerError(
+      'HTTP_RECON_OPERATOR_AUTHORIZATION_IDENTITY_MISMATCH',
+      'operator authorization identity differs from the execution identity',
+    )
+  }
+  if (
+    typeof planImpl !== 'function'
+    || typeof runImpl !== 'function'
+    || typeof finalizeImpl !== 'function'
+    || (onPlanned !== undefined && typeof onPlanned !== 'function')
+  ) {
+    throw controllerError(
+      'HTTP_RECON_GO_CONTROLLER_INVALID',
+      'target-and-go requires controller-owned plan, execution, and finalization functions',
+    )
+  }
+  const effectiveAuthorizedBy = authorizedBy ?? 'Local operator directive'
+  const effectiveRationale = rationale ?? 'Operator directed target-and-go execution.'
+  const output = typeof out === 'string' && out.trim() !== ''
+    ? out
+    : join(tmpdir(), `red-team-audit-http-recon-${randomBytesImpl(8).toString('hex')}`)
+  const planned = await planImpl({
+    targetUrl,
+    tlsSpkiSha256,
+    method,
+    safeToGet,
+    requestHeaderProfile,
+    responseObservationProfile,
+    operatorId: declaration.operator_id,
+    authorizedBy: effectiveAuthorizedBy,
+    authorizationReference: declaration.authorization_reference,
+    environment,
+    operatorAuthorization: declaration,
+    out: output,
+    now,
+    randomBytesImpl,
+  })
+  if (!Array.isArray(planned?.run?.actions) || planned.run.actions.length !== 1) {
+    throw controllerError(
+      'HTTP_RECON_GO_PLAN_INVALID',
+      'target-and-go requires exactly one controller-sealed action',
+    )
+  }
+  await onPlanned?.(Object.freeze({
+    bundle: planned.directory,
+    operator_id: declaration.operator_id,
+    action_id: planned.run.actions[0].action_id,
+  }))
+  const executed = await runImpl({
+    bundle: planned.directory,
+    actionId: planned.run.actions[0].action_id,
+    operatorId: declaration.operator_id,
+    rationale: effectiveRationale,
+    authorizationConfirmed: true,
+    now,
+  })
+  const finalized = await finalizeImpl({
+    bundle: planned.directory,
+    now,
+  })
+  return Object.freeze({
+    action: executed.action,
+    bundle: planned.directory,
+    engagement_id: finalized.run.engagement_id,
+    ...(planned.operator_authorization_receipt === undefined
+      ? {}
+      : { operator_authorization_receipt: planned.operator_authorization_receipt }),
+    report: finalized.reportPath,
+    state: finalized.run.state,
+  })
 }
 
 function assertActionWindow(run, now) {
@@ -1187,8 +1073,6 @@ function assertRunnableState(run) {
 
 export async function nextHttpReconAction({
   bundle,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
   now = () => new Date(),
 }) {
   const loaded = await loadRun(bundle)
@@ -1196,8 +1080,6 @@ export async function nextHttpReconAction({
   assertActionWindow(loaded.run, now)
   const trust = await loadAuthorizationContext({
     loaded,
-    authorizationDocumentPath,
-    ownerPublicKeyPath,
     now,
   })
   await verifyExistingEvidence({ loaded, trust })
@@ -1284,15 +1166,6 @@ function startStopWatcher(directory, abortController, intervalMs = 100) {
 }
 
 function enforceRateAndBudgets(run, now) {
-  if (
-    run.authorization.mode === 'EXTERNAL_SIGNED'
-    && run.budget.proof_requests_used >= run.limits.max_target_proof_requests
-  ) {
-    throw controllerError(
-      'HTTP_RECON_TARGET_PROOF_BUDGET_EXHAUSTED',
-      'authorized target-proof request budget is exhausted',
-    )
-  }
   if (run.budget.probe_requests_used >= run.limits.max_probe_requests) {
     throw controllerError(
       'HTTP_RECON_REQUEST_BUDGET_EXHAUSTED',
@@ -1390,24 +1263,14 @@ function normalizeTransportObservation({
       'transport TLS evidence does not match the sealed verification policy',
     )
   }
-  const authority = run.authorization.mode === 'OPERATOR_ATTESTED'
-    ? {
-        mode: 'OPERATOR_ATTESTED',
-        authorization_id: run.authorization.authorization_id,
-        operator_id: run.authorization.operator_id,
-        scope_sha256: run.authorization.scope_sha256,
-        plan_sha256: run.plan_sha256,
-        target_proof_sha256: null,
-        independently_verified: false,
-      }
-    : {
-        mode: 'EXTERNAL_SIGNED',
-        authorization_id: run.authorization.authorization_id,
-        authorization_document_sha256: run.authorization.document_sha256,
-        owner_key_id: run.authorization.owner_key_id,
-        plan_sha256: run.plan_sha256,
-        target_proof_sha256: run.target_proof.proof_sha256,
-      }
+  const authority = {
+    mode: 'OPERATOR_ATTESTED',
+    authorization_id: run.authorization.authorization_id,
+    operator_id: run.authorization.operator_id,
+    scope_sha256: run.authorization.scope_sha256,
+    plan_sha256: run.plan_sha256,
+    independently_verified: false,
+  }
   const expectedResponseObservation = action.response_observation ?? null
   const observedResponseObservation = transport.response_observation ?? null
   if (
@@ -1522,6 +1385,12 @@ async function commitTransportObservation({
   return observation
 }
 
+function responseStopReason(stopCondition) {
+  return stopCondition === null
+    ? null
+    : `${stopCondition.code}: ${stopCondition.message}`
+}
+
 async function markStopped(
   loaded,
   marker,
@@ -1613,127 +1482,13 @@ async function terminalizeInterruptedAction(loaded, now, priorEvents = []) {
   return action
 }
 
-async function verifyLiveTargetProof({
-  loaded,
-  actionId,
-  trust,
-  abortSignal,
-  beforeSend,
-  now,
-  fetchProofImpl,
-  clientDependencies,
-  getExpectedTransportIdentity,
-  onTransportSettled,
-}) {
-  const proofStartedAt = timestamp(now)
-  const remainingBytes = loaded.run.limits.max_aggregate_response_bytes
-    - loaded.run.budget.response_bytes_used
-  if (remainingBytes < 1) {
-    throw controllerError(
-      'HTTP_RECON_BYTE_BUDGET_EXHAUSTED',
-      'no aggregate response-byte budget remains for target proof',
-    )
-  }
-  const proofByteLimit = Math.min(
-    loaded.run.limits.max_target_proof_response_bytes,
-    remainingBytes,
-  )
-  const response = await fetchProofImpl({
-    url: loaded.run.target.proof.url,
-    method: 'GET',
-    tlsVerificationMode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
-    tlsSpkiSha256: loaded.run.target.tls_spki_sha256,
-    timeoutMs: loaded.run.limits.request_timeout_ms,
-    maxResponseBytes: proofByteLimit,
-    maxProofBodyBytes: proofByteLimit,
-    signal: abortSignal,
-    beforeSend,
-    dependencies: clientDependencies,
-  })
-  const expectedTransportIdentity = getExpectedTransportIdentity?.() ?? null
-  const returnedTransportIdentity = assertReturnedTransportIdentity({
-    run: loaded.run,
-    url: loaded.run.target.proof.url,
-    transport: response,
-    expectedIdentity: expectedTransportIdentity,
-    code: 'HTTP_RECON_PROOF_TRANSPORT_IDENTITY_CHANGED',
-    message: 'target-proof transport identity changed after durable pre-dispatch recording',
-  })
-  onTransportSettled?.(returnedTransportIdentity)
-  loaded.run.budget.proof_requests_used += 1
-  loaded.run.budget.response_bytes_used += response.body.size
-  loaded.run.budget.last_request_at = timestamp(now)
-  const contentTypes = response.response_headers
-    .filter(({ name }) => name === 'content-type')
-    .map(({ value }) => value.toLowerCase())
-  if (
-    response.status !== 200
-    || response.body.truncated
-    || contentTypes.length !== 1
-    || !/^application\/json(?:\s*;|$)/.test(contentTypes[0])
-  ) {
-    throw controllerError(
-      'HTTP_RECON_TARGET_PROOF_RESPONSE_INVALID',
-      'live target-control proof must be one complete HTTP 200 application/json response',
-    )
-  }
-  let proof
-  try {
-    proof = JSON.parse(response.body.bytes.toString('utf8'))
-  } catch (error) {
-    throw controllerError(
-      'HTTP_RECON_TARGET_PROOF_JSON_INVALID',
-      `live target-control proof is not valid JSON: ${error.message}`,
-      { cause: error },
-    )
-  }
-  const verifiedProof = verifyHttpReconTargetProof({
-    proof,
-    roe: trust.roe,
-    planSha256: loaded.run.plan_sha256,
-    ownerPublicKeyBytes: trust.publicKeyBytes,
-    now: now(),
-  })
-  if (verifiedProof.revoked === true || verifiedProof.status === 'REVOKED') {
-    throw controllerError(
-      'HTTP_RECON_AUTHORIZATION_REVOKED',
-      'live target-control proof marks this authorization revoked',
-    )
-  }
-  loaded.run.target_proof = {
-    proof: structuredClone(proof),
-    verified_at: timestamp(now),
-    proof_sha256: sha256Hex(canonicalJson(proof)),
-    expires_at: proof.expires_at,
-    dns_sha256: response.dns.answer_sha256,
-    resolved_ip: response.dns.selected_ip,
-    peer_spki_sha256: response.tls.spki_sha256,
-    response_bytes: response.body.size,
-    request_started_at: proofStartedAt,
-  }
-  await appendEvent(loaded, 'TARGET_PROOF_VERIFIED', {
-    action_id: actionId,
-    proof: structuredClone(proof),
-    proof_sha256: loaded.run.target_proof.proof_sha256,
-    expires_at: loaded.run.target_proof.expires_at,
-    dns_sha256: loaded.run.target_proof.dns_sha256,
-    response_bytes: loaded.run.target_proof.response_bytes,
-    transport_identity: returnedTransportIdentity,
-  }, now)
-  await saveRun(loaded)
-  return response
-}
-
 export async function runHttpReconAction({
   bundle,
   actionId,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
   operatorId,
   rationale,
   authorizationConfirmed = false,
   now = () => new Date(),
-  fetchProofImpl = fetchHttpsProof,
   probeImpl = probeHttps,
   clientDependencies,
   stopPollIntervalMs = 100,
@@ -1749,26 +1504,18 @@ export async function runHttpReconAction({
     enforceRateAndBudgets(loaded.run, now)
     const trust = await loadAuthorizationContext({
       loaded,
-      authorizationDocumentPath,
-      ownerPublicKeyPath,
       now,
     })
     await verifyExistingEvidence({ loaded, trust })
     const normalizedOperatorId = normalizeOperatorId(operatorId)
     const normalizedRationale = normalizeHumanReason(rationale, 'rationale')
-    if (
-      trust.mode === 'OPERATOR_ATTESTED'
-      && normalizedOperatorId !== loaded.run.authorization.operator_id
-    ) {
+    if (normalizedOperatorId !== loaded.run.authorization.operator_id) {
       throw controllerError(
         'HTTP_RECON_ATTESTING_OPERATOR_MISMATCH',
         'operator-attested execution must use the operator identity that created the sealed attestation',
       )
     }
-    if (
-      trust.mode === 'OPERATOR_ATTESTED'
-      && authorizationConfirmed !== true
-    ) {
+    if (authorizationConfirmed !== true) {
       throw controllerError(
         'HTTP_RECON_CURRENT_AUTHORIZATION_CONFIRMATION_REQUIRED',
         'operator-attested execution requires confirmation that authorization is still current',
@@ -1816,8 +1563,7 @@ export async function runHttpReconAction({
       rationale: normalizedRationale,
       authorization_mode: trust.mode,
       tls_policy: tlsPolicyForRun(loaded.run),
-      current_authorization_confirmed:
-        trust.mode === 'OPERATOR_ATTESTED' ? true : null,
+      current_authorization_confirmed: true,
       budget_before: structuredClone(loaded.run.budget),
     }, now)
     await saveRun(loaded)
@@ -1828,11 +1574,8 @@ export async function runHttpReconAction({
       abortController,
       stopPollIntervalMs,
     )
-    let currentPhase = trust.mode === 'EXTERNAL_SIGNED' ? 'PROOF' : 'ACTION'
+    const currentPhase = 'ACTION'
     let sentRecorded = false
-    let proofRequestOutstanding = false
-    let proofRequestDispatchedAt = null
-    let proofPreDispatchIdentity = null
     let actionPreDispatchIdentity = null
     let actionStartedAt = null
     const beforeSend = async ({ url, method, request_headers: requestHeaders, dns, tls }) => {
@@ -1842,15 +1585,9 @@ export async function runHttpReconAction({
         abortController.abort(new Error(currentMarker.reason))
         throw controllerError('HTTP_RECON_STOP_REQUESTED', currentMarker.reason)
       }
-      const expectedMethod = currentPhase === 'PROOF'
-        ? loaded.run.target.proof?.method
-        : action.method
-      const expectedUrl = currentPhase === 'PROOF'
-        ? loaded.run.target.proof?.url
-        : action.url
-      const expectedRequestHeaders = currentPhase === 'ACTION'
-        ? (action.request_headers ?? null)
-        : null
+      const expectedMethod = action.method
+      const expectedUrl = action.url
+      const expectedRequestHeaders = action.request_headers ?? null
       if (
         method !== expectedMethod
         || url !== expectedUrl
@@ -1867,76 +1604,29 @@ export async function runHttpReconAction({
         dns,
         tls,
       )
-      if (currentPhase === 'ACTION') {
-        action.state = 'SENT'
-        action.sent_at = timestamp(now)
-        await saveRun(loaded)
-      }
-      await appendEvent(loaded, `${currentPhase}_REQUEST_PRE_DISPATCH`, {
+      action.state = 'SENT'
+      action.sent_at = timestamp(now)
+      await saveRun(loaded)
+      await appendEvent(loaded, 'ACTION_REQUEST_PRE_DISPATCH', {
         action_id: action.action_id,
         method,
         url,
         request_headers: requestHeaders ?? null,
-        response_observation: currentPhase === 'ACTION'
-          ? (action.response_observation ?? null)
-          : null,
+        response_observation: action.response_observation ?? null,
         transport_identity: transportIdentity,
       }, now)
-      if (currentPhase === 'ACTION') {
-        actionPreDispatchIdentity = transportIdentity
-        sentRecorded = true
-      } else {
-        proofPreDispatchIdentity = transportIdentity
-        proofRequestOutstanding = true
-        proofRequestDispatchedAt = timestamp(now)
-      }
+      actionPreDispatchIdentity = transportIdentity
+      sentRecorded = true
       await saveRun(loaded)
     }
 
     try {
-      let expectedDnsSha256
-      if (trust.mode === 'EXTERNAL_SIGNED') {
-        const proofResponse = await verifyLiveTargetProof({
-          loaded,
-          actionId: action.action_id,
-          trust,
-          abortSignal: abortController.signal,
-          beforeSend,
-          now,
-          fetchProofImpl,
-          clientDependencies,
-          getExpectedTransportIdentity: () => proofPreDispatchIdentity,
-          onTransportSettled: () => {
-            proofRequestOutstanding = false
-          },
-        })
-        if (
-          loaded.run.target_proof.dns_sha256 !== proofResponse.dns.answer_sha256
-          || proofResponse.tls.spki_sha256 !== loaded.run.target.tls_spki_sha256
-        ) {
-          throw controllerError(
-            'HTTP_RECON_TARGET_IDENTITY_CHANGED',
-            'target identity changed during live proof verification',
-          )
-        }
-        if (
-          loaded.run.budget.response_bytes_used
-          >= loaded.run.limits.max_aggregate_response_bytes
-        ) {
-          throw controllerError(
-            'HTTP_RECON_BYTE_BUDGET_EXHAUSTED',
-            'target proof exhausted the aggregate response-byte budget',
-          )
-        }
-        expectedDnsSha256 = loaded.run.target_proof.dns_sha256
-      }
       await waitForRequestInterval(
         loaded.run,
         now,
         abortController.signal,
         delayImpl,
       )
-      currentPhase = 'ACTION'
       actionStartedAt = timestamp(now)
       const transport = await probeImpl({
         url: action.url,
@@ -1951,7 +1641,6 @@ export async function runHttpReconAction({
           loaded.run.limits.max_aggregate_response_bytes
             - loaded.run.budget.response_bytes_used,
         ),
-        expectedDnsSha256,
         signal: abortController.signal,
         beforeSend,
         dependencies: clientDependencies,
@@ -1973,9 +1662,7 @@ export async function runHttpReconAction({
         completedAt,
         now,
       })
-      const stopReason = observation.stop_condition
-        ? `${observation.stop_condition.code}: ${observation.stop_condition.message}`
-        : null
+      const stopReason = responseStopReason(observation.stop_condition)
       if (stopReason) {
         await markStopped(loaded, null, stopReason, now)
       } else {
@@ -2016,10 +1703,11 @@ export async function runHttpReconAction({
             now,
             stopCondition: stopReason,
           })
+          const committedStopReason = responseStopReason(observation.stop_condition)
           await markStopped(
             loaded,
             currentMarker,
-            currentMarker?.reason ?? `transport stop condition: ${stopReason}`,
+            currentMarker?.reason ?? committedStopReason,
             now,
           )
           return {
@@ -2030,15 +1718,11 @@ export async function runHttpReconAction({
           }
         }
       }
-      if (currentPhase === 'PROOF' && error.result) {
-        proofRequestOutstanding = false
-      }
       const requestMayHaveBeenSent = sentRecorded
-        || proofRequestOutstanding
         || error.request_may_have_been_sent === true
       action.state = requestMayHaveBeenSent ? 'DELIVERY_AMBIGUOUS' : 'FAILED'
       if (requestMayHaveBeenSent && action.sent_at === null) {
-        action.sent_at = proofRequestDispatchedAt ?? action.leased_at
+        action.sent_at = action.leased_at
       }
       action.completed_at = timestamp(now)
       action.error = {
@@ -2108,38 +1792,23 @@ async function loadObservations(loaded) {
 
 export function renderHttpReconReport({ run, observations }) {
   const coverage = reportCoverage(run)
-  const operatorAttested = run.authorization.mode === 'OPERATOR_ATTESTED'
-  const authorityLines = operatorAttested
-    ? [
-        '- Authorization mode: `OPERATOR_ATTESTED`',
-        `- Declaring operator: \`${run.authorization.operator_id}\``,
-        `- Declared authorizer: ${run.authorization.authorized_by}`,
-        `- Authorization reference: ${run.authorization.authorization_reference}`,
-        `- Locally sealed scope SHA-256: \`${run.authorization.scope_sha256}\``,
-        '- Independently verified owner authorization: **no**',
-      ]
-    : [
-        '- Authorization mode: `EXTERNAL_SIGNED`',
-        `- Authorization document SHA-256: \`${run.authorization.document_sha256}\``,
-        `- Externally pinned owner key: \`${run.authorization.owner_key_id}\``,
-      ]
-  const completionBoundary = operatorAttested
-    ? 'Completion means only that the locally hash-bound HTTP request denominator ran within the operator-attested scope.'
-    : 'Completion means only that the hash-bound HTTP request denominator ran within the signed Rules of Engagement.'
-  const authorityBoundary = operatorAttested
-    ? 'No signed RoE, authorization document, independently pinned owner key, ownership proof, or live machine-revocation signal was supplied or verified. Authorization is an operator declaration only; the controller does not independently establish asset ownership, legal authority, or whether permission remains current.'
-    : 'A valid signature proves possession of the externally pinned key, and the target proof demonstrates technical control at the observed endpoint; neither by itself proves legal authority or ownership.'
-  const boundaryLabel = operatorAttested
-    ? 'Operator-attested external HTTP reconnaissance only.'
-    : 'Authorized external HTTP reconnaissance only.'
+  const authorityLines = [
+    '- Authorization mode: `OPERATOR_ATTESTED`',
+    `- Declaring operator: \`${run.authorization.operator_id}\``,
+    `- Declared authorizer: ${run.authorization.authorized_by}`,
+    `- Authorization reference: ${run.authorization.authorization_reference}`,
+    `- Locally sealed scope SHA-256: \`${run.authorization.scope_sha256}\``,
+    '- Authorization source: operator declaration',
+  ]
+  const completionBoundary = 'Completion means only that the locally hash-bound HTTP request denominator ran within the operator-attested scope.'
+  const authorityBoundary = 'Authorization is an operator declaration; the controller records the statement and exact scope without independently deciding legal authority.'
+  const boundaryLabel = 'Operator-attested external HTTP reconnaissance only.'
   const tlsPolicy = tlsPolicyForRun(run)
   const tlsPolicyLine = tlsPolicy.mode === 'PKIX_HOSTNAME'
     ? '- TLS verification policy: runtime-configured CA trust and hostname validation; no advance SPKI pin'
     : `- TLS verification policy: runtime-configured CA trust, hostname validation, and SPKI pin \`${tlsPolicy.spki_sha256}\``
   const lines = [
-    operatorAttested
-      ? '# Operator-attested external HTTP reconnaissance'
-      : '# Authorized external HTTP reconnaissance',
+    '# Operator-attested external HTTP reconnaissance',
     '',
     `- Engagement: \`${run.engagement_id}\``,
     `- Run: \`${run.run_id}\``,
@@ -2213,8 +1882,6 @@ export function renderHttpReconReport({ run, observations }) {
 
 export async function finalizeHttpReconBundle({
   bundle,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
   now = () => new Date(),
 }) {
   const loaded = await loadRun(bundle)
@@ -2223,8 +1890,6 @@ export async function finalizeHttpReconBundle({
     loaded.run = refreshed.run
     const trust = await loadAuthorizationContext({
       loaded,
-      authorizationDocumentPath,
-      ownerPublicKeyPath,
       now,
       requireCurrentValidity: false,
     })
@@ -2290,21 +1955,11 @@ export async function finalizeHttpReconBundle({
     }
     if (
       loaded.run.state === 'PROBE_PLAN_COMPLETE'
-      && (
-        evidence.observations.length !== loaded.run.actions.length
-        || (
-          trust.mode === 'EXTERNAL_SIGNED'
-          && evidence.proofByAction.size !== loaded.run.actions.length
-        )
-        || (
-          trust.mode === 'OPERATOR_ATTESTED'
-          && evidence.proofByAction.size !== 0
-        )
-      )
+      && evidence.observations.length !== loaded.run.actions.length
     ) {
       throw controllerError(
         'HTTP_RECON_COMPLETE_DENOMINATOR_MISMATCH',
-        'complete state requires one observation per action and signed-mode proof evidence',
+        'complete state requires one observation per action',
       )
     }
     const observations = evidence.observations
@@ -2474,21 +2129,6 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
       ) {
         throw eventTailError('ACTION_LEASED tail does not match durable run state')
       }
-    } else if (event.type === 'PROOF_REQUEST_PRE_DISPATCH') {
-      if (
-        trust.mode !== 'EXTERNAL_SIGNED'
-        || !action
-        || action.state !== 'LEASED'
-        || event.details?.method !== 'GET'
-        || event.details?.url !== run.target.proof?.url
-      ) {
-        throw eventTailError('proof pre-dispatch tail is outside signed scope')
-      }
-      assertRecordedTransportIdentity(
-        run,
-        run.target.proof.url,
-        event.details?.transport_identity,
-      )
     } else if (event.type === 'ACTION_REQUEST_PRE_DISPATCH') {
       if (
         !action
@@ -2507,43 +2147,6 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         action.url,
         event.details?.transport_identity,
       )
-    } else if (event.type === 'TARGET_PROOF_VERIFIED') {
-      const proofPreDispatch = [...rootedEvents, ...applied].findLast(
-        (candidate) => candidate.type === 'PROOF_REQUEST_PRE_DISPATCH'
-          && candidate.details?.action_id === event.details?.action_id,
-      )
-      const proof = event.details?.proof
-      const identity = event.details?.transport_identity
-      if (
-        trust.mode !== 'EXTERNAL_SIGNED'
-        || !action
-        || action.state !== 'LEASED'
-        || !proofPreDispatch
-        || !proof
-        || event.details?.proof_sha256 !== sha256Hex(canonicalJson(proof))
-        || event.details?.expires_at !== proof.expires_at
-        || !Number.isSafeInteger(event.details?.response_bytes)
-        || event.details.response_bytes < 1
-        || canonicalJson(identity)
-          !== canonicalJson(proofPreDispatch.details?.transport_identity)
-      ) {
-        throw eventTailError('verified-proof tail is incomplete or unbound')
-      }
-      assertRecordedTransportIdentity(run, run.target.proof.url, identity)
-      run.target_proof = {
-        proof: structuredClone(proof),
-        verified_at: event.at,
-        request_started_at: proofPreDispatch.at,
-        proof_sha256: event.details.proof_sha256,
-        expires_at: proof.expires_at,
-        dns_sha256: identity.dns_sha256,
-        resolved_ip: identity.resolved_ip,
-        peer_spki_sha256: identity.peer_spki_sha256,
-        response_bytes: event.details.response_bytes,
-      }
-      run.budget.proof_requests_used += 1
-      run.budget.response_bytes_used += event.details.response_bytes
-      run.budget.last_request_at = event.at
     } else if (event.type === 'ACTION_COMMITTED') {
       if (
         !action
@@ -2564,6 +2167,8 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         || observationArtifact.value?.action_id !== action.action_id
         || canonicalJson(event.details?.response_observation ?? null)
           !== canonicalJson(action.response_observation ?? null)
+        || canonicalJson(event.details?.stop_condition ?? null)
+          !== canonicalJson(observationArtifact.value?.stop_condition ?? null)
         || !responseObservationMatchesAction(observationArtifact.value, action)
       ) {
         throw eventTailError('committed-action tail lacks its exact observation')
@@ -2587,6 +2192,15 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
       action.observation_sha256 = event.details.observation_sha256
       action.error = null
       run.budget = expectedBudget
+      if (observationArtifact.value.stop_condition !== null) {
+        run.state = 'STOPPED'
+        run.stop = {
+          requested_at: event.at,
+          observed_at: event.at,
+          operator_id: 'controller',
+          reason: responseStopReason(observationArtifact.value.stop_condition),
+        }
+      }
     } else if (
       event.type === 'ACTION_DELIVERY_AMBIGUOUS'
       || event.type === 'ACTION_FAILED'
@@ -2733,6 +2347,31 @@ async function verifyExistingEvidence({
       'event history does not begin with the sealed plan commitment',
     )
   }
+  if (loaded.run.authorization.mode === 'OPERATOR_ATTESTED') {
+    const receipt = verifyOperatorAuthorizationReceipt({
+      value: events[0]?.details?.operator_authorization_receipt,
+      planSha256: loaded.run.plan_sha256,
+      scopeRevisionSha256: loaded.run.authorization.scope_sha256,
+      target: {
+        kind: 'https_url',
+        url: loaded.run.actions[0]?.url,
+      },
+      fail: (code, message) => {
+        throw controllerError(`HTTP_RECON_OPERATOR_AUTHORIZATION_${code}`, message)
+      },
+    })
+    if (
+      receipt.operator_id !== loaded.run.authorization.operator_id
+      || receipt.declared_at !== loaded.run.authorization.attested_at
+      || receipt.authorization_reference
+        !== loaded.run.authorization.authorization_reference
+    ) {
+      throw controllerError(
+        'HTTP_RECON_OPERATOR_AUTHORIZATION_RECEIPT_INVALID',
+        'operator authorization receipt does not bind the sealed authorization identity',
+      )
+    }
+  }
   if (forDispatch && events.some(({ type }) => type === 'RUN_FINALIZED')) {
     throw controllerError(
       'HTTP_RECON_ALREADY_FINALIZED',
@@ -2750,15 +2389,27 @@ async function verifyExistingEvidence({
   const actionById = new Map(
     loaded.run.actions.map((action) => [action.action_id, action]),
   )
-  const proofByAction = new Map()
-  const proofPreDispatchByAction = new Map()
-  const proofVerifiedEventByAction = new Map()
   const leasedByAction = new Map()
   const preDispatchByAction = new Map()
   const committedByAction = new Map()
   const dispatchedActions = new Set()
-  const dispatchedProofs = new Set()
+  const allowedEventTypes = new Set([
+    'PLAN_CREATED',
+    'ACTION_LEASED',
+    'ACTION_REQUEST_PRE_DISPATCH',
+    'ACTION_COMMITTED',
+    'ACTION_DELIVERY_AMBIGUOUS',
+    'ACTION_FAILED',
+    'STOP_CONFIRMED',
+    'RUN_FINALIZED',
+  ])
   for (const event of events) {
+    if (!allowedEventTypes.has(event.type)) {
+      throw controllerError(
+        'HTTP_RECON_EVENT_TYPE_INVALID',
+        `event ${event.sequence} has an unsupported type`,
+      )
+    }
     const eventActionId = event.details?.action_id
     if (eventActionId !== null && eventActionId !== undefined) {
       if (!planActionIds.has(eventActionId)) {
@@ -2770,11 +2421,8 @@ async function verifyExistingEvidence({
     }
     if (event.type === 'ACTION_LEASED') {
       const plannedAction = actionById.get(eventActionId)
-      const attestedLeaseValid = trust.mode !== 'OPERATOR_ATTESTED'
-        || (
-          event.details?.current_authorization_confirmed === true
-          && event.details?.operator_id === loaded.run.authorization.operator_id
-        )
+      const attestedLeaseValid = event.details?.current_authorization_confirmed === true
+        && event.details?.operator_id === loaded.run.authorization.operator_id
       if (
         leasedByAction.has(eventActionId)
         || event.details?.authorization_mode !== trust.mode
@@ -2805,10 +2453,6 @@ async function verifyExistingEvidence({
           !== canonicalJson(plannedAction?.request_headers ?? null)
         || canonicalJson(event.details?.response_observation ?? null)
           !== canonicalJson(plannedAction?.response_observation ?? null)
-        || (
-          trust.mode === 'EXTERNAL_SIGNED'
-          && !proofByAction.has(eventActionId)
-        )
       ) {
         throw controllerError(
           'HTTP_RECON_ACTION_PRE_DISPATCH_INVALID',
@@ -2822,65 +2466,6 @@ async function verifyExistingEvidence({
       )
       preDispatchByAction.set(eventActionId, event)
       dispatchedActions.add(eventActionId)
-    }
-    if (event.type === 'PROOF_REQUEST_PRE_DISPATCH') {
-      const lease = leasedByAction.get(eventActionId)
-      if (
-        trust.mode !== 'EXTERNAL_SIGNED'
-        || proofPreDispatchByAction.has(eventActionId)
-        || event.details?.method !== 'GET'
-        || event.details?.url !== loaded.run.target.proof?.url
-        || lease === undefined
-        || lease.sequence >= event.sequence
-      ) {
-        throw controllerError(
-          'HTTP_RECON_PROOF_PRE_DISPATCH_INVALID',
-          `proof pre-dispatch event ${event.sequence} is duplicated or outside the signed target-proof scope`,
-        )
-      }
-      assertRecordedTransportIdentity(
-        loaded.run,
-        loaded.run.target.proof.url,
-        event.details?.transport_identity,
-      )
-      proofPreDispatchByAction.set(eventActionId, event)
-      dispatchedProofs.add(eventActionId)
-    }
-    if (event.type === 'TARGET_PROOF_VERIFIED') {
-      if (trust.mode !== 'EXTERNAL_SIGNED') {
-        throw controllerError(
-          'HTTP_RECON_UNEXPECTED_TARGET_PROOF',
-          'operator-attested evidence cannot contain target-proof events',
-        )
-      }
-      if (
-        proofByAction.has(eventActionId)
-        || !proofPreDispatchByAction.has(eventActionId)
-        || !event.details?.proof
-        || sha256Hex(canonicalJson(event.details.proof)) !== event.details.proof_sha256
-        || event.details?.dns_sha256
-          !== event.details?.transport_identity?.dns_sha256
-        || canonicalJson(event.details?.transport_identity)
-          !== canonicalJson(
-            proofPreDispatchByAction.get(eventActionId)?.details
-              ?.transport_identity,
-          )
-        || proofPreDispatchByAction.get(eventActionId).sequence >= event.sequence
-      ) {
-        throw controllerError(
-          'HTTP_RECON_TARGET_PROOF_HISTORY_INVALID',
-          `target proof event ${event.sequence} is duplicated or malformed`,
-        )
-      }
-      verifyHttpReconTargetProof({
-        proof: event.details.proof,
-        roe: trust.roe,
-        planSha256: loaded.run.plan_sha256,
-        ownerPublicKeyBytes: trust.publicKeyBytes,
-        now: new Date(event.at),
-      })
-      proofByAction.set(eventActionId, event.details.proof_sha256)
-      proofVerifiedEventByAction.set(eventActionId, event)
     }
     if (event.type === 'ACTION_COMMITTED') {
       if (committedByAction.has(eventActionId)) {
@@ -2900,15 +2485,6 @@ async function verifyExistingEvidence({
       )
     }
   }
-  for (const actionId of dispatchedProofs) {
-    if (forDispatch && !proofVerifiedEventByAction.has(actionId)) {
-      throw controllerError(
-        'HTTP_RECON_PRIOR_DELIVERY_UNCERTAIN',
-        `target-proof request for ${actionId} has pre-dispatch evidence without a verified response`,
-      )
-    }
-  }
-
   const observations = await loadObservations(loaded)
   const observationByAction = new Map(
     observations.map((observation) => [observation.action_id, observation]),
@@ -2918,28 +2494,14 @@ async function verifyExistingEvidence({
     const commit = committedByAction.get(action.action_id)
     const lease = leasedByAction.get(action.action_id)
     const preDispatch = preDispatchByAction.get(action.action_id)
-    const proofPreDispatch = proofPreDispatchByAction.get(action.action_id)
-    const proofVerified = proofVerifiedEventByAction.get(action.action_id)
-    const authorityMatches = trust.mode === 'EXTERNAL_SIGNED'
-      ? observation?.authority?.mode === 'EXTERNAL_SIGNED'
-        && observation.authority.authorization_id
-          === loaded.run.authorization.authorization_id
-        && observation.authority.authorization_document_sha256
-          === loaded.run.authorization.document_sha256
-        && observation.authority.owner_key_id
-          === loaded.run.authorization.owner_key_id
-        && observation.authority.plan_sha256 === loaded.run.plan_sha256
-        && observation.authority.target_proof_sha256
-          === proofByAction.get(action.action_id)
-      : observation?.authority?.mode === 'OPERATOR_ATTESTED'
-        && observation.authority.authorization_id
-          === loaded.run.authorization.authorization_id
-        && observation.authority.operator_id
-          === loaded.run.authorization.operator_id
-        && observation.authority.target_proof_sha256 === null
-        && observation.authority.scope_sha256
-          === loaded.run.authorization.scope_sha256
-        && observation.authority.plan_sha256 === loaded.run.plan_sha256
+    const authorityMatches = observation?.authority?.mode === 'OPERATOR_ATTESTED'
+      && observation.authority.authorization_id
+        === loaded.run.authorization.authorization_id
+      && observation.authority.operator_id
+        === loaded.run.authorization.operator_id
+      && observation.authority.scope_sha256
+        === loaded.run.authorization.scope_sha256
+      && observation.authority.plan_sha256 === loaded.run.plan_sha256
     const observationMatchesAction = observation !== undefined
       && observation.run_id === loaded.run.run_id
       && observation.engagement_id === loaded.run.engagement_id
@@ -2959,16 +2521,6 @@ async function verifyExistingEvidence({
         || !preDispatch
         || lease.sequence >= commit.sequence
         || preDispatch.sequence >= commit.sequence
-        || (
-          trust.mode === 'EXTERNAL_SIGNED'
-          && (
-            !proofPreDispatch
-            || !proofVerified
-            || lease.sequence >= proofPreDispatch.sequence
-            || proofPreDispatch.sequence >= proofVerified.sequence
-            || proofVerified.sequence >= preDispatch.sequence
-          )
-        )
         || commit.details.observation_sha256 !== action.observation_sha256
         || commit.details.observation_path !== action.observation_path
         || commit.details.status_code !== observation.status_code
@@ -2982,7 +2534,7 @@ async function verifyExistingEvidence({
       ) {
         throw controllerError(
           'HTTP_RECON_COMMITTED_EVIDENCE_MISMATCH',
-          `committed action ${action.action_id} lacks matching proof, event, or observation evidence`,
+          `committed action ${action.action_id} lacks matching event or observation evidence`,
         )
       }
     } else if (observation || commit) {
@@ -2998,60 +2550,17 @@ async function verifyExistingEvidence({
       'probe request counter does not match committed observations',
     )
   }
-  if (loaded.run.budget.proof_requests_used < proofByAction.size) {
-    throw controllerError(
-      'HTTP_RECON_PROOF_BUDGET_MISMATCH',
-      'target-proof counter is lower than verified proof evidence',
-    )
-  }
-  if (
-    trust.mode === 'EXTERNAL_SIGNED'
-    && proofByAction.size > 0
-    && loaded.run.target_proof === null
-  ) {
-    throw controllerError(
-      'HTTP_RECON_TARGET_PROOF_RECEIPT_MISSING',
-      'signed proof evidence requires its correlated target-proof receipt',
-    )
-  }
-  if (trust.mode === 'EXTERNAL_SIGNED' && loaded.run.target_proof !== null) {
-    const receiptEvent = [...proofVerifiedEventByAction.values()]
-      .filter((event) =>
-        event.details?.proof_sha256 === loaded.run.target_proof.proof_sha256)
-      .sort((left, right) => right.sequence - left.sequence)[0]
-    const identity = receiptEvent?.details?.transport_identity
-    if (
-      receiptEvent === undefined
-      || loaded.run.target_proof.dns_sha256 !== identity?.dns_sha256
-      || loaded.run.target_proof.resolved_ip !== identity?.resolved_ip
-      || loaded.run.target_proof.peer_spki_sha256 !== identity?.peer_spki_sha256
-    ) {
-      throw controllerError(
-        'HTTP_RECON_TARGET_PROOF_RECEIPT_IDENTITY_MISMATCH',
-        'target-proof receipt does not match its verified pre-dispatch transport identity',
-      )
-    }
-  }
-  if (
-    trust.mode === 'OPERATOR_ATTESTED'
-    && (
-      proofByAction.size !== 0
-      || loaded.run.budget.proof_requests_used !== 0
-      || loaded.run.target_proof !== null
-    )
-  ) {
+  if (loaded.run.budget.proof_requests_used !== 0) {
     throw controllerError(
       'HTTP_RECON_ATTESTED_PROOF_STATE_INVALID',
-      'operator-attested evidence must not contain target-proof state',
+      'operator-attested evidence must not contain target-proof budget use',
     )
   }
-  return { events, observations, proofByAction, ...recovery }
+  return { events, observations, ...recovery }
 }
 
 export async function validateHttpReconBundle({
   bundle,
-  authorizationDocumentPath,
-  ownerPublicKeyPath,
   now = () => new Date(),
 }) {
   const path = resolveBundle(bundle).directory
@@ -3061,8 +2570,6 @@ export async function validateHttpReconBundle({
     loaded = await loadRun(bundle)
     const trust = await loadAuthorizationContext({
       loaded,
-      authorizationDocumentPath,
-      ownerPublicKeyPath,
       now,
       requireCurrentValidity: false,
     })
@@ -3074,34 +2581,12 @@ export async function validateHttpReconBundle({
     const observations = evidence.observations
     if (
       loaded.run.state === 'PROBE_PLAN_COMPLETE'
-      && (
-        observations.length !== loaded.run.actions.length
-        || (
-          trust.mode === 'EXTERNAL_SIGNED'
-          && evidence.proofByAction.size !== loaded.run.actions.length
-        )
-        || (
-          trust.mode === 'OPERATOR_ATTESTED'
-          && evidence.proofByAction.size !== 0
-        )
-      )
+      && observations.length !== loaded.run.actions.length
     ) {
       throw controllerError(
         'HTTP_RECON_COMPLETE_DENOMINATOR_MISMATCH',
-        'complete state requires one observation per action and signed-mode proof evidence',
+        'complete state requires one observation per action',
       )
-    }
-    if (loaded.run.target_proof) {
-      const proofFile = loaded.run.target_proof.proof
-      if (proofFile) {
-        verifyHttpReconTargetProof({
-          proof: proofFile,
-          roe: trust.roe,
-          planSha256: loaded.run.plan_sha256,
-          ownerPublicKeyBytes: trust.publicKeyBytes,
-          now: new Date(loaded.run.target_proof.verified_at),
-        })
-      }
     }
     if (loaded.run.report) {
       const report = await readBoundedNoFollow(
@@ -3155,7 +2640,6 @@ export async function httpReconReportPath(bundle) {
 
 export const httpReconControllerConstants = Object.freeze({
   RUN_FILE,
-  ROE_FILE,
   ATTESTED_SCOPE_FILE,
   EVENTS_FILE,
   REPORT_FILE,

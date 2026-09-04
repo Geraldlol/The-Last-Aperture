@@ -13,6 +13,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'n
 import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mjs'
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { assertValidCompletenessInputs } from './contracts.mjs'
 import { buildEvidenceCoverage } from './evidence-coverage.mjs'
 import { readEvidenceIndex } from './evidence-packet.mjs'
 import {
@@ -46,6 +47,12 @@ import { PLATFORM_VERSION } from './version.mjs'
 export { PLATFORM_VERSION }
 export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
+
+const UNAVAILABLE_COMPLETENESS_INPUTS = Object.freeze({
+  schema_version: '1.0.0',
+  high_value_flows: null,
+  selected_framework_requirements: null,
+})
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -178,7 +185,35 @@ function normalizedCoveragePolicy({
   }
 }
 
-function planCoverage(inventory, activation, policy, databaseDiscovery) {
+export function normalizeCompletenessInputs(value) {
+  const normalized = structuredClone(
+    value === undefined ? UNAVAILABLE_COMPLETENESS_INPUTS : value,
+  )
+  assertValidCompletenessInputs(normalized)
+  if (Array.isArray(normalized.high_value_flows)) {
+    for (const flow of normalized.high_value_flows) {
+      flow.entry_points.sort((left, right) => compareCanonicalStrings(left, right))
+    }
+    normalized.high_value_flows.sort((left, right) =>
+      compareCanonicalStrings(left.flow_id, right.flow_id))
+  }
+  if (Array.isArray(normalized.selected_framework_requirements)) {
+    normalized.selected_framework_requirements.sort((left, right) =>
+      compareCanonicalStrings(left.framework_id, right.framework_id)
+      || compareCanonicalStrings(left.version, right.version)
+      || compareCanonicalStrings(left.profile, right.profile)
+      || compareCanonicalStrings(left.requirement_id, right.requirement_id))
+  }
+  return normalized
+}
+
+function planCoverage(
+  inventory,
+  activation,
+  policy,
+  databaseDiscovery,
+  completenessInputs,
+) {
   const gaps = []
   for (const path of activation.coverage.unassigned_text_files) {
     gaps.push({ area: path, reason: 'text input matched no domain lens' })
@@ -258,6 +293,7 @@ function planCoverage(inventory, activation, policy, databaseDiscovery) {
     lenses: [...rowsByLens.values()],
     gaps,
     denominators: buildCategoryDenominators(records),
+    completeness_inputs: structuredClone(completenessInputs),
     shards: activation.jobs
       .filter((job) => job.phase === 'fanout' && job.activated && job.shard)
       .map((job) => ({
@@ -358,7 +394,7 @@ function inventoryErrors(inventory) {
   }))
 }
 
-function jobSidecar(job, repositoryRoot) {
+function jobSidecar(job, repositoryRoot, completenessInputs) {
   const jobId = activationJobId(job)
   const kind = job.kind ?? (
     job.phase === 'fanout'
@@ -399,6 +435,9 @@ function jobSidecar(job, repositoryRoot) {
               ?? [],
         }
       : {}),
+    ...(kind === 'COMPLETENESS'
+      ? { completeness_inputs: structuredClone(completenessInputs) }
+      : {}),
     owned_topics: job.owned_topics,
     known_topics: job.known_topics,
     trust_boundary: {
@@ -424,6 +463,7 @@ export async function createRunPlan(options) {
       ?? DEFAULT_CLOSURE_MAX_ROUNDS,
     databaseConformanceEvidence,
     evidenceBundles = [],
+    completenessInputs,
   } = options
   if (!targetRoot) throw new Error('targetRoot is required')
 
@@ -523,6 +563,8 @@ export async function createRunPlan(options) {
   const databaseConformance = databaseConformanceEvidence
     ? structuredClone(databaseConformanceEvidence)
     : null
+  const normalizedCompleteness = normalizeCompletenessInputs(completenessInputs)
+  const completenessInputsContent = stableJson(normalizedCompleteness)
   const providerPolicy = providerPolicyProjection(
     effectivePolicy,
     policyDigest,
@@ -543,6 +585,10 @@ export async function createRunPlan(options) {
     {
       path: 'controls/database-discovery.json',
       bytes: Buffer.from(databaseDiscoveryContent, 'utf8'),
+    },
+    {
+      path: 'controls/completeness-inputs.json',
+      bytes: Buffer.from(completenessInputsContent, 'utf8'),
     },
     ...(databaseConformance
       ? [{
@@ -571,6 +617,7 @@ export async function createRunPlan(options) {
     activation,
     coveragePolicy,
     databaseDiscovery,
+    normalizedCompleteness,
   )
   const planMaterial = {
     schema_version: RUN_SCHEMA_VERSION,
@@ -587,6 +634,7 @@ export async function createRunPlan(options) {
     coverage_policy: coveragePolicy,
     database_discovery_digest: databaseDiscovery.digest,
     evidence_coverage_sha256: sha256(stableJson(evidenceCoverage, 0)),
+    completeness_inputs_sha256: sha256(stableJson(normalizedCompleteness, 0)),
     ...(databaseConformance
       ? {
           database_conformance_sha256: sha256(
@@ -598,7 +646,8 @@ export async function createRunPlan(options) {
     ...(sourceSnapshotMaterial
       ? { source_snapshot_sha256: sourceSnapshotMaterial.descriptor.root_sha256 }
       : {}),
-    jobs: plannedJobs.map((job) => jobSidecar(job, inventory.root)),
+    jobs: plannedJobs.map((job) =>
+      jobSidecar(job, inventory.root, normalizedCompleteness)),
   }
   const planDigest = sha256(stableJson(planMaterial, 0))
   const runId = createRunId(timestamp, planDigest)
@@ -669,12 +718,14 @@ export async function createRunPlan(options) {
     ...(databaseConformance
       ? { databaseConformanceEvidence: databaseConformance }
       : {}),
+    completenessInputs: normalizedCompleteness,
     lensPack,
     sealedSnapshots: {
       control: controlSnapshot,
       ...(sourceSnapshot ? { source: sourceSnapshot } : {}),
     },
-    jobSidecars: plannedJobs.map((job) => jobSidecar(job, inventory.root)),
+    jobSidecars: plannedJobs.map((job) =>
+      jobSidecar(job, inventory.root, normalizedCompleteness)),
   }
 }
 

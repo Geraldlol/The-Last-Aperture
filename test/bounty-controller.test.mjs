@@ -30,6 +30,7 @@ function planOptions(dir, policyPath) {
     policyUrl: 'https://yeswehack.com/programs/acme-public',
     operatorId: 'operator-1',
     authorizedBy: 'ACME via YesWeHack program policy',
+    requiredUserAgent: 'BugBounty-acme',
     allowSpecs: ['*.acme.example'],
     denySpecs: ['legacy.acme.example'],
     permissions: {

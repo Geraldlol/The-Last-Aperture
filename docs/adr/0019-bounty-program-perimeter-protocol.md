@@ -4,6 +4,15 @@ Status: Accepted
 
 Date: 2026-08-21
 
+> **Current-release safety amendment (2026-09-03):** the live capabilities
+> described in this historical decision are not exposed by the product CLI.
+> Recon execution, authenticated replay, scanning, OOB operations, and all proxy
+> capture/query/import commands fail closed pending migration to the detached
+> signed-plan controller in ADR 0020. No loadable mitmproxy addon ships. The pure
+> scope kernels, planners, historical-import libraries, and fixture helpers remain
+> only as offline/reference components. Where this ADR says a phase is "built" or
+> a socket opens, read it as the original architecture, not a current capability.
+
 ## Context
 
 `http-recon-v1` seals exactly one URL, defaults to `HEAD`, and refuses body,
@@ -28,21 +37,22 @@ A third protocol, `bounty-v1`, seals a **predicate** rather than an action.
 
 `plan` digests a program policy snapshot into `policy_snapshot_sha256` and seals
 mode `PROGRAM_POLICY_SEALED`: platform, program handle, scope rules, validity
-window, and permissions including an `intensity` tier. Inside that perimeter,
-requests are unceremonious and unlimited. Outside it, nothing is sent.
+window, and permissions including an `intensity` tier. The original design made
+requests inside that perimeter low-ceremony; the current release does not treat
+the perimeter alone as action approval and exposes no live request path.
 
 The ceremony gradient inverts relative to `http-authed-v1`: expensive to
 authorize once per program, free per request thereafter.
 
-Every egress path in the protocol passes one pure decision function
-(`scripts/lib/bounty-scope-kernel.mjs`) before a socket opens. The interception
-proxy enforces the same perimeter through a Python port
-(`proxy/bounty_scope_kernel.py`) whose decisions are proven identical against a
-shared fixture suite.
+The original design required every egress path to pass one pure decision
+function (`scripts/lib/bounty-scope-kernel.mjs`) before a socket opened. The
+current release retains the Node/Python scope kernels and proves their decisions
+identical against a shared fixture suite, but exposes no egress path and ships no
+interception-proxy addon.
 
-Phases, all built: perimeter sealing, recon, proxy capture, authorization
-grinding with horizontal IDOR, a narrow scanner, the intensity dial, report
-drafting, and an out-of-band interaction channel.
+Offline/reference components exist for perimeter sealing, historical capture
+ingestion, authorization analysis, scan planning, report drafting, and OOB
+contracts. Their former live entry points are disabled as described above.
 
 ## Invariants
 
@@ -112,10 +122,9 @@ because submitting unproven observations destroys the researcher signal that
 earns private invites. Severity is a suggestion with per-metric justification,
 never an assertion.
 
-Two capabilities are intentionally left to the operator. Installing mitmproxy's
-root certificate into a trust store is a security decision belonging to whoever
-owns the machine. Submitting a report is a human act; nothing is sent
-automatically.
+Submitting a report remains a human act; nothing is sent automatically. The
+current release has no mitmproxy addon and therefore no certificate-installation
+workflow.
 
 Remaining known limits: no stateful multi-step authorization flows, no automatic
 session refresh (an expired credential surfaces as uniform `ACCESS_DENIED`, which

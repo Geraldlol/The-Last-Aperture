@@ -1,6 +1,6 @@
 ---
 name: red-team-audit
-description: Run evidence-first repository audits or separately authorized HTTPS reconnaissance and authenticated campaigns through Red Team Audit controllers. Use for security reviews, audits, scans, threat models, red-team or HIPAA/PHI reviews, and code ready to commit, merge, deploy, or ship. Do not use for ordinary writing or debugging.
+description: Run evidence-first repository audits and controller-bounded HTTPS reconnaissance or fixed authenticated campaigns while keeping generic live execution fail-closed. Use for security reviews, audits, scans, threat models, fuzzing, vulnerability proof, red-team or HIPAA/PHI reviews, and code ready to commit, merge, deploy, or ship. Do not use for ordinary writing or debugging.
 ---
 
 # Red Team Audit Compatibility Entry Point
@@ -18,15 +18,24 @@ If the canonical skill is missing or unreadable, stop and report that the audit
 cannot start. Do not improvise an alternate audit, issue a clearance, or
 remediate the target.
 
-The repository workflow remains static and read-only by default. It enters
-through the executable controller's `plan`, `next`, `ingest`, `finalize`, and
-`validate` commands; never patch the target or execute its code in the live
-repository. External work uses only the canonical skill's separate controllers:
-`audit:http-recon` for credential-free bounded observation, or
-`audit:http-authed` for lower-assurance `OPERATOR_ATTESTED_AUTHED` declarations
-or document-bound `WRITTEN_AUTHORIZATION_AUTHED` campaigns under ADRs 0017 and
-0016. Attested mode records the operator's claim; it does not verify vendor or
-program permission, ownership, legal authority, scope coverage, or revocation.
-This shim cannot authorize a URL, widen either protocol, or merge external work
-with repository coverage. Deliver only controller-validated artifacts and
-preserve every gap and nonclaim.
+The repository workflow remains static and read-only by default. For a local
+repository, an operator's `go` directive starts a static `plan`; the agent must
+continue through `next`, scoped analysis and `ingest`, then `finalize` and
+`validate` rather than stopping at `PLANNED`. Never patch the target or execute
+its code in the live repository.
+
+For external work, the operator phrase `target <HTTPS URL> and go` is sufficient
+authority to launch one exact, bounded live HTTP-recon action through the public
+controller. The fixed, already-sealed `http-authed` `campaign-attested` route is
+also active; invoking it launches that sealed campaign without asking the
+operator to repeat confirmation flags. Even a
+single action uses a campaign ledger; standalone probe dispatch is not public.
+These routes do not create repository coverage or proof.
+
+Generic live/L3 adversarial execution, provider/remote execution, `run-proof`,
+bounty/OOB execution, and evidence acquisition remain unavailable. The
+canonical skill defines the complete boundary, including target-bound Break
+Their Bones semantics and inert scope expansion. This shim cannot widen a
+target, activate a disabled protocol, or merge external work with repository
+coverage. Deliver only controller-validated artifacts and preserve every gap
+and nonclaim.

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-recon-run.schema.json",
   "title": "Red Team Audit authorized HTTP reconnaissance run",
-  "description": "The bounded controller state for one externally authorized HTTP reconnaissance plan.",
+  "description": "The bounded controller state for one operator-attested HTTP reconnaissance plan.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,6 @@
     "plan_sha256",
     "limits",
     "budget",
-    "target_proof",
     "actions",
     "stop",
     "report",
@@ -71,16 +70,6 @@
     },
     "budget": {
       "$ref": "#/$defs/budget"
-    },
-    "target_proof": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "$ref": "#/$defs/targetProofReceipt"
-        }
-      ]
     },
     "actions": {
       "type": "array",
@@ -171,55 +160,7 @@
       "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
     },
     "authorization": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/externalSignedAuthorization"
-        },
-        {
-          "$ref": "#/$defs/operatorAttestedAuthorization"
-        }
-      ]
-    },
-    "externalSignedAuthorization": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "mode",
-        "authorization_id",
-        "signed_roe_sha256",
-        "payload_sha256",
-        "document_sha256",
-        "owner_key_id",
-        "valid_from",
-        "valid_until"
-      ],
-      "properties": {
-        "mode": {
-          "const": "EXTERNAL_SIGNED"
-        },
-        "authorization_id": {
-          "$ref": "#/$defs/id"
-        },
-        "signed_roe_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "payload_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "document_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "owner_key_id": {
-          "type": "string",
-          "pattern": "^ed25519:[a-f0-9]{64}$"
-        },
-        "valid_from": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "valid_until": {
-          "$ref": "#/$defs/timestamp"
-        }
-      }
+      "$ref": "#/$defs/operatorAttestedAuthorization"
     },
     "operatorAttestedAuthorization": {
       "type": "object",
@@ -260,7 +201,7 @@
           "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
         },
         "statement": {
-          "const": "I confirm that I am authorized by the asset owner to perform this exact bounded HTTP reconnaissance action."
+          "const": "I confirm that I am authorized to perform this exact bounded HTTP reconnaissance action."
         },
         "attested_at": {
           "$ref": "#/$defs/timestamp"
@@ -280,42 +221,14 @@
       }
     },
     "target": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/externalSignedTarget"
-        },
-        {
-          "$ref": "#/$defs/operatorAttestedTarget"
-        }
-      ]
-    },
-    "externalSignedTarget": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "origin",
-        "tls_spki_sha256",
-        "proof"
-      ],
-      "properties": {
-        "origin": {
-          "$ref": "#/$defs/httpsUrl"
-        },
-        "tls_spki_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "proof": {
-          "$ref": "#/$defs/proofDescriptor"
-        }
-      }
+      "$ref": "#/$defs/operatorAttestedTarget"
     },
     "operatorAttestedTarget": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "origin",
-        "tls",
-        "proof"
+        "tls"
       ],
       "properties": {
         "origin": {
@@ -323,9 +236,6 @@
         },
         "tls": {
           "$ref": "#/$defs/tlsPolicy"
-        },
-        "proof": {
-          "type": "null"
         }
       }
     },
@@ -360,32 +270,6 @@
           }
         }
       ]
-    },
-    "proofDescriptor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "method",
-        "url",
-        "challenge_nonce",
-        "max_age_ms"
-      ],
-      "properties": {
-        "method": {
-          "const": "GET"
-        },
-        "url": {
-          "$ref": "#/$defs/httpsUrl"
-        },
-        "challenge_nonce": {
-          "$ref": "#/$defs/sha256"
-        },
-        "max_age_ms": {
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 300000
-        }
-      }
     },
     "limits": {
       "type": "object",
@@ -771,55 +655,6 @@
         },
         "last_sha256": {
           "$ref": "#/$defs/sha256"
-        }
-      }
-    },
-    "targetProofReceipt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "verified_at",
-        "request_started_at",
-        "expires_at",
-        "proof_sha256",
-        "proof",
-        "dns_sha256",
-        "resolved_ip",
-        "peer_spki_sha256",
-        "response_bytes"
-      ],
-      "properties": {
-        "verified_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "request_started_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "expires_at": {
-          "$ref": "#/$defs/timestamp"
-        },
-        "proof_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "proof": {
-          "$ref": "https://red-team-audit.dev/schemas/http-recon-target-proof.schema.json"
-        },
-        "dns_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "resolved_ip": {
-          "type": "string",
-          "minLength": 3,
-          "maxLength": 45,
-          "pattern": "^[0-9A-Fa-f:.]+$"
-        },
-        "peer_spki_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "response_bytes": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65536
         }
       }
     }

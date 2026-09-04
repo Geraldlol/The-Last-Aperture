@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync } from 'node:crypto'
 import {
   access,
   mkdir,
@@ -23,7 +22,7 @@ import {
 } from '../scripts/lib/http-authed-contracts.mjs'
 import { planHttpAuthedAttestedScope } from '../scripts/lib/http-authed-planner.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
-import { writtenScope } from './helpers/http-authed-fixtures.mjs'
+import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-17T10:00:00.000Z')
 const COOKIE = '__Host-rta=SYNTHETIC_ATTESTED_COOKIE_MUST_NOT_PERSIST'
@@ -49,7 +48,6 @@ function planArguments(scopePath) {
     '--operator-id', 'security-researcher',
     '--authorized-by', 'Vendor security program contact',
     '--authorization-reference', 'Operator-held vendor authorization reference 2026-08-17',
-    '--attest-authorized',
     '--not-before', '2026-08-17T09:00:00.000Z',
     '--not-after', '2026-08-17T11:00:00.000Z',
     '--target-origin', 'https://bounty.example.test',
@@ -72,7 +70,7 @@ function withoutOption(args, name) {
   const copy = [...args]
   const index = copy.indexOf(`--${name}`)
   assert.notEqual(index, -1, `test setup must include --${name}`)
-  copy.splice(index, name === 'attest-authorized' ? 1 : 2)
+  copy.splice(index, 2)
   return copy
 }
 
@@ -123,10 +121,7 @@ async function assertUnsafeAttestedUrlRejected(t, name, updateArguments) {
 }
 
 async function attestedMutationPlannerInput(files) {
-  const { publicKey } = generateKeyPairSync('ed25519')
-  const publicKeyPath = join(files.directory, 'approver-public.der')
-  await writeFile(publicKeyPath, publicKey.export({ type: 'spki', format: 'der' }))
-  const action = structuredClone(writtenScope({ actionCount: 1 }).requests[0])
+  const action = structuredClone(attestedScope({ actionCount: 1 }).requests[0])
   action.request_body.body_id = 'SYNTHETIC_MUTATION_BODY_0001'
   action.rollback.request_body.body_id = 'SYNTHETIC_ROLLBACK_BODY_0001'
   action.expected_mutation.resource_ref = 'SYNTHETIC_RESOURCE_0001'
@@ -169,14 +164,6 @@ async function attestedMutationPlannerInput(files) {
       },
       limits: { min_interval_ms: 0 },
       mutationAuthorized: true,
-      approver: {
-        publicKeyPath,
-        enrollment: {
-          enrolledBy: 'Independent security approver',
-          enrolledAt: '2026-08-17T09:00:00.000Z',
-          provenance: 'Synthetic test-only attested approver enrollment',
-        },
-      },
     },
     action,
   }
@@ -192,7 +179,6 @@ test('plan-attested truthfully seals exact production third-party PHI scope with
   assert.equal(planned.summary.authorization_mode, 'OPERATOR_ATTESTED_AUTHED')
   assert.equal(planned.summary.independently_verified, false)
   assert.match(planned.summary.authorization_binding_sha256, /^[a-f0-9]{64}$/)
-  assert.equal('authorization_document_sha256' in planned.summary, false)
   assert.match(planned.summary.campaign_grant_sha256, /^[a-f0-9]{64}$/)
 
   const scopeText = await readFile(files.scopePath, 'utf8')
@@ -201,9 +187,6 @@ test('plan-attested truthfully seals exact production third-party PHI scope with
   assert.equal(scope.authorization.statement, OPERATOR_ATTESTED_AUTHED_STATEMENT)
   assert.equal(scope.authorization.attested_at, NOW.toISOString())
   assert.equal(scope.authorization.independently_verified, false)
-  assert.equal(scope.authorization.written_authorization_sha256, undefined)
-  assert.equal(scope.authorization.document_issuer, undefined)
-  assert.equal(scope.authorization.document_issued_at, undefined)
   assert.deepEqual(scope.authorization.permissions, {
     active_testing: true,
     production: true,
@@ -240,7 +223,6 @@ test('plan-attested truthfully seals exact production third-party PHI scope with
 
 test('plan-attested requires an explicit current attestation, validity window, and exact scope', async (t) => {
   const required = [
-    'attest-authorized',
     'operator-id',
     'authorized-by',
     'authorization-reference',
@@ -392,26 +374,18 @@ test('attested commands reject every document-authority flag', async (t) => {
     )
   }
 
-  for (const [command, args] of [
-    ['validate-attested', [
-      'validate-attested', '--scope', files.scopePath, '--authorization-document', 'not-used.txt',
-    ]],
-    ['campaign-attested', [
-      'campaign-attested',
-      '--scope', files.scopePath,
-      '--campaign-grant-sha256', 'a'.repeat(64),
-      '--ledger', files.ledgerDirectory,
-      '--operator-id', 'security-researcher',
-      '--confirm-authorization-current',
-      '--credential-stdin',
+  await assert.rejects(
+    main([
+      'validate-attested', '--scope', files.scopePath,
       '--authorization-document', 'not-used.txt',
-    ]],
-  ]) {
-    await assert.rejects(
-      main(args, { clock: () => NOW, write: () => {} }),
-      new RegExp(`${command} does not support --authorization-document`),
-    )
-  }
+    ], { clock: () => NOW, write: () => {} }),
+    /validate-attested does not support --authorization-document/,
+  )
+
+  await assert.rejects(
+    main(['campaign-attested', '--authorization-document', 'not-used.txt']),
+    /campaign-attested does not support --authorization-document/,
+  )
 })
 
 test('validate-attested verifies the sealed attestation offline without credential or document input', async (t) => {
@@ -450,30 +424,24 @@ test('validate-attested verifies the sealed attestation offline without credenti
     planned.summary.authorization_binding_sha256,
   )
   assert.equal(validation.campaign_grant_sha256, planned.summary.campaign_grant_sha256)
-  assert.equal('authorization_document_sha256' in validation, false)
 })
 
-test('campaign-attested uses sealed stdin and persists no credential, PHI body, or header value', async (t) => {
+test('attested-campaign runtime uses sealed stdin and persists no credential, PHI body, or header value', async (t) => {
   const files = await fixture(t, 'campaign')
   const planArgs = planArguments(files.scopePath)
   planArgs.splice(planArgs.indexOf('--json'), 0,
     '--enable-discovery',
     '--discovery-source', 'location_header')
   const planned = await planAttested(files, { args: planArgs })
-  let output = ''
   let credentialReads = 0
   let transportCalls = 0
 
-  await main([
-    'campaign-attested',
-    '--scope', files.scopePath,
-    '--campaign-grant-sha256', planned.summary.campaign_grant_sha256,
-    '--ledger', files.ledgerDirectory,
-    '--operator-id', 'security-researcher',
-    '--confirm-authorization-current',
-    '--credential-stdin',
-    '--json',
-  ], {
+  const result = await runHttpAuthedAttestedCampaign({
+    scopePath: files.scopePath,
+    expectedCampaignGrantSha256: planned.summary.campaign_grant_sha256,
+    ledgerDirectory: files.ledgerDirectory,
+    operatorId: 'security-researcher',
+    authorizationConfirmed: true,
     clock: () => NOW,
     env: {},
     credentialInput: Symbol('sealed campaign stdin credential'),
@@ -481,7 +449,7 @@ test('campaign-attested uses sealed stdin and persists no credential, PHI body, 
       credentialReads += 1
       return Buffer.from(COOKIE, 'ascii')
     },
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       transportCalls += 1
       assert.equal(request.headers.cookie, COOKIE)
       assert.equal(request.headers.authorization, undefined)
@@ -500,17 +468,14 @@ test('campaign-attested uses sealed stdin and persists no credential, PHI body, 
         responseHeaderNames: ['set-cookie', 'content-type'],
       }
     },
-    write: (value) => { output += value },
   })
 
-  const result = JSON.parse(output)
   assert.equal(credentialReads, 1)
   assert.equal(transportCalls, 1)
   assert.equal(result.actions.completed, 1)
   assert.equal(result.authorization_mode, 'OPERATOR_ATTESTED_AUTHED')
   assert.equal(result.independently_verified, false)
   assert.match(result.authorization_binding_sha256, /^[a-f0-9]{64}$/)
-  assert.equal('authorization_document_sha256' in result, false)
 
   const entries = await readdir(files.ledgerDirectory, { withFileTypes: true })
   const ledgerRecordTexts = await Promise.all(entries
@@ -558,58 +523,59 @@ test('campaign-attested uses sealed stdin and persists no credential, PHI body, 
   const durableText = [
     await readFile(files.scopePath, 'utf8'),
     ledgerText,
-    output,
+    JSON.stringify(result),
   ].join('\n')
   assert.equal(durableText.includes(COOKIE), false)
   assert.equal(durableText.includes(PHI_BODY_SENTINEL), false)
   assert.equal(durableText.includes(HEADER_VALUE_SENTINEL), false)
-  assert.equal(ledgerText.includes('"authorization_document_sha256"'), false)
   assert.match(ledgerText, /"authorization_binding_sha256"\s*:\s*"[a-f0-9]{64}"/)
 })
 
-test('campaign-attested rejects stale confirmation and operator drift before ledger or network', async (t) => {
+test('attested-campaign runtime rejects missing launch confirmation and operator drift before ledger or network', async (t) => {
   const files = await fixture(t, 'pre-dispatch')
   const planned = await planAttested(files)
   let credentialReads = 0
   let transportCalls = 0
   const deps = {
+    scopePath: files.scopePath,
+    expectedCampaignGrantSha256: planned.summary.campaign_grant_sha256,
+    ledgerDirectory: files.ledgerDirectory,
     clock: () => NOW,
     env: {},
+    credentialInput: Symbol('sealed campaign stdin credential'),
     credentialStdinReader: async () => {
       credentialReads += 1
       return Buffer.from(COOKIE, 'ascii')
     },
-    transport: async () => { transportCalls += 1 },
-    write: () => {},
+    protectedTransport: async () => { transportCalls += 1 },
   }
-  const base = [
-    'campaign-attested',
-    '--scope', files.scopePath,
-    '--campaign-grant-sha256', planned.summary.campaign_grant_sha256,
-    '--ledger', files.ledgerDirectory,
-    '--operator-id', 'security-researcher',
-    '--credential-stdin',
-    '--json',
-  ]
 
   await assert.rejects(
-    main(base, deps),
-    /requires --confirm-authorization-current|current authorization/i,
+    runHttpAuthedAttestedCampaign({
+      ...deps,
+      operatorId: 'security-researcher',
+      authorizationConfirmed: false,
+    }),
+    /requires explicit controller launch confirmation/i,
   )
   assert.equal(credentialReads, 0)
   assert.equal(transportCalls, 0)
   await assert.rejects(access(files.ledgerDirectory), { code: 'ENOENT' })
 
-  const mismatch = [...base]
-  mismatch.splice(mismatch.indexOf('--json'), 0, '--confirm-authorization-current')
-  mismatch[mismatch.indexOf('--operator-id') + 1] = 'different-security-researcher'
-  await assert.rejects(main(mismatch, deps), /operator.*match|operator.*mismatch/i)
+  await assert.rejects(
+    runHttpAuthedAttestedCampaign({
+      ...deps,
+      operatorId: 'different-security-researcher',
+      authorizationConfirmed: true,
+    }),
+    /operator.*match|operator.*mismatch/i,
+  )
   assert.equal(credentialReads, 0)
   assert.equal(transportCalls, 0)
   await assert.rejects(access(files.ledgerDirectory), { code: 'ENOENT' })
 })
 
-test('plan-attested retains explicit mutation authorization and approver gates', async (t) => {
+test('plan-attested uses the operator statement as explicit mutation authorization', async (t) => {
   const unsafeFiles = await fixture(t, 'mutation-permission')
   const unsafeArgs = planArguments(unsafeFiles.scopePath)
   unsafeArgs.splice(unsafeArgs.indexOf('--method'), 0, '--method', 'POST')
@@ -625,21 +591,20 @@ test('plan-attested retains explicit mutation authorization and approver gates',
   )
   await assert.rejects(access(unsafeFiles.scopePath), { code: 'ENOENT' })
 
-  const approverFiles = await fixture(t, 'mutation-approver')
-  const approverArgs = planArguments(approverFiles.scopePath)
-  approverArgs.splice(approverArgs.indexOf('--method'), 0, '--method', 'POST')
-  approverArgs.splice(approverArgs.indexOf('--seed-url'), 0, '--seed-method', 'POST')
-  approverArgs.splice(approverArgs.indexOf('--json'), 0, '--mutation-authorized')
-  await assert.rejects(
-    main(approverArgs, {
-      clock: () => NOW,
-      env: {},
-      credentialStdinReader: async () => Buffer.from(COOKIE, 'ascii'),
-      write: () => {},
-    }),
-    /approver.*required|requires.*approver/i,
-  )
-  await assert.rejects(access(approverFiles.scopePath), { code: 'ENOENT' })
+  const authorizedFiles = await fixture(t, 'mutation-authorized')
+  const authorizedArgs = planArguments(authorizedFiles.scopePath)
+  authorizedArgs.splice(authorizedArgs.indexOf('--method'), 0, '--method', 'POST')
+  authorizedArgs.splice(authorizedArgs.indexOf('--seed-url'), 0, '--seed-method', 'POST')
+  authorizedArgs.splice(authorizedArgs.indexOf('--json'), 0, '--mutation-authorized')
+  await main(authorizedArgs, {
+    clock: () => NOW,
+    env: {},
+    credentialStdinReader: async () => Buffer.from(COOKIE, 'ascii'),
+    write: () => {},
+  })
+  const authorizedScope = JSON.parse(await readFile(authorizedFiles.scopePath, 'utf8'))
+  assert.equal(authorizedScope.authorization.permissions.mutation, true)
+  assert.equal(authorizedScope.approver, undefined)
 })
 
 test('attested mutation planning refuses non-synthetic body and resource identifiers', async (t) => {
@@ -697,85 +662,54 @@ test('attested mutation planning accepts explicit synthetic body and resource id
   )
 })
 
-test('campaign commands reject authorization-mode confusion before credentials, ledger, or network', async (t) => {
-  const attestedFiles = await fixture(t, 'mode-attested-as-written')
-  const planned = await planAttested(attestedFiles)
+test('campaign runtime rejects the retired authorization mode before credentials, ledger, or network', async (t) => {
+  const files = await fixture(t, 'retired-authorization-mode')
+  const legacyScope = attestedScope({ actionCount: 1 })
+  legacyScope.authorization.mode = 'WRITTEN_AUTHORIZATION_AUTHED'
+  await writeFile(files.scopePath, stableJson(legacyScope), 'utf8')
   let credentialReads = 0
   let transportCalls = 0
-  const deps = {
-    clock: () => NOW,
-    env: {},
-    credentialStdinReader: async () => {
-      credentialReads += 1
-      return Buffer.from(COOKIE, 'ascii')
-    },
-    transport: async () => { transportCalls += 1 },
-    write: () => {},
-  }
 
   await assert.rejects(
-    main([
-      'campaign-written',
-      '--scope', attestedFiles.scopePath,
-      '--authorization-document', join(attestedFiles.directory, 'must-not-be-read.txt'),
-      '--campaign-grant-sha256', planned.summary.campaign_grant_sha256,
-      '--ledger', attestedFiles.ledgerDirectory,
-      '--operator-id', 'security-researcher',
-      '--confirm-authorization-current',
-      '--credential-stdin',
-      '--json',
-    ], deps),
+    runHttpAuthedAttestedCampaign({
+      scopePath: files.scopePath,
+      expectedCampaignGrantSha256: 'a'.repeat(64),
+      ledgerDirectory: files.ledgerDirectory,
+      operatorId: 'peerstar-security-operator',
+      authorizationConfirmed: true,
+      clock: () => NOW,
+      env: {},
+      credentialInput: Symbol('sealed campaign stdin credential'),
+      credentialStdinReader: async () => {
+        credentialReads += 1
+        return Buffer.from(COOKIE, 'ascii')
+      },
+      protectedTransport: async () => { transportCalls += 1 },
+    }),
     (error) => error.code === 'HTTP_AUTHED_AUTHORIZATION_MODE_MISMATCH',
   )
   assert.equal(credentialReads, 0)
   assert.equal(transportCalls, 0)
-  await assert.rejects(access(attestedFiles.ledgerDirectory), { code: 'ENOENT' })
-
-  const writtenFiles = await fixture(t, 'mode-written-as-attested')
-  await writeFile(
-    writtenFiles.scopePath,
-    stableJson(writtenScope({ actionCount: 1 })),
-    'utf8',
-  )
-  await assert.rejects(
-    main([
-      'campaign-attested',
-      '--scope', writtenFiles.scopePath,
-      '--campaign-grant-sha256', 'a'.repeat(64),
-      '--ledger', writtenFiles.ledgerDirectory,
-      '--operator-id', 'peerstar-security-operator',
-      '--confirm-authorization-current',
-      '--credential-stdin',
-      '--json',
-    ], deps),
-    (error) => error.code === 'HTTP_AUTHED_AUTHORIZATION_MODE_MISMATCH',
-  )
-  assert.equal(credentialReads, 0)
-  assert.equal(transportCalls, 0)
-  await assert.rejects(access(writtenFiles.ledgerDirectory), { code: 'ENOENT' })
+  await assert.rejects(access(files.ledgerDirectory), { code: 'ENOENT' })
 })
 
-test('campaign-attested rechecks scope and candidate bytes immediately before send', async (t) => {
+test('attested-campaign runtime rechecks scope and candidate bytes immediately before send', async (t) => {
   const files = await fixture(t, 'immediate-reauthorization')
   const planned = await planAttested(files)
-  let output = ''
   let transportCalls = 0
   let wireSends = 0
 
-  await main([
-    'campaign-attested',
-    '--scope', files.scopePath,
-    '--campaign-grant-sha256', planned.summary.campaign_grant_sha256,
-    '--ledger', files.ledgerDirectory,
-    '--operator-id', 'security-researcher',
-    '--confirm-authorization-current',
-    '--credential-stdin',
-    '--json',
-  ], {
+  const result = await runHttpAuthedAttestedCampaign({
+    scopePath: files.scopePath,
+    expectedCampaignGrantSha256: planned.summary.campaign_grant_sha256,
+    ledgerDirectory: files.ledgerDirectory,
+    operatorId: 'security-researcher',
+    authorizationConfirmed: true,
     clock: () => NOW,
     env: {},
+    credentialInput: Symbol('sealed campaign stdin credential'),
     credentialStdinReader: async () => Buffer.from(COOKIE, 'ascii'),
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       transportCalls += 1
       assert.equal(
         request.url,
@@ -788,10 +722,8 @@ test('campaign-attested rechecks scope and candidate bytes immediately before se
       wireSends += 1
       return { status: 200, responseBytes: 0, responseHeaderNames: [] }
     },
-    write: (value) => { output += value },
   })
 
-  const result = JSON.parse(output)
   assert.equal(transportCalls, 1)
   assert.equal(wireSends, 0)
   assert.equal(result.actions.completed, 0)
@@ -800,8 +732,8 @@ test('campaign-attested rechecks scope and candidate bytes immediately before se
   assert.equal(result.ledger.terminal_actions, 1)
 })
 
-test('attested authorization binding refuses legacy document-shaped ledger records', async (t) => {
-  const files = await fixture(t, 'legacy-ledger')
+test('attested authorization binding refuses ledger records missing the binding field', async (t) => {
+  const files = await fixture(t, 'missing-ledger-binding')
   const planned = await planAttested(files)
   const ledger = await openHttpAuthedCampaignLedger({
     directory: files.ledgerDirectory,
@@ -818,11 +750,9 @@ test('attested authorization binding refuses legacy document-shaped ledger recor
     files.ledgerDirectory,
     '0000000000000000.http-authed-campaign.json',
   )
-  const legacy = JSON.parse(await readFile(recordPath, 'utf8'))
-  legacy.schema_version = '1.0.0'
-  legacy.authorization_document_sha256 = legacy.authorization_binding_sha256
-  delete legacy.authorization_binding_sha256
-  await writeFile(recordPath, stableJson(legacy), 'utf8')
+  const record = JSON.parse(await readFile(recordPath, 'utf8'))
+  delete record.authorization_binding_sha256
+  await writeFile(recordPath, stableJson(record), 'utf8')
 
   await assert.rejects(
     openHttpAuthedCampaignLedger({
@@ -838,20 +768,17 @@ test('attested authorization binding refuses legacy document-shaped ledger recor
   )
 })
 
-test('attested mutation campaign preserves countersignature, verification, and rollback phases', async (t) => {
+test('attested mutation campaign durably qualifies authorization, verification, and rollback', async (t) => {
   const files = await fixture(t, 'mutation-e2e')
   const materialsDirectory = join(files.directory, 'materials')
   await mkdir(materialsDirectory)
   const mutationCredential = 'SYNTHETIC_ATTESTED_MUTATION_CREDENTIAL'
   const mutationBody = Buffer.alloc(64, 0x6d)
   const rollbackBody = Buffer.alloc(64, 0x72)
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
   scope.authorization.mode = 'OPERATOR_ATTESTED_AUTHED'
   scope.authorization.statement = OPERATOR_ATTESTED_AUTHED_STATEMENT
   scope.authorization.attested_at = NOW.toISOString()
-  delete scope.authorization.written_authorization_sha256
-  delete scope.authorization.document_issuer
-  delete scope.authorization.document_issued_at
   scope.validity = {
     not_before: '2026-08-17T09:00:00.000Z',
     not_after: '2026-08-17T11:00:00.000Z',
@@ -870,16 +797,10 @@ test('attested mutation campaign preserves countersignature, verification, and r
     writeFile(files.scopePath, stableJson(scope), 'utf8'),
     writeFile(bodyPath(scope.requests[0].request_body), mutationBody),
     writeFile(bodyPath(scope.requests[0].rollback.request_body), rollbackBody),
-    writeFile(
-      join(materialsDirectory, 'countersignature-1.json'),
-      stableJson({ nonce: 'attested-mutation-nonce-0001' }),
-      'utf8',
-    ),
   ])
 
   const methods = []
   let wireSends = 0
-  let countersignatureChecks = 0
   const result = await runHttpAuthedAttestedCampaign({
     scopePath: files.scopePath,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
@@ -906,12 +827,6 @@ test('attested mutation campaign preserves countersignature, verification, and r
       }
     },
     mutationDependencies: {
-      verifyCountersignature: async ({ scope: currentScope, countersignature }) => {
-        assert.equal(currentScope.authorization.mode, 'OPERATOR_ATTESTED_AUTHED')
-        assert.equal(countersignature.nonce, 'attested-mutation-nonce-0001')
-        countersignatureChecks += 1
-        return { keyId: currentScope.approver.key_id }
-      },
       verifyObservation: async () => ({
         valueMatch: true,
         contextMatch: true,
@@ -922,11 +837,17 @@ test('attested mutation campaign preserves countersignature, verification, and r
 
   assert.deepEqual(methods, ['GET', 'GET', 'POST', 'GET', 'PATCH', 'GET'])
   assert.equal(wireSends, 6)
-  assert.equal(countersignatureChecks, 2)
   assert.equal(result.actions.completed, 1)
   assert.equal(result.actions.failed, 0)
   assert.equal(result.authorization_mode, 'OPERATOR_ATTESTED_AUTHED')
   assert.equal(result.independently_verified, false)
   assert.equal(result.authorization_binding_sha256, verified.authorizationBindingSha256)
-  assert.equal('authorization_document_sha256' in result, false)
+  const ledgerText = (await Promise.all(
+    (await readdir(files.ledgerDirectory))
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => readFile(join(files.ledgerDirectory, name), 'utf8')),
+  )).join('\n')
+  assert.match(ledgerText, /AUTHORIZATION_CONSUMED/)
+  assert.match(ledgerText, /dispatch_permit_sha256/)
+  assert.doesNotMatch(ledgerText, /countersignature/i)
 })

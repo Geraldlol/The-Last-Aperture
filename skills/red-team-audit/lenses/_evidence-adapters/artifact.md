@@ -1,5 +1,12 @@
 # `artifact` acquisition adapter
 
+> **Release gate (2026-09-03):** Every public artifact command is disabled
+> before reading `--source`. A caller string can name a UNC/WebDAV path, device,
+> pipe, link, sparse file, or compressed bomb; the retained implementation is a
+> test kernel, not current file-read authority. Re-enable only with enrolled
+> local roots, bounded no-follow same-handle hashing, digest/size revalidation,
+> bounded decompression, and a controller-authenticated plan.
+
 Adapter ID: `artifact`
 
 Evidence class: `built-artifact`

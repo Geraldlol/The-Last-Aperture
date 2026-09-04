@@ -1,5 +1,15 @@
 # bounty-v1 P7 — Out-of-Band Interaction Server Implementation Plan
 
+> [!CAUTION]
+> **SUPERSEDED SECURITY GUIDANCE (2026-09-03):** This document is retained as a
+> historical implementation record, not as current operational guidance. Every
+> public OOB action (`open`, `mint`, `poll`, `status`, and `close`) now fails
+> closed before bundle/session I/O pending a trusted controller-owned local root
+> and atomic backend/transport lease. The current bounty scope also seals
+> `permissions.third_party: false`; a fixed hosted-server allowlist constrains
+> destination selection but is not authorization for third-party transit. Do
+> not use the historical commands below to re-enable OOB.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give `bounty-v1` an out-of-band interaction channel so blind SSRF, blind XXE, blind RCE, OOB SQLi, and blind SSTI become observable, with two interchangeable backends: a hosted interactsh client that needs no infrastructure, and a self-hosted DNS + HTTP listener for when a domain and VPS exist.
@@ -16,9 +26,9 @@
 - **Node 24 ESM**, `.mjs`, `node:` prefix on builtins, no semicolons, 2-space indent, single quotes, named exports prefixed `bountyOob`/`oob` per module concern.
 - **Module layout:** `scripts/lib/bounty-oob-*.mjs`, tests `test/bounty-oob-*.test.mjs`, schemas `schemas/bounty-oob-*.schema.json`.
 - **Purity boundary:** `bounty-oob-payload.mjs` and `bounty-oob-correlator.mjs` must not import `node:fs`, `node:http`, `node:https`, `node:dgram`, `node:dns`, or read the ambient clock. Randomness and timestamps are injected.
-- **No target contact.** This module talks to our own OOB infrastructure only. Registering with `oast.fun` is not contacting a bounty target and needs no scope-kernel decision. Payloads that *embed* an OOB host are sent to targets by other phases, and those requests pass the kernel normally.
+- **Historical network boundary — superseded for public hosted use.** The original module treated registration with `oast.fun` as contact with OOB infrastructure rather than the bounty target. Current guidance also accounts for target-derived callback data transiting that third party: public hosted `open`, `mint`, and `poll` must remain fail-closed until a trusted controller validates current scope and explicit third-party authority. Payloads sent to targets still require the target phase's own authorization gate.
 - **Case-insensitive matching.** DNS is case-insensitive and resolvers may randomize case (0x20 encoding). Every hostname comparison lowercases first.
-- **No gate on `third_party`.** Operator decision, 2026-08-21: a hosted backend is permitted regardless of `permissions.third_party`. The session **records** which backend was used — that is evidence, not a gate, and it must never block a run.
+- **Historical `third_party` decision — superseded.** The 2026-08-21 implementation recorded hosted transit without gating it. That is no longer valid operational guidance: `permissions.third_party` is authorization, not telemetry, and the current scope seals it to `false`. A hostname appearing in the fixed hosted-server allowlist does not grant that authority.
 - **Never claim clearance.** An absent callback is `NO_INTERACTION_OBSERVED`, never proof the target is not vulnerable. A blind-vector test that produced no callback is inconclusive, not negative.
 
 ## Verified protocol facts
@@ -36,7 +46,10 @@ Established empirically against `oast.fun` on 2026-08-21. Do not "correct" these
 | Deregister | `POST https://<server>/deregister`, JSON `{"correlation-id", "secret-key"}` |
 | Poll semantics | Polling drains; interactions are returned once. The session must persist what it has already seen. |
 
-Public servers: `oast.fun`, `oast.pro`, `oast.site`, `oast.live`, `oast.online`, `oast.me`.
+Historical protocol endpoints, now retained only as a fixed destination allowlist
+inside the disabled hosted transport: `oast.fun`, `oast.pro`, `oast.site`,
+`oast.live`, `oast.online`, `oast.me`. Membership limits where the transport could
+connect; it does not authorize hosted OOB use.
 
 ---
 
@@ -1266,7 +1279,7 @@ git commit -m "feat(bounty-v1): self-hosted HTTP capture listener"
   - `pollOobSession({ bundlePath, fetchImpl }) -> Promise<{ results, summary }>` — correlates and appends to `oob-interactions.jsonl`
   - `oobSessionStatus({ bundlePath }) -> Promise<{ backend, server, correlationId, mints, observed }>`
   - `closeOobSession({ bundlePath, fetchImpl }) -> Promise<void>`
-  - Backend values: `'hosted'` and `'self_hosted'`. The session records the backend for evidence; nothing gates on `third_party`.
+  - Historical backend values: `'hosted'` and `'self_hosted'`. The original controller recorded the backend but did not gate on `third_party`. Current public hosted `open`, `mint`, and `poll` fail closed; neither a recorded backend nor fixed-server allowlisting supplies authorization. Re-enablement requires a trusted controller to validate current scope and explicit third-party authority.
 
 - [x] **Step 1: Write the failing test**
 
@@ -1700,7 +1713,10 @@ Expected: PASS, 6 tests
 
 - [x] **Step 6: Wire the CLI**
 
-Add to `scripts/bounty.mjs` an `oob` command group dispatching to the controller:
+Historical implementation step: add to `scripts/bounty.mjs` an `oob` command group
+dispatching to the controller. The command listing below records the original
+interface; it is not an instruction to bypass the current hosted-OOB fail-closed
+gate.
 
 ```
 bounty oob open <bundle> --backend <hosted|self-hosted> [--server <domain>] [--json]
@@ -1710,7 +1726,12 @@ bounty oob status <bundle> [--json]
 bounty oob close <bundle> [--json]
 ```
 
-Help text must state: a hosted backend sends callback data through a third-party service, and an absent callback is `NO_INTERACTION_OBSERVED`, never proof of absence.
+The historical help requirement stated that a hosted backend sends callback data
+through a third-party service and that an absent callback is
+`NO_INTERACTION_OBSERVED`, never proof of absence. Current help instead states
+that every public OOB session command is disabled pending a trusted
+controller-owned local root and atomic transport lease, and that destination
+allowlisting is not authorization.
 
 - [x] **Step 7: Add the new test files to `test:platform` in package.json and commit**
 
@@ -1728,9 +1749,12 @@ git commit -m "feat(bounty-v1): oob session controller and cli"
 
 **Interfaces:** none — this task produces evidence.
 
-- [x] **Step 1: Hosted backend, real callback**
+- [x] **Step 1: Hosted backend, real callback (historical verification only)**
 
-Open a session against `oast.fun`, mint one payload, resolve it, poll, and confirm the correlation names the mint. Record the actual output.
+This verification was performed against `oast.fun` on 2026-08-21 by opening a
+session, minting one payload, resolving it, polling, and recording the resulting
+correlation. Do not repeat it through the current public CLI: hosted `open`,
+`mint`, and `poll` are now fail-closed pending a trusted controller.
 
 - [x] **Step 2: Self-hosted backend over loopback**
 
@@ -1753,7 +1777,7 @@ Verified 2026-08-21.
 - [x] **A real `oast.fun` callback correlates to the exact mint that produced it** — 4/4 matched, each resolving to `ssrf @ body:json:/order/callbackUrl as customer (req flow-42)`
 - [x] The self-hosted DNS and HTTP listeners both capture and correlate over loopback — 2/2, with two concurrent mints correctly discriminated (DNS→xxe mint, HTTP→rce mint)
 - [x] A hosted session records `backend: "hosted"` in the bundle
-- [x] No code path gates on `permissions.third_party` — per operator decision; the session records `third_party_transit` as evidence only
+- [x] Historical result: the 2026-08-21 code did not gate on `permissions.third_party` and recorded `third_party_transit` as evidence only. **Superseded:** current public hosted `open`, `mint`, and `poll` fail closed because the sealed scope does not authorize third-party transit; the fixed hosted-server allowlist is a destination constraint, not authorization.
 - [x] An empty poll reports `NO_INTERACTION_OBSERVED` and never implies absence of vulnerability
 - [x] **67 OOB tests across 7 files, all passing**; every unit test runs with `fetch` injected, so none opens a socket
 - [x] `npm.cmd test` — **1615 tests, 1610 pass, 2 fail, 3 skipped.** The 2 failures are the same pre-existing pair from P0 (`canonical-ordering.test.mjs:126` and `http-authed-credential.test.mjs:355`); zero bounty or OOB failures. Baseline at the end of P0 was 1548, and 1548 + 67 = 1615 exactly, so nothing regressed. **The suite does not pass clean, and this checkbox does not claim it does.**

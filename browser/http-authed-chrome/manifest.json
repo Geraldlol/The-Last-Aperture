@@ -1,21 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Red Team Audit Browser Bridge",
-  "version": "0.12.0",
-  "description": "Runs one explicitly committed same-origin request through an operator-selected tab without exporting browser-held authentication.",
-  "permissions": [
-    "activeTab",
-    "scripting"
-  ],
-  "host_permissions": [
-    "http://127.0.0.1/*"
-  ],
-  "background": {
-    "service_worker": "service-worker.js",
-    "type": "module"
-  },
+  "name": "Red Team Audit Browser Bridge (Disabled)",
+  "version": "0.12.1",
+  "description": "Release-disabled placeholder. It has no host, tab, scripting, background, or network authority.",
+  "permissions": [],
+  "host_permissions": [],
   "action": {
-    "default_title": "Red Team Audit browser bridge",
+    "default_title": "Red Team Audit browser bridge is disabled",
     "default_popup": "popup.html"
   },
   "content_security_policy": {

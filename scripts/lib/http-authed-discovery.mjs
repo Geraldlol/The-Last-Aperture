@@ -10,7 +10,7 @@ const AMBIGUOUS_PATH_ENCODING = /(?:\\|%(?:25)*(?:2e|2f|5c))/i
 const MAX_HEADER_VALUE_BYTES = 64 * 1024
 const MAX_RESPONSE_BYTES = 1024 * 1024
 // Response-derived write methods are hints, not executable actions. They need a
-// predeclared mutation envelope (before/after reads, inverse, and countersignature)
+// predeclared mutation envelope (before/after reads, inverse, and controller permit)
 // and therefore cannot be synthesized from untrusted response content.
 const AUTOMATIC_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const DISCOVERY_SOURCES = new Set([

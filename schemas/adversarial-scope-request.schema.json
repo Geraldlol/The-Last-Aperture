@@ -1,0 +1,320 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json",
+  "title": "Red Team Audit adversarial scope expansion request",
+  "description": "An inert, provider-authored request for an exact change to a predecessor-bound scope. This document grants no authority and cannot authorize target I/O.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "request_id",
+    "engagement_id",
+    "requested_at",
+    "base_scope",
+    "delta",
+    "delta_sha256",
+    "request_sha256",
+    "rationale",
+    "blocked_objective",
+    "discovery_evidence",
+    "expected_risk",
+    "side_effects",
+    "cleanup_plan",
+    "eligible_action_plan"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/adversarial-scope-request" },
+    "request_id": { "$ref": "#/$defs/id" },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "requested_at": { "$ref": "#/$defs/timestamp" },
+    "base_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "sha256"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "delta": { "$ref": "#/$defs/scopeDelta" },
+    "delta_sha256": { "$ref": "#/$defs/sha256" },
+    "request_sha256": { "$ref": "#/$defs/sha256" },
+    "rationale": { "$ref": "#/$defs/explanation" },
+    "blocked_objective": { "$ref": "#/$defs/explanation" },
+    "discovery_evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/evidenceDigest" }
+    },
+    "expected_risk": { "$ref": "#/$defs/explanation" },
+    "side_effects": { "$ref": "#/$defs/explanation" },
+    "cleanup_plan": { "$ref": "#/$defs/explanation" },
+    "eligible_action_plan": { "$ref": "#/$defs/explanation" },
+    "attack_plan_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "scopeName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._-]*$"
+    },
+    "explanation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "\\S"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "evidenceDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "sha256"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/id" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "kind", "locator"],
+      "properties": {
+        "target_id": { "$ref": "#/$defs/id" },
+        "kind": {
+          "enum": [
+            "repository_snapshot",
+            "local_service",
+            "staging_service",
+            "production_service",
+            "live_service",
+            "network_asset",
+            "cloud_resource",
+            "mobile_app"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        },
+        "identity_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_id", "path"],
+      "properties": {
+        "target_id": { "$ref": "#/$defs/id" },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[A-Z][A-Z0-9_-]*$"
+    },
+    "impactPermission": {
+      "enum": [
+        "state-change",
+        "account-modification",
+        "production-execution",
+        "sensitive-data-access",
+        "third-party-access",
+        "callback-transit",
+        "availability-impact",
+        "irreversible-change",
+        "lateral-movement",
+        "persistence",
+        "credential-use"
+      ]
+    },
+    "limit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["limit_id", "value", "unit"],
+      "properties": {
+        "limit_id": { "$ref": "#/$defs/scopeName" },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "unit": {
+          "enum": [
+            "count",
+            "bytes",
+            "milliseconds",
+            "requests_per_second",
+            "concurrent"
+          ]
+        }
+      }
+    },
+    "validityWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["not_before", "not_after"],
+      "properties": {
+        "not_before": { "$ref": "#/$defs/timestamp" },
+        "not_after": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "targetDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/targetSet" },
+        "remove": { "$ref": "#/$defs/targetSet" }
+      }
+    },
+    "targetSet": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/target" }
+    },
+    "pathDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/pathSet" },
+        "remove": { "$ref": "#/$defs/pathSet" }
+      }
+    },
+    "pathSet": {
+      "type": "array",
+      "maxItems": 8192,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "methodDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/methodSet" },
+        "remove": { "$ref": "#/$defs/methodSet" }
+      }
+    },
+    "methodSet": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/method" }
+    },
+    "nameDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/nameSet" },
+        "remove": { "$ref": "#/$defs/nameSet" }
+      }
+    },
+    "nameSet": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/scopeName" }
+    },
+    "impactDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/impactSet" },
+        "remove": { "$ref": "#/$defs/impactSet" }
+      }
+    },
+    "impactSet": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/impactPermission" }
+    },
+    "limitDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/limitSet" },
+        "remove": { "$ref": "#/$defs/limitSet" }
+      }
+    },
+    "limitSet": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/limit" }
+    },
+    "validityDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["add", "remove"],
+      "properties": {
+        "add": { "$ref": "#/$defs/validitySet" },
+        "remove": { "$ref": "#/$defs/validitySet" }
+      }
+    },
+    "validitySet": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/validityWindow" }
+    },
+    "scopeDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targets",
+        "paths",
+        "methods",
+        "strategy_families",
+        "data_classes",
+        "impact_permissions",
+        "limits",
+        "validity"
+      ],
+      "properties": {
+        "targets": { "$ref": "#/$defs/targetDelta" },
+        "paths": { "$ref": "#/$defs/pathDelta" },
+        "methods": { "$ref": "#/$defs/methodDelta" },
+        "strategy_families": { "$ref": "#/$defs/nameDelta" },
+        "data_classes": { "$ref": "#/$defs/nameDelta" },
+        "impact_permissions": { "$ref": "#/$defs/impactDelta" },
+        "limits": { "$ref": "#/$defs/limitDelta" },
+        "validity": { "$ref": "#/$defs/validityDelta" }
+      }
+    }
+  }
+}

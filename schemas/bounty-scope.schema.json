@@ -28,11 +28,17 @@
     "program": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["program_handle", "policy_url", "policy_snapshot_sha256"],
+      "required": ["program_handle", "policy_url", "policy_snapshot_sha256", "required_user_agent"],
       "properties": {
         "program_handle": { "$ref": "#/$defs/id" },
         "policy_url": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
-        "policy_snapshot_sha256": { "$ref": "#/$defs/sha256" }
+        "policy_snapshot_sha256": { "$ref": "#/$defs/sha256" },
+        "required_user_agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[\u0021-\u007E]([\u0020-\u007E]*[\u0021-\u007E])?$"
+        }
       }
     },
     "authorization": {

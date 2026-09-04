@@ -24,7 +24,13 @@ const policyFor = (root) => normalizePolicy({
   capabilities: {
     read_file: { enabled: true, roots: ['.'] },
     write_file: { enabled: true, roots: ['test/security'] },
-    execute: { enabled: true, commands: [{ program: 'npm', args: ['test'] }] },
+    execute: {
+      enabled: true,
+      commands: [
+        { program: 'npm', args: ['test'] },
+        { program: 'npm', args: ['test', '--', 'control'] },
+      ],
+    },
     network: { enabled: false, destinations: [] },
   },
 }, { workspaceRoot: root, policySource: 'external' })
@@ -63,6 +69,68 @@ test('a demonstration-only proof runs the command once', async () => {
   assert.deepEqual(calls[0].args, ['test'])
   assert.equal(outcome.demonstration.code, 1)
   assert.equal(outcome.remediation, null)
+})
+
+test('a v2 proof runs a paired control after the attack', async () => {
+  const calls = []
+  const spawn = async (program, args, cwd, limits) => {
+    calls.push({ program, args, cwd, limits })
+    return args.at(-1) === 'control'
+      ? { code: 0, stdout: 'control passed', stderr: '' }
+      : { code: 1, stdout: 'attack reproduced', stderr: '' }
+  }
+  const outcome = await run({
+    ...baseConfig,
+    schema_version: '2.0.0',
+    destination_guard: { installed: true, path: 'test/security/a.test.mjs' },
+    strategy: { id: 'exact.reproducer', version: '1.0.0' },
+    control_command: { program: 'npm', args: ['test', '--', 'control'] },
+    oracle: {
+      id: 'security-test-exit-differential',
+      attack_exit_codes: [1],
+      control_exit_codes: [0],
+    },
+    limits: { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    reproducer: { path: 'test/security/a.test.mjs', format: 'text' },
+  }, spawn)
+  assert.deepEqual(calls.map(({ args }) => args), [
+    ['test'],
+    ['test', '--', 'control'],
+  ])
+  assert.deepEqual(calls.map(({ limits }) => limits), [
+    { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+  ])
+  assert.equal(outcome.demonstration.code, 1)
+  assert.equal(outcome.control.code, 0)
+})
+
+test('an unauthorized v2 control command is refused before the mirror is created', async () => {
+  const targetRoot = makeTarget()
+  const mirrorRoot = mirrorPath()
+  let spawned = false
+  await assert.rejects(
+    () => run({
+      ...baseConfig,
+      schema_version: '2.0.0',
+      destination_guard: { installed: true, path: 'test/security/a.test.mjs' },
+      strategy: { id: 'exact.reproducer', version: '1.0.0' },
+      control_command: { program: 'node', args: ['control.mjs'] },
+      oracle: {
+        id: 'security-test-exit-differential',
+        attack_exit_codes: [1],
+        control_exit_codes: [0],
+      },
+      limits: { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+      reproducer: { path: 'test/security/a.test.mjs', format: 'text' },
+    }, async () => {
+      spawned = true
+      return { code: 0, stdout: '', stderr: '' }
+    }, { targetRoot, mirrorRoot }),
+    /control command.*not authorized|not authorized.*control command/i,
+  )
+  assert.equal(spawned, false)
+  assert.equal(existsSync(mirrorRoot), false)
 })
 
 test('a proof with a patch runs the command twice, patched only on the second', async () => {

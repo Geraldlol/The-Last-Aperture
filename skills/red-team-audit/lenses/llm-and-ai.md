@@ -129,8 +129,21 @@ defers:
   trust-boundary-inventory: threat-modeling
   stride-decomposition: threat-modeling
   attack-tree-construction: threat-modeling
+  training-data-provenance-and-integrity: ai-model-and-mlops-security
+  training-and-finetuning-poisoning: ai-model-and-mlops-security
+  model-artifact-integrity-and-change-control: ai-model-and-mlops-security
+  adversarial-input-and-evasion-resilience: ai-model-and-mlops-security
+  model-extraction-and-weight-theft: ai-model-and-mlops-security
+  model-inversion-and-membership-inference: ai-model-and-mlops-security
+  model-serving-resource-exhaustion: ai-model-and-mlops-security
+  model-security-monitoring-drift-and-rollback: ai-model-and-mlops-security
 frameworks:
-  - owasp-llm-top-10
+  - owasp-genai-llm-top-10-2026
+  - owasp-aisvs-1.0
+  - owasp-llmsvs-2.0
+  - owasp-agentic-top-10-2026
+  - nist-ai-600-1
+  - nist-sp-800-218a
   - cwe
 severity_floor: low
 ---
@@ -172,6 +185,7 @@ Do not raise findings on these. Where the code shows one, note it in the candida
   - **The renderer's escaping is web-and-api's; the channel is this lens's.** Rendering model output as HTML without encoding is `xss-and-output-encoding`. What stays here is `chat-exfiltration-channels`: a *correctly escaped* markdown image or link whose URL the model chose still performs an outbound request to an attacker-named host.
   - **Generic per-route rate limiting is web-and-api's** (`rate-limiting-and-request-quotas`). `denial-of-wallet-controls` is the model-specific budget: token caps, agent iteration caps, streaming length, concurrency of provider calls, and per-principal spend. A repository with a correct global rate limiter can still have an agent that loops forever on one request.
   - **CSP as a header policy is web-and-api's** (`security-headers-and-csp`). This lens reads the CSP only to decide whether an exfiltration channel is open, and reports that conclusion inside a `chat-exfiltration-channels` finding rather than filing a header finding.
+- **ai-model-and-mlops-security** — `training-data-provenance-and-integrity`, `training-and-finetuning-poisoning`, `model-artifact-integrity-and-change-control`, `adversarial-input-and-evasion-resilience`, `model-extraction-and-weight-theft`, `model-inversion-and-membership-inference`, `model-serving-resource-exhaustion`, and `model-security-monitoring-drift-and-rollback`. The artifact seam is exact: this lens owns origin, reference pinning, executable loading formats, and authenticity/integrity verification of an external artifact before interpretation. Once admitted, the model/MLOps lens owns the internally managed complete-release identity, component/evaluation binding, change approval, promotion, and rollback.
 - **cicd-and-supply-chain** — `package-name-squatting`, `dependency-pinning-and-lockfiles`, `package-dependency-cves`, `install-and-lifecycle-scripts`, `sbom-generation-and-attachment`. Including model-hallucinated package names that were installed: the slopsquatting and typosquatting analysis is theirs. What this lens contributes is the provenance note — that the install command or import came from model output — as an aggravator on their finding. CVEs in `transformers`, `langchain` or `llama-index` are likewise theirs.
 - **cloud-and-iac** — `iam-policy-and-privilege-scope`, `network-exposure-and-segmentation`, `managed-secret-service-configuration`, `kms-key-lifecycle-and-policy`, `encryption-at-rest-configuration`. Including the network position of a self-hosted inference or MCP server and the role attached to it. This lens owns whether the MCP server authenticates its callers and validates `Origin`; whether it is reachable from the internet is theirs.
 - **crypto-and-key-management** — `symmetric-encryption-and-nonce-handling`, `key-separation-derivation-and-destruction`. Including any encryption applied to stored conversations or embeddings.
@@ -1426,4 +1440,6 @@ These recipes ship once, in the lens that owns them. Reference them by number an
 
 ### Framework citations for the report
 
-Cite what actually governs the finding, by identifier: **OWASP Top 10 for LLM Applications (2025)** for the LLM01-LLM10 classes; **OWASP Top 10 for Agentic Applications** for the tool-authority, multi-agent and MCP classes, which the application list does not fully cover; **`nist-ai-600-1`** (the Generative AI Profile of the AI Risk Management Framework) for the risk framing; **`mitre-atlas`** for adversary technique identifiers where a finding maps to one; and the **GenAI community profile of the NIST Secure Software Development Framework** (`nist-ssdf-800-218a`) for the artifact-provenance and training-data items. Name the identifier in the finding rather than the phrase, so a reader can look it up, and do not cite a version you have not confirmed.
+Cite only the artifact that actually governs the finding, by versioned identifier: **OWASP Top 10 for LLM Applications 2026** for the LLM01-LLM10 application-risk taxonomy; **OWASP AISVS 1.0** for individually mapped verification requirements; **OWASP LLMSVS 2.0** as a secondary LLM-specific verification gap check beneath AISVS; and **OWASP Top 10 for Agentic Applications 2026** for tool-authority, multi-agent, memory, identity, and MCP risk classes that the application list does not fully cover. Use **`nist-ai-600-1`** for Generative AI risk framing, **`nist-sp-800-218a`** for AI-specific secure-development practices, and **`mitre-atlas`** for adversary technique identifiers where a finding maps to one.
+
+The OWASP Agentic AI Security Initiative's Agent Control Standard, MCP Top 10, and Agentic Skills Top 10 remain preview, beta, or public-review material as of the 2026-09-03 source snapshot. They can sharpen a hypothesis or verification question, but they are not conformance baselines. Name a requirement or risk identifier in the finding instead of citing a project name alone, and never imply whole-standard conformance from this repository lens.

@@ -1,5 +1,12 @@
 # Shared proof harness
 
+> **CURRENT RELEASE EXECUTION GATE:** Every command recipe below is future
+> controller/reference material. Public T1/T2 execution is unavailable. Do not
+> execute target code, start a service or container, open credentials, or make
+> network requests from this skill. Emit a proof plan and coverage gap instead.
+> Execution requires an enrolled controller and an exact, current operator authorization;
+> consent prose, a CLI flag, L3 mode, or break-glass is not an execution route.
+
 This file is a contract, not a lens. It owns no topics, activates on nothing, and the linter skips it. It exists because ten domain lenses independently invented the same handful of test components, and a component described ten times drifts ten ways.
 
 **How a lens uses this file.** A lens's `## Proof recipes` block names a component in a sentence and moves on — "seed the record with a distinctive marker from the **canary fixture set**", "enumerate the cases with the **registry-driven enumerator**". The name is the whole citation. The implementation is here, once, and an auditor must be able to build it from this file alone without reading the lens that cited it.
@@ -92,9 +99,12 @@ Never a remote host. Never a staging URL. Never "just curl it to check". And spe
 This rail remains absolute for every lens recipe and T0-T3 proof. The separate
 `http-recon-v1` and `http-authed-v1` controllers documented in
 `docs/http-recon-protocol.md` and ADRs 0016/0017 are not lens recipes or proof tiers.
-They execute only their separately authorized, controller-sealed external
-actions and create no repository coverage or closure. A remote response cannot
-raise a repository finding's proof tier.
+Their contracts admit only separately authorized, controller-sealed external
+actions and create no repository coverage or closure. Public execution is
+active only for one exact bounded `http-recon-v1` action and fixed sealed
+`http-authed-v1` campaigns. Standalone authenticated probes and
+discovery-derived actions remain unavailable. A remote response cannot raise a
+repository finding's proof tier.
 
 **2. No destructive payloads.**
 
@@ -124,7 +134,7 @@ Before running anything that could open a socket, install the guard from `## Soc
 
 `salesforce-platform`'s guest-access recipe originally instructed the auditor to send unauthenticated requests to a live Experience Cloud site. That reaches a remote host and violates rail 1 outright. It was rewritten as a computation over the checkout: resolve the guest profile by its license, compute its effective object and field permissions from the profile plus any permission set assigned to it, intersect that with the Apex classes it can call, read each object's sharing model, and assert the reachable set is a subset of a committed allowlist of objects the site is *intended* to publish. That runs offline, and it is **T1**.
 
-**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site is governed by a scope agreement and happens outside these proof recipes. Use only the canonical skill's separate external controller: `http-recon-v1` for bounded credential-free observation or `http-authed-v1` for an operator-attested or document-bound authenticated campaign. Neither route changes finding proof tiers.
+**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site is governed by a scope agreement and happens outside these proof recipes. External work belongs only to the canonical skill's separate controllers: one exact bounded credential-free action through `http-recon-v1`, or fixed sealed authenticated actions through the public `http-authed-v1` campaign routes. Standalone authenticated probes and response-derived discovery are not public. Neither route changes finding proof tiers.
 
 **The T2 consent prompt is not that authorization and must never be presented as if it were.** Asking "may I boot the app locally?" and receiving yes does not authorize a request to a hosted endpoint. Treating the prompt as authorization would have the skill walk an auditor into unauthorized testing while showing them a consent dialog.
 

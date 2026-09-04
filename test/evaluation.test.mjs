@@ -134,7 +134,7 @@ test('unlisted and duplicate findings are precision debt even on a true-positive
   ])
 })
 
-test('Info, dropped, merged, disproved, and not-reproduced records do not become findings', () => {
+test('Info is non-reportable but unauthenticated removal claims remain findings', () => {
   const expected = [EXPECTED[0]]
   const variants = [
     finding('C-001', 'info', expected[0].topic, 'Info'),
@@ -144,8 +144,14 @@ test('Info, dropped, merged, disproved, and not-reproduced records do not become
     finding('C-001', 'absent', expected[0].topic, 'High', { verification_status: 'NOT_REPRODUCED' }),
   ]
   const score = scoreEvaluation({ expectedCases: expected, observedFindings: variants })
-  assert.equal(score.counts.tn, 1)
-  assert.equal(score.counts.reportable_findings, 0)
+  assert.equal(score.counts.fp, 1)
+  assert.equal(score.counts.reportable_findings, 4)
+  assert.deepEqual(score.cases[0].unexpected_candidate_ids, [
+    'absent',
+    'disproved',
+    'drop',
+    'merge',
+  ])
 })
 
 test('severity accuracy distinguishes exact, overclassified, and underclassified cases', () => {

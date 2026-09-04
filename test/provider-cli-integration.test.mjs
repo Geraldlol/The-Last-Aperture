@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  main,
   runProviderCommand,
   verifyControlBundle,
 } from '../scripts/audit.mjs'
@@ -28,6 +29,17 @@ import {
 const SHA_A = 'a'.repeat(64)
 const SHA_B = 'b'.repeat(64)
 const SHA_C = 'c'.repeat(64)
+
+test('public run-provider refuses before reading caller-selected bundle or runtime config', async () => {
+  await assert.rejects(
+    () => main(['run-provider', 'missing-bundle', 'missing-provider-config.json']),
+    (error) => {
+      assert.equal(error.code, 'PROVIDER_RUNTIME_ENROLLMENT_REQUIRED')
+      assert.match(error.message, /disabled before bundle or configuration access/i)
+      return true
+    },
+  )
+})
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')

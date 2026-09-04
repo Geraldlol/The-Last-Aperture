@@ -9,17 +9,32 @@
   proof tiers.
 - Amended: ADR 0017 (2026-08-17) supersedes this ADR's operator-attested routing,
   runtime-command, and reporting restrictions.
+- Amended: ADR 0021 (2026-09-04) supersedes its signed/document authorization
+  routing and external mutation-countersignature requirements.
+
+> **Supersession notice:** Authorization-mode, owner-key, passkey, signed RoE,
+> authorization-document-as-authority, and `countersignature-N.json` requirements
+> below are historical. The authenticated operator target/scope statement is the
+> sole authority primitive; the controller now issues ledger-consumed technical
+> action permits. Transport, credential, observation, rollback, stop, and
+> uncertain-delivery mechanics remain in force where retained.
 
 ## Amendment notice
 
-ADR 0017 implements `plan-attested`, `validate-attested`, and
-`campaign-attested` as a distinct declaration-only route. Do not use this ADR's
-original routing matrix, `(non-production only)` operator-attested qualification,
-or written-only runtime wording as the current release contract. ADR 0017 permits
-the attested mode across declared classifications while requiring
-`independently_verified: false` and explicit nonclaims. This ADR continues to
-govern transport, discovery, mutation, rollback, browser-session, evidence, ledger,
-and uncertainty mechanics.
+**Release amendment (2026-09-04):** the public operator-statement campaign route
+executes fixed, already-sealed campaigns through the authenticated controller.
+Every active request uses the immutable campaign ledger; standalone probe
+dispatch is not public. The public lane refuses response-derived discovery and
+more than 256 sealed actions. The packaged Chrome companion remains inert, but a
+separately supplied protocol-compatible companion may use the browser bridge
+under its distinct browser-managed-DNS assurance.
+
+ADR 0017 introduced the operator-statement route and ADR 0021 makes it the sole
+authorization mode. Do not use this ADR's original routing matrix, written-only
+runtime wording, external signed mode, or caller-supplied approval mechanics as
+the current release contract. This ADR continues to govern transport,
+discovery, mutation, rollback, browser-session, evidence, ledger, and uncertainty
+mechanics where retained.
 
 ## Context
 
@@ -55,11 +70,11 @@ and extension methods. Native transport refuses `CONNECT` and protocol upgrades;
 browser transport also refuses `TRACE` and `TRACK`. Canonical uppercase is required
 because the Node transport normalizes method casing and HTTP method tokens are
 case-sensitive. Planning is
-network-free. Runtime discoveries may produce new
-candidate actions, but every candidate is checked against the sealed campaign
-scope before dispatch; a response can never widen that scope. Once the durable
-campaign ledger is opened, it records those candidates for sequencing and
-evidence without imposing an action-count ceiling.
+network-free. The internal campaign kernel can validate response-derived
+candidates against a sealed scope, but the public fixed-campaign controller does
+not enable that path. Once the durable campaign ledger is opened, it records
+every action for sequencing and evidence. The public controller caps the sealed
+request list at 256 actions.
 
 ### Current implementation status
 
@@ -69,9 +84,10 @@ attested and written runtime routes now share these technical mechanics.
 
 The implementation includes the schema and semantic validators, written-document
 rehash/current-validity checks, canonical path/method/category checks, a canonical
-`campaign_grant_sha256`, the offline generic `plan-written` scope generator, the
-one-shot `probe-written` compatibility command, and
-the ledger-backed `campaign-written` runtime. The HTTPS transport uses
+`campaign_grant_sha256`, the offline generic `plan-written` scope generator, and
+the ledger-backed `campaign-written` runtime. A one-action test is represented as
+a one-action campaign so it receives the same durable lease and ledger evidence.
+The HTTPS transport uses
 public-address DNS binding, PKIX (and optional SPKI pinning), follows no redirect,
 performs no retry, and returns metadata only. The controller rereads the scope and
 written authorization and checks the controller-held campaign grant immediately
@@ -84,13 +100,10 @@ Explicit mutation authority still requires a pinned Ed25519 approver and its
 enrollment metadata before the scope can validate.
 
 `campaign-written` opens an external immutable hash-chained ledger, enqueues the
-sealed plan, drains response-derived candidates sequentially, and dispatches each
-candidate at most once. Discovery accepts bounded Link, Location, Allow, HTML
-links and safe GET forms, recognized JSON hypermedia links, OpenAPI operations,
-and sitemap locations. Query values and OpenAPI path parameters are replaced by
-sealed `SYNTHETIC_*` values. Response-derived execution is limited to
-GET/HEAD/OPTIONS; write-capable hints require a predeclared mutation envelope.
-There is no candidate-count ceiling.
+sealed plan, and dispatches each candidate at most once. Although the internal
+kernel retains bounded discovery mechanics, the public fixed-campaign route
+refuses any scope with discovery enabled and never turns response material into
+new work.
 
 Declared mutations perform credential preflight, exact before-state verification,
 one mutation attempt, after-state and sibling-context verification, one always-on
@@ -104,9 +117,14 @@ bound to the canonical campaign-ledger directory, and the controller reserves
 enough time through `validity.cleanup_not_after` for mutation settlement plus the
 cleanup sequence.
 
-There is no campaign action-count, cumulative-impact, aggregate-response, or
-controller wall-time ceiling. Repeated candidates can be dispatched throughout the
-authorization window. The ledger atomically allocates monotonic sequences, uses
+Observer execution or validation failure is distinct from a completed semantic
+mismatch. The controller records the former as `VERIFICATION_FAILED` with only a
+bounded reason code, then follows the applicable stop and cleanup path; raw
+observer response and error payloads are never persisted.
+
+The public route rejects more than 256 sealed actions. Each accepted action must
+also fit the sealed per-request, rate, concurrency, validity, mutation, cleanup,
+and response bounds. The ledger atomically allocates monotonic sequences, uses
 immutable canonical records with a predecessor-byte hash chain, serializes writers,
 and fails closed on tampering, gaps, links/junctions, stale leases, and unexpected
 entries. A durable pre-dispatch record is a consumed attempt. Restart recovery
@@ -139,9 +157,10 @@ not universal de-identification of arbitrary operator-supplied scope text.
    extraction of the permissions it grants: active testing, production,
    third-party, PHI-sensitive, and mutation. It also binds authorized origins,
    path prefixes, methods, test categories, every dispatched action, and a
-   renewable execution lease. Actions may be discovered during the campaign,
-   but each is validated against that engagement scope before dispatch. The
-   controller records this document-bound grant
+   renewable execution lease. The retained internal adaptive kernel can validate
+   a discovered candidate against that engagement scope, but public fixed-
+   campaign commands reject discovery-enabled scopes. The controller records
+   this document-bound grant
    but does not claim to judge its legal sufficiency or cryptographically verify
    its issuer. The validator emits `campaign_grant_sha256` over the canonical
    extracted scope. A controller-held copy detects later scope widening; the hash
@@ -241,15 +260,17 @@ stores no credential value or digest and is mutually exclusive with `env:` and
 `stdin:`. Browser scopes require Chrome-managed PKIX/hostname TLS; controller SPKI
 pin mode is refused because the companion cannot observe or enforce that pin.
 
-The packaged Manifest V3 companion in `browser/http-authed-chrome` has only
-`activeTab`, `scripting`, and loopback-host access. It has no cookie, storage,
-debugger, request-observer, broad target-host, or profile permission. The
-controller starts an IPv4-only loopback bridge and creates a random one-use
-pairing capability bound to the sealed extension ID, campaign, and origin. In the
-exact logged-in tab, one explicit operator attach binds that tab and document for
-the campaign. Every action then follows `PREPARE -> READY -> COMMIT -> RESULT`,
-with one action in flight, immediate pre-send authorization revalidation, and no
-automatic retry.
+The packaged Manifest V3 companion in `browser/http-authed-chrome` is an inert
+`0.12.1` placeholder with no host, tab, scripting, background, or attach
+authority. A separately supplied protocol-compatible companion may use the
+public browser bridge under the narrow active-tab, scripting, and loopback-host
+boundary; it must not gain cookie, storage, debugger, request-observer, broad
+target-host, or profile access. With such a companion, the controller starts an
+IPv4-only loopback bridge and creates a random one-use pairing capability bound
+to the sealed extension ID, campaign, and origin. In the exact logged-in tab,
+one explicit operator attach binds that tab and document for the campaign. Every
+action then follows `PREPARE -> READY -> COMMIT -> RESULT`, with one action in
+flight, immediate pre-send authorization revalidation, and no automatic retry.
 
 The fixed injected function rechecks the tab origin, document nonce, action
 binding, uppercase method, relative URL, body digest, and bounded headers before
@@ -257,9 +278,10 @@ one same-origin fetch. Chrome applies its current session and processes normal
 cookie rotation internally on every request. Neither controller nor companion
 reads cookie or Authorization values, `document.cookie`, browser storage, a
 profile database, CDP, or HAR. Only bounded response material needed transiently
-for discovery and mutation verification crosses loopback; evidence contracts
-still forbid durable body or header values. Tab, document, origin, pairing,
-protocol, or action drift fails closed.
+for sealed observations and mutation verification crosses the public fixed-
+campaign bridge. Retained internal discovery parsing is not a public execution
+path. Evidence contracts still forbid durable body or header values. Tab,
+document, origin, pairing, protocol, or action drift fails closed.
 
 ### PHI-minimizing evidence handling
 
@@ -296,8 +318,9 @@ values; a future sensitive-data detector is still required for a universal claim
 
 1. **Target** — the action URL must lie within the sealed authorized origin and be
    covered by an authorized path prefix and method (and, in signed mode, by the
-   owner-signed RoE). A discovered candidate is allowed only after this same
-   just-in-time scope validation.
+   owner-signed RoE). The retained internal adaptive kernel applies this same
+   just-in-time scope validation to discovered candidates; public fixed-campaign
+   commands do not dispatch them.
 2. **Expected mutation** — a sealed `expected_mutation` descriptor: resource id,
    field, expected before-value, expected after-value. Signed in
    `EXTERNAL_SIGNED_AUTHED`. The controller will not dispatch a mutation whose
@@ -334,19 +357,18 @@ values; a future sensitive-data detector is still required for a universal claim
 
 ### Campaign controls and cleanup
 
-- There is no mutation-count, action-count, or cumulative-impact ceiling. A
-  monotonic ledger exists for evidence and sequencing, not as a dispatch cap.
-  Authorized exploration may continue for the engagement window, including
-  actions discovered during the campaign, provided every action remains within
-  the authorized origin, path, method, test-category, data-handling, and mutation
-  permissions. There is no aggregate-response or controller wall-time cap; the
-  ordinary authorization window (`validity.not_after`) defines how long new work
-  may continue. `validity.cleanup_not_after` extends only the deadline for
-  ledger-proven rollback and rollback verification.
-  Per-request timeout/response-size, rate, concurrency, and emergency-stop
-  controls remain operational safeguards and do not define the assessment's
-  completeness denominator. The 64 MiB input-file bound protects the validator;
-  runtime discoveries belong in the separate ledger rather than growing that file.
+- The public fixed-campaign controller admits at most 256 sealed actions and does
+  not dispatch response-derived actions. That ceiling is enforced before the
+  campaign opens; the lower-level monotonic ledger remains the evidence and
+  sequencing primitive rather than the source of that cap. The ordinary
+  authorization window (`validity.not_after`) defines how long sealed work may
+  continue. `validity.cleanup_not_after` extends only the deadline for
+  ledger-proven rollback and rollback verification. Per-request timeout and
+  response-size, rate, concurrency, and emergency-stop controls remain
+  operational safeguards and do not define the assessment's completeness
+  denominator. The bounded input-file limit protects the validator; retained
+  internal discovery mechanics remain conformance-only and cannot enlarge a
+  public campaign.
 - Terminalization never leaves a half-applied, unverified mutation silent: either
   rollback completes and verifies, or the run terminates
   `MANUAL_INTERVENTION_REQUIRED` with the exact residual state recorded.
@@ -359,7 +381,7 @@ values; a future sensitive-data detector is still required for a universal claim
 ### Runtime material layout
 
 `campaign-written` requires `--ledger` to name an absolute external directory.
-Mutating actions and body-bearing probes also require an absolute `--materials`
+Mutating actions and body-bearing campaign probes also require an absolute `--materials`
 directory. A countersignature for allocated sequence `N` is read from
 `countersignature-N.json`. Synthetic body bytes are read from
 `body-<sha256(body_id UTF-8)>.bin`; using the digest as the filename prevents a
@@ -368,7 +390,8 @@ re-read without following links, and never copied into the ledger.
 
 The controller-held `campaign_grant_sha256` comes from `validate-written`; it must
 be supplied unchanged to `campaign-written`. The command also requires the exact
-operator id and `--confirm-authorization-current` for every invocation.
+operator id. Invoking the live campaign is the operator's launch directive; the
+public CLI does not require a second legal-attestation flag.
 Scopes sealed as `stdin:PIPE` additionally require `--credential-stdin` and
 redirected stdin at every credential-bearing live invocation. Scopes sealed as
 `CHROME_ACTIVE_TAB_SESSION` instead require `--credential-browser`, the expected
@@ -394,9 +417,10 @@ issuer was not cryptographically verified and legal sufficiency was not judged.
   rationale alone cannot select `WRITTEN_AUTHORIZATION_AUTHED`; the supplied
   document digest, extracted permissions, target scope, lease, and candidate
   action must all match at dispatch.
-- Automatic retry of a mutation with uncertain delivery. Response-driven path
-  discovery, crawling, and chaining are allowed only inside the authorized
-  campaign scope and each derived request is revalidated before dispatch.
+- Automatic retry of a mutation with uncertain delivery. Public fixed-campaign
+  execution also refuses response-driven discovery, crawling, and chaining. The
+  retained internal adaptive kernel is conformance-only and does not dispatch
+  derived requests through the public commands.
 
 ## Consequences
 

@@ -713,7 +713,7 @@ test('real HTTPS log persists, deduplicates, restarts, and verifies offline', as
       ],
       { encoding: 'utf8', windowsHide: true },
     )
-    assert.match(offline, /Root authenticity: VERIFIED/)
+    assert.match(offline, /Root signature: VERIFIED WITH SUPPLIED KEY/)
     assert.match(
       offline,
       /Transparency inclusion: VERIFIED \(reference-log\.example\.test\/v1, tree 1, leaf 0\)/,
@@ -740,7 +740,7 @@ test('real HTTPS log persists, deduplicates, restarts, and verifies offline', as
       ],
       { encoding: 'utf8', windowsHide: true },
     )
-    assert.match(offlineAnchored, /Root authenticity: VERIFIED/)
+    assert.match(offlineAnchored, /Root signature: VERIFIED WITH SUPPLIED KEY/)
     assert.match(
       offlineAnchored,
       /Transparency inclusion: VERIFIED \(reference-log\.example\.test\/v1, tree 2, leaf 0\)/,

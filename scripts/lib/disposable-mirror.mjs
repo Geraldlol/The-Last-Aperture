@@ -8,7 +8,7 @@
  * This is not a sandbox. The copy prevents accidental mutation of the target;
  * it does not contain what an executed command does to the rest of the machine.
  */
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { inventoryRepository } from './inventory.mjs'
@@ -43,13 +43,49 @@ export async function createMirror(targetRoot, mirrorRoot) {
 
 export async function materializeFiles(mirrorRoot, files) {
   const root = resolve(mirrorRoot)
+  const canonicalRoot = await realpath(root)
   const written = []
   for (const { path, contents } of files) {
     const absolute = resolve(root, path)
     if (absolute !== root && !absolute.startsWith(root + sep)) {
       throw new Error(`proof file path escapes the mirror: ${path}`)
     }
-    await mkdir(dirname(absolute), { recursive: true })
+    const parent = dirname(absolute)
+    const parentRelative = relative(root, parent)
+    let cursor = root
+    for (const segment of parentRelative.split(sep).filter(Boolean)) {
+      cursor = join(cursor, segment)
+      try {
+        const stat = await lstat(cursor)
+        if (stat.isSymbolicLink()) {
+          throw new Error(`proof file path crosses a symbolic link or reparse point: ${path}`)
+        }
+        if (!stat.isDirectory()) {
+          throw new Error(`proof file parent is not a directory: ${path}`)
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+        await mkdir(cursor)
+      }
+    }
+    const canonicalParent = await realpath(parent)
+    if (
+      canonicalParent !== canonicalRoot
+      && !canonicalParent.startsWith(canonicalRoot + sep)
+    ) {
+      throw new Error(`proof file path escapes through a symbolic link or reparse point: ${path}`)
+    }
+    try {
+      const stat = await lstat(absolute)
+      if (stat.isSymbolicLink()) {
+        throw new Error(`proof file is a symbolic link or reparse point: ${path}`)
+      }
+      if (!stat.isFile()) {
+        throw new Error(`proof file target is not a regular file: ${path}`)
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
     await writeFile(absolute, contents)
     written.push(relative(root, absolute).split(sep).join('/'))
   }

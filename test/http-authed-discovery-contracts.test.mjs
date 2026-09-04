@@ -2,10 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import { assertValidHttpAuthedScope } from '../scripts/lib/http-authed-contracts.mjs'
-import { writtenScope } from './helpers/http-authed-fixtures.mjs'
+import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 function discoveryScope() {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
   const actionUrl = 'https://peerstar-test.example.test/approved/seed'
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
   scope.liveness.credential_preflight.url = 'https://peerstar-test.example.test/approved/whoami'
@@ -42,7 +42,7 @@ function discoveryScope() {
   return scope
 }
 
-test('sealed automated discovery is a subset of the written campaign scope', () => {
+test('sealed automated discovery is a subset of the operator-attested campaign scope', () => {
   const scope = discoveryScope()
   assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
   assert.equal('max_candidates' in scope.discovery, false)

@@ -21,8 +21,15 @@ const CLEANUP_RECOVERY_STATES = new Set([
   'AFTER_READ_SETTLED',
   'AFTER_READ_FAILED',
   'AFTER_READ_VERIFIED',
+  'AFTER_READ_VERIFICATION_FAILED',
   'ROLLBACK_SETTLED',
   'ROLLBACK_FAILED',
+])
+const MUTATION_RESPONSE_STOP_REASONS = new Set([
+  'CREDENTIAL_INVALID',
+  'LIMIT_REACHED',
+  'UNEXPECTED_REDIRECT',
+  'TARGET_HEALTH_DEGRADED',
 ])
 
 export class HttpAuthedCampaignControllerError extends Error {
@@ -59,6 +66,7 @@ function publicLedger(snapshot) {
     queued_actions: snapshot.queued_actions,
     terminal_actions: snapshot.terminal_actions,
     stopped: snapshot.stopped,
+    stop_reason: snapshot.stop_reason,
   }
 }
 
@@ -156,6 +164,29 @@ function responseMetadata(response, requestMayHaveBeenSent = true, observation) 
   }
 }
 
+function responseStopReason(status) {
+  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
+  if (status === 429) return 'LIMIT_REACHED'
+  if (status >= 300 && status <= 399) return 'UNEXPECTED_REDIRECT'
+  if (status >= 500) return 'TARGET_HEALTH_DEGRADED'
+  return null
+}
+
+function durableMutationStopReason(state) {
+  for (const phase of [
+    'CREDENTIAL_PREFLIGHT',
+    'BEFORE_READ',
+    'MUTATION',
+    'AFTER_READ',
+    'ROLLBACK',
+    'ROLLBACK_VERIFY',
+  ]) {
+    const reason = responseStopReason(state?.phase_outcomes?.[phase]?.status)
+    if (reason !== null) return reason
+  }
+  return null
+}
+
 function expiredCleanupTarget({ scope, ledger, campaignGrantSha256 }) {
   if (
     typeof ledger?.actionState !== 'function'
@@ -175,7 +206,7 @@ function expiredCleanupTarget({ scope, ledger, campaignGrantSha256 }) {
       && !state.terminal
       && state.provenance === 'SEALED_PLAN'
       && state.action_kind === 'mutate'
-      && state.approval_consumed === true
+      && state.authorization_consumed === true
       && typeof state.lease_id === 'string'
       && CLEANUP_RECOVERY_STATES.has(state.state)
     ) {
@@ -186,13 +217,12 @@ function expiredCleanupTarget({ scope, ledger, campaignGrantSha256 }) {
 }
 
 /**
- * Drain an operator-attested or document-bound authenticated campaign sequentially. The ledger is the
+ * Drain an operator-attested authenticated campaign sequentially. The ledger is the
  * authoritative exact-once history; candidate bytes live only in the sealed
  * scope or in this process for response-derived, synthetic-safe discoveries.
  */
 export async function runHttpAuthedCampaign({
   scope,
-  documentBytes,
   expectedCampaignGrantSha256,
   operatorId,
   authorizationConfirmed,
@@ -216,6 +246,7 @@ export async function runHttpAuthedCampaign({
     || typeof ledger.confirmCampaignSession !== 'function'
     || typeof ledger.snapshot !== 'function'
     || typeof ledger.actionState !== 'function'
+    || typeof ledger.reconcileInterruptedDispatches !== 'function'
   ) {
     throw campaignError(
       'HTTP_AUTHED_CAMPAIGN_LEDGER_REQUIRED',
@@ -238,7 +269,6 @@ export async function runHttpAuthedCampaign({
   try {
     verified = verifyHttpAuthedAuthorization({
       scope,
-      documentBytes,
       now: now(),
     })
   } catch (cause) {
@@ -248,7 +278,6 @@ export async function runHttpAuthedCampaign({
     const cleanupVerified = verifyHttpAuthedCleanupCandidate({
       scope,
       action: cleanupCandidate,
-      documentBytes,
       expectedCampaignGrantSha256,
       now: now(),
     })
@@ -318,6 +347,12 @@ export async function runHttpAuthedCampaign({
   const queue = []
   const queuedIds = new Set()
   let executedActions = 0
+  const observeOperatorStop = async () => {
+    if (typeof ledger.observeStopRequest === 'function') {
+      await ledger.observeStopRequest()
+    }
+    return ledger.snapshot().stopped === true
+  }
 
   const enqueue = async (candidateDraft, provenance) => {
     const enqueued = await ledger.enqueueCandidate({ candidateDraft, provenance })
@@ -334,8 +369,11 @@ export async function runHttpAuthedCampaign({
     return enqueued
   }
 
+  await observeOperatorStop()
   if (entryCleanupTarget === null) {
-    for (const action of scope.requests) await enqueue(action, 'SEALED_PLAN')
+    if (!ledger.snapshot().stopped) {
+      for (const action of scope.requests) await enqueue(action, 'SEALED_PLAN')
+    }
   } else {
     const { action, state } = entryCleanupTarget
     queuedIds.add(state.action_id)
@@ -362,6 +400,7 @@ export async function runHttpAuthedCampaign({
     if (currentState?.terminal) continue
     const cleanupRecovery = currentState?.action_kind === 'mutate'
       && currentState.state !== 'QUEUED'
+    await observeOperatorStop()
     if (ledger.snapshot().stopped && !cleanupRecovery) break
     if (cleanupRecovery) {
       const recoveryLease = {
@@ -386,7 +425,6 @@ export async function runHttpAuthedCampaign({
         verifyHttpAuthedCleanupCandidate({
           scope,
           action: recoveryLease.allocatedAction,
-          documentBytes,
           expectedCampaignGrantSha256,
           now: now(),
         })
@@ -419,6 +457,7 @@ export async function runHttpAuthedCampaign({
     }
     if (executedActions > 0 && scope.limits.min_interval_ms > 0) {
       await wait(scope.limits.min_interval_ms)
+      if (await observeOperatorStop()) break
     }
     executedActions += 1
     const lease = await ledger.leaseAction({
@@ -429,10 +468,19 @@ export async function runHttpAuthedCampaign({
     verifyHttpAuthedCandidate({
       scope,
       action,
-      documentBytes,
       expectedCampaignGrantSha256,
       now: now(),
     })
+    if (await observeOperatorStop()) {
+      await ledger.terminalizeAction({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        outcome: action.kind === 'mutate' ? 'FAILED_BEFORE_MUTATION' : 'FAILED_BEFORE_SEND',
+        reasonCode: 'OPERATOR_REQUESTED',
+      })
+      counts.failed += 1
+      break
+    }
 
     if (action.kind === 'mutate') {
       if (executeMutation === undefined) {
@@ -446,9 +494,13 @@ export async function runHttpAuthedCampaign({
         continue
       }
       let stopReason = null
+      let haltAfterMutation = false
       try {
         const outcome = await executeMutation({ action, lease, ledger, reauthorize })
         const terminalOutcome = outcome?.terminal_outcome ?? outcome?.outcome
+        const preciseStopReason = MUTATION_RESPONSE_STOP_REASONS.has(outcome?.stop_reason)
+          ? outcome.stop_reason
+          : null
         if (terminalOutcome === 'MUTATION_VERIFIED_ROLLBACK_VERIFIED') {
           counts.completed += 1
         } else if ([
@@ -463,10 +515,11 @@ export async function runHttpAuthedCampaign({
             ? 'VERIFICATION_MISMATCH'
             : 'MUTATION_ACTION_FAILED'
         }
+        if (preciseStopReason !== null) stopReason = preciseStopReason
       } catch (cause) {
-        const state = ledger.actionState(lease.actionId)
+        let state = ledger.actionState(lease.actionId)
         if (!state?.terminal) {
-          const postWrite = state?.approval_consumed === true && (
+          const postWrite = state?.authorization_consumed === true && (
             state?.pending_phase !== null
             || state?.settled_phases?.some((phase) => [
               'MUTATION', 'AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY',
@@ -474,25 +527,94 @@ export async function runHttpAuthedCampaign({
           )
           const deliveryUncertain = postWrite
             || cause?.request_may_have_been_sent === true
-          await ledger.terminalizeAction({
-            actionId: lease.actionId,
-            leaseId: lease.leaseId,
-            outcome: postWrite
-              ? 'MANUAL_INTERVENTION_REQUIRED'
-              : deliveryUncertain
+          if (postWrite) {
+            // Never terminalize a possibly executed write merely because its
+            // executor unwound. Reconcile any ambiguous append, durably stop
+            // new work, and enter the cleanup-only path on the same lease.
+            // The reconciliation state machine never reissues MUTATION.
+            const preciseDurableStopReason = durableMutationStopReason(state)
+            if (preciseDurableStopReason !== null && !ledger.snapshot().stopped) {
+              await ledger.stopCampaign(preciseDurableStopReason)
+            }
+            await ledger.reconcileInterruptedDispatches()
+            state = ledger.actionState(lease.actionId)
+            if (!ledger.snapshot().stopped) {
+              await ledger.stopCampaign('MUTATION_EXECUTOR_FAILED')
+            }
+            if (state?.terminal) {
+              if (state.outcome === 'MUTATION_VERIFIED_ROLLBACK_VERIFIED') {
+                counts.completed += 1
+              } else if (state.outcome === 'ROLLBACK_VERIFIED_AFTER_FAILURE') {
+                counts.failed += 1
+              } else {
+                counts.uncertain += 1
+              }
+            } else if (
+              CLEANUP_RECOVERY_STATES.has(state?.state)
+              && executeMutationRecovery !== undefined
+            ) {
+              try {
+                verifyHttpAuthedCleanupCandidate({
+                  scope,
+                  action,
+                  expectedCampaignGrantSha256,
+                  now: now(),
+                })
+                const recovery = await executeMutationRecovery({
+                  action,
+                  lease,
+                  ledger,
+                  reauthorize,
+                })
+                if (recovery?.outcome === 'MUTATION_VERIFIED_ROLLBACK_VERIFIED') {
+                  counts.completed += 1
+                } else {
+                  counts.uncertain += 1
+                }
+              } catch {
+                const recoveryState = ledger.actionState(lease.actionId)
+                if (!recoveryState?.terminal) {
+                  await ledger.terminalizeAction({
+                    actionId: lease.actionId,
+                    leaseId: lease.leaseId,
+                    outcome: 'MANUAL_INTERVENTION_REQUIRED',
+                    reasonCode: 'MUTATION_RECOVERY_FAILED',
+                  })
+                }
+                counts.uncertain += 1
+              }
+            } else {
+              await ledger.terminalizeAction({
+                actionId: lease.actionId,
+                leaseId: lease.leaseId,
+                outcome: 'MANUAL_INTERVENTION_REQUIRED',
+                reasonCode: executeMutationRecovery === undefined
+                  ? 'MUTATION_RECOVERY_EXECUTOR_UNAVAILABLE'
+                  : 'MUTATION_RECOVERY_STATE_UNAVAILABLE',
+              })
+              counts.uncertain += 1
+            }
+            haltAfterMutation = true
+          } else {
+            await ledger.terminalizeAction({
+              actionId: lease.actionId,
+              leaseId: lease.leaseId,
+              outcome: deliveryUncertain
                 ? 'DELIVERY_UNCERTAIN'
-              : state?.approval_consumed
-                ? 'FAILED_BEFORE_SEND'
-                : 'FAILED_BEFORE_MUTATION',
-            reasonCode: deliveryUncertain
-              ? 'MUTATION_EXECUTOR_DELIVERY_UNCERTAIN'
-              : 'MUTATION_EXECUTOR_REJECTED',
-          })
-          if (deliveryUncertain) counts.uncertain += 1
-          else counts.failed += 1
+                : state?.authorization_consumed
+                  ? 'FAILED_BEFORE_SEND'
+                  : 'FAILED_BEFORE_MUTATION',
+              reasonCode: deliveryUncertain
+                ? 'MUTATION_EXECUTOR_DELIVERY_UNCERTAIN'
+                : 'MUTATION_EXECUTOR_REJECTED',
+            })
+            if (deliveryUncertain) counts.uncertain += 1
+            else counts.failed += 1
+          }
         }
-        stopReason = 'MUTATION_EXECUTOR_FAILED'
+        if (!haltAfterMutation) stopReason = 'MUTATION_EXECUTOR_FAILED'
       }
+      if (haltAfterMutation) break
       if (stopReason !== null) {
         if (!ledger.snapshot().stopped) await ledger.stopCampaign(stopReason)
         break
@@ -501,6 +623,7 @@ export async function runHttpAuthedCampaign({
     }
 
     let preDispatchRecorded = false
+    let preDispatchSettled = false
     const beforeSend = async () => {
       if (preDispatchRecorded) {
         throw campaignError(
@@ -508,14 +631,28 @@ export async function runHttpAuthedCampaign({
           'campaign executor invoked pre-dispatch more than once',
         )
       }
+      if (await observeOperatorStop()) {
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_STOP_REQUESTED',
+          'operator stop was requested before probe dispatch',
+        )
+      }
       await reauthorize({ action: structuredClone(action) })
       verifyHttpAuthedCandidate({
         scope,
         action,
-        documentBytes,
         expectedCampaignGrantSha256,
         now: now(),
       })
+      // Re-import the external stop after every asynchronous qualification
+      // step. A stop committed while reauthorization was in flight must win
+      // before this request receives a durable send permit.
+      if (await observeOperatorStop()) {
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_STOP_REQUESTED',
+          'operator stop was requested while probe dispatch was being qualified',
+        )
+      }
       await ledger.markPreDispatch({
         actionId: lease.actionId,
         leaseId: lease.leaseId,
@@ -523,6 +660,33 @@ export async function runHttpAuthedCampaign({
         requestBindingSha256: requestBindingSha256(action),
       })
       preDispatchRecorded = true
+      // The pre-dispatch record and its immediate stop observation form the
+      // controller's final permit boundary. If a stop landed with that record,
+      // settle the qualified request as definitely unsent before returning to
+      // the transport.
+      if (await observeOperatorStop()) {
+        try {
+          await ledger.markOutcome({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            phase: 'PROBE',
+            outcome: 'FAILED',
+            responseMetadata: {
+              status: null,
+              bytes: 0,
+              headerNames: [],
+              requestMayHaveBeenSent: false,
+            },
+          })
+        } finally {
+          preDispatchSettled = ledger.actionState(lease.actionId)
+            ?.phase_outcomes?.PROBE?.outcome === 'FAILED'
+        }
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_STOP_REQUESTED',
+          'operator stop was committed with probe pre-dispatch; request was not sent',
+        )
+      }
     }
 
     try {
@@ -545,6 +709,7 @@ export async function runHttpAuthedCampaign({
         outcome: 'SETTLED',
         responseMetadata: settledResponse,
       })
+      const settledStopReason = responseStopReason(settledResponse.status)
       if (settledResponse.failureStageCode !== undefined) {
         observationFailures.push({
           action_sequence: action.sequence,
@@ -561,6 +726,10 @@ export async function runHttpAuthedCampaign({
           reasonCode: 'PROBE_JSON_SHAPE_OBSERVATION_FAILED',
         })
         counts.failed += 1
+        if (settledStopReason !== null) {
+          if (!ledger.snapshot().stopped) await ledger.stopCampaign(settledStopReason)
+          break
+        }
         continue
       }
       if (settledResponse.jsonShape !== undefined) {
@@ -569,6 +738,17 @@ export async function runHttpAuthedCampaign({
           method: action.method,
           json_shape: structuredClone(settledResponse.jsonShape),
         })
+      }
+
+      if (settledStopReason !== null) {
+        await ledger.terminalizeAction({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          outcome: 'PROBE_COMPLETED',
+        })
+        counts.completed += 1
+        if (!ledger.snapshot().stopped) await ledger.stopCampaign(settledStopReason)
+        break
       }
 
       if (scope.discovery?.enabled === true) {
@@ -616,7 +796,12 @@ export async function runHttpAuthedCampaign({
       counts.completed += 1
     } catch (cause) {
       const requestMayHaveBeenSent = cause?.request_may_have_been_sent === true
-      if (preDispatchRecorded) {
+      const durableState = ledger.actionState(lease.actionId)
+      const durablePreDispatch = preDispatchRecorded
+        || durableState?.pending_phase === 'PROBE'
+        || durableState?.phase_outcomes?.PROBE !== undefined
+      preDispatchSettled ||= durableState?.phase_outcomes?.PROBE !== undefined
+      if (durablePreDispatch && !preDispatchSettled) {
         await ledger.markOutcome({
           actionId: lease.actionId,
           leaseId: lease.leaseId,
@@ -649,6 +834,10 @@ export async function runHttpAuthedCampaign({
     }
   }
 
+  // Close the final response/terminalization race: a stop requested while the
+  // last request was in flight must still enter the ledger before the result is
+  // projected, even though there is no next loop iteration to observe it.
+  await observeOperatorStop()
   return {
     kind: 'red-team-audit/http-authed-campaign-result',
     schema_version: observationFailures.length > 0
@@ -663,9 +852,6 @@ export async function runHttpAuthedCampaign({
     authorization_assurance: authorizationEvidence.authorizationAssurance,
     authorization_nonclaim: authorizationEvidence.authorizationNonclaim,
     authorization_binding_sha256: verified.authorizationBindingSha256,
-    ...(verified.authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorization_document_sha256: verified.authorizationDocumentSha256 }),
     campaign_grant_sha256: verified.campaignGrantSha256,
     ...(entryCleanupTarget === null ? {} : { cleanup_only: true }),
     actions: counts,

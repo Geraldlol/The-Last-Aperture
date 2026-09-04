@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { isMainModule } from './lib/main-module.mjs'
+import { terminalSafeText } from './lib/terminal-text.mjs'
 
 // Deterministic: every timestamp is a constant, so a rebuilt fixture is
 // byte-identical and the drift test means something. Date.now() would make the
@@ -171,6 +172,6 @@ if (isMainModule(import.meta.url)) {
   const out = process.argv[2] ?? 'test/fixtures/evidence'
   const written = await buildEvidenceFixtures(out)
   for (const [name, path] of Object.entries(written)) {
-    console.log(`${name}: ${path}`)
+    console.log(`${terminalSafeText(name, 128)}: ${terminalSafeText(path)}`)
   }
 }

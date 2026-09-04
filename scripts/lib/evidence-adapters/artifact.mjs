@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { lstat, open } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { compareCanonicalStrings } from '../canonical-order.mjs'
 import { writeEvidenceBundle } from '../evidence-bundle.mjs'
 import {
@@ -14,7 +16,12 @@ const ADAPTER_VERSION = '1.0.0'
 export const DEFAULT_ARTIFACT_LIMITS = Object.freeze({
   ...DEFAULT_NORMALIZER_LIMITS,
   maxCapturedEntryBytes: 1024 * 1024,
+  maxSourceBytes: DEFAULT_NORMALIZER_LIMITS.maxTotalBytes,
 })
+
+const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
+  | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
+const SOURCE_READ_CHUNK_BYTES = 64 * 1024
 
 // Every canonical capability, declared once. Offline file reading touches no
 // target, so there is nothing for this adapter to count: impact accounting
@@ -34,6 +41,131 @@ const CAPABILITIES = Object.freeze({
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+function sourceError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function assertLocalSourcePath(sourcePath) {
+  if (typeof sourcePath !== 'string' || sourcePath.trim() === '') {
+    throw sourceError('ARTIFACT_SOURCE_PATH_REQUIRED', 'artifact source_path is required')
+  }
+  if (/^(?:\\\\|\/\/)/.test(sourcePath)) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_REMOTE_PATH_REFUSED',
+      'artifact acquisition refuses UNC, network-share, device, and pipe source paths',
+    )
+  }
+  if (
+    process.platform === 'win32'
+    && sourcePath
+      .replaceAll('/', '\\')
+      .split('\\')
+      .some((segment) => /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(segment))
+  ) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_DEVICE_PATH_REFUSED',
+      'artifact acquisition refuses Windows reserved device source paths',
+    )
+  }
+  return resolve(sourcePath)
+}
+
+async function readBoundedArtifactSource(sourcePath, maxBytes) {
+  const path = assertLocalSourcePath(sourcePath)
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new RangeError('artifact maxSourceBytes must be a positive safe integer')
+  }
+
+  let before
+  try {
+    before = await lstat(path)
+  } catch (error) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_NOT_FOUND',
+      `artifact source not found: ${sourcePath} (${error.code ?? 'unavailable'})`,
+    )
+  }
+  if (before.isSymbolicLink() || !before.isFile()) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_NOT_REGULAR',
+      `artifact source must be one regular, non-linked file: ${sourcePath}`,
+    )
+  }
+  if (before.size > maxBytes) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_TOO_LARGE',
+      `artifact source is ${before.size} bytes, above the ${maxBytes}-byte source cap`,
+    )
+  }
+
+  let handle
+  try {
+    handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
+  } catch (error) {
+    throw sourceError(
+      'ARTIFACT_SOURCE_OPEN_REFUSED',
+      `artifact source could not be opened without following links: ${sourcePath} (${error.code ?? 'unavailable'})`,
+    )
+  }
+
+  try {
+    const opened = await handle.stat()
+    if (!opened.isFile()) {
+      throw sourceError(
+        'ARTIFACT_SOURCE_NOT_REGULAR',
+        `artifact source must remain a regular file while open: ${sourcePath}`,
+      )
+    }
+    if (
+      opened.dev !== before.dev
+      || opened.ino !== before.ino
+      || opened.size !== before.size
+      || opened.mtimeMs !== before.mtimeMs
+    ) {
+      throw sourceError(
+        'ARTIFACT_SOURCE_CHANGED_DURING_READ',
+        `artifact source changed before its bounded read began: ${sourcePath}`,
+      )
+    }
+    if (opened.size > maxBytes) {
+      throw sourceError(
+        'ARTIFACT_SOURCE_TOO_LARGE',
+        `artifact source is ${opened.size} bytes, above the ${maxBytes}-byte source cap`,
+      )
+    }
+
+    const chunks = []
+    let total = 0
+    while (true) {
+      const probeBytes = Math.min(SOURCE_READ_CHUNK_BYTES, maxBytes - total + 1)
+      const chunk = Buffer.allocUnsafe(probeBytes)
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null)
+      if (bytesRead === 0) break
+      total += bytesRead
+      if (total > maxBytes) {
+        throw sourceError(
+          'ARTIFACT_SOURCE_TOO_LARGE',
+          `artifact source grew beyond the ${maxBytes}-byte source cap while being read`,
+        )
+      }
+      chunks.push(chunk.subarray(0, bytesRead))
+    }
+
+    const after = await handle.stat()
+    if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs) {
+      throw sourceError(
+        'ARTIFACT_SOURCE_CHANGED_DURING_READ',
+        `artifact source changed during its bounded read: ${sourcePath}`,
+      )
+    }
+    return { bytes: Buffer.concat(chunks, total), path }
+  } finally {
+    await handle.close()
+  }
 }
 
 // Zero-padded so a ten-layer image still sorts correctly, and so
@@ -136,23 +268,27 @@ export function createArtifactAdapter({
     // else. A missing source fails here, not silently at run time as an empty
     // success — a missing dependency is a failure, never an empty success.
     plan: async (request) => {
-      let bytes
-      try {
-        bytes = await readFile(request.source_path)
-      } catch (error) {
-        throw new Error(`artifact source not found: ${request.source_path} (${error.code})`)
-      }
+      const source = await readBoundedArtifactSource(
+        request.source_path,
+        effectiveLimits.maxSourceBytes,
+      )
+      const { bytes } = source
       const digest = sha256(bytes)
       return {
         plan_id: `artifact:${digest.slice(0, 16)}`,
-        source_path: request.source_path,
+        source_path: source.path,
+        source_integrity: {
+          algorithm: 'sha256',
+          sha256: digest,
+          size_bytes: bytes.length,
+        },
         evidence_context_seed: {
           evidence_id: request.evidence_id,
           evidence_class: 'built-artifact',
           adapter_id: 'artifact',
           target_identity: `sha256:${digest}`,
           acquisition_mode: 'offline-export',
-          detection_evidence: [`${request.source_path} sha256:${digest.slice(0, 8)}`],
+          detection_evidence: [`${source.path} sha256:${digest.slice(0, 8)}`],
           confidence: 'high',
         },
         target_class: request.target_class ?? 'LAB',
@@ -162,7 +298,32 @@ export function createArtifactAdapter({
     },
 
     run: async (planned, { out }) => {
-      const bytes = await readFile(planned.source_path)
+      const binding = planned.source_integrity
+      if (
+        binding?.algorithm !== 'sha256'
+        || !/^[a-f0-9]{64}$/.test(binding.sha256 ?? '')
+        || !Number.isSafeInteger(binding.size_bytes)
+        || binding.size_bytes < 0
+        || planned.evidence_context_seed?.target_identity !== `sha256:${binding.sha256}`
+        || planned.plan_id !== `artifact:${String(binding.sha256).slice(0, 16)}`
+      ) {
+        throw sourceError(
+          'ARTIFACT_SOURCE_BINDING_INVALID',
+          'artifact run requires a consistent exact source digest and size sealed at planning',
+        )
+      }
+      const source = await readBoundedArtifactSource(
+        planned.source_path,
+        effectiveLimits.maxSourceBytes,
+      )
+      const { bytes } = source
+      const actualDigest = sha256(bytes)
+      if (bytes.length !== binding.size_bytes || actualDigest !== binding.sha256) {
+        throw sourceError(
+          'ARTIFACT_SOURCE_CHANGED_SINCE_PLAN',
+          'artifact source changed since planning; refusing normalization and evidence output',
+        )
+      }
       const normalized = normalizeOciLayout(bytes, effectiveLimits)
       const { payload, gaps } = buildArtifactPayload(bytes, normalized, effectiveLimits)
 

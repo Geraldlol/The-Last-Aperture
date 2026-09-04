@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { digestAdversarialPlan } from '../scripts/lib/adversarial-validation-contracts.mjs'
+import { digestPolicySnapshot } from '../scripts/lib/bounty-contracts.mjs'
 import {
   INTENSITY_TIERS,
   applyCap,
@@ -12,6 +14,17 @@ import {
 } from '../scripts/lib/bounty-intensity.mjs'
 import { runScan } from '../scripts/lib/bounty-scan-controller.mjs'
 import { normalizeCapturedRequest } from '../scripts/lib/bounty-authz-request.mjs'
+import { findRole } from '../scripts/lib/bounty-authz-roles.mjs'
+import {
+  buildBountyScanPlan,
+  snapshotBountyScanRole,
+} from '../scripts/lib/bounty-scan-plan.mjs'
+import {
+  OPERATOR_AUTHORIZATION_KIND,
+  OPERATOR_AUTHORIZATION_STATUS,
+  OPERATOR_CAMPAIGN_AUTHORIZATION_STATEMENT,
+  verifyBoundOperatorAuthorization,
+} from '../scripts/lib/operator-authorization.mjs'
 import { startAuthzTestbed } from './fixtures/authz-testbed.mjs'
 
 const NOW = new Date('2026-08-21T12:00:00.000Z')
@@ -21,6 +34,38 @@ const REGISTRY = {
   roles: [{ id: 'alice', label: 'op', auth: { kind: 'header', name: 'authorization', value_env: 'TB_ALICE' } }],
 }
 const ENV = { TB_ALICE: 'Bearer alice-token' }
+
+function operatorAuthorizationFor(scope, requests) {
+  const role = snapshotBountyScanRole(findRole(REGISTRY, 'alice'))
+  const plan = buildBountyScanPlan({
+    scope,
+    requests,
+    classes: ['error-injection'],
+    role,
+    profile: resolveIntensityProfile(scope),
+  })
+  return verifyBoundOperatorAuthorization({
+    value: {
+      schema_version: '1.0.0',
+      kind: OPERATOR_AUTHORIZATION_KIND,
+      status: OPERATOR_AUTHORIZATION_STATUS,
+      operator_id: 'operator:intensity-test',
+      authorization_reference: `authorization:${plan.plan_id}`,
+      statement: OPERATOR_CAMPAIGN_AUTHORIZATION_STATEMENT,
+      declared_at: '2026-08-21T11:59:00.000Z',
+      target: structuredClone(plan.target),
+      plan_sha256: digestAdversarialPlan(plan),
+      scope_revision_sha256: plan.scope_revision_sha256,
+    },
+    planSha256: digestAdversarialPlan(plan),
+    scopeRevisionSha256: plan.scope_revision_sha256,
+    target: plan.target,
+    now: NOW,
+    fail(code, message) {
+      throw new Error(`${code}: ${message}`)
+    },
+  })
+}
 
 const scopeWith = (intensity, rateLimit = 100) => ({
   authorization: { permissions: { intensity, rate_limit_rps: rateLimit, active_testing: true } },
@@ -51,7 +96,7 @@ test('breadth increases monotonically with tier', () => {
   assert.equal(normal.recurseOnDiscovery, false)
 })
 
-test('HAM asks for unbounded concurrency and gets the sealed rate limit', () => {
+test('HAM requests its finite concurrency ceiling and is clamped by the sealed rate limit', () => {
   // The invariant that keeps HAM deployable: the program's stated limit IS the
   // authorization, and no tier outranks it.
   const ham = resolveIntensityProfile(scopeWith('ham', 5))
@@ -59,6 +104,16 @@ test('HAM asks for unbounded concurrency and gets the sealed rate limit', () => 
   const slower = resolveIntensityProfile(scopeWith('ham', 1))
   assert.equal(slower.concurrency, 1)
   assert.notEqual(ham.concurrency, Number.POSITIVE_INFINITY)
+})
+
+test('every workload tier has finite work ceilings', () => {
+  for (const tier of INTENSITY_TIERS) {
+    const profile = resolveIntensityProfile(scopeWith(tier))
+    assert.equal(Number.isFinite(profile.probesPerInsertionPoint), true, tier)
+    assert.equal(Number.isFinite(profile.insertionPointCap), true, tier)
+    assert.equal(Number.isFinite(profile.requestCap), true, tier)
+    assert.equal(Number.isFinite(profile.concurrency), true, tier)
+  }
 })
 
 test('a lower tier never exceeds its own concurrency even on a generous limit', () => {
@@ -99,7 +154,8 @@ test('the description states the clamp so it is visible in output', () => {
   const text = describeIntensity(resolveIntensityProfile(scopeWith('ham', 4)))
   assert.match(text, /tier=ham/)
   assert.match(text, /concurrency=4 \(clamped to 4\/s\)/)
-  assert.match(text, /requests=unbounded/)
+  assert.match(text, /requests=1000/)
+  assert.doesNotMatch(text, /unbounded/)
 })
 
 // --- the dial actually changing scanner behaviour ---
@@ -108,23 +164,68 @@ async function scanAt(intensity, path) {
   const testbed = await startAuthzTestbed()
   const dir = await mkdtemp(join(tmpdir(), 'bounty-intensity-'))
   try {
-    await writeFile(join(dir, 'scope.json'), JSON.stringify({
+    const sealedScope = {
+      schema_version: '1.0.0',
+      kind: 'red-team-audit/bounty-scope',
       engagement_id: 'intensity',
-      authorization: { permissions: { intensity, rate_limit_rps: 100, active_testing: true } },
+      platform: 'direct',
+      environment: 'non_production',
+      data_class: 'non_phi',
+      authorization: {
+        mode: 'PROGRAM_POLICY_SEALED',
+        authorization_id: 'intensity-auth',
+        statement: 'Synthetic authorization for the local intensity fixture.',
+        operator_id: 'operator-test',
+        authorized_by: 'test engagement owner',
+        authorization_reference: 'https://policy.example.test/scope',
+        attested_at: '2026-08-21T00:00:00.000Z',
+        independently_verified: false,
+        permissions: {
+          intensity,
+          rate_limit_rps: 100,
+          active_testing: true,
+          production: false,
+          third_party: false,
+          phi: false,
+          mutation: false,
+          automation_allowed: true,
+          desync_probes: false,
+        },
+      },
       validity: { not_before: '2026-08-21T00:00:00.000Z', not_after: '2026-08-22T00:00:00.000Z' },
+      program: {
+        program_handle: 'test-program',
+        policy_url: 'https://policy.example.test/scope',
+        policy_snapshot_sha256: 'a'.repeat(64),
+        required_user_agent: 'BugBounty-acme',
+      },
       scope_rules: {
         allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [testbed.port] }],
         deny: [], private_targets_sealed: true,
       },
-    }), 'utf8')
+      stop_conditions: { max_findings: 10, operator_stop: false },
+    }
+    const scopeText = `${JSON.stringify(sealedScope, null, 2)}\n`
+    await writeFile(join(dir, 'scope.json'), scopeText, 'utf8')
+    await writeFile(join(dir, 'bundle.json'), `${JSON.stringify({
+      kind: 'red-team-audit/bounty-bundle',
+      schema_version: '1.0.0',
+      engagement_id: sealedScope.engagement_id,
+      scope_sha256: digestPolicySnapshot(scopeText),
+      created_at: sealedScope.authorization.attested_at,
+    }, null, 2)}\n`, 'utf8')
+    const requests = [normalizeCapturedRequest({
+      request_id: path, method: 'GET', url: `${testbed.origin}${path}`,
+      headers: { accept: 'application/json' }, owner_role: 'alice',
+    })]
     const summary = await runScan({
       bundlePath: dir,
-      requests: [normalizeCapturedRequest({
-        request_id: path, method: 'GET', url: `${testbed.origin}${path}`,
-        headers: { accept: 'application/json' }, owner_role: 'alice',
-      })],
+      requests,
       registry: REGISTRY, roleId: 'alice', now: NOW, env: ENV,
       classes: ['error-injection'],
+      operatorAuthorizationReceipt: operatorAuthorizationFor(sealedScope, requests),
+      isAuthorizationRevoked: async () => false,
+      isOperatorStopRequested: async () => false,
       sleep: async () => {}, clock: () => 0,
     })
     const findings = JSON.parse(await readFile(join(dir, 'scan-findings.json'), 'utf8'))

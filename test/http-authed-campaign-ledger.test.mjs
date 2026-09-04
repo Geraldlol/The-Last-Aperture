@@ -23,7 +23,7 @@ import { canonicalJson, sha256Hex } from '../scripts/lib/http-authed-contracts.m
 import { stableJson } from '../scripts/lib/run-engine.mjs'
 
 const GRANT = 'a'.repeat(64)
-const DOCUMENT = 'b'.repeat(64)
+const AUTHORIZATION_BINDING = 'b'.repeat(64)
 const NOW = new Date('2026-08-17T12:00:00.000Z')
 
 function candidate(overrides = {}) {
@@ -67,7 +67,9 @@ async function openLedger(directory, additions = {}) {
   return openHttpAuthedCampaignLedger({
     directory,
     campaignGrantSha256: GRANT,
-    authorizationDocumentSha256: DOCUMENT,
+    authorizationBindingSha256: AUTHORIZATION_BINDING,
+    authorizationMode: 'OPERATOR_ATTESTED_AUTHED',
+    independentlyVerified: false,
     operatorId: 'peerstar-security-operator',
     initialize: true,
     now: () => NOW,
@@ -718,11 +720,11 @@ test('durable mutation pre-dispatch reopens only for cleanup and is never resent
     operatorId: 'peerstar-security-operator',
   })
   await recordVerifiedBeforeState(ledger, leased)
-  await ledger.consumeApproval({
+  await ledger.consumeAuthorization({
     actionId: leased.actionId,
     leaseId: leased.leaseId,
-    nonce: 'SYNTHETIC_APPROVAL_NONCE_0001',
-    countersignatureBindingSha256: '9'.repeat(64),
+    nonce: 'SYNTHETIC_AUTHORIZATION_NONCE_0001',
+    dispatchPermitSha256: '9'.repeat(64),
   })
   await ledger.markPreDispatch({
     actionId: leased.actionId,
@@ -845,7 +847,8 @@ test('a settled observation failure recovers terminally without retry or uncerta
   const state = recovered.actionState(lease.actionId)
   assert.equal(state.terminal, true)
   assert.equal(state.outcome, 'PROBE_OBSERVATION_FAILED')
-  assert.equal(recovered.snapshot().stopped, false)
+  assert.equal(recovered.snapshot().stopped, true)
+  assert.equal(recovered.snapshot().stop_reason, 'TARGET_HEALTH_DEGRADED')
   await assert.rejects(
     () => recovered.leaseAction({
       candidateDraft: candidate(),
@@ -876,8 +879,8 @@ test('a queued discovery without persisted URL bytes becomes an explicit restart
   await recovered.close()
 })
 
-test('mutation approval nonces are durably consumed once before write dispatch', async (t) => {
-  const directory = await directoryFor(t, 'approval-replay')
+test('mutation authorization permits are durably consumed once before write dispatch', async (t) => {
+  const directory = await directoryFor(t, 'authorization-replay')
   const ledger = await openLedger(directory)
   const first = candidate({ kind: 'mutate', method: 'PATCH' })
   delete first.expected_effect
@@ -899,31 +902,31 @@ test('mutation approval nonces are durably consumed once before write dispatch',
   })
   await recordVerifiedBeforeState(ledger, firstLease, '4'.repeat(64))
   await recordVerifiedBeforeState(ledger, secondLease, '5'.repeat(64))
-  const nonce = 'SYNTHETIC_APPROVAL_NONCE_REPLAY_SENTINEL'
+  const nonce = 'SYNTHETIC_AUTHORIZATION_NONCE_REPLAY_SENTINEL'
   const binding = '7'.repeat(64)
-  await ledger.consumeApproval({
+  await ledger.consumeAuthorization({
     actionId: firstLease.actionId,
     leaseId: firstLease.leaseId,
     nonce,
-    countersignatureBindingSha256: binding,
+    dispatchPermitSha256: binding,
   })
   await assert.rejects(
-    () => ledger.consumeApproval({
+    () => ledger.consumeAuthorization({
       actionId: firstLease.actionId,
       leaseId: firstLease.leaseId,
       nonce,
-      countersignatureBindingSha256: binding,
+      dispatchPermitSha256: binding,
     }),
-    /approval|consum|replay|nonce/i,
+    /authorization|consum|replay|nonce/i,
   )
   await assert.rejects(
-    () => ledger.consumeApproval({
+    () => ledger.consumeAuthorization({
       actionId: secondLease.actionId,
       leaseId: secondLease.leaseId,
       nonce,
-      countersignatureBindingSha256: '8'.repeat(64),
+      dispatchPermitSha256: '8'.repeat(64),
     }),
-    /approval|consum|replay|nonce/i,
+    /authorization|consum|replay|nonce/i,
   )
   await assert.rejects(
     () => ledger.markPreDispatch({
@@ -932,7 +935,7 @@ test('mutation approval nonces are durably consumed once before write dispatch',
       phase: 'MUTATION',
       requestBindingSha256: '6'.repeat(64),
     }),
-    /approval|countersign|consum/i,
+    /authorization|permit|consum/i,
   )
   await ledger.close()
 
@@ -1072,6 +1075,128 @@ test('a trusted head anchors its exact retained prefix while allowing newer reco
   assert.equal(reopened.snapshot().record_count, retained.record_count + 1)
   await reopened.close()
 })
+
+for (const terminalizedBeforeCrash of [false, true]) {
+  test(`response-derived stop survives a crash ${terminalizedBeforeCrash ? 'after' : 'before'} action terminalization`, async (t) => {
+    const directory = await directoryFor(
+      t,
+      terminalizedBeforeCrash ? 'status-stop-after-terminal' : 'status-stop-after-settlement',
+    )
+    const ledger = await openLedger(directory)
+    const firstCandidate = candidate({ url: 'https://synthetic.example.test/FIRST_STOP_ROUTE' })
+    const secondCandidate = candidate({ url: 'https://synthetic.example.test/SECOND_BLOCKED_ROUTE' })
+    await ledger.enqueueCandidate({ candidateDraft: firstCandidate, provenance: 'SEALED_PLAN' })
+    await ledger.enqueueCandidate({ candidateDraft: secondCandidate, provenance: 'SEALED_PLAN' })
+    const first = await ledger.leaseAction({
+      candidateDraft: firstCandidate,
+      operatorId: 'peerstar-security-operator',
+    })
+    await ledger.markPreDispatch({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'PROBE',
+      requestBindingSha256: 'd'.repeat(64),
+    })
+    await ledger.markOutcome({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'PROBE',
+      outcome: 'SETTLED',
+      responseMetadata: {
+        status: 500,
+        bytes: 0,
+        headerNames: [],
+        requestMayHaveBeenSent: true,
+      },
+    })
+    if (terminalizedBeforeCrash) {
+      await ledger.terminalizeAction({
+        actionId: first.actionId,
+        leaseId: first.leaseId,
+        outcome: 'PROBE_COMPLETED',
+      })
+    }
+    await ledger.close()
+
+    const recovered = await openLedger(directory, { initialize: false })
+    const snapshot = recovered.snapshot()
+    assert.equal(snapshot.stopped, true)
+    assert.equal(snapshot.stop_reason, 'TARGET_HEALTH_DEGRADED')
+    assert.equal(recovered.actionState(first.actionId).terminal, true)
+    await assert.rejects(
+      () => recovered.leaseAction({
+        candidateDraft: secondCandidate,
+        operatorId: 'peerstar-security-operator',
+      }),
+      /stopped|current state/i,
+    )
+    await recovered.close()
+  })
+}
+
+for (const terminalizedBeforeCrash of [false, true]) {
+  test(`mutation response stop survives a crash ${terminalizedBeforeCrash ? 'after' : 'before'} action terminalization`, async (t) => {
+    const directory = await directoryFor(
+      t,
+      terminalizedBeforeCrash
+        ? 'mutation-status-stop-after-terminal'
+        : 'mutation-status-stop-after-settlement',
+    )
+    const ledger = await openLedger(directory)
+    const mutation = candidate({ kind: 'mutate', method: 'PATCH' })
+    delete mutation.expected_effect
+    const secondCandidate = candidate({
+      url: 'https://synthetic.example.test/SECOND_AFTER_MUTATION_STOP_ROUTE',
+    })
+    await ledger.enqueueCandidate({ candidateDraft: mutation, provenance: 'SEALED_PLAN' })
+    await ledger.enqueueCandidate({ candidateDraft: secondCandidate, provenance: 'SEALED_PLAN' })
+    const first = await ledger.leaseAction({
+      candidateDraft: mutation,
+      operatorId: 'peerstar-security-operator',
+    })
+    await ledger.markPreDispatch({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'CREDENTIAL_PREFLIGHT',
+      requestBindingSha256: 'f'.repeat(64),
+    })
+    await ledger.markOutcome({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'CREDENTIAL_PREFLIGHT',
+      outcome: 'SETTLED',
+      responseMetadata: {
+        status: 500,
+        bytes: 0,
+        headerNames: [],
+        requestMayHaveBeenSent: true,
+      },
+    })
+    if (terminalizedBeforeCrash) {
+      await ledger.terminalizeAction({
+        actionId: first.actionId,
+        leaseId: first.leaseId,
+        outcome: 'FAILED_BEFORE_MUTATION',
+        reasonCode: 'CREDENTIAL_PREFLIGHT_FAILED',
+      })
+    }
+    await ledger.close()
+
+    const recovered = await openLedger(directory, { initialize: false })
+    const snapshot = recovered.snapshot()
+    assert.equal(snapshot.stopped, true)
+    assert.equal(snapshot.stop_reason, 'TARGET_HEALTH_DEGRADED')
+    assert.equal(recovered.actionState(first.actionId).terminal, true)
+    await assert.rejects(
+      () => recovered.leaseAction({
+        candidateDraft: secondCandidate,
+        operatorId: 'peerstar-security-operator',
+      }),
+      /stopped|current state/i,
+    )
+    await recovered.close()
+  })
+}
 
 test('ledger rejects unexpected directory entries without deleting them', async (t) => {
   const directory = await directoryFor(t, 'unexpected-entry')

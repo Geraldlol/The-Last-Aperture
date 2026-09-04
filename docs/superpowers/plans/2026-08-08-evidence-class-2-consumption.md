@@ -1,5 +1,9 @@
 # Evidence-Class Consumption Implementation Plan (Plan 2 of 5)
 
+> **Historical implementation plan.** Public `audit plan --evidence-bundle` is
+> disabled before repository or bundle access. The legacy payload-root check is
+> structural integrity, not authentication of coverage or attestation claims.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make evidence class a dimension of coverage, so an audit that never opened the image says so instead of reading as clean — with zero adapters, on every audit that runs today.

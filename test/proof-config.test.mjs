@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { assertValidProofConfig } from '../scripts/lib/proof-execution.mjs'
 
 const schema = JSON.parse(readFileSync('schemas/proof-config.schema.json', 'utf8'))
 const validate = new Ajv2020({ strict: true, allErrors: true }).compile(schema)
@@ -81,5 +82,77 @@ test('a destination guard may name its harness', () => {
     })),
     true,
     JSON.stringify(validate.errors),
+  )
+})
+
+const v2Config = (overrides = {}) => ({
+  ...config({
+    schema_version: '2.0.0',
+    destination_guard: {
+      installed: true,
+      path: 'test/security/harness/destinations.mjs',
+    },
+  }),
+  strategy: { id: 'property.node.fast-check', version: '4.9.0' },
+  control_command: { program: 'npm', args: ['test', '--', 'control'] },
+  oracle: {
+    id: 'security-test-exit-differential',
+    attack_exit_codes: [1],
+    control_exit_codes: [0],
+  },
+  limits: {
+    timeout_ms: 30_000,
+    kill_grace_ms: 1_000,
+    max_output_bytes: 65_536,
+  },
+  reproducer: {
+    path: 'test/security/authz.test.mjs',
+    format: 'text',
+  },
+  ...overrides,
+})
+
+test('a v2 adversarial proof requires attack, control, oracle, strategy, limits, and reproducer', () => {
+  assert.equal(validate(v2Config()), true, JSON.stringify(validate.errors))
+  for (const field of ['strategy', 'control_command', 'oracle', 'limits', 'reproducer']) {
+    const invalid = v2Config()
+    delete invalid[field]
+    assert.equal(validate(invalid), false, `${field} must be required by v2`)
+  }
+})
+
+test('v2 accepts only a verification job and a declared destination guard', () => {
+  assert.equal(
+    validate(v2Config({ job_id: 'proof-existence:cand:web:001' })),
+    false,
+  )
+  assert.equal(
+    validate(v2Config({ destination_guard: { installed: false } })),
+    false,
+  )
+})
+
+test('v2 limits are bounded and fail closed', () => {
+  for (const limits of [
+    { timeout_ms: 0, kill_grace_ms: 1_000, max_output_bytes: 65_536 },
+    { timeout_ms: 30_000, kill_grace_ms: 60_000, max_output_bytes: 65_536 },
+    { timeout_ms: 30_000, kill_grace_ms: 1_000, max_output_bytes: 100_000_000 },
+  ]) {
+    assert.equal(validate(v2Config({ limits })), false, JSON.stringify(limits))
+  }
+})
+
+test('semantic validation rejects overlapping proof/patch paths and an undeclared reproducer', () => {
+  assert.throws(
+    () => assertValidProofConfig(v2Config({
+      patch_files: [{ path: 'test/security/authz.test.mjs', contents: 'patched\n' }],
+    })),
+    /overlap|disjoint/i,
+  )
+  assert.throws(
+    () => assertValidProofConfig(v2Config({
+      reproducer: { path: 'test/security/missing.txt', format: 'text' },
+    })),
+    /reproducer/i,
   )
 })

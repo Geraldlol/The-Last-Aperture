@@ -15,6 +15,7 @@ activates_on:
     - '**/{nginx,haproxy,envoy}*.{conf,yaml,yml}'
     - '**/*.{pem,key,p12,pfx,jks,keystore,asc}'
     - '**/{tls,ssl,mtls}*.{go,py,ts,js,java,yaml,yml}'
+    - '**/*{crypto-inventory,crypto_inventory,cryptographic-inventory,cryptographic_inventory,crypto-agility,crypto_agility,pqc-migration,pqc_migration,post-quantum,post_quantum}*.{json,yml,yaml,toml,md}'
   signals:
     - 'python: cryptography, pycryptodome / Crypto.Cipher, hashlib, hmac, secrets, PyJWT (import jwt), authlib, passlib, bcrypt, argon2-cffi, PyNaCl/nacl, pyOpenSSL, python3-saml, xmlsec'
     - 'node: node:crypto, crypto.createCipheriv, crypto.timingSafeEqual, jsonwebtoken, jose, jwks-rsa, node-forge, bcrypt/bcryptjs, argon2, libsodium-wrappers, tweetnacl, @node-saml/node-saml, openid-client'
@@ -27,6 +28,16 @@ activates_on:
     - 'protocol/asset signals: X-Signature / X-Hub-Signature / Stripe-Signature style webhook headers, ecrecover / secp256k1 / low-s, /.well-known/jwks.json, SAMLResponse, InResponseTo, KeyInfo, argon2id$ / $2b$ / pbkdf2_sha256$ hash prefixes in fixtures or migrations'
     - 'node:crypto'
     - 'Ed25519'
+    - 'crypto-inventory'
+    - 'crypto_inventory'
+    - 'cryptographic inventory'
+    - 'crypto agility'
+    - 'crypto_agility'
+    - 'post-quantum'
+    - 'post_quantum'
+    - 'approvedCrypto.require('
+    - 'approvedSuites.requireReadable('
+    - 'migrationQueue.enqueueRewrap('
   evidence_classes:
     source:
       state: consumed
@@ -54,6 +65,8 @@ owns:
   - csprng-and-token-entropy
   - key-separation-derivation-and-destruction
   - hardcoded-credentials-and-key-material
+  - cryptographic-inventory-and-discovery
+  - crypto-agility-and-migration
 defers:
   session-and-cookie-management: web-and-api
   authentication-and-credential-flows: web-and-api
@@ -96,6 +109,7 @@ frameworks:
   - rfc-7636
   - nist-sp-800-38d
   - nist-sp-800-56b
+  - owasp-asvs-5.0.0
   - cwe                   # body must cite CWE-323, 327, 329, 338, 347, 208, 916, 295, 757 inline; a top-25 lineage, if claimed, is written exactly cwe-top-25 — there is no separate "SANS Top 25" list
 severity_floor: low
 ---
@@ -132,6 +146,8 @@ Three facts drive everything below.
 | `csprng-and-token-entropy` | Generator choice (CWE-338), seeding, and whether a token carries enough entropy over the alphabet it is actually drawn from. |
 | `key-separation-derivation-and-destruction` | HKDF versus `SHA256(key ‖ context)` (RFC 5869), one key across contexts, key lifetime, and whether anything can rotate. |
 | `hardcoded-credentials-and-key-material` | Private keys, secrets and credential-shaped literals in the tree — and the discipline that separates them from public keys, CA bundles and test vectors. |
+| `cryptographic-inventory-and-discovery` | A mechanically reproducible inventory of algorithms, modes, parameters, keys, certificates, trust stores, protocol versions, providers, and the data or function each protects, including hidden framework defaults. |
+| `crypto-agility-and-migration` | Whether algorithms and keys can be identified, versioned, rotated, migrated, and retired without an unsafe flag day, including a documented post-quantum migration trigger for long-lived protection. |
 
 ### Does not own
 
@@ -190,6 +206,7 @@ that language. The rows below make that boundary explicit.
 | JWT, JWKS, JOSE, OAuth, OIDC, SAML and SSO source umbrella | PARTIAL | `jwt-jws-and-jwks-verification` | V-003 measures the JWT path; OAuth, OIDC, SAML and the remaining languages require separate checklist reads |
 | Password and KDF source paths | PARTIAL | `password-hashing-and-kdf-parameters` | Parameter and storage-format checks exist, but the multi-language glob has no measured pair |
 | TLS configuration and committed key assets | PARTIAL | `tls-and-certificate-validation` | Actionable checks exist; version, parser and runtime behavior still govern the verdict |
+| Cryptographic inventory, agility, and migration artifacts | PARTIAL | `cryptographic-inventory-and-discovery` | Focused inventory and migration artifacts activate the lens; completeness, deployed overrides, and operational migration readiness remain unverified |
 
 ## Checklist
 
@@ -1351,7 +1368,7 @@ nomatch: |
 ### 11. Asymmetric scheme pitfalls (`asymmetric-scheme-pitfalls`)
 
 - **RSA padding is the whole finding.** Textbook RSA (no padding) is broken. PKCS#1 v1.5 *encryption* is Bleichenbacher-attackable and should be OAEP (RFC 8017, NIST SP 800-56B). PKCS#1 v1.5 *signing* remains widely deployed and is acceptable where the verifier parses strictly — but a lenient verifier that ignores trailing bytes after the digest allows forgery with a small public exponent. Prefer PSS for new signing.
-- **Key size.** RSA below 2048 bits is a finding; 3072+ for anything long-lived. A 1024-bit key in a fixture is not, unless the fixture is what deploys.
+- **Key size.** RSA below 2048 bits is a cryptographic-strength finding in any deploying path. Where ASVS 5.0.0 is the selected verification profile, `v5.0.0-11.2.3` requires at least 128-bit security strength and therefore RSA 3072 or stronger; RSA 2048 is then an explicit profile gap even when no practical key-recovery exploit is claimed. A 1024-bit fixture is not a finding unless the fixture deploys, and a repository-only review cannot prove the size of a KMS-held key it never reads.
 - **ECDSA is only as good as its `k`.** A repeated or biased per-signature nonce recovers the private key from two signatures. Use a library that implements RFC 6979 deterministic ECDSA, or one whose `k` comes from the platform CSPRNG. Report any code that *supplies* `k` itself — that is a hand-rolled signer and it is almost always wrong.
 - **Diffie-Hellman peer keys must be validated, and NIST-curve ECDH is not self-protecting.** The consequence of skipping the check on P-256, P-384 and secp256k1 is not a weak session — it is **private-key recovery**. The attacker sends a point that lies on a *different* curve sharing the same field and `a` coefficient but a different `b`, chosen so the point has small order. Short-Weierstrass point arithmetic never reads `b`, so the victim happily computes `d·P` on the attacker's curve and leaks `d mod ord(P)` through whatever it derives from the result; repeat with more small orders and CRT recovers `d`. Two things decide it and both are readable at the call site: **is the private scalar long-lived** — read from config, a keystore or a KMS handle rather than generated per exchange, since an ephemeral key spends the attack — and **does the peer's point get an on-curve and subgroup check before the multiply**. A high-level API that parses an *encoded point* generally validates as part of parsing; a raw primitive handed an `(x, y)` pair, a hand-written `decode_point`, or a scalar-multiply called directly does not. Name the call that validates, or record it as unverified — "modern libraries handle it" is the sentence that made this check disappear from the source material this lens replaces. For **finite-field DH**, validate both halves: the group parameters themselves (an attacker-supplied `p`/`g` is its own break) **and** the peer's `y` for subgroup membership (small-subgroup confinement). **X25519 is the exception** and the reason it is the recommendation: every 32-byte string decodes to a valid point, so there is no invalid-curve case — the check that remains is rejecting an all-zero shared secret.
 - **Ed25519** is hard to misuse, but verification semantics differ between libraries: cofactored versus cofactorless verification, and acceptance of non-canonical encodings, mean two implementations can disagree on whether a signature is valid. Where consensus across parties matters — a blockchain, a multi-verifier protocol — name the library and say which semantics it implements rather than assuming they agree.
@@ -1408,7 +1425,7 @@ nomatch: |
 Two facts that change how the grep behaves:
 
 - **Go 1.20 made the global `math/rand` source auto-seeded.** The old tell — a missing `rand.Seed(time.Now().UnixNano())` — is gone, and the output is no more unpredictable than it was. Grep for the *import*, not for the seeding call.
-- **UUID version matters.** UUIDv4 from a CSPRNG carries **122** bits of entropy (six bits are fixed version and variant) — ample for a token, and the frequently quoted "128 bits" is wrong by a small margin that never changes a verdict. UUIDv1 and v7 embed a timestamp and, for v1, often a MAC address; they are sortable identifiers, not secrets. Python's `uuid.uuid1()` used as a token is the finding.
+- **UUID version matters.** UUIDv4 from a CSPRNG carries **122** random bits because six bits are fixed for version and variant. That may be adequate for some short-lived, rate-limited opaque identifiers under a documented risk model, but it does **not** meet ASVS 5.0.0 requirement `v5.0.0-11.5.1`, which requires at least 128 bits and explicitly says UUIDs do not qualify. Never round 122 up to claim ASVS conformance. UUIDv1 and v7 contain structured time fields and, for v1, often a MAC address; they are identifiers, not bearer secrets. Python's `uuid.uuid1()` used as a token is a finding independently of the profile.
 
 **Token entropy is measured over the alphabet actually used.** A 32-character token drawn from a 16-character hex alphabet carries 128 bits; the same length drawn from a 10-digit alphabet carries about 106. Require ≥ 128 bits for anything bearer-like, and check for structure: a timestamp prefix, a sequential counter, a user id concatenated to a short random tail.
 
@@ -1500,6 +1517,58 @@ A hand-rolled handshake, encrypted channel or token format is a finding by const
 4. Was it reviewed by someone with cryptographic expertise?
 
 Almost always the recommendation is to replace it with TLS, Noise, `age`, libsodium sealed boxes or a JOSE/COSE profile. File the finding against the primitive slug the defect actually lands on, so it is not double-counted with item 1 or item 4.
+
+### 16. Cryptographic inventory and discovery (`cryptographic-inventory-and-discovery`)
+
+ASVS 5.0.0 separates the maintained inventory (`v5.0.0-11.1.2`) from a repeatable discovery mechanism (`v5.0.0-11.1.3`). Both matter. A spreadsheet that nobody can reproduce goes stale; a grep with no normalized output cannot support migration, exception review, or incident response.
+
+Build the inventory from executable and declarative evidence:
+
+- primitive, mode, padding, digest, curve, protocol, and minimum version;
+- library/provider and pinned version, including platform or framework defaults;
+- key or certificate identifier, purpose, owner, storage boundary, rotation path, and consuming locations;
+- protected data or security decision, so a deprecated algorithm can be prioritized by consequence; and
+- status: approved, migration-only, legacy exception with expiry, test-only, or unresolved.
+
+Search source, manifests, lockfiles, deployment configuration, certificate/key containers, trust stores, and generated configuration. Record scanner errors and unsupported languages as coverage gaps. Do not claim the inventory includes KMS-held key bytes, deployed overrides, runtime-negotiated suites, or certificates injected outside the repository unless those evidence classes were actually consumed.
+
+```detector
+match: |
+  # The algorithm is spread across code and an undocumented environment value.
+  cipher = Cipher.getInstance(System.getenv("PAYLOAD_CIPHER"))
+nomatch: |
+  # crypto-inventory.yml records id=payload-v2, AES-256-GCM, owner,
+  # key alias, rotation procedure, consumers, and migration status.
+  cipher = approvedCrypto.require("payload-v2").newEncryptor()
+```
+
+The clean example still needs the cited inventory artifact and a test that discovery finds this call. A wrapper name is not evidence by itself.
+
+### 17. Crypto agility and migration (`crypto-agility-and-migration`)
+
+`v5.0.0-11.2.2` requires cryptographic agility; `v5.0.0-11.1.4` requires a documented strategy for transitioning to post-quantum cryptography where relevant. Agility is not a caller-controlled `algorithm` field. It is a versioned, authenticated format and a controlled migration path that can read old data, write only the approved current form, rewrap or re-encrypt safely, and retire the old form after measured completion.
+
+Verify:
+
+- ciphertexts, signatures, tokens, and key references carry an unambiguous internal version or suite identifier covered by integrity protection;
+- the receiver maps that identifier through a server-owned allowlist and rejects unknown, retired, or downgraded values;
+- key rotation and format migration preserve rollback safety without restoring a compromised or deprecated write path;
+- mixed-version fleets cannot negotiate themselves down through unauthenticated metadata; and
+- long-lived confidentiality, signatures, firmware, or customer artifacts have an owner, trigger, dependency inventory, and testable post-quantum migration plan. Do not require a premature algorithm deployment merely because a plan is required.
+
+```detector
+match: |
+  algorithm = request.json["algorithm"]
+  plaintext = decryptors[algorithm](request.json["ciphertext"])
+nomatch: |
+  envelope = AuthenticatedEnvelope.parse(blob)
+  decryptor = approvedSuites.requireReadable(envelope.version)
+  plaintext = decryptor.open(envelope)
+  if envelope.version != approvedSuites.currentVersion:
+      migrationQueue.enqueueRewrap(envelope.objectId)
+```
+
+Inventory absence is normally an Info coverage gap unless it prevents analysis of an observed high-risk primitive. A hard-coded, non-versioned format that makes emergency rotation or retirement unsafe is Medium by default; raise it only when the repository proves the affected security function and reachable impact.
 
 ## Severity calibration
 

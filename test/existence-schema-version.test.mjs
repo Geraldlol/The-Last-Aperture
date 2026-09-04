@@ -1,7 +1,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn, execFileSync, spawnSync } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -233,6 +233,42 @@ test('a 7.0.0 run survives plan through finalize to a terminal state', {
     }
     assert.ok(executions > 0 && executions < 64)
 
+    const readyRun = await readFile(written.runPath, 'utf8')
+    const lockPath = `${written.runPath}.lock`
+    await writeFile(lockPath, stableJson({
+      pid: process.pid,
+      created_at: new Date().toISOString(),
+      token: 'finalize-race-regression-lock-token',
+    }))
+    const lockedFinalize = spawnSync(
+      process.execPath,
+      [resolve('scripts/audit.mjs'), 'finalize', written.directory],
+      { encoding: 'utf8' },
+    )
+    assert.equal(lockedFinalize.status, 1)
+    assert.match(lockedFinalize.stderr, /run is locked/i)
+    assert.equal(await readFile(written.runPath, 'utf8'), readyRun)
+    for (const artifact of ['coverage.json', 'report.md', 'results.sarif']) {
+      await assert.rejects(readFile(join(written.directory, artifact)), { code: 'ENOENT' })
+    }
+    await rm(lockPath)
+
+    const conflictingReportPath = join(written.directory, 'report.md')
+    await writeFile(conflictingReportPath, 'stale conflicting report\n')
+    const conflictingFinalize = spawnSync(
+      process.execPath,
+      [resolve('scripts/audit.mjs'), 'finalize', written.directory],
+      { encoding: 'utf8' },
+    )
+    assert.equal(conflictingFinalize.status, 1)
+    assert.match(conflictingFinalize.stderr, /conflicting artifact report\.md/i)
+    assert.equal(await readFile(written.runPath, 'utf8'), readyRun)
+    assert.equal(await readFile(conflictingReportPath, 'utf8'), 'stale conflicting report\n')
+    for (const artifact of ['coverage.json', 'results.sarif']) {
+      await assert.rejects(readFile(join(written.directory, artifact)), { code: 'ENOENT' })
+    }
+    await rm(conflictingReportPath)
+
     execFileSync(
       process.execPath,
       [resolve('scripts/audit.mjs'), 'finalize', written.directory],
@@ -242,6 +278,19 @@ test('a 7.0.0 run survives plan through finalize to a terminal state', {
     assert.equal(finalRun.schema_version, '7.0.0')
     assert.equal(finalRun.phase, 'FINALIZED')
     assert.ok(['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(finalRun.state))
+
+    const committedReport = await readFile(join(written.directory, 'report.md'), 'utf8')
+    await rm(join(written.directory, 'report.md'))
+    const repaired = execFileSync(
+      process.execPath,
+      [resolve('scripts/audit.mjs'), 'finalize', written.directory],
+      { encoding: 'utf8' },
+    )
+    assert.match(repaired, /Verified final artifacts/)
+    assert.equal(
+      await readFile(join(written.directory, 'report.md'), 'utf8'),
+      committedReport,
+    )
 
     const validation = execFileSync(
       process.execPath,

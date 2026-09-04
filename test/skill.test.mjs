@@ -7,6 +7,7 @@ import { runLint } from '../scripts/lint-lenses.mjs'
 const SKILL_PATH = 'skills/red-team-audit/SKILL.md'
 const ROOT_SKILL_PATH = 'SKILL.md'
 const NESTED_COLON_FIXTURE = 'test/samples/skill-nested-colon.md'
+const MAX_ROOT_SKILL_BYTES = 2600
 
 const ok = (body = '') => `---\nname: red-team-audit\ndescription: Audit code adversarially.\n---\n${body}`
 const ROOT_SKILL_BODY = `# Red Team Audit Compatibility Entry Point
@@ -24,18 +25,27 @@ If the canonical skill is missing or unreadable, stop and report that the audit
 cannot start. Do not improvise an alternate audit, issue a clearance, or
 remediate the target.
 
-The repository workflow remains static and read-only by default. It enters
-through the executable controller's \`plan\`, \`next\`, \`ingest\`, \`finalize\`, and
-\`validate\` commands; never patch the target or execute its code in the live
-repository. External work uses only the canonical skill's separate controllers:
-\`audit:http-recon\` for credential-free bounded observation, or
-\`audit:http-authed\` for lower-assurance \`OPERATOR_ATTESTED_AUTHED\` declarations
-or document-bound \`WRITTEN_AUTHORIZATION_AUTHED\` campaigns under ADRs 0017 and
-0016. Attested mode records the operator's claim; it does not verify vendor or
-program permission, ownership, legal authority, scope coverage, or revocation.
-This shim cannot authorize a URL, widen either protocol, or merge external work
-with repository coverage. Deliver only controller-validated artifacts and
-preserve every gap and nonclaim.`
+The repository workflow remains static and read-only by default. For a local
+repository, an operator's \`go\` directive starts a static \`plan\`; the agent must
+continue through \`next\`, scoped analysis and \`ingest\`, then \`finalize\` and
+\`validate\` rather than stopping at \`PLANNED\`. Never patch the target or execute
+its code in the live repository.
+
+For external work, the operator phrase \`target <HTTPS URL> and go\` is sufficient
+authority to launch one exact, bounded live HTTP-recon action through the public
+controller. The fixed, already-sealed \`http-authed\` \`campaign-attested\` route is
+also active; invoking it launches that sealed campaign without asking the
+operator to repeat confirmation flags. Even a
+single action uses a campaign ledger; standalone probe dispatch is not public.
+These routes do not create repository coverage or proof.
+
+Generic live/L3 adversarial execution, provider/remote execution, \`run-proof\`,
+bounty/OOB execution, and evidence acquisition remain unavailable. The
+canonical skill defines the complete boundary, including target-bound Break
+Their Bones semantics and inert scope expansion. This shim cannot widen a
+target, activate a disabled protocol, or merge external work with repository
+coverage. Deliver only controller-validated artifacts and preserve every gap
+and nonclaim.`
 
 function frontmatterBlock(text) {
   return text.match(/^---\r?\n[\s\S]*?\r?\n---/)?.[0].replaceAll('\r\n', '\n')
@@ -66,29 +76,36 @@ function rootSkillViolations(rootText, canonicalText) {
   if (!body.includes('static and read-only by default')) {
     violations.push('root skill must preserve the static read-only capability boundary')
   }
-  if (!body.includes('`audit:http-recon`')) {
-    violations.push('root skill must route external observation to the recon protocol')
+  if (!body.includes('`target <HTTPS URL> and go` is sufficient')) {
+    violations.push('root skill must expose only the bounded HTTP-recon launch directive')
   }
-  if (!body.includes('`audit:http-authed`')) {
-    violations.push('root skill must route authenticated campaigns to the authenticated protocol')
+  if (
+    !body.includes('`campaign-attested`')
+    || !body.includes('standalone probe dispatch is not public')
+    || body.includes('`campaign-written`')
+  ) {
+    violations.push('root skill must preserve the fixed authenticated campaign boundary')
   }
-  if (!body.includes('`OPERATOR_ATTESTED_AUTHED`') || !body.includes('`WRITTEN_AUTHORIZATION_AUTHED`')) {
-    violations.push('root skill must preserve both authenticated assurance modes')
+  if (
+    !body.includes('Generic live/L3 adversarial execution')
+    || !body.includes('evidence acquisition remain unavailable')
+  ) {
+    violations.push('root skill must keep generic live and L3 execution fail-closed')
   }
-  if (!body.includes("does not verify vendor or\nprogram permission")) {
-    violations.push('root skill must preserve the attested authorization nonclaim')
+  if (!body.includes('This shim cannot widen a\ntarget')) {
+    violations.push('root skill must prevent its compatibility shim from widening authority')
   }
   for (const command of ['`plan`', '`next`', '`ingest`', '`finalize`', '`validate`']) {
     if (!body.includes(command)) {
       violations.push(`root skill must require the controller ${command} command`)
     }
   }
-  if (Buffer.byteLength(normalized, 'utf8') > 2400) {
+  if (Buffer.byteLength(normalized, 'utf8') > MAX_ROOT_SKILL_BYTES) {
     violations.push('root skill must remain a short compatibility pointer')
   }
   for (const [label, pattern] of [
     ['patch-producing description', /produce(?:s|d)? patched (?:code|versions)/i],
-    ['free-form patch phase', /phase\s*2\s*[-â€”:]\s*patch/i],
+    ['free-form patch phase', /phase\s*2\s*(?:-|:|\u2013|\u2014)\s*patch/i],
     ['patch output section', /^##\s+Patches\s*$/im],
     ['dynamic audit mode', /\*\*(?:Test execution|Local dynamic)\*\*/i],
     ['alternate reference router', /references\/(?:web-and-api|mobile|llm-and-ai|cloud-and-iac|hipaa-and-phi)\.md/i],
@@ -277,65 +294,56 @@ test('the shipped skill enters through the static executable control plane', () 
   }
 })
 
-test('the shipped skill routes both authenticated assurance modes without widening recon', () => {
+test('the shipped skill exposes only the narrow public routes and keeps generic live/L3 closed', () => {
   const text = readFileSync(SKILL_PATH, 'utf8')
+  const compact = text.replace(/\s+/g, ' ')
   for (const required of [
-    'http-authed-v1',
-    'docs/adr/0016-authenticated-mutation-actions.md',
-    'docs/adr/0017-operator-attested-authenticated-campaigns.md',
-    'plan-attested --attest-authorized',
-    'validate-attested',
-    'campaign-attested',
-    'plan-written',
-    'validate-written',
-    'campaign-written',
-    'OPERATOR_ATTESTED_AUTHED',
-    'WRITTEN_AUTHORIZATION_AUTHED',
-    'countersignature-N.json',
-    'CHROME_ACTIVE_TAB_SESSION',
-    '--credential-browser',
-    '--browser-extension-id',
-    'one attach per campaign',
-    '--credential-stdin',
-    '--requests <absolute-json>',
-    'cleanup_not_after',
-    'not_after',
-    '`CONNECT`/upgrades',
-    '`TRACE`/`TRACK`',
+    'references/adversarial-validation.md',
+    'L3_MAXIMUM_AUTHORIZED',
+    'Break Their Bones',
+    'inert scope expansion',
+    'bounded `BREAK_GLASS`',
+    'Two target-I/O paths are public:',
+    '`http-recon go <HTTPS URL>`',
+    '`campaign-attested` route is active',
+    'Even one action uses the durable campaign ledger',
+    'standalone probes and response-derived discovery are not public',
+    '`campaign-stop` creates',
+    'cannot make a missing transport safe',
+    'Permission declarations are claims, not independent proof of legal',
   ]) {
-    assert.ok(text.includes(required), `SKILL.md must route through ${JSON.stringify(required)}`)
+    assert.ok(compact.includes(required), `SKILL.md must preserve ${JSON.stringify(required)}`)
   }
-  assert.match(text, /lower\s+assurance:[\s\S]*vendor\/program permission[\s\S]*not independently verified/i)
-  assert.match(text, /separate from [`]?http-recon-v1[`]? and repository proof/i)
-  for (const staleRail of [
-    'contact an external target only through a valid `http-recon-v1` plan',
-    'Never execute dynamic proof against production or shared infrastructure.',
-    'Never mutate, stage, commit, push, deploy, or message external systems.',
-    'Copy value',
-    'credential rotation requires a new binding',
-  ]) {
-    assert.equal(text.includes(staleRail), false, `SKILL.md must rescope ${JSON.stringify(staleRail)}`)
-  }
+  assert.doesNotMatch(
+    compact,
+    /`(?:plan|validate|campaign)-written`/,
+    'the retired document-authority routes must not be advertised as public',
+  )
+  assert.match(
+    compact,
+    /Generic live\/L3, .* remain fail closed\./,
+    'generic live/L3 and the named unmigrated routes must remain fail-closed',
+  )
 })
 
-test('the repository-root skill is only a fail-closed pointer to the packaged authority', () => {
+test('the repository-root skill is a narrow compatibility pointer to the packaged authority', () => {
   const root = readFileSync(ROOT_SKILL_PATH, 'utf8')
   const canonical = readFileSync(SKILL_PATH, 'utf8')
   assert.deepEqual(rootSkillViolations(root, canonical), [])
 
   const { violations, bytes } = checkSkill(root, ROOT_SKILL_PATH)
   assert.deepEqual(violations.map((violation) => violation.message), [])
-  assert.ok(bytes <= 2400, `root SKILL.md must remain a pointer; received ${bytes} bytes`)
+  assert.ok(
+    bytes <= MAX_ROOT_SKILL_BYTES,
+    `root SKILL.md must remain a pointer; received ${bytes} bytes`,
+  )
 })
 
 test('the root-entrypoint gate rejects trigger drift and restored alternate authority', () => {
   const root = readFileSync(ROOT_SKILL_PATH, 'utf8')
   const canonical = readFileSync(SKILL_PATH, 'utf8')
   const cases = [
-    root.replace(
-      'description: Run evidence-first repository audits or separately authorized HTTPS reconnaissance and authenticated campaigns',
-      'description: Produce patched versions after an audit',
-    ),
+    root.replace(/^description:.*$/m, 'description: Produce patched versions after an audit'),
     `${root}\n## Patches\n\nPatch every Critical and High finding.\n`,
     root.replace(
       '`skills/red-team-audit/SKILL.md` completely',

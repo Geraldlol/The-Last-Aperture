@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/adversarial-controller-enrollment.schema.json",
+  "title": "Red Team Audit adversarial controller enrollment",
+  "description": "Controller-owned current-scope binding and adapter policy. The public CLI can select an enrollment by identifier but cannot replace its scope or adapter allowlist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "enrollment_id",
+    "engagement_id",
+    "status",
+    "scope_sha256",
+    "allowed_adapters"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/adversarial-controller-enrollment" },
+    "enrollment_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 80,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]+$"
+    },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "status": { "enum": ["ACTIVE", "SUSPENDED", "REVOKED"] },
+    "scope_sha256": { "$ref": "#/$defs/sha256" },
+    "allowed_adapters": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,36 +6,29 @@ import { test } from 'node:test'
 
 import { main } from '../scripts/http-authed.mjs'
 import {
-  readAndVerifyHttpAuthedWrittenAuthorization,
+  readAndVerifyHttpAuthedAuthorization,
   sha256Hex,
 } from '../scripts/lib/http-authed-contracts.mjs'
-import { writtenScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-17T10:00:00.000Z')
-const AUTHORIZATION_BYTES = Buffer.from('synthetic generic bug bounty authorization evidence')
 const CREDENTIAL = 'SYNTHETIC_CREDENTIAL_VALUE_MUST_NOT_PERSIST'
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'http-authed-planner-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const authorizationDocumentPath = join(directory, 'authorization.txt')
   const scopePath = join(directory, 'scope.json')
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_BYTES)
-  return { directory, authorizationDocumentPath, scopePath }
+  return { directory, scopePath }
 }
 
-function plannerArguments({ authorizationDocumentPath, scopePath }) {
+function planAttestedArguments({ scopePath }) {
   return [
-    'plan-written',
+    'plan-attested',
     '--scope', scopePath,
-    '--authorization-document', authorizationDocumentPath,
     '--engagement-id', 'generic-vendor-bounty-2026',
     '--authorization-id', 'vendor-program-2026',
     '--operator-id', 'security-researcher',
     '--authorized-by', 'Vendor security team',
     '--authorization-reference', 'Vendor bug bounty terms accepted 2026-08-01',
-    '--document-issuer', 'Vendor security team',
-    '--document-issued-at', '2026-08-01T00:00:00.000Z',
     '--not-before', '2026-08-17T09:00:00.000Z',
     '--not-after', '2026-08-18T09:00:00.000Z',
     '--target-origin', 'https://bounty.example.test',
@@ -62,7 +54,7 @@ function removeOption(args, name) {
   const option = `--${name}`
   for (let index = args.length - 1; index >= 0; index -= 1) {
     if (args[index] === option) {
-      args.splice(index, ['enable-discovery', 'attest-authorized', 'mutation-authorized'].includes(name)
+      args.splice(index, ['enable-discovery', 'mutation-authorized'].includes(name)
         ? 1
         : 2)
     }
@@ -70,61 +62,86 @@ function removeOption(args, name) {
 }
 
 function requestPlanArguments(files, requestsPath) {
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   removeOption(args, 'seed-url')
   removeOption(args, 'seed-test-category')
   args.splice(args.indexOf('--json'), 0, '--requests', requestsPath)
   return args
 }
 
-function attestedRequestPlanArguments(files, requestsPath) {
-  const args = requestPlanArguments(files, requestsPath)
-  args[0] = 'plan-attested'
-  for (const option of [
-    'authorization-document',
-    'document-issuer',
-    'document-issued-at',
-  ]) {
-    removeOption(args, option)
-  }
-  args.splice(args.indexOf('--not-before'), 0, '--attest-authorized')
-  return args
-}
-
 function mutationRequestDraft(origin = 'https://bounty.example.test') {
-  const action = structuredClone(writtenScope({ actionCount: 1 }).requests[0])
   const url = `${origin}/security/synthetic-resource/1`
-  action.sequence = 97
-  action.test_category = 'api_security'
-  action.url = url
-  action.before_read.url = url
-  action.after_read.url = url
-  action.rollback.url = url
-  action.rollback.verification_read.url = url
-  return action
+  return {
+    kind: 'mutate',
+    sequence: 97,
+    test_category: 'api_security',
+    method: 'POST',
+    url,
+    success_statuses: [200, 201, 204],
+    request_body: {
+      body_id: 'SYNTHETIC_SECURITY_TEST_PAYLOAD_1',
+      sha256: '4'.repeat(64),
+      byte_length: 64,
+      content_type: 'application/json',
+      data_class: 'synthetic_non_phi',
+    },
+    expected_mutation: {
+      resource_ref: 'SYNTHETIC_SECURITY_TEST_RECORD_1',
+      field: '/synthetic_marker',
+      representation: 'CANONICAL_JSON_VALUE_SHA256',
+      before_digest: '2'.repeat(64),
+      after_digest: '3'.repeat(64),
+    },
+    before_read: {
+      method: 'GET',
+      url,
+      expected_statuses: [200],
+      observation: { format: 'JSON', json_pointer: '/synthetic_marker' },
+    },
+    after_read: {
+      method: 'GET',
+      url,
+      expected_statuses: [200],
+      observation: { format: 'JSON', json_pointer: '/synthetic_marker' },
+    },
+    rollback: {
+      method: 'PATCH',
+      url,
+      expected_after_digest: '2'.repeat(64),
+      idempotent_restore: true,
+      success_statuses: [200],
+      request_body: {
+        body_id: 'SYNTHETIC_SECURITY_TEST_ROLLBACK_1',
+        sha256: '5'.repeat(64),
+        byte_length: 64,
+        content_type: 'application/json',
+        data_class: 'synthetic_non_phi',
+      },
+      verification_read: {
+        method: 'GET',
+        url,
+        expected_statuses: [200],
+        observation: { format: 'JSON', json_pointer: '/synthetic_marker' },
+      },
+    },
+    rollback_policy: 'ALWAYS',
+  }
 }
 
-async function addMutationPlannerOptions(args, directory) {
-  const { publicKey } = generateKeyPairSync('ed25519')
-  const publicKeyPath = join(directory, 'request-plan-approver-public.pem')
-  await writeFile(publicKeyPath, publicKey.export({ type: 'spki', format: 'pem' }))
+function addMutationPlannerOptions(args) {
   args.splice(args.indexOf('--json'), 0,
     '--method', 'POST',
     '--method', 'PATCH',
     '--mutation-authorized',
-    '--approver-public-key', publicKeyPath,
-    '--approver-enrolled-by', 'Independent program approver',
-    '--approver-enrolled-at', '2026-08-01T00:00:00.000Z',
-    '--approver-provenance', 'Synthetic request-plan approver enrollment',
   )
 }
 
-test('plan-written creates and validates a generic offline campaign without persisting secrets', async (t) => {
+test('plan-attested creates and validates a generic offline campaign without persisting secrets', async (t) => {
   const files = await fixture(t)
   let output = ''
   let transportCalls = 0
 
-  await main(plannerArguments(files), {
+  await main(planAttestedArguments(files), {
     clock: () => NOW,
     env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
     transport: async () => {
@@ -136,7 +153,7 @@ test('plan-written creates and validates a generic offline campaign without pers
 
   assert.equal(transportCalls, 0)
   const summary = JSON.parse(output)
-  assert.equal(summary.kind, 'red-team-audit/http-authed-written-plan')
+  assert.equal(summary.kind, 'red-team-audit/http-authed-attested-plan')
   assert.equal(summary.target_origin, 'https://bounty.example.test')
   assert.equal(summary.request_count, 1)
   assert.match(summary.campaign_grant_sha256, /^[a-f0-9]{64}$/)
@@ -146,13 +163,11 @@ test('plan-written creates and validates a generic offline campaign without pers
   assert.equal(plannedScope.schema_version, '1.0.0')
   assert.equal(plannedScope.response_observation, undefined)
   assert.equal(scopeText.includes(CREDENTIAL), false)
-  assert.equal(scopeText.includes(AUTHORIZATION_BYTES.toString('utf8')), false)
   assert.equal(output.includes(CREDENTIAL), false)
-  assert.equal(output.includes(AUTHORIZATION_BYTES.toString('utf8')), false)
 
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.equal(verified.campaignGrantSha256, summary.campaign_grant_sha256)
@@ -208,9 +223,9 @@ test('plan-written creates and validates a generic offline campaign without pers
   assert.equal(verified.scope.requests[0].test_category, 'api_security')
 })
 
-test('plan-written seals an explicitly opted-in JSON shape allowlist', async (t) => {
+test('plan-attested seals an explicitly opted-in JSON shape allowlist', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--json'), 0,
     '--observe-json-shape',
     '--json-shape-key', 'records',
@@ -232,17 +247,17 @@ test('plan-written seals an explicitly opted-in JSON shape allowlist', async (t)
     max_depth: 3,
     safe_key_names: ['records', 'id'],
   })
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.deepEqual(verified.scope.response_observation, scope.response_observation)
 })
 
-test('plan-written seals an explicitly opted-in ASP.NET d JSON projection', async (t) => {
+test('plan-attested seals an explicitly opted-in ASP.NET d JSON projection', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--json'), 0,
     '--observe-json-shape',
     '--json-shape-aspnet-d',
@@ -265,9 +280,9 @@ test('plan-written seals an explicitly opted-in ASP.NET d JSON projection', asyn
     max_depth: 3,
     safe_key_names: ['records', 'id'],
   })
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.deepEqual(verified.scope.response_observation, scope.response_observation)
@@ -318,7 +333,7 @@ test('JSON shape planner options fail closed unless the allowlist is explicit an
 
   for (const scenario of scenarios) {
     const scopePath = join(files.directory, `${scenario.name}-scope.json`)
-    const args = plannerArguments({ ...files, scopePath })
+    const args = planAttestedArguments({ ...files, scopePath })
     args.splice(args.indexOf('--json'), 0, ...scenario.options)
     await assert.rejects(
       main(args, {
@@ -332,10 +347,10 @@ test('JSON shape planner options fail closed unless the allowlist is explicit an
   }
 })
 
-test('plan-written refuses to invent unavailable credentials and does not create output', async (t) => {
+test('plan-attested refuses to invent unavailable credentials and does not create output', async (t) => {
   const files = await fixture(t)
   await assert.rejects(
-    main(plannerArguments(files), {
+    main(planAttestedArguments(files), {
       clock: () => NOW,
       env: {},
       write: () => {},
@@ -345,9 +360,9 @@ test('plan-written refuses to invent unavailable credentials and does not create
   await assert.rejects(readFile(files.scopePath), { code: 'ENOENT' })
 })
 
-test('plan-written binds one redirected credential without persisting or printing it', async (t) => {
+test('plan-attested binds one redirected credential without persisting or printing it', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   const credentialOption = args.indexOf('--credential-env')
   args.splice(credentialOption, 2, '--credential-stdin')
   let reads = 0
@@ -372,9 +387,9 @@ test('plan-written binds one redirected credential without persisting or printin
   assert.equal(output.includes(CREDENTIAL), false)
 })
 
-test('plan-written seals a Chrome-held active-tab session without exporting a credential', async (t) => {
+test('plan-attested seals a Chrome-held active-tab session without exporting a credential', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   const credentialOption = args.indexOf('--credential-env')
   args.splice(
     credentialOption,
@@ -406,16 +421,16 @@ test('plan-written seals a Chrome-held active-tab session without exporting a cr
   assert.equal(scopeText.includes('binding_sha256'), false)
   assert.equal(scopeText.includes('cookie'), false)
   assert.equal(output.includes('cookie'), false)
-  await readAndVerifyHttpAuthedWrittenAuthorization({
+  await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
 })
 
-test('plan-written keeps browser-held and exported credential sources mutually exclusive', async (t) => {
+test('plan-attested keeps browser-held and exported credential sources mutually exclusive', async (t) => {
   const files = await fixture(t)
-  const mixed = plannerArguments(files)
+  const mixed = planAttestedArguments(files)
   mixed.splice(mixed.indexOf('--json'), 0,
     '--credential-browser',
     '--browser-extension-id', 'abcdefghijklmnopabcdefghijklmnop',
@@ -431,11 +446,11 @@ test('plan-written keeps browser-held and exported credential sources mutually e
   await assert.rejects(readFile(files.scopePath), { code: 'ENOENT' })
 })
 
-test('plan-written uses exclusive output creation and never overwrites a scope', async (t) => {
+test('plan-attested uses exclusive output creation and never overwrites a scope', async (t) => {
   const files = await fixture(t)
   await writeFile(files.scopePath, 'SENTINEL_EXISTING_SCOPE')
   await assert.rejects(
-    main(plannerArguments(files), {
+    main(planAttestedArguments(files), {
       clock: () => NOW,
       env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
       write: () => {},
@@ -445,40 +460,77 @@ test('plan-written uses exclusive output creation and never overwrites a scope',
   assert.equal(await readFile(files.scopePath, 'utf8'), 'SENTINEL_EXISTING_SCOPE')
 })
 
-test('plan-written requires an approver key before authorizing mutation', async (t) => {
+test('plan-attested uses the operator statement as mutation authority without approver material', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--json'), 0, '--mutation-authorized')
-  await assert.rejects(
-    main(args, {
-      clock: () => NOW,
-      env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
-      write: () => {},
-    }),
-    (error) => error.code === 'HTTP_AUTHED_PLAN_APPROVER_REQUIRED',
-  )
-  await assert.rejects(readFile(files.scopePath), { code: 'ENOENT' })
+  await main(args, {
+    clock: () => NOW,
+    env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
+    write: () => {},
+  })
+  const scope = JSON.parse(await readFile(files.scopePath, 'utf8'))
+  assert.equal(scope.authorization.permissions.mutation, true)
+  assert.equal(scope.approver, undefined)
 })
 
-test('plan-written rejects unused approver flags and write-capable seeds without mutation authority', async (t) => {
+test('retired written commands and authority-file flags fail before planner I/O', async (t) => {
   const files = await fixture(t)
-  const unusedApprover = plannerArguments({
-    ...files,
-    scopePath: join(files.directory, 'unused-approver.json'),
-  })
-  unusedApprover.splice(unusedApprover.indexOf('--json'), 0,
-    '--approver-public-key', join(files.directory, 'unused.pem'),
-  )
-  await assert.rejects(
-    main(unusedApprover, {
-      clock: () => NOW,
-      env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
-      write: () => {},
+  const cases = [
+    ...['plan-written', 'validate-written', 'campaign-written'].map((command) => ({
+      name: command,
+      args: [command, '--authorization-document', 'must-not-read-authorization.txt'],
+      pattern: /supported http-authed command/i,
+    })),
+    ...[
+      ['authorization-document', 'must-not-read-authorization.txt'],
+      ['approver-public-key', 'must-not-read-approver.pem'],
+      ['countersignature', 'must-not-read-countersignature.json'],
+    ].map(([flag, value]) => {
+      const scopePath = join(files.directory, `retired-${flag}.json`)
+      return {
+        name: flag,
+        scopePath,
+        args: [...planAttestedArguments({ scopePath }), `--${flag}`, value],
+        pattern: new RegExp(`plan-attested does not support --${flag}`, 'i'),
+      }
     }),
-    /approver options require --mutation-authorized/i,
-  )
+  ]
 
-  const writeSeed = plannerArguments({
+  for (const scenario of cases) {
+    let credentialReads = 0
+    let requestPlanReads = 0
+    let transportCalls = 0
+    await assert.rejects(
+      main(scenario.args, {
+        clock: () => NOW,
+        env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
+        credentialStdinReader: async () => {
+          credentialReads += 1
+          return Buffer.from(CREDENTIAL, 'utf8')
+        },
+        requestPlanLstat: async () => {
+          requestPlanReads += 1
+          throw new Error('retired command or flag must fail before request-plan I/O')
+        },
+        transport: async () => { transportCalls += 1 },
+        write: () => {},
+      }),
+      scenario.pattern,
+      scenario.name,
+    )
+    assert.equal(credentialReads, 0, scenario.name)
+    assert.equal(requestPlanReads, 0, scenario.name)
+    assert.equal(transportCalls, 0, scenario.name)
+    if (scenario.scopePath) {
+      await assert.rejects(readFile(scenario.scopePath), { code: 'ENOENT' })
+    }
+  }
+})
+
+test('plan-attested rejects a write-capable seed without explicit mutation authority', async (t) => {
+  const files = await fixture(t)
+  const writeSeed = planAttestedArguments({
     ...files,
     scopePath: join(files.directory, 'write-seed.json'),
   })
@@ -496,9 +548,10 @@ test('plan-written rejects unused approver flags and write-capable seeds without
     }),
     (error) => error.code === 'HTTP_AUTHED_PLAN_MUTATION_AUTHORIZATION_REQUIRED',
   )
+  await assert.rejects(readFile(join(files.directory, 'write-seed.json')), { code: 'ENOENT' })
 })
 
-test('plan-written rejects URL credentials and fragments even when discovery is disabled', async (t) => {
+test('plan-attested rejects URL credentials and fragments even when discovery is disabled', async (t) => {
   const files = await fixture(t)
   for (const [name, seedUrl, code] of [
     [
@@ -513,7 +566,7 @@ test('plan-written rejects URL credentials and fragments even when discovery is 
     ],
   ]) {
     const caseFiles = { ...files, scopePath: join(files.directory, `${name}.json`) }
-    const args = plannerArguments(caseFiles)
+    const args = planAttestedArguments(caseFiles)
     args.splice(args.indexOf('--enable-discovery'), 1)
     args[args.indexOf('https://bounty.example.test/security/start')] = seedUrl
     await assert.rejects(
@@ -529,54 +582,25 @@ test('plan-written rejects URL credentials and fragments even when discovery is 
   }
 })
 
-test('plan-written creates a valid probe-only scope with discovery disabled', async (t) => {
+test('plan-attested creates a valid probe-only scope with discovery disabled', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--enable-discovery'), 1)
   await main(args, {
     clock: () => NOW,
     env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
     write: () => {},
   })
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.equal(verified.scope.discovery, undefined)
   assert.equal(verified.scope.requests[0].kind, 'probe')
 })
 
-test('plan-written pins an Ed25519 approver when mutation is explicitly authorized', async (t) => {
-  const files = await fixture(t)
-  const { publicKey } = generateKeyPairSync('ed25519')
-  const publicKeyPath = join(files.directory, 'approver-public.pem')
-  await writeFile(publicKeyPath, publicKey.export({ type: 'spki', format: 'pem' }))
-  const args = plannerArguments(files)
-  args.splice(args.indexOf('--json'), 0,
-    '--mutation-authorized',
-    '--approver-public-key', publicKeyPath,
-    '--approver-enrolled-by', 'Independent program approver',
-    '--approver-enrolled-at', '2026-08-01T00:00:00.000Z',
-    '--approver-provenance', 'Vendor program approver enrollment record 2026-08-01',
-  )
-
-  await main(args, {
-    clock: () => NOW,
-    env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
-    write: () => {},
-  })
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
-    scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
-    now: NOW,
-  })
-  const der = publicKey.export({ type: 'spki', format: 'der' })
-  assert.equal(verified.scope.authorization.permissions.mutation, true)
-  assert.equal(verified.scope.approver.key_id, `ed25519:${sha256Hex(der)}`)
-})
-
-test('plan-written rejects widening and contradictory discovery input before writing', async (t) => {
+test('plan-attested rejects widening and contradictory discovery input before writing', async (t) => {
   const files = await fixture(t)
   const cases = [
     {
@@ -608,7 +632,7 @@ test('plan-written rejects widening and contradictory discovery input before wri
       ...files,
       scopePath: join(files.directory, `${scenario.name.replaceAll(' ', '-')}.json`),
     }
-    const args = plannerArguments(caseFiles)
+    const args = planAttestedArguments(caseFiles)
     scenario.mutate(args)
     await assert.rejects(
       main(args, {
@@ -622,9 +646,9 @@ test('plan-written rejects widening and contradictory discovery input before wri
   }
 })
 
-test('plan-written maps CLI limit overrides into the sealed contract fields', async (t) => {
+test('plan-attested maps CLI limit overrides into the sealed contract fields', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--json'), 0,
     '--request-timeout-ms', '12000',
     '--max-response-bytes', '32768',
@@ -636,9 +660,9 @@ test('plan-written maps CLI limit overrides into the sealed contract fields', as
     env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
     write: () => {},
   })
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.deepEqual(verified.scope.limits, {
@@ -649,9 +673,9 @@ test('plan-written maps CLI limit overrides into the sealed contract fields', as
   })
 })
 
-test('plan-written reports a safe actionable contract reason without echoing input bytes', async (t) => {
+test('plan-attested reports a safe actionable contract reason without echoing input bytes', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   args.splice(args.indexOf('--enable-discovery'), 1)
   args[args.indexOf('https://bounty.example.test/security/start')] =
     'https://other.example.test/security/start'
@@ -665,13 +689,12 @@ test('plan-written reports a safe actionable contract reason without echoing inp
       assert.equal(error.code, 'HTTP_AUTHED_PLAN_SCOPE_INVALID')
       assert.match(error.message, /outside the sealed authorization scope/i)
       assert.equal(error.message.includes(CREDENTIAL), false)
-      assert.equal(error.message.includes(AUTHORIZATION_BYTES.toString('utf8')), false)
       return true
     },
   )
 })
 
-test('plan-written accepts an absolute bounded JSON action plan and assigns contiguous sequences', async (t) => {
+test('plan-attested accepts an absolute bounded JSON action plan and assigns contiguous sequences', async (t) => {
   const files = await fixture(t)
   const requestsPath = join(files.directory, 'requests.json')
   const actions = [
@@ -688,7 +711,7 @@ test('plan-written accepts an absolute bounded JSON action plan and assigns cont
   await writeFile(requestsPath, JSON.stringify(actions), 'utf8')
   const args = requestPlanArguments(files, requestsPath)
   removeOption(args, 'enable-discovery')
-  await addMutationPlannerOptions(args, files.directory)
+  addMutationPlannerOptions(args)
   let transportCalls = 0
 
   await main(args, {
@@ -706,7 +729,7 @@ test('plan-written accepts an absolute bounded JSON action plan and assigns cont
   assert.equal(scope.requests[1].rollback.request_body.body_id, 'SYNTHETIC_SECURITY_TEST_ROLLBACK_1')
   assert.equal(scope.requests[1].expected_mutation.resource_ref, 'SYNTHETIC_SECURITY_TEST_RECORD_1')
   assert.equal(scope.authorization.permissions.mutation, true)
-  assert.match(scope.approver.key_id, /^ed25519:[a-f0-9]{64}$/)
+  assert.equal(scope.approver, undefined)
 })
 
 test('plan-attested accepts full probe and mutate JSON drafts without a document', async (t) => {
@@ -723,9 +746,9 @@ test('plan-attested accepts full probe and mutate JSON drafts without a document
     },
     mutationRequestDraft(),
   ]), 'utf8')
-  const args = attestedRequestPlanArguments(files, requestsPath)
+  const args = requestPlanArguments(files, requestsPath)
   removeOption(args, 'enable-discovery')
-  await addMutationPlannerOptions(args, files.directory)
+  addMutationPlannerOptions(args)
   let output = ''
 
   await main(args, {
@@ -743,6 +766,7 @@ test('plan-attested accepts full probe and mutate JSON drafts without a document
   assert.deepEqual(scope.requests.map(({ sequence }) => sequence), [1, 2])
   assert.equal(scope.requests[1].kind, 'mutate')
   assert.equal(scope.authorization.permissions.mutation, true)
+  assert.equal(scope.approver, undefined)
 })
 
 test('JSON action plans are mutually exclusive with every seed shortcut', async (t) => {
@@ -862,9 +886,9 @@ test('JSON action-plan parsing rejects malformed or non-array content without ec
   }
 })
 
-test('human-readable plan, validate, and campaign output preserve authorization assurance', async (t) => {
+test('human-readable plan, validate, and fixed campaign output preserve assurance', async (t) => {
   const files = await fixture(t)
-  const args = plannerArguments(files)
+  const args = planAttestedArguments(files)
   removeOption(args, 'enable-discovery')
   args.splice(args.indexOf('--json'), 1)
   let planOutput = ''
@@ -875,21 +899,20 @@ test('human-readable plan, validate, and campaign output preserve authorization 
     write: (text) => { planOutput += text },
   })
 
-  const assurance = 'DOCUMENT_BOUND_OPERATOR_EXTRACTION'
-  const nonclaim = 'ISSUER_AND_LEGAL_SUFFICIENCY_NOT_VERIFIED'
+  const assurance = 'OPERATOR_DECLARATION_ONLY'
+  const nonclaim = 'NOT_INDEPENDENTLY_VERIFIED'
   assert.match(planOutput, new RegExp(`authorization assurance: ${assurance}`))
   assert.match(planOutput, new RegExp(`authorization nonclaim: ${nonclaim}`))
 
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   let validationOutput = ''
   await main([
-    'validate-written',
+    'validate-attested',
     '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
   ], {
     clock: () => NOW,
     write: (text) => { validationOutput += text },
@@ -900,13 +923,11 @@ test('human-readable plan, validate, and campaign output preserve authorization 
   let campaignOutput = ''
   let sends = 0
   await main([
-    'campaign-written',
+    'campaign-attested',
     '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
     '--campaign-grant-sha256', verified.campaignGrantSha256,
     '--ledger', join(files.directory, 'human-output-ledger'),
     '--operator-id', 'security-researcher',
-    '--confirm-authorization-current',
   ], {
     clock: () => NOW,
     env: { GENERIC_BOUNTY_CREDENTIAL: CREDENTIAL },
@@ -918,7 +939,7 @@ test('human-readable plan, validate, and campaign output preserve authorization 
     write: (text) => { campaignOutput += text },
   })
   assert.equal(sends, 1)
+  assert.match(campaignOutput, /completed actions: 1/)
   assert.match(campaignOutput, new RegExp(`authorization assurance: ${assurance}`))
   assert.match(campaignOutput, new RegExp(`authorization nonclaim: ${nonclaim}`))
-  assert.doesNotMatch(campaignOutput, /cleanup only: true/)
 })

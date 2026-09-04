@@ -6,6 +6,7 @@ import { buildRegistry, diffRegistry, checkShapes, checkDetectors, checkBodyClai
 import { checkOrthography } from './lib/orthography.mjs'
 import { parseLedger } from './lib/ledger.mjs'
 import { checkSkill, MAX_SKILL_BYTES } from './lib/skill.mjs'
+import { terminalSafeJson, terminalSafeText } from './lib/terminal-text.mjs'
 
 const DEFAULTS = {
   lensDir: 'skills/red-team-audit/lenses',
@@ -104,7 +105,11 @@ if (isMainModule(import.meta.url)) {
   const { violations, observations, counts } = runLint()
   const byRule = violations.reduce((acc, v) => ((acc[v.rule] = (acc[v.rule] ?? 0) + 1), acc), {})
 
-  for (const v of violations) console.error(`[${v.rule}] ${v.message}`)
+  for (const v of violations) {
+    console.error(
+      `[${terminalSafeText(v.rule, 128)}] ${terminalSafeText(v.message)}`,
+    )
+  }
 
   console.log(`\n${counts.lenses} lenses, ${counts.slugs} slugs owned.`)
   console.log(`SKILL.md: ${counts.skillBytes} bytes of the ${MAX_SKILL_BYTES}-byte budget (${MAX_SKILL_BYTES - counts.skillBytes} to spare).`)
@@ -112,14 +117,14 @@ if (isMainModule(import.meta.url)) {
   console.log('\n--- Detector coverage (observation only — never affects the exit code) ---')
   if (observations.length) {
     for (const o of observations) {
-      console.log(`  [OBSERVATION] ${o.lens}: ${o.detectors} detector(s) demonstrating ${o.literals} distinct literal(s) named in its Checklist`)
+      console.log(`  [OBSERVATION] ${terminalSafeText(o.lens, 256)}: ${o.detectors} detector(s) demonstrating ${o.literals} distinct literal(s) named in its Checklist`)
     }
   } else {
     console.log('  (no lenses with a Checklist section)')
   }
 
   if (violations.length) {
-    console.error(`\nFAIL: ${violations.length} violation(s) — ${JSON.stringify(byRule)}`)
+    console.error(`\nFAIL: ${violations.length} violation(s) — ${terminalSafeJson(byRule, 0)}`)
     process.exit(1)
   }
   console.log('\nPASS: R1-R9, SKILL and ledger gate clean.')

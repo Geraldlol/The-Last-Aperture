@@ -84,13 +84,32 @@ export async function planAcquisition({ adapterId, request, out, env = process.e
 
 export async function runAcquisition({
   bundle,
+  expectedAdapterId,
   operatorId,
   authorizationConfirmed = false,
   env = process.env,
   resolver,
 }) {
+  if (typeof expectedAdapterId !== 'string' || expectedAdapterId.trim() === '') {
+    throw new AcquisitionError(
+      'ACQUISITION_EXPECTED_ADAPTER_REQUIRED',
+      'runAcquisition requires an explicit expectedAdapterId before reading a plan',
+    )
+  }
+  if (!ADAPTER_FACTORIES.has(expectedAdapterId)) {
+    throw new AcquisitionError(
+      'ACQUISITION_EXPECTED_ADAPTER_UNKNOWN',
+      `runAcquisition refuses unknown expected adapter "${expectedAdapterId}"`,
+    )
+  }
   const directory = resolve(bundle)
   const record = await readPlanFile(directory)
+  if (record.adapter_id !== expectedAdapterId) {
+    throw new AcquisitionError(
+      'ACQUISITION_ADAPTER_MISMATCH',
+      `acquisition plan adapter "${record.adapter_id}" does not match expected adapter "${expectedAdapterId}"`,
+    )
+  }
   if (record.state === 'STOPPED') {
     throw new AcquisitionError('ACQUISITION_STOPPED', 'this acquisition was stopped and cannot run')
   }
@@ -100,7 +119,7 @@ export async function runAcquisition({
       'this plan already produced a bundle; re-acquiring writes a new bundle, not this one',
     )
   }
-  const routed = resolveEvidenceAdapter(record.adapter_id)
+  const routed = resolveEvidenceAdapter(expectedAdapterId)
   if (routed.authorization.operator_identity && !operatorId) {
     throw new AcquisitionError('ACQUISITION_OPERATOR_REQUIRED', 'this class requires a named operator')
   }
@@ -123,7 +142,8 @@ export async function runAcquisition({
     }
   }
 
-  const adapter = ADAPTER_FACTORIES.get(record.adapter_id)({ env, resolver })
+  const factory = ADAPTER_FACTORIES.get(expectedAdapterId)
+  const adapter = factory({ env, resolver })
   const written = await adapter.run(record.plan, {
     out: directory,
     authorizationConfirmed,

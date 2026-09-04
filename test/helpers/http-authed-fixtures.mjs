@@ -1,30 +1,8 @@
-import { generateKeyPairSync } from 'node:crypto'
 import {
-  sha256Hex,
-  WRITTEN_AUTHORIZATION_AUTHED_STATEMENT,
+  OPERATOR_ATTESTED_AUTHED_STATEMENT,
 } from '../../scripts/lib/http-authed-contracts.mjs'
 
-export const AUTHORIZATION_DOCUMENT = Buffer.from('synthetic authorization fixture')
-
-function approver() {
-  const { publicKey } = generateKeyPairSync('ed25519')
-  const der = publicKey.export({ type: 'spki', format: 'der' })
-  return {
-    mechanism: 'ed25519_file',
-    key_id: `ed25519:${sha256Hex(der)}`,
-    public_key: {
-      format: 'spki_der_b64',
-      value_base64: der.toString('base64'),
-    },
-    enrollment: {
-      enrolled_by: 'Peerstar security lead',
-      enrolled_at: '2026-04-15T12:00:00.000Z',
-      provenance: 'Peerstar internal approver enrollment for the written vendor authorization',
-    },
-  }
-}
-
-export function writtenScope({ actionCount = 128 } = {}) {
+export function attestedScope({ actionCount = 128 } = {}) {
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-authed-scope',
@@ -32,17 +10,14 @@ export function writtenScope({ actionCount = 128 } = {}) {
     environment: 'production',
     data_class: 'phi',
     authorization: {
-      mode: 'WRITTEN_AUTHORIZATION_AUTHED',
-      authorization_id: 'credible-april-2026-authorization',
-      statement: WRITTEN_AUTHORIZATION_AUTHED_STATEMENT,
+      mode: 'OPERATOR_ATTESTED_AUTHED',
+      authorization_id: 'operator-attestation-2026-08-16',
+      statement: OPERATOR_ATTESTED_AUTHED_STATEMENT,
       operator_id: 'peerstar-security-operator',
-      authorized_by: 'Credible/Qualifacts security',
-      authorization_reference: 'Credible/Qualifacts written authorization, April 2026',
+      authorized_by: 'engagement operator',
+      authorization_reference: 'Operator-held engagement authorization reference 2026-08-16',
       attested_at: '2026-08-16T12:00:00.000Z',
       independently_verified: false,
-      written_authorization_sha256: sha256Hex(AUTHORIZATION_DOCUMENT),
-      document_issuer: 'Credible/Qualifacts security',
-      document_issued_at: '2026-04-15T12:00:00.000Z',
       permissions: {
         active_testing: true,
         production: true,
@@ -77,7 +52,6 @@ export function writtenScope({ actionCount = 128 } = {}) {
       stop_on_sensitive_data: true,
       test_data: 'synthetic_only',
     },
-    approver: approver(),
     liveness: {
       credential_preflight: {
         method: 'GET',
@@ -168,7 +142,6 @@ export function writtenScope({ actionCount = 128 } = {}) {
           },
         },
         rollback_policy: 'ALWAYS',
-        requires_countersignature: true,
       }
     }),
   }

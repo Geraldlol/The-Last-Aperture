@@ -29,6 +29,7 @@ function options(overrides = {}) {
     policySnapshotBytes: Buffer.from('ACME program policy. Scope: *.acme.example\n'),
     operatorId: 'operator-1',
     authorizedBy: 'ACME via YesWeHack program policy',
+    requiredUserAgent: 'BugBounty-acme',
     allowSpecs: ['*.acme.example', 'acme.example'],
     denySpecs: ['legacy.acme.example'],
     permissions: permissions(),

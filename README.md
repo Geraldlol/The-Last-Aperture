@@ -12,44 +12,67 @@ request; neither proves model comprehension. External HTTP reconnaissance has
 its own authorization, action denominator, stop path, and nonclaims. It never
 becomes repository coverage.
 
+At authenticated controller ingress, an explicit operator statement authorizing
+the named target and scope is accepted as the controller's authorization fact.
+The controller seals it without requiring an external RoE, ownership, or legal-
+proof artifact or repeated certification of unchanged authority. The statement
+is not independent proof of its legal basis; the operator remains accountable.
+
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
 it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
+> **Current boundary:** one exact bounded operator-directed HTTP-recon action and
+> fixed, already-sealed authenticated HTTP campaigns are active through their
+> protocol controllers. Generic live/L3, proof, provider, remote, bounty/OOB,
+> acquisition, database, and transparency execution remain gated. Public
+> `--seal-source` and evidence-bundle import are also disabled pending controller-
+> enrolled local custody and signed semantic manifests. Static repository
+> inventory, offline planning/validation, and manual result ingestion remain
+> available.
+
+Manual provider decisions are not semantic authority in this release. The
+controller stamps triage and proof decisions as unauthenticated; reports render
+confirmation, disproof, non-reproduction, drop, merge, and fix assertions as
+`CLAIMED_*`. They cannot suppress a candidate, reduce report/SARIF priority, or
+remove it from proof scheduling. Likewise, comparable-coverage absence is
+`claimed-fixed`; the unqualified `fixed` state is reserved for a future
+authenticated semantic-negative oracle.
+
 Version 0.12.0 adds authenticated HTTP campaigns to the v0.11
 authorized-reconnaissance and v0.10 repository-audit foundation:
 
-- A separate `http-authed-v1` protocol and `audit:http-authed` CLI. The released
-  runtime has distinct lower-assurance `OPERATOR_ATTESTED_AUTHED` and
-  document-bound `WRITTEN_AUTHORIZATION_AUTHED` routes. The former records an
-  operator declaration only; it does not independently verify vendor/program
-  permission, ownership, legal authority, external scope coverage, or revocation.
-  The latter rechecks supplied document bytes and extracted permissions without
-  verifying issuer identity or judging legal sufficiency.
+- A separate `http-authed-v1` protocol and `audit:http-authed` CLI. The
+  authenticated operator's exact target/scope statement is the sole
+  authorization primitive. Optional governance material is evidence only; it
+  cannot select a more capable route or increase limits. The controller does not
+  independently verify vendor/program permission, ownership, legal authority,
+  external scope coverage, or revocation.
 - Canonical uppercase application methods explicitly admitted by the sealed
   scope, including body-bearing and write methods. Native transport refuses
   `CONNECT` and protocol upgrades; browser transport also refuses `TRACE`/`TRACK`.
-- An immutable external campaign ledger with monotonic sequencing, no campaign
-  action-count ceiling, no redirect or automatic retry, scope-bounded synthetic
-  discovery, and immediate pre-send authorization revalidation.
+- A locally append-only, hash-chained external campaign ledger with monotonic
+  sequencing, no redirect or automatic retry, a 256-action public
+  fixed-campaign ceiling, and immediate pre-send authorization revalidation.
+  Cross-restart rollback or valid-prefix truncation detection requires a
+  separately retained trusted record count and head digest.
 - Declared mutations with credential preflight, before/after JSON observation,
-  a fresh one-use Ed25519 countersignature, an always-on inverse rollback, and
-  rollback verification. Ambiguous mutation or rollback delivery is never
-  retried.
+  a one-use controller-sealed technical dispatch permit, an always-on inverse
+  rollback, and rollback verification. Ambiguous mutation or rollback delivery
+  is never retried.
 - Metadata-only durable results: credential values, request/response bodies,
   header values, arbitrary target-controlled header names, and rejected
   discovery values are not persisted. Operators must use synthetic non-PHI
   identifiers and bodies.
 
-It retains the separately authorized `http-recon-v1` observation protocol:
+It retains the separately authorized `http-recon-v1` observation contract:
 
 - A separate `http-recon-v1` protocol with no repository, lens, closure, code
   coverage, or T0-T3 proof-tier claim.
-- A default one-action operator-attested mode requiring no authorization files,
-  plus an optional externally signed RoE mode with owner key, hash-bound
-  document, and fresh target-control proof.
+- One operator-statement route that seals one exact action without a separate
+  authorization-file or signing-key prerequisite.
 - Exact HTTPS `HEAD`, `GET`, or `OPTIONS` actions only, with schema-enforced hard
   caps, runtime CA and hostname validation, recorded certificate identity,
   concurrency one, durable stop, and explicit uncertain-delivery state.
@@ -73,7 +96,8 @@ It retains the separately authorized `http-recon-v1` observation protocol:
 - External read/write/execute/network policy decisions.
 - Provider-neutral job packets and result ingestion.
 - Packet/result binding and declared producer provenance.
-- Opt-in exact-byte source and trusted-control snapshots with no live target mount.
+- Internal exact-byte source and trusted-control snapshot support with no live
+  target mount; public `--seal-source` is currently disabled.
 - Durable, hash-chained, one-use provider attempts with retry history.
 - A digest-pinned, no-network Docker stdio runner with bounded resources and
   verified effective isolation settings.
@@ -101,9 +125,8 @@ It retains the separately authorized `http-recon-v1` observation protocol:
 - Separate `PROVIDER_DECLARED`, `CONTROLLER_OBSERVED_CONSUMPTION`, and
   `REMOTE_REQUEST_ACCEPTED` coverage authority in run, Markdown, lifecycle,
   and SARIF output.
-- A `remote_static` Rules of Engagement mode that allows one exact
-  policy-authorized HTTPS gateway while keeping provider packets read-only and
-  credential-free.
+- A `remote_static` technical outbound-policy mode that allows one exact HTTPS
+  gateway while keeping provider packets read-only and credential-free.
 - Canonical Ed25519 remote requests, SPKI-pinned HTTPS, RFC 9530 content
   digests, one-use request IDs, signed gateway acceptance receipts, and
   hash-chained schema-v6 attempt recovery.
@@ -122,21 +145,28 @@ It retains the separately authorized `http-recon-v1` observation protocol:
 - Markdown, JSON, and SARIF 2.1 output.
 - Separate unique-file, lens/file-obligation, conceptual-gap, and raw-gap
   reporting with bounded samples.
-- Baseline comparison that distinguishes `fixed` from `not-observed`.
+- Baseline comparison that distinguishes unauthenticated `claimed-fixed` from
+  `not-observed`; `fixed` is reserved for a future authenticated semantic oracle.
 - TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
 
 The general dynamic T1/T2 target proof broker is not enabled. T2 retains its
 historical meaning: a locally booted application reached only through
 loopback. `http-recon-v1` is not T2 and cannot verify a repository finding.
-Local static mode does not execute target code, follow target symlinks, or make
-network calls. `remote_static` permits only the configured provider-gateway
-request; it grants no network authority to repository content or a provider
-packet. The local provider boundary runs a separately supplied trusted adapter
-image against brokered sealed data; it neither mounts nor executes the target.
+Local static mode does not execute target code or intentionally create socket
+traffic. Caller-selected filesystem paths remain trusted endpoints and may
+resolve through symlinks, junctions, mapped drives, or remote-backed volumes;
+the lexical path guard is not local-volume attestation. Public `remote_static`
+and local provider execution are currently
+disabled until their gateway and container-runtime identities are enrolled by a
+trusted controller outside caller-controlled configuration. The retained
+protocols describe brokered sealed data and never grant network authority to
+repository content or a provider packet.
 
-The standalone database lab is separate opt-in `LOCAL_DYNAMIC` execution of
-controller-owned synthetic SQL. It never reads the audited target or target
-credentials, and its reference-engine results never prove a target deployment.
+The standalone database-lab protocol models `LOCAL_DYNAMIC` execution of
+controller-owned synthetic SQL. Public lab execution is currently disabled
+until the container runtime has a controller-enrolled, pinned identity. It never
+reads the audited target or target credentials, and reference-engine results
+never prove a target deployment.
 
 Inventory is fail-closed and resource-bounded. Regular files are opened with
 no-follow semantics where Node exposes them, verified with `fstat`, read and
@@ -154,12 +184,30 @@ serialized inventory records the effective values. There is deliberately no
 wall-clock traversal timeout because it would make the inventory and its digest
 machine-load-dependent.
 
+The `gen`, `gen:benchmarks`, `gen:evidence-fixtures`, `scan:residue`,
+`test:cloud-iac:conformance`, `conformance:bounty-kernel`, and real-service or
+real-container conformance commands are trusted-checkout maintainer tools, not
+product audit entry points and not covered by the product CLI path/no-egress
+guarantees. They may follow filesystem indirection, overwrite generated
+artifacts, interpret checkout-authored commands, or invoke a selected host
+executable. Run them only from this trusted local checkout with local
+maintainer-controlled paths and environment. Default `npm test` does not
+auto-discover the shell or real-Docker conformance files.
+
+CI never checks out or executes pull-request head code. Tests run only after a
+change reaches the protected `main` ref; stateful HTTPS and Docker conformance
+also require a manual workflow dispatch through the protected
+`release-conformance` environment. Review proposed changes before merge—the
+trusted main checkout is part of the maintainer test boundary.
+
 ## Quick start
 
 Requirements: Node.js 20 or newer for planning and manual `next`/`ingest`.
-Observed provider execution requires Node.js 24 or newer and a local Docker
-daemon. The full development test suite also requires Bash and ripgrep because
-it executes selected shell probes directly from the audit lenses.
+Provider and remote execution are internal conformance surfaces in this release;
+their public commands fail closed pending trusted-controller enrollment. The
+default development test suite does not execute shell snippets embedded in
+lenses. Run `npm run test:cloud-iac:conformance` explicitly from a trusted
+checkout when Bash and ripgrep are available.
 
 ```powershell
 npm.cmd install
@@ -172,17 +220,25 @@ npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
 
 ### Authorized external HTTP reconnaissance
 
-This path is separate from `npm.cmd run audit`. The default mode records an
-operator declaration of asset-owner permission and seals one exact action. It
-does not require a signed RoE, authorization-document, or public-key path:
+> **Current release status:** bounded live HTTP reconnaissance is active.
+> `go <exact-https-url>` treats the invocation as the operator directive and
+> executes one sealed action. Exact-target DNS/TLS, no-redirect, evidence,
+> deadline, and stop controls remain enforced.
+
+This path is separate from `npm.cmd run audit`. The authenticated invocation is
+the operator authorization statement. The controller accepts it as fact for the
+named target, records it, and seals one exact action:
 
 ```powershell
+npm.cmd run audit:http-recon -- go `
+  https://target.example/exact-path `
+  --out C:\audit-runs\http-recon-run-001
+
 npm.cmd run audit:http-recon -- plan `
   --target-url https://target.example/exact-path `
   --operator-id <operator-id> `
-  --authorized-by "asset owner name or role" `
-  --authorization-reference "ticket, email, or conversation reference" `
-  --attest-authorized `
+  --authorized-by "operator-declared authorizer" `
+  --authorization-reference "operator-held reference or none" `
   --out C:\audit-runs\http-recon-run-001
 
 npm.cmd run audit:http-recon -- next `
@@ -191,8 +247,7 @@ npm.cmd run audit:http-recon -- next `
 npm.cmd run audit:http-recon -- run `
   C:\audit-runs\http-recon-run-001 <action-id> `
   --operator-id <operator-id> `
-  --rationale "authorized header and status observation" `
-  --confirm-authorization-current
+  --rationale "authorized header and status observation"
 ```
 
 Planning is network-free and `HEAD` is the default method. No certificate
@@ -206,9 +261,11 @@ values remain unavailable. After planning, the CLI accepts no target, URL,
 method, TLS policy, header profile,
 credential, body, proof endpoint, retry, or limit override. Operator-attested
 mode makes zero proof requests and may execute only its one sealed action.
-`run` must use the operator ID that created the plan. Its permission claim is
-not independently verified.
-Stop immediately without needing a still-valid authorization artifact:
+`run` must use the operator ID that created the plan. The sealed statement is
+accepted by the controller but does not independently prove underlying legal
+authority.
+Stop remains available after the ordinary action window closes or the bundle
+fails:
 
 ```powershell
 npm.cmd run audit:http-recon -- stop `
@@ -217,48 +274,58 @@ npm.cmd run audit:http-recon -- stop `
   --reason "operator stop"
 ```
 
-Then `finalize` and `validate` using only the attested bundle; use
-`report <bundle>` to locate the generated report. The optional higher-assurance
-`plan-signed` command retains the signed RoE, authorization-document, owner-key,
-and live-proof workflow. A complete run may say
+Then `finalize` and `validate` using only the sealed bundle; use
+`report <bundle>` to locate the generated report. Optional governance material
+may be retained separately as evidence, but it does not create authority or
+change the action boundary. A complete run may say
 `NO_FINDINGS_OBSERVED_IN_AUTHORIZED_PROBED_SURFACE`, never clean or safe. Every
 report states that repository inventory, lens activation, source closure, and
 code coverage are not applicable. See
 [`docs/http-recon-protocol.md`](docs/http-recon-protocol.md) and
 [`ADR 0014`](docs/adr/0014-operator-attested-http-recon.md), as amended by
 [`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md) and
-[`ADR 0018`](docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md).
+[`ADR 0018`](docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md),
+with the authorization model in
+[`ADR 0021`](docs/adr/0021-operator-statement-authorization.md).
 
 ### Authorized authenticated HTTP campaign
 
-This path is separate from both repository proof and `http-recon-v1`. Choose one
-authorization mode; commands never convert or fall back between them.
+> **Current release status:** fixed, sealed authenticated campaign execution is
+> active. Probe actions run only inside one-action or multi-action campaigns;
+> standalone probe dispatch is not public. Invoking a live campaign is the
+> operator's launch directive, so no second current-authorization flag is
+> required. Adaptive response-derived discovery remains outside this public lane.
 
-`plan-attested --attest-authorized` creates lower-assurance
+This path is separate from both repository proof and `http-recon-v1`. The
+authenticated operator target/scope statement is its sole authorization source.
+
+`plan-attested` creates lower-assurance
 `OPERATOR_ATTESTED_AUTHED` from the operator's explicit declaration and exact
-scope. It is suitable only when the operator actually holds authorization, such
+scope. The controller accepts that statement as its authorization fact without
+requesting an external legal-proof artifact or later recertification. It is
+suitable only when the operator actually holds authorization, such
 as an applicable bug-bounty or security-testing engagement. The controller does
 not fetch or interpret that program, and does not independently verify
 vendor/program permission, ownership, legal authority, external scope coverage,
 or revocation. The declared authorizer and reference are audit fields, not proof
 of vendor approval.
 
-Planning is offline and requires no authorization document:
+Planning is offline; the invocation records and seals the operator statement:
 
 ```powershell
 npm.cmd run audit:http-authed -- plan-attested `
   --scope C:\trusted\scope.json `
   --engagement-id <engagement-id> --authorization-id <authorization-id> `
   --operator-id <operator-id> --authorized-by <declared-authorizer> `
-  --authorization-reference <operator-held-reference> --attest-authorized `
+  --authorization-reference <operator-held-reference> `
   --not-before <timestamp> --not-after <timestamp> `
   --cleanup-not-after <timestamp> `
   --target-origin https://target.example --environment production `
   --data-class phi --ownership third_party_owned `
-  --credential-browser --browser-extension-id <extension-id> `
+  --credential-stdin --credential-kind bearer `
   --path-prefix / --method HEAD --method GET --method OPTIONS `
   --test-category api_security --seed-url https://target.example/start `
-  --enable-discovery --json
+  --json
 ```
 
 For simple probes, use repeatable `--seed-url`. For a complete probe/mutation
@@ -270,45 +337,40 @@ discovery, probes, or a new mutation.
 
 The plan and validation expose `authorization_binding_sha256`,
 `authorization_mode: OPERATOR_ATTESTED_AUTHED`, and
-`independently_verified: false`. They do not invent a null or synthetic
-`authorization_document_sha256`.
+`independently_verified: false`. Optional governance bytes may be retained as
+separate evidence, but their digest, issuer, or signature cannot grant a
+different mode, target, action, or limit.
 
-Use `plan-written` instead when supplying bounded authorization-document bytes.
-`WRITTEN_AUTHORIZATION_AUTHED` binds the document digest, declared issuer/date,
-and extracted permissions, but still does not cryptographically verify the issuer
-or judge legal sufficiency. Its planner uses the same scope flags plus
-`--authorization-document`, `--document-issuer`, and `--document-issued-at`.
+Do not load the companion under `browser/http-authed-chrome`. The packaged
+0.12.1 manifest is a release-disabled placeholder with no host, tab, scripting,
+or background authority, and its popup contains no attach controls. The public
+`--credential-browser` bridge can execute only if the operator separately
+supplies a compatible companion. That browser path enforces exact origin and no
+redirect, but uses the browser's DNS/network stack rather than native all-answer
+DNS validation and socket IP pinning; treat that as a distinct assurance level.
+Anyone who previously loaded version 0.12.0 must remove it from Chrome or reload
+the unpacked directory and verify version 0.12.1; replacing repository files does
+not terminate an already registered service worker by itself.
 
-For a rotating Chrome session, load the unpacked extension from
-`browser/http-authed-chrome` into a dedicated testing profile and copy its
-32-character ID from `chrome://extensions`. The extension has only `activeTab`,
-`scripting`, and loopback-host access: it has no cookie, storage, debugger,
-request-observer, broad target-host, or profile permission. Browser mode creates
-`CHROME_ACTIVE_TAB_SESSION`; no cookie value or credential digest enters the
-scope. It uses Chrome's PKIX/hostname validation and cannot be combined with
-`--tls-spki-sha256`.
-
-Probe-only plans need no per-mutation approver. Add `--mutation-authorized` plus
-the approver public-key and enrollment flags shown by `--help` when the sealed
-permissions include write-capable probes or declared reversible mutations. The
-planner does not create synthetic bodies or countersignatures. Validate with the
-matching command and retain the returned grant hash:
+Probe-only plans need no mutation permit. For write-capable probes or declared
+reversible mutations, the controller uses the sealed campaign authority and
+selected autonomy profile to issue a one-use technical dispatch permit. In
+L1/L2 it may encode an operational decision; in L3 it derives from the accepted
+finite envelope without another operator prompt. The permit binds the exact
+operator, target, plan, scope revision, action, effects, verification, rollback,
+and replay state and is durably consumed in the ledger. No separate action-
+approval artifact is supplied. Validate the scope and retain the returned grant
+hash:
 
 ```powershell
 npm.cmd run audit:http-authed -- validate-attested `
   --scope C:\trusted\scope.json `
   --json
-
-npm.cmd run audit:http-authed -- validate-written `
-  --scope C:\trusted\written-scope.json `
-  --authorization-document C:\trusted\authorization.pdf `
-  --json
 ```
 
-Run the campaign with an absolute ledger outside the target; the runtime creates
-the ledger when that path does not yet exist. Mutating actions also require an
-absolute materials directory containing the declared synthetic bodies and
-`countersignature-N.json` approvals:
+The campaign uses an absolute ledger outside the target and an absolute
+materials directory containing declared synthetic bodies. Controller permits
+and their consumption records stay in the campaign ledger:
 
 ```powershell
 npm.cmd run audit:http-authed -- campaign-attested `
@@ -317,47 +379,59 @@ npm.cmd run audit:http-authed -- campaign-attested `
   --ledger C:\trusted\campaign-ledger `
   --materials C:\trusted\campaign-materials `
   --operator-id <operator-id> `
-  --confirm-authorization-current `
-  --credential-browser `
+  --credential-stdin `
   --json
 ```
 
-For written mode, use `campaign-written` with the written scope and add
-`--authorization-document`. An attested command rejects document flags, and a
-written command rejects an attested scope.
+Retain each returned ledger `record_count` and `head_sha256` outside the ledger
+directory. On restart, detecting rollback or valid-prefix truncation requires
+supplying them as `--trusted-ledger-record-count` and
+`--trusted-ledger-head-sha256`; the local hash chain alone cannot detect a
+whole-ledger rollback to an otherwise valid prefix.
+
+Even one authenticated action uses this campaign route; standalone probe
+dispatch is not public. To stop a running
+campaign before it dispatches another action, write the grant-bound out-of-band
+request (the runner consumes it into the locally append-only, hash-chained
+ledger):
+
+```powershell
+npm.cmd run audit:http-authed -- campaign-stop `
+  --ledger C:\trusted\campaign-ledger `
+  --campaign-grant-sha256 <hash-from-validation> `
+  --operator-id <operator-id>
+```
 
 Ordinary actions stop at `validity.not_after`. If a previously dispatched,
-approval-consumed mutation remains incomplete, restarting the matching campaign
+receipt-consumed mutation remains incomplete, restarting the matching campaign
 before `validity.cleanup_not_after` opens the existing ledger in cleanup-only
 mode and can send only the sealed rollback and rollback-verification requests.
 It writes `CLEANUP_SESSION_CONFIRMED` before cleanup dispatch, does not write a
 new ordinary session confirmation, and never queues or sends new work.
 
-The browser campaign prints a loopback port and one-time pairing capability. In
-the exact logged-in target tab, open the companion, enter those values, select
-**Load controller binding**, and verify the exact origin and full campaign grant.
-Then select **Attach and start campaign**. That is one extension attach per
-campaign. The companion automatically prepares and executes each
-controller-authorized action; only emergency stop or detach remains manual. Chrome
-applies the current session and processes normal cookie rotation on every sealed
-same-origin request. Cookie and Authorization values never cross into the
-controller, ledger, command output, or agent context. Origin, tab, document,
-action-binding, or protocol drift fails closed, and ambiguous delivery is never
-retried.
+The packaged browser companion is not runnable in this release. A separately
+installed protocol-compatible companion may use the public loopback bridge;
+its actions still pass through the same campaign ledger and sealed action list.
 
 Sealed `env:NAME` and redirected `--credential-stdin` remain explicit fallbacks
 for exported credentials. Stdin is read once per process and must match the
 binding at live execution; it does not provide automatic rotation. Never put an
 exported credential in chat, argv, or a file. Validation needs no credential.
 
-Use synthetic non-PHI test data even when the target data class is PHI. Discovery
-can enqueue only scope-valid
-`GET`/`HEAD`/`OPTIONS` probes; it never synthesizes mutation envelopes. See
+Use synthetic non-PHI test data even when the target data class is PHI. Public
+campaign execution sends only the sealed request list (at most 256 actions) and
+does not admit response-derived discovery. See
 [`ADR 0016`](docs/adr/0016-authenticated-mutation-actions.md),
 [`ADR 0017`](docs/adr/0017-operator-attested-authenticated-campaigns.md), and
 [`schemas/http-authed-scope.schema.json`](schemas/http-authed-scope.schema.json).
 
 ### Disposable database conformance
+
+> **Current release gate:** Public `conformance:database -- run` refuses before
+> argument, bundle, or configuration access. An absolute caller-selected runtime
+> path is not authenticated Docker identity. Lower-level and real-Docker
+> conformance commands are release-operator test infrastructure, not a production
+> execution API.
 
 The lab requires a trusted absolute Docker CLI path, a local Docker daemon, and
 the two exact manifest images already present. Plan bundles outside the project
@@ -365,6 +439,7 @@ and audited target:
 
 ```powershell
 npm.cmd run conformance:database -- plan C:\database-lab-runs\run-001
+# Historical command shape; currently fail-closed.
 npm.cmd run conformance:database -- run C:\database-lab-runs\run-001 C:\trusted\database-lab-config.json
 npm.cmd run conformance:database -- validate C:\database-lab-runs\run-001
 ```
@@ -413,8 +488,9 @@ input changed after planning.
 A custom `--out` must be outside the audited repository so creating the bundle
 cannot change its own snapshot denominator. Omit `--out` to use the built-in
 `.audit-runs` directory for a hash-only plan, which inventory excludes
-explicitly. `--seal-source` always requires an output outside the target,
-because that bundle is a sensitive exact-byte source archive.
+explicitly. Public `--seal-source` currently refuses before repository or output
+access: a filesystem destination is an outbound-data endpoint, and source
+archiving requires a controller-enrolled local custody root.
 
 Inspect the bounded jobs:
 
@@ -454,10 +530,17 @@ npm.cmd run audit -- validate C:\audit-runs\<run-directory> `
 ```
 
 The detached attestation binds the exact terminal `run.json` bytes, run
-identity, state, phase, and externally pinned Ed25519 key. It can optionally be
-published to a separately operated transparency log:
+identity, state, phase, and externally pinned Ed25519 key. The transparency
+protocol can publish it to a separately operated log, but the public command is
+currently gated:
+
+> **Current release gate:** Public `publish` refuses before reading the run,
+> attestation, keys, output, or log configuration. The protocol remains for
+> conformance testing; production use requires a log endpoint enrolled outside
+> caller-controlled configuration.
 
 ```powershell
+# Historical command shape; currently fail-closed.
 npm.cmd run audit -- publish C:\audit-runs\<run-directory> `
   C:\trusted\transparency-log-config.json `
   --root-attestation C:\trusted\attestations\<run-id>.json `
@@ -509,11 +592,20 @@ output cannot raise them later.
 
 ### Controller-observed provider execution
 
+> **Current release gate:** Public `run-provider` refuses before reading the
+> bundle or provider configuration. The protocol remains for conformance
+> testing, but an absolute caller-selected runtime path is not authenticated
+> container-runtime identity. Public `--seal-source` is also disabled before
+> repository/output access. Re-enable only with a controller-enrolled,
+> identity-pinned runtime, local custody root, and protected execution environment.
+
 Create a sensitive runner-ready bundle only when exact source-byte archiving is
 acceptable:
 
 ```powershell
+# Historical command shape; currently fail-closed.
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --seal-source
+# Historical command shape; currently fail-closed.
 npm.cmd run audit -- run-provider C:\audit-runs\<run-directory> C:\trusted\provider-config.json
 ```
 
@@ -530,15 +622,27 @@ attempts remain in the hash-chained event history. See
 
 ### Signed remote gateway execution
 
-Remote execution requires an external `remote_static` Rules of Engagement
-policy whose network allowlist contains the exact gateway endpoint:
+> **Current release gate:** Public `run-remote` refuses before reading the run
+> bundle or gateway configuration. The protocol implementation remains for
+> conformance testing, but caller-supplied RoE/config files cannot establish an
+> independently enrolled gateway or authorize transmission of source data.
+> Its required `--seal-source` input is itself disabled pending local custody.
+> Re-enable only through a privileged controller enrollment and explicit
+> outbound-data policy.
+
+The historical remote protocol also consumes a `remote_static` technical
+outbound-network policy whose allowlist contains the exact gateway endpoint.
+That file is transport policy, not legal proof or the operator authorization
+fact. An operator statement cannot activate the currently unavailable route:
 
 ```powershell
+# Historical command shape; currently fail-closed.
 npm.cmd run audit -- plan C:\path\to\repository `
   --out C:\audit-runs `
   --roe C:\trusted\remote-static-roe.json `
   --seal-source
 
+# Historical command shape; currently fail-closed.
 npm.cmd run audit -- run-remote `
   C:\audit-runs\<run-directory> `
   C:\trusted\remote-gateway-config.json
@@ -631,10 +735,10 @@ This architecture uses OWASP APTS 0.1.0 as a governance design baseline and
 NIST SP 800-115 as a planning and authorization baseline. The project claims
 conformance with neither. See
 [`docs/adr/0001-executable-audit-platform.md`](docs/adr/0001-executable-audit-platform.md)
-and [`ADR 0013`](docs/adr/0013-authorized-external-http-recon.md).
-Operator-attested authorization is the lower-assurance exception documented in
-[`ADR 0014`](docs/adr/0014-operator-attested-http-recon.md); its URL-first TLS
-policy is documented in [`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md).
+and [`ADR 0021`](docs/adr/0021-operator-statement-authorization.md). ADRs 0013
+and 0014 retain the historical signed and operator-attested recon decisions;
+ADR 0021 supersedes their authority mechanics. URL-first TLS policy remains
+documented in [`ADR 0015`](docs/adr/0015-url-first-pkix-http-recon.md).
 
 ## Repository audit run states
 
@@ -680,8 +784,12 @@ npm.cmd run gen -- --check
 npm.cmd run gen:benchmarks -- --check
 ```
 
-Real-container conformance is a separate, fail-closed release gate. The host
-controller still requires Node 24; the small protocol peer can use its separately
+Real-container conformance is trusted-checkout maintainer infrastructure, not a
+product CLI guarantee or target-testing route. Its test module lives outside
+default test discovery and is reachable only through the explicit
+`test:provider:docker` launcher, so ambient Docker variables cannot activate it
+during ordinary `npm test`. The separate release gate's host controller still
+requires Node 24; the small protocol peer can use its separately
 digest-pinned runtime. The CI-reviewed peer pin is shown below. Pass its
 immutable local image ID—not a mutable tag:
 
@@ -728,20 +836,24 @@ Compare two validated runs:
 npm.cmd run audit -- compare baseline\run.json current\run.json
 ```
 
-An absent finding is classified `fixed` only when the current run covers the
-relevant file under the relevant lens, no attributable coverage gap can hide
-it, and both runs use the same repository root, lens pack, and Rules of
+An absent finding is classified `claimed-fixed` only when the current run covers
+the relevant file under the relevant lens, no attributable coverage gap can
+hide it, and both runs use the same repository root, lens pack, and Rules of
 Engagement. Database findings additionally require the same assessed store,
 topic, adapter, engine/version/deployment semantics, and effective principal.
 Otherwise the finding is `not-observed`; unrelated or differently governed runs
-are explicitly non-comparable. Lifecycle output preserves whether that basis
-was provider-declared or controller-observed byte consumption; neither is
+are explicitly non-comparable. The unqualified `fixed` state is reserved for a
+future authenticated semantic-negative oracle and is never emitted in this
+release. Lifecycle output preserves whether the absence basis was
+provider-declared or controller-observed byte consumption; neither is
 independent semantic proof.
 
 Historical bundles remain validatable and reportable from their own hashed
 manifests after the installed lens pack advances. Without an externally pinned
-root attestation they are explicitly `UNANCHORED`; with one, exact manifest
-replacement is detected. Active `next`, `ingest`, and `finalize` operations
+root attestation they are explicitly `UNANCHORED`; with a caller-supplied
+attestation/key pair, exact raw-byte manifest replacement is detected and the
+result is `SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY`. That status does not claim the
+key identity is controller-enrolled. Active `next`, `ingest`, and `finalize` operations
 additionally require the installed trusted pack to match the planned pack; old
 and new packs compare as explicitly non-comparable rather than making the
 baseline unreadable.
@@ -823,11 +935,12 @@ variants after the v1 result and lifecycle contracts have operational history.
 
 - Do not upload source, evidence, secrets, PII, or PHI by default.
 - Do not run repository T1/T2 proof against production. Production HTTP actions
-  require a separate `http-authed-v1` campaign and actual authorization; an
-  operator attestation records a claim but does not verify it.
+  require a separate `http-authed-v1` campaign. The authenticated operator
+  statement is accepted as the controller authorization fact but does not
+  independently prove its underlying legal basis.
 - Do not infer completeness from zero findings.
 - Do not automatically apply patches; external mutation requires its declared
-  reversible action and fresh countersignature.
+  reversible action and one-use technical dispatch receipt.
 - Do not claim unsupported frameworks or engines were assessed.
 - Do not treat this tool as a compliance attestation or a replacement for a
   qualified penetration test.

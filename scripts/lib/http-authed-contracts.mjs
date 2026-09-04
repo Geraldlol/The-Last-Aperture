@@ -1,52 +1,24 @@
 import { constants as fsConstants, readFileSync } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
-import {
-  createHash,
-  createPrivateKey,
-  createPublicKey,
-  sign as signBytes,
-  verify as verifyBytes,
-} from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute, resolve } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { stableJson } from './run-engine.mjs'
 import { resolveHttpReconResponseObservation } from './http-recon-response-observations.mjs'
 
-// The small crypto/canonicalization helpers below intentionally mirror
-// http-recon-contracts.mjs rather than importing its module-private functions,
-// so this new tier stays self-contained. Candidate to factor into a shared
-// http-signing module once both tiers are stable (ADR 0016).
-
 const SCOPE_SCHEMA_URL = new URL(
   '../../schemas/http-authed-scope.schema.json',
   import.meta.url,
 )
 
-const ROE_SIGNATURE_CONTEXT = Buffer.from(
-  'red-team-audit/http-authed-roe/v1\0',
-  'utf8',
-)
-const COUNTERSIGN_CONTEXT = Buffer.from(
-  'red-team-audit/http-authed-countersign/v1\0',
-  'utf8',
-)
-
 export const OPERATOR_ATTESTED_AUTHED_STATEMENT =
-  'I confirm that I am authorized by the asset owner to perform these exact bounded authenticated HTTP actions.'
+  'I confirm that I am authorized to perform these exact bounded authenticated HTTP actions.'
 
-export const WRITTEN_AUTHORIZATION_AUTHED_STATEMENT =
-  'I attest that the supplied written authorization permits authenticated HTTP testing throughout the sealed engagement scope.'
-
-const MAX_WRITTEN_AUTHORIZATION_BYTES = 16 * 1024 * 1024
-const MAX_WRITTEN_SCOPE_BYTES = 64 * 1024 * 1024
+const MAX_SCOPE_BYTES = 64 * 1024 * 1024
 const STATE_SAFE_PROBE_METHODS = new Set(['HEAD', 'GET', 'OPTIONS'])
 const FETCH_FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK'])
 const TUNNEL_METHODS = new Set(['CONNECT'])
-const RUNTIME_DECLARED_AUTHORIZATION_MODES = new Set([
-  'OPERATOR_ATTESTED_AUTHED',
-  'WRITTEN_AUTHORIZATION_AUTHED',
-])
 const AMBIGUOUS_PATH_ENCODING = /(?:\\|%(?:25)*(?:2e|2f|5c))/i
 const SYNTHETIC_PERSISTED_VALUE = /^SYNTHETIC_[A-Z0-9_-]{4,128}$/
 const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
@@ -117,7 +89,7 @@ export function isHttpAuthedBrowserSessionCredential(credential) {
 }
 
 export function isHttpAuthedRuntimeAuthorizationMode(mode) {
-  return RUNTIME_DECLARED_AUTHORIZATION_MODES.has(mode)
+  return mode === 'OPERATOR_ATTESTED_AUTHED'
 }
 
 export function httpAuthedAuthorizationEvidence(scope) {
@@ -130,143 +102,10 @@ export function httpAuthedAuthorizationEvidence(scope) {
       authorizationNonclaim: 'NOT_INDEPENDENTLY_VERIFIED',
     })
   }
-  if (mode === 'WRITTEN_AUTHORIZATION_AUTHED') {
-    return Object.freeze({
-      authorizationMode: mode,
-      independentlyVerified: false,
-      authorizationAssurance: 'DOCUMENT_BOUND_OPERATOR_EXTRACTION',
-      authorizationNonclaim: 'ISSUER_AND_LEGAL_SUFFICIENCY_NOT_VERIFIED',
-    })
-  }
   throw contractError(
     'HTTP_AUTHED_RUNTIME_MODE_REQUIRED',
-    'authorization evidence requires operator-attested or written authorization',
+    'authorization evidence requires operator-attested authorization',
   )
-}
-
-function unsignedDocument(value) {
-  const { signature: _signature, ...unsigned } = value
-  return unsigned
-}
-
-function signingPayload(context, value) {
-  return Buffer.concat([
-    context,
-    Buffer.from(canonicalJson(unsignedDocument(value)), 'utf8'),
-  ])
-}
-
-function publicKeyIdentity(key) {
-  if (key.asymmetricKeyType !== 'ed25519') {
-    throw contractError(
-      'HTTP_AUTHED_KEY_INVALID',
-      'authed owner/approver key must be Ed25519',
-    )
-  }
-  const spki = key.export({ type: 'spki', format: 'der' })
-  return { key, keyId: `ed25519:${sha256Hex(spki)}` }
-}
-
-function parsePublicKey(keyBytes) {
-  try {
-    const asText = Buffer.isBuffer(keyBytes) ? keyBytes.toString('latin1') : String(keyBytes)
-    const keyInput = asText.startsWith('-----BEGIN ')
-      ? keyBytes
-      : { key: Buffer.isBuffer(keyBytes) ? keyBytes : Buffer.from(keyBytes), format: 'der', type: 'spki' }
-    return publicKeyIdentity(createPublicKey(keyInput))
-  } catch (error) {
-    if (error instanceof HttpAuthedContractError) throw error
-    throw contractError(
-      'HTTP_AUTHED_KEY_INVALID',
-      `cannot parse public key: ${error.message}`,
-      [],
-      { cause: error },
-    )
-  }
-}
-
-function parsePrivateKey(keyBytes, passphrase) {
-  try {
-    const key = passphrase === undefined
-      ? createPrivateKey(keyBytes)
-      : createPrivateKey({ key: keyBytes, format: 'pem', passphrase })
-    if (key.asymmetricKeyType !== 'ed25519') {
-      throw contractError(
-        'HTTP_AUTHED_KEY_INVALID',
-        'authed signing key must be Ed25519',
-      )
-    }
-    const identity = publicKeyIdentity(createPublicKey(key))
-    return { key, keyId: identity.keyId }
-  } catch (error) {
-    if (error instanceof HttpAuthedContractError) throw error
-    throw contractError(
-      'HTTP_AUTHED_KEY_INVALID',
-      `cannot parse signing key: ${error.message}`,
-      [],
-      { cause: error },
-    )
-  }
-}
-
-function decodeSignature(value) {
-  const signature = value?.signature?.value_base64
-  const decoded = Buffer.from(signature ?? '', 'base64')
-  if (
-    decoded.length !== 64
-    || decoded.toString('base64') !== signature
-    || value?.signature?.algorithm !== 'Ed25519'
-  ) {
-    throw contractError(
-      'HTTP_AUTHED_SIGNATURE_INVALID',
-      'authed signature must be canonical base64 Ed25519 data',
-    )
-  }
-  return decoded
-}
-
-function verifySignedDocument({ value, publicKeyBytes, context, label }) {
-  const identity = parsePublicKey(publicKeyBytes)
-  if (
-    value.signing?.algorithm !== 'Ed25519'
-    || value.signing?.key_id !== identity.keyId
-  ) {
-    throw contractError(
-      'HTTP_AUTHED_KEY_ID_MISMATCH',
-      `${label} does not match the externally pinned key`,
-    )
-  }
-  if (!verifyBytes(
-    null,
-    signingPayload(context, value),
-    identity.key,
-    decodeSignature(value),
-  )) {
-    throw contractError(
-      'HTTP_AUTHED_SIGNATURE_INVALID',
-      `${label} signature is invalid under the pinned key`,
-    )
-  }
-  return identity
-}
-
-function signDocument({ value, privateKeyBytes, passphrase, context }) {
-  const identity = parsePrivateKey(privateKeyBytes, passphrase)
-  const prepared = {
-    ...structuredClone(unsignedDocument(value)),
-    signing: { algorithm: 'Ed25519', key_id: identity.keyId },
-  }
-  return {
-    ...prepared,
-    signature: {
-      algorithm: 'Ed25519',
-      value_base64: signBytes(
-        null,
-        signingPayload(context, prepared),
-        identity.key,
-      ).toString('base64'),
-    },
-  }
 }
 
 function parseExactTimestamp(value, label) {
@@ -327,14 +166,14 @@ function assertUnderOrigin(url, originUrl, label) {
 function assertCanonicalPathValue(value, label) {
   if (AMBIGUOUS_PATH_ENCODING.test(value)) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_PATH_NONCANONICAL',
+      'HTTP_AUTHED_AUTHORIZATION_PATH_NONCANONICAL',
       `${label} contains an encoded dot/separator or backslash`,
     )
   }
   const segments = value.split('/')
   if (segments.some((segment) => segment === '.' || segment === '..')) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_PATH_NONCANONICAL',
+      'HTTP_AUTHED_AUTHORIZATION_PATH_NONCANONICAL',
       `${label} contains a dot segment`,
     )
   }
@@ -424,19 +263,19 @@ function assertDeclaredRequestScope(scope, request, label) {
   assertSyntheticQueryValues(url, label)
   if (!authorizedScope.origins.includes(url.origin)) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_ORIGIN_OUT_OF_SCOPE',
+      'HTTP_AUTHED_AUTHORIZATION_ORIGIN_OUT_OF_SCOPE',
       `${label} origin is outside the sealed authorization scope`,
     )
   }
   if (!authorizedScope.methods.includes(request.method)) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_METHOD_OUT_OF_SCOPE',
+      'HTTP_AUTHED_AUTHORIZATION_METHOD_OUT_OF_SCOPE',
       `${label} method is outside the sealed authorization scope`,
     )
   }
   if (!authorizedScope.path_prefixes.some((prefix) => pathMatchesPrefix(url.pathname, prefix))) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_PATH_OUT_OF_SCOPE',
+      'HTTP_AUTHED_AUTHORIZATION_PATH_OUT_OF_SCOPE',
       `${label} path is outside the sealed authorization scope`,
     )
   }
@@ -445,7 +284,7 @@ function assertDeclaredRequestScope(scope, request, label) {
     && !authorizedScope.test_categories.includes(request.test_category)
   ) {
     throw contractError(
-      'HTTP_AUTHED_WRITTEN_CATEGORY_OUT_OF_SCOPE',
+      'HTTP_AUTHED_AUTHORIZATION_CATEGORY_OUT_OF_SCOPE',
       `${label} test category is outside the sealed authorization scope`,
     )
   }
@@ -515,7 +354,7 @@ function assertScopeSemantics(scope) {
     if (!isHttpAuthedRuntimeAuthorizationMode(scope.authorization.mode)) {
       throw contractError(
         'HTTP_AUTHED_DISCOVERY_DECLARED_SCOPE_REQUIRED',
-        'automated discovery requires an operator-attested or document-bound declared scope',
+        'automated discovery requires an operator-attested declared scope',
       )
     }
     const authorized = scope.authorization.authorized_scope
@@ -559,7 +398,6 @@ function assertScopeSemantics(scope) {
   }
 
   if (isHttpAuthedRuntimeAuthorizationMode(scope.authorization.mode)) {
-    const written = scope.authorization.mode === 'WRITTEN_AUTHORIZATION_AUTHED'
     const permissions = scope.authorization.permissions
     const requiredPermissions = [['active_testing', 'active testing']]
     if (scope.environment === 'production') {
@@ -577,10 +415,8 @@ function assertScopeSemantics(scope) {
     for (const [field, label] of requiredPermissions) {
       if (permissions[field] !== true) {
         throw contractError(
-          written
-            ? 'HTTP_AUTHED_WRITTEN_PERMISSION_MISSING'
-            : 'HTTP_AUTHED_ATTESTED_PERMISSION_MISSING',
-          `${written ? 'written authorization' : 'operator attestation'} must explicitly permit ${label}`,
+          'HTTP_AUTHED_ATTESTED_PERMISSION_MISSING',
+          `operator attestation must explicitly permit ${label}`,
         )
       }
     }
@@ -588,10 +424,8 @@ function assertScopeSemantics(scope) {
     const authorizedScope = scope.authorization.authorized_scope
     if (!authorizedScope.origins.includes(scope.target.origin)) {
       throw contractError(
-        written
-          ? 'HTTP_AUTHED_WRITTEN_ORIGIN_OUT_OF_SCOPE'
-          : 'HTTP_AUTHED_ATTESTED_ORIGIN_OUT_OF_SCOPE',
-        `sealed target origin is outside the ${written ? 'written authorization' : 'operator-attested'} scope`,
+        'HTTP_AUTHED_ATTESTED_ORIGIN_OUT_OF_SCOPE',
+        'sealed target origin is outside the operator-attested scope',
       )
     }
     assertDeclaredRequestScope(
@@ -614,55 +448,6 @@ function assertScopeSemantics(scope) {
         )
       }
     })
-
-    if (written) {
-      const issuedAt = parseExactTimestamp(
-        scope.authorization.document_issued_at,
-        'authorization.document_issued_at',
-      )
-      const attestedAt = parseExactTimestamp(
-        scope.authorization.attested_at,
-        'authorization.attested_at',
-      )
-      if (issuedAt > attestedAt) {
-        throw contractError(
-          'HTTP_AUTHED_WRITTEN_DOCUMENT_TIME_INVALID',
-          'written authorization cannot be issued after the operator attestation',
-        )
-      }
-    }
-  }
-
-  // Four-eyes on production: the owner (RoE signer) and the approver
-  // (per-action countersigner) must be distinct keys. Enforced here because
-  // JSON Schema cannot express cross-field inequality without $data.
-  if (
-    scope.environment === 'production'
-    && scope.approver
-    && scope.authorization.owner_key_id
-    && scope.authorization.owner_key_id === scope.approver.key_id
-  ) {
-    throw contractError(
-      'HTTP_AUTHED_APPROVER_NOT_INDEPENDENT',
-      'production requires owner_key_id to differ from approver.key_id (four-eyes)',
-    )
-  }
-
-  // A file-based approver key_id must equal ed25519:sha256(spki) of its public key.
-  if (scope.approver?.mechanism === 'ed25519_file') {
-    const spkiDer = Buffer.from(scope.approver.public_key.value_base64, 'base64')
-    let fingerprint = null
-    try {
-      fingerprint = parsePublicKey(spkiDer).keyId
-    } catch {
-      fingerprint = null
-    }
-    if (!fingerprint || fingerprint !== scope.approver.key_id) {
-      throw contractError(
-        'HTTP_AUTHED_APPROVER_KEY_MISMATCH',
-        'approver.key_id must equal ed25519:sha256(spki) of approver.public_key',
-      )
-    }
   }
 
   const notBefore = parseExactTimestamp(scope.validity.not_before, 'validity.not_before')
@@ -761,7 +546,7 @@ function assertHttpAuthedCandidateWithinScope({ scope, action }) {
   if (!isHttpAuthedRuntimeAuthorizationMode(scope.authorization.mode)) {
     throw contractError(
       'HTTP_AUTHED_RUNTIME_MODE_REQUIRED',
-      'runtime campaign candidate validation requires operator-attested or written authorization',
+      'runtime campaign candidate validation requires operator-attested authorization',
     )
   }
   assertSchema(validateActionSchema, action, 'http-authed runtime candidate')
@@ -770,12 +555,9 @@ function assertHttpAuthedCandidateWithinScope({ scope, action }) {
   assertUnderOrigin(action.url, originUrl, 'runtime candidate url')
   assertDeclaredRequestScope(scope, action, 'runtime candidate')
   if (requiresMutationPermission(action) && scope.authorization.permissions.mutation !== true) {
-    const written = scope.authorization.mode === 'WRITTEN_AUTHORIZATION_AUTHED'
     throw contractError(
-      written
-        ? 'HTTP_AUTHED_WRITTEN_PERMISSION_MISSING'
-        : 'HTTP_AUTHED_ATTESTED_PERMISSION_MISSING',
-      `${written ? 'written authorization' : 'operator attestation'} must explicitly permit mutation testing for write-capable or body-bearing probes`,
+      'HTTP_AUTHED_ATTESTED_PERMISSION_MISSING',
+      'operator attestation must explicitly permit mutation testing for write-capable or body-bearing probes',
     )
   }
   if (action.kind === 'mutate') {
@@ -802,9 +584,6 @@ function assertHttpAuthedCandidateWithinScope({ scope, action }) {
 
 export function httpAuthedAuthorizationBindingSha256(scope) {
   const mode = scope?.authorization?.mode
-  if (mode === 'WRITTEN_AUTHORIZATION_AUTHED') {
-    return scope.authorization.written_authorization_sha256
-  }
   if (mode === 'OPERATOR_ATTESTED_AUTHED') {
     return sha256Hex(Buffer.from(
       `red-team-audit/http-authed-operator-attestation/v1\0${canonicalJson(scope.authorization)}`,
@@ -813,13 +592,12 @@ export function httpAuthedAuthorizationBindingSha256(scope) {
   }
   throw contractError(
     'HTTP_AUTHED_RUNTIME_MODE_REQUIRED',
-    'authorization binding requires operator-attested or written authorization',
+    'authorization binding requires operator-attested authorization',
   )
 }
 
 function verifyHttpAuthedAuthorizationForPurpose({
   scope,
-  documentBytes,
   now,
   cleanupOnly,
 }) {
@@ -827,36 +605,7 @@ function verifyHttpAuthedAuthorizationForPurpose({
   if (!isHttpAuthedRuntimeAuthorizationMode(scope.authorization.mode)) {
     throw contractError(
       'HTTP_AUTHED_RUNTIME_MODE_REQUIRED',
-      'runtime verification requires operator-attested or written authorization',
-    )
-  }
-  const written = scope.authorization.mode === 'WRITTEN_AUTHORIZATION_AUTHED'
-  let authorizationDocumentSha256
-  if (written) {
-    if (!(Buffer.isBuffer(documentBytes) || documentBytes instanceof Uint8Array)) {
-      throw contractError(
-        'HTTP_AUTHED_WRITTEN_DOCUMENT_INVALID',
-        'written authorization document must be supplied as bytes',
-      )
-    }
-    const bytes = Buffer.from(documentBytes)
-    if (bytes.length === 0 || bytes.length > MAX_WRITTEN_AUTHORIZATION_BYTES) {
-      throw contractError(
-        'HTTP_AUTHED_WRITTEN_DOCUMENT_INVALID',
-        `written authorization document must contain 1 to ${MAX_WRITTEN_AUTHORIZATION_BYTES} bytes`,
-      )
-    }
-    authorizationDocumentSha256 = sha256Hex(bytes)
-    if (authorizationDocumentSha256 !== scope.authorization.written_authorization_sha256) {
-      throw contractError(
-        'HTTP_AUTHED_WRITTEN_DOCUMENT_DIGEST_MISMATCH',
-        'written authorization document digest does not match the sealed scope',
-      )
-    }
-  } else if (documentBytes !== undefined) {
-    throw contractError(
-      'HTTP_AUTHED_ATTESTED_DOCUMENT_REFUSED',
-      'operator-attested authorization must not be represented as a written authorization document',
+      'runtime verification requires operator-attested authorization',
     )
   }
 
@@ -899,36 +648,21 @@ function verifyHttpAuthedAuthorizationForPurpose({
   return {
     scope,
     authorizationBindingSha256: httpAuthedAuthorizationBindingSha256(scope),
-    ...(authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorizationDocumentSha256 }),
     campaignGrantSha256: sha256Hex(canonicalJson(scope)),
   }
 }
 
-export function verifyHttpAuthedAuthorization({ scope, documentBytes, now = new Date() }) {
+export function verifyHttpAuthedAuthorization({ scope, now = new Date() }) {
   return verifyHttpAuthedAuthorizationForPurpose({
     scope,
-    documentBytes,
     now,
     cleanupOnly: false,
   })
 }
 
-export function verifyHttpAuthedWrittenAuthorization({ scope, documentBytes, now = new Date() }) {
-  if (scope?.authorization?.mode !== 'WRITTEN_AUTHORIZATION_AUTHED') {
-    throw contractError(
-      'HTTP_AUTHED_WRITTEN_MODE_REQUIRED',
-      'written authorization verification requires WRITTEN_AUTHORIZATION_AUTHED mode',
-    )
-  }
-  return verifyHttpAuthedAuthorization({ scope, documentBytes, now })
-}
-
 export function verifyHttpAuthedCandidate({
   scope,
   action,
-  documentBytes,
   expectedCampaignGrantSha256,
   now = new Date(),
 }) {
@@ -938,7 +672,7 @@ export function verifyHttpAuthedCandidate({
       'runtime candidate verification requires the controller-held campaign grant digest',
     )
   }
-  const verified = verifyHttpAuthedAuthorization({ scope, documentBytes, now })
+  const verified = verifyHttpAuthedAuthorization({ scope, now })
   if (verified.campaignGrantSha256 !== expectedCampaignGrantSha256) {
     throw contractError(
       'HTTP_AUTHED_CAMPAIGN_GRANT_MISMATCH',
@@ -949,9 +683,6 @@ export function verifyHttpAuthedCandidate({
   return {
     action,
     authorizationBindingSha256: verified.authorizationBindingSha256,
-    ...(verified.authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorizationDocumentSha256: verified.authorizationDocumentSha256 }),
     campaignGrantSha256: verified.campaignGrantSha256,
   }
 }
@@ -965,7 +696,6 @@ export function verifyHttpAuthedCandidate({
 export function verifyHttpAuthedCleanupCandidate({
   scope,
   action,
-  documentBytes,
   expectedCampaignGrantSha256,
   now = new Date(),
 }) {
@@ -987,7 +717,6 @@ export function verifyHttpAuthedCleanupCandidate({
   }
   const verified = verifyHttpAuthedAuthorizationForPurpose({
     scope,
-    documentBytes,
     now,
     cleanupOnly: true,
   })
@@ -1001,22 +730,9 @@ export function verifyHttpAuthedCleanupCandidate({
   return {
     action,
     authorizationBindingSha256: verified.authorizationBindingSha256,
-    ...(verified.authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorizationDocumentSha256: verified.authorizationDocumentSha256 }),
     campaignGrantSha256: verified.campaignGrantSha256,
     cleanupOnly: true,
   }
-}
-
-export function verifyHttpAuthedWrittenCandidate(input) {
-  if (input?.scope?.authorization?.mode !== 'WRITTEN_AUTHORIZATION_AUTHED') {
-    throw contractError(
-      'HTTP_AUTHED_WRITTEN_MODE_REQUIRED',
-      'written candidate verification requires WRITTEN_AUTHORIZATION_AUTHED mode',
-    )
-  }
-  return verifyHttpAuthedCandidate(input)
 }
 
 async function readStableBoundedFile(path, { label, maxBytes }) {
@@ -1049,28 +765,14 @@ async function readStableBoundedFile(path, { label, maxBytes }) {
   }
 }
 
-export async function readAndVerifyHttpAuthedWrittenAuthorization({
-  scopePath,
-  authorizationDocumentPath,
-  now = new Date(),
-}) {
-  return readAndVerifyHttpAuthedAuthorization({
-    scopePath,
-    authorizationDocumentPath,
-    requiredMode: 'WRITTEN_AUTHORIZATION_AUTHED',
-    now,
-  })
-}
-
 export async function readAndVerifyHttpAuthedAuthorization({
   scopePath,
-  authorizationDocumentPath,
   requiredMode,
   now = new Date(),
 }) {
   const scopeBytes = await readStableBoundedFile(scopePath, {
     label: 'http-authed scope',
-    maxBytes: MAX_WRITTEN_SCOPE_BYTES,
+    maxBytes: MAX_SCOPE_BYTES,
   })
   let scope
   try {
@@ -1089,54 +791,13 @@ export async function readAndVerifyHttpAuthedAuthorization({
       'scope authorization mode does not match the selected command',
     )
   }
-  let documentBytes
-  if (scope.authorization?.mode === 'WRITTEN_AUTHORIZATION_AUTHED') {
-    if (typeof authorizationDocumentPath !== 'string' || authorizationDocumentPath.length === 0) {
-      throw contractError(
-        'HTTP_AUTHED_WRITTEN_DOCUMENT_INVALID',
-        'written authorization document path is required',
-      )
-    }
-    documentBytes = await readStableBoundedFile(authorizationDocumentPath, {
-      label: 'written authorization document',
-      maxBytes: MAX_WRITTEN_AUTHORIZATION_BYTES,
-    })
-  } else if (authorizationDocumentPath !== undefined) {
-    throw contractError(
-      'HTTP_AUTHED_ATTESTED_DOCUMENT_REFUSED',
-      'operator-attested authorization does not accept an authorization document path',
-    )
-  }
-  return verifyHttpAuthedAuthorization({ scope, documentBytes, now })
+  return verifyHttpAuthedAuthorization({ scope, now })
 }
-
-// --- Owner RoE signing / verification -------------------------------------
-
-export function signHttpAuthedRoe({ roe, privateKeyBytes, passphrase }) {
-  return signDocument({
-    value: roe,
-    privateKeyBytes,
-    passphrase,
-    context: ROE_SIGNATURE_CONTEXT,
-  })
-}
-
-export function verifyHttpAuthedRoeSignature({ roe, ownerPublicKeyBytes }) {
-  return verifySignedDocument({
-    value: roe,
-    publicKeyBytes: ownerPublicKeyBytes,
-    context: ROE_SIGNATURE_CONTEXT,
-    label: 'signed authed RoE',
-  })
-}
-
-// --- Per-action approver countersignature ---------------------------------
 
 function actionIdentityInput(action) {
   const candidate = structuredClone(action)
   delete candidate.sequence
   delete candidate.action_id
-  delete candidate.countersignature
   return candidate
 }
 
@@ -1162,95 +823,4 @@ export function httpAuthedCampaignLedgerBindingSha256(directory) {
     `red-team-audit/http-authed-campaign-ledger-binding/v1\0${canonicalDirectory}`,
     'utf8',
   ))
-}
-
-export function buildActionCountersignaturePayload({
-  action,
-  planSha256,
-  campaignLedgerSha256,
-  nonce,
-  at,
-}) {
-  if (!/^[a-f0-9]{64}$/.test(campaignLedgerSha256 ?? '')) {
-    throw contractError(
-      'HTTP_AUTHED_CAMPAIGN_LEDGER_BINDING_INVALID',
-      'countersignature requires a campaign ledger binding digest',
-    )
-  }
-  return {
-    kind: 'red-team-audit/http-authed-countersignature',
-    action_id: action.action_id ?? actionId(action),
-    candidate_sha256: actionCandidateSha256(action),
-    method: action.method,
-    url: action.url,
-    expected_mutation_sha256: sha256Hex(canonicalJson(action.expected_mutation)),
-    rollback_sha256: sha256Hex(canonicalJson(action.rollback)),
-    plan_sha256: planSha256,
-    campaign_ledger_sha256: campaignLedgerSha256,
-    nonce,
-    at,
-  }
-}
-
-export function signHttpAuthedActionCountersignature({ payload, privateKeyBytes, passphrase }) {
-  return signDocument({
-    value: payload,
-    privateKeyBytes,
-    passphrase,
-    context: COUNTERSIGN_CONTEXT,
-  })
-}
-
-export function verifyHttpAuthedActionCountersignature({
-  countersignature,
-  approverPublicKeyBytes,
-  expected,
-  now = new Date(),
-  maxAgeMs = 300000,
-}) {
-  const identity = verifySignedDocument({
-    value: countersignature,
-    publicKeyBytes: approverPublicKeyBytes,
-    context: COUNTERSIGN_CONTEXT,
-    label: 'action countersignature',
-  })
-  for (const field of [
-    'action_id',
-    'candidate_sha256',
-    'method',
-    'url',
-    'expected_mutation_sha256',
-    'rollback_sha256',
-    'plan_sha256',
-    'campaign_ledger_sha256',
-  ]) {
-    if (expected[field] !== undefined && countersignature[field] !== expected[field]) {
-      throw contractError(
-        'HTTP_AUTHED_COUNTERSIGN_BINDING_MISMATCH',
-        `countersignature ${field} does not match the sealed action`,
-      )
-    }
-  }
-  const signedAt = parseExactTimestamp(countersignature.at, 'countersignature.at')
-  const current = now instanceof Date ? now.getTime() : new Date(now).getTime()
-  if (!Number.isFinite(current) || signedAt > current || current - signedAt > maxAgeMs) {
-    throw contractError(
-      'HTTP_AUTHED_COUNTERSIGN_STALE',
-      'action countersignature is not fresh at verification time',
-    )
-  }
-  return identity
-}
-
-// --- WebAuthn approver (deferred) -----------------------------------------
-
-export function verifyWebauthnAssertion() {
-  // ADR 0016 lists a WebAuthn/passkey approver as the recommended production
-  // path, but this engagement selected the ed25519_file approver. The COSE
-  // clientDataJSON/authenticatorData verifier is intentionally not implemented
-  // here yet so no half-built crypto path ships.
-  throw contractError(
-    'HTTP_AUTHED_WEBAUTHN_NOT_IMPLEMENTED',
-    'WebAuthn approver path is deferred (ed25519_file approver selected); see ADR 0016 future work',
-  )
 }

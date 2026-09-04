@@ -16,7 +16,8 @@ activates_on:
       state: not-consumed
 owns: []
 defers: {}
-frameworks: []
+frameworks:
+  - owasp-asvs-5.0.0
 severity_floor: info
 ---
 
@@ -26,7 +27,7 @@ This lens reads the merged candidate-finding set — after structural dedup, sem
 
 Its bug classes are the ones with no bad input and no bad call. A negative quantity that credits the buyer, coupons that compose below the floor the code itself states, an integer overflow that wraps a total, a multi-step approval that can be re-entered or skipped, a charge endpoint with no idempotency, two concurrent requests that spend one balance twice. Every one of those is well-formed traffic that a validator has no reason to reject.
 
-**`frameworks: []` is correct and deliberate.** No catalogue enumerates the rules of a particular product, so a framework claim here would cite a document that cannot decide a single finding. What frameworks *do* supply is a name for the mechanism, and `cwe` should carry it where one fits — `CWE-841` improper enforcement of behavioral workflow, `CWE-837` improper enforcement of a single unique action, `CWE-190` integer overflow or wraparound, `CWE-367` time-of-check to time-of-use. The mechanism comes from the catalogue; **the rule comes from the product**, and the rule is what makes it a finding.
+No catalogue enumerates the rules of a particular product, so a framework can never decide a finding here by itself. OWASP ASVS 5.0.0 is declared only for exact verification mechanics such as `v5.0.0-2.3.5`, which requires multi-user approval for documented critical transactions. Applicability still comes from the selected ASVS profile and the product's classification of a transaction as critical; the repository must establish both before an ASVS gap is filed. CWE may name a mechanism where one fits — `CWE-841` improper enforcement of behavioral workflow, `CWE-837` improper enforcement of a single unique action, `CWE-190` integer overflow or wraparound, `CWE-367` time-of-check to time-of-use — but **the rule comes from the product**, and the rule is what makes it a finding.
 
 ### Where the intent comes from, and what happens when it is absent
 
@@ -45,7 +46,12 @@ In priority order, the rule must be established from:
 
 `owns: []`, and two of this lens's most frequent findings are topics `web-and-api` owns outright: **`client-trusted-business-rules`** and **`race-conditions-and-toctou`**. This lens **raises** against them; it never claims them.
 
-**The boundary from this side.** A raised record is written with `lens: web-and-api`, `topic: <that slug>`, `raised_by: business-logic`. The topic still belongs to its owner and `lens` still names the owner; `raised_by` records who pushed. Ownership is declared, never inferred from which pass emitted the record — any rule that infers it from the emitter misfires precisely here, which is why the emitter is recorded in a separate field.
+**The boundary from this side.** A raised record is written with
+`lens: business-logic`, `topic: <the web-and-api-owned slug>`, and
+`raised_by: business-logic`. The zero-owner exemption in `_schema.md` preserves
+both authorship and the registered topic used for deduplication. Ownership is
+resolved through `_topics.md`; it is never inferred from the emitting pass or
+from the `lens` field alone.
 
 **The boundary from the other side.** `web-and-api` files both of those topics on its own, without this lens, on the *mechanism*: a rule enforced only in the browser, a check-then-act window with no lock. It does not need this lens's permission and its findings are complete without it. What this lens contributes is the **product-intent half** — which rule is being broken, and what the resulting state costs — and that half goes into the raised record's `impact` and `attack`. It does not become a new topic, and it does not become a second finding.
 
@@ -81,7 +87,10 @@ Four consequences of route 2, stated so nobody is surprised by them later:
 
 - **`business-logic` must never appear in any lens's `owns`.** The registry is the fan-out deduplication namespace; this label is deliberately outside it. Adding it would make the ownership rules assert a partition over a namespace that has none.
 - **The label does not discriminate.** Because it is one string rather than a slug per defect, deduplication for these records falls to the normalized `location` and `title` inside the content-addressed `candidate_id`. Give distinct defects distinct titles, or two of them at one location collapse into one.
-- **This is a stated exception to the schema's rule that `topic` is owned by `lens`.** As written, that invariant admits no triage-originated record at all. The exception is **reported to the contract's owner rather than resolved here**, and until the contract carries it a validator will flag these records. `completeness` originates by the same mechanism with its own name, so one exception covers both lenses rather than two.
+- **This is the implemented zero-owner exemption in `_schema.md`.** A
+  triage-originated record uses this lens's own name for `lens`, `topic`, and
+  `raised_by`; validators accept that exact form. `completeness` originates by
+  the same mechanism with its own name.
 - **Stretching an owned slug to avoid the exception is the thing not to do.** Filing a negative-quantity credit under `client-trusted-business-rules` because it is the nearest available slug corrupts the deduplication boundary for a topic another lens owns, and a wrong topic is not cosmetic — it merges a finding against the wrong finding. A flagged record is recoverable; a wrong merge is not.
 
 Route 2 is for these, and this list is the intended extent of it: **quantities and prices that reach the money path** with a value the code's own arithmetic mishandles; **pricing arithmetic** — overflow, wraparound, rounding order, floating-point money; **discount and coupon composition**; **re-entrant, skippable or reversible multi-step workflows**; **missing idempotency on a first-party charge or transfer endpoint**; and **two enforcement points of one rule that disagree**. Everything else goes through route 1, and where both routes could apply, route 1 wins.
@@ -205,6 +214,12 @@ Five traps, each of which produces a pass on vulnerable code:
 Where the rule has a time component — a coupon's validity, an approval that expires, a hold that releases, a trial that ends — use **clock control**, and assert both directions: the case outside the window is refused **and** the case inside it still works. "Refuse everything" is the failure mode a one-directional test rewards.
 
 Back-date the rows rather than freezing the process clock wherever the predicate is evaluated by the database, and say in the finding which you did. Where a monthly or month-end rule is involved, choose the instant to expose it — a rule anchored on 31 January is where the calendar arithmetic breaks.
+
+### B6 — Two-principal maker-checker proof (T1)
+
+For a transaction the product or selected ASVS profile classifies as critical, use two distinct principals and prove the complete separation-of-duty invariant behind `v5.0.0-2.3.5`: the initiator can create but cannot approve or execute the same transaction; an authorized second principal can approve exactly the pending intent; neither principal can alter amount, beneficiary, tenant, or authority after the approval token is created; and replay, self-approval, role change, and concurrent approval do not execute it twice.
+
+Assert identity at the server-side decision and assert the resulting side effect, not button visibility or a log message. Include a positive control in which the second principal approves the unmodified intent. If the repository never states that the transaction is critical and no selected profile makes the requirement applicable, record the question in assumptions instead of inventing a segregation-of-duties finding.
 
 ### Where no shared component applies, plainly
 

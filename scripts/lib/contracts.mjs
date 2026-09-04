@@ -30,6 +30,7 @@ import {
   synthesizeStoreProfiles,
 } from './store-synthesis.mjs'
 import { validateDatabaseConformanceEvidence } from './database-conformance-contracts.mjs'
+import { isSurvivingFinding } from './findings.mjs'
 
 const FINDING_SCHEMA_URL = new URL('../../schemas/finding.schema.json', import.meta.url)
 const STORE_PROFILE_SCHEMA_URL = new URL('../../schemas/store-profile.schema.json', import.meta.url)
@@ -79,6 +80,9 @@ ajv.addSchema(runSchema)
 
 const validateFindingSchema = ajv.getSchema(findingSchema.$id)
 const validateRunSchema = ajv.getSchema(runSchema.$id)
+const validateCompletenessInputsSchema = ajv.compile({
+  $ref: `${runSchema.$id}#/$defs/completenessInputs`,
+})
 const validateDatabaseDiscoverySchema = ajv.getSchema(
   databaseDiscoverySchema.$id,
 )
@@ -86,6 +90,7 @@ const validateDatabaseDiscoverySchema = ajv.getSchema(
 const TRIAGE_FIELDS = new Set([
   'effective_severity',
   'triage_disposition',
+  'triage_authority',
   'drop_reason',
   'raised_by',
   'component_finding_ids',
@@ -96,6 +101,7 @@ const PROOF_FIELDS = new Set([
   'existence_check',
   'proof_tier',
   'verification_status',
+  'verification_authority',
   'disproof_basis',
   'artifact',
   'command',
@@ -151,7 +157,6 @@ const TERMINAL_VERIFICATION_STATUSES = new Set([
   'UNPROVEN',
 ])
 
-const OPEN_DISPOSITIONS = new Set(['queued', 'elevated'])
 const TERMINAL_RUN_STATES = new Set(['COMPLETED', 'COMPLETE_WITH_GAPS', 'ABORTED', 'FAILED'])
 const TERMINAL_JOB_STATES = new Set(['SUCCEEDED', 'SKIPPED', 'FAILED'])
 const MODELED_DATABASE_RUN_SCHEMAS = new Set(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'])
@@ -1243,7 +1248,7 @@ function findingFinalizationErrors(record) {
     return errors
   }
 
-  if (OPEN_DISPOSITIONS.has(disposition)) {
+  if (isSurvivingFinding(record)) {
     if (!TERMINAL_VERIFICATION_STATUSES.has(record.verification_status)) {
       addError(
         errors,
@@ -2675,6 +2680,50 @@ function runInvariantErrors(run, { final = false } = {}) {
   if (run === null || typeof run !== 'object' || Array.isArray(run)) return errors
   errors.push(...sealedSnapshotInvariantErrors(run))
   errors.push(...attemptInvariantErrors(run))
+  const completenessInputs = run.coverage?.completeness_inputs
+  if (completenessInputs && typeof completenessInputs === 'object') {
+    const flowIds = new Set()
+    for (const [index, flow] of (
+      Array.isArray(completenessInputs.high_value_flows)
+        ? completenessInputs.high_value_flows
+        : []
+    ).entries()) {
+      if (typeof flow?.flow_id !== 'string') continue
+      if (flowIds.has(flow.flow_id)) {
+        addError(
+          errors,
+          'DUPLICATE_HIGH_VALUE_FLOW',
+          `/coverage/completeness_inputs/high_value_flows/${index}/flow_id`,
+          `high-value flow ${flow.flow_id} must appear once in the planned denominator`,
+        )
+      }
+      flowIds.add(flow.flow_id)
+    }
+    const requirementIds = new Set()
+    for (const [index, requirement] of (
+      Array.isArray(completenessInputs.selected_framework_requirements)
+        ? completenessInputs.selected_framework_requirements
+        : []
+    ).entries()) {
+      const identity = [
+        requirement?.framework_id,
+        requirement?.version,
+        requirement?.profile,
+        requirement?.requirement_id,
+      ]
+      if (identity.some((part) => typeof part !== 'string')) continue
+      const key = identity.join('\0')
+      if (requirementIds.has(key)) {
+        addError(
+          errors,
+          'DUPLICATE_SELECTED_FRAMEWORK_REQUIREMENT',
+          `/coverage/completeness_inputs/selected_framework_requirements/${index}/requirement_id`,
+          `selected requirement ${identity.join('/')} must appear once in the planned denominator`,
+        )
+      }
+      requirementIds.add(key)
+    }
+  }
   if (run.database_conformance !== undefined) {
     const conformance = validateDatabaseConformanceEvidence(
       run.database_conformance,
@@ -3328,6 +3377,31 @@ export function validateRun(run) {
   return result(errors.length === 0, errors)
 }
 
+export function validateCompletenessInputs(value) {
+  const schemaValid = validateCompletenessInputsSchema(value)
+  const errors = schemaValid
+    ? []
+    : normalizeAjvErrors(validateCompletenessInputsSchema.errors)
+  if (schemaValid) {
+    const fixture = { coverage: { completeness_inputs: value } }
+    errors.push(...runInvariantErrors(fixture).filter(({ code }) =>
+      code === 'DUPLICATE_HIGH_VALUE_FLOW'
+      || code === 'DUPLICATE_SELECTED_FRAMEWORK_REQUIREMENT'))
+  }
+  return result(errors.length === 0, errors)
+}
+
+export function assertValidCompletenessInputs(value) {
+  const validation = validateCompletenessInputs(value)
+  if (!validation.valid) {
+    throw new ContractValidationError(
+      'Completeness input contract validation failed',
+      validation.errors,
+    )
+  }
+  return value
+}
+
 export function assertValidRun(run) {
   const validation = validateRun(run)
   if (!validation.valid) {
@@ -3348,7 +3422,7 @@ export function finalizeRun(run) {
 
 function activeProofCandidateIds(run) {
   return (run.findings ?? [])
-    .filter((finding) => OPEN_DISPOSITIONS.has(finding.triage_disposition))
+    .filter(isSurvivingFinding)
     .map(({ candidate_id: candidateId }) => candidateId)
     .filter((candidateId) => typeof candidateId === 'string')
     .sort((left, right) => compareCanonicalStrings(left, right))
@@ -3881,6 +3955,25 @@ function runTransitionErrors(previous, next) {
         `${field} is immutable after planning`,
       )
     }
+  }
+  const previousHasCompletenessInputs = hasOwn(previousCoverage, 'completeness_inputs')
+  const nextHasCompletenessInputs = hasOwn(nextCoverage, 'completeness_inputs')
+  if (
+    previousHasCompletenessInputs !== nextHasCompletenessInputs
+    || (
+      previousHasCompletenessInputs
+      && !isDeepStrictEqual(
+        previousCoverage.completeness_inputs,
+        nextCoverage.completeness_inputs,
+      )
+    )
+  ) {
+    addError(
+      errors,
+      'COVERAGE_DENOMINATOR_CHANGED',
+      '/coverage/completeness_inputs',
+      'completeness_inputs is immutable after planning',
+    )
   }
 
   const previousExamined = new Set(

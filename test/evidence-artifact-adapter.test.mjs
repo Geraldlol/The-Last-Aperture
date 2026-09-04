@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
@@ -30,6 +30,11 @@ test('plan seals the target identity by hashing the supplied bytes', async () =>
   const planned = await adapter.plan(REQUEST)
   const bytes = await readFile(FIXTURE)
   assert.match(planned.evidence_context_seed.target_identity, /^sha256:[0-9a-f]{64}$/)
+  assert.deepEqual(planned.source_integrity, {
+    algorithm: 'sha256',
+    sha256: planned.evidence_context_seed.target_identity.slice('sha256:'.length),
+    size_bytes: bytes.length,
+  })
   assert.equal(planned.evidence_context_seed.acquisition_mode, 'offline-export')
   assert.equal(planned.evidence_context_seed.adapter_id, 'artifact')
   assert.ok(bytes.length > 0)
@@ -40,6 +45,36 @@ test('plan performs no acquisition and refuses a missing source', async () => {
     () => adapter.plan({ ...REQUEST, source_path: 'no/such/image.tar' }),
     /not found|ENOENT/i,
   )
+})
+
+test('plan refuses remote/device-style paths and sources above its byte cap', async () => {
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, source_path: '\\\\host\\share\\artifact.tar' }),
+    (error) => error?.code === 'ARTIFACT_SOURCE_REMOTE_PATH_REFUSED',
+  )
+
+  const capped = createArtifactAdapter({ limits: { maxSourceBytes: 8 } })
+  await assert.rejects(
+    () => capped.plan(REQUEST),
+    (error) => error?.code === 'ARTIFACT_SOURCE_TOO_LARGE',
+  )
+})
+
+test('run rejects a same-size source swap before normalization or evidence output', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-artifact-swap-'))
+  const source = join(directory, 'image.tar')
+  const out = join(directory, 'evidence')
+  await copyFile(FIXTURE, source)
+  const planned = await adapter.plan({ ...REQUEST, source_path: source })
+  const swapped = Buffer.from(await readFile(source))
+  swapped[0] ^= 0xff
+  await writeFile(source, swapped)
+
+  await assert.rejects(
+    () => adapter.run(planned, { out }),
+    (error) => error?.code === 'ARTIFACT_SOURCE_CHANGED_SINCE_PLAN',
+  )
+  await assert.rejects(() => readFile(join(out, 'manifest.json')), /ENOENT/)
 })
 
 test('run writes a verifiable bundle with the layer index in manifest order', async () => {

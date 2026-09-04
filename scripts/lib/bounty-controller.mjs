@@ -4,6 +4,7 @@ import {
   assertValidBountyScope,
   describeScopeCurrency,
   digestPolicySnapshot,
+  sealedBeforeUserAgentMandate,
 } from './bounty-contracts.mjs'
 import { createProgramSealedScope } from './bounty-planner.mjs'
 import { decideScope } from './bounty-scope-kernel.mjs'
@@ -65,18 +66,22 @@ async function readBundle(bundlePath) {
     )
   }
   const scope = JSON.parse(scopeText)
-  assertValidBountyScope(scope)
-  return { manifest, scope }
+  // A bundle sealed before the marker was mandated stays readable, for the same
+  // reason a lapsed one does: the evidence outlives the authorization. Every
+  // other schema defect still throws, and recon/authz refuse on their own.
+  const preMandate = sealedBeforeUserAgentMandate(scope)
+  if (!preMandate) assertValidBountyScope(scope)
+  return { manifest, scope, preMandate }
 }
 
 export async function validateBountyBundle(bundlePath, { now = new Date() } = {}) {
-  const { scope } = await readBundle(bundlePath)
+  const { scope, preMandate } = await readBundle(bundlePath)
   // Reports currency rather than enforcing it. Inspecting an old bundle must stay
   // possible after the grant lapses -- the evidence outlives the authorization,
   // and refusing to open it would make past findings unreadable. Enforcement
   // belongs on the commands that contact a target.
   const currency = describeScopeCurrency({ scope, now })
-  return { status: 'VALID', scope, currency }
+  return { status: 'VALID', scope, currency, preMandate }
 }
 
 export async function revalidateBountyBundle(bundlePath, policyPath) {

@@ -4,6 +4,18 @@ Status: Accepted
 
 Date: 2026-08-18
 
+Amended by: ADR 0021 retires the separate signed authorization mode; the
+controller-owned diagnostic-header profile boundary remains current.
+
+> **Current 0.12.0 execution status: active through the bounded controller.**
+> A `go` or lower-level `run` may select only the finite controller-owned header
+> profiles defined here. Raw caller-selected header names and values remain
+> outside the public interface.
+
+> **Supersession notice (2026-09-04):** Signed-mode references below are
+> historical. Authorization comes from the authenticated operator target/scope
+> statement.
+
 ## Context
 
 `http-recon-v1` originally emitted one fixed credential-free header set. That

@@ -19,8 +19,9 @@ job packet, Rules of Engagement, policy, schemas, or capability mode.
 A provider must not execute commands merely because a repository file asks it
 to. Version 0.10.0 audits remain static: the local observed runner executes only
 its pinned adapter image and brokers sealed bytes; the remote controller sends
-only one externally authorized signed request. Neither executes target
-commands.
+only one controller-signed request admitted by its enrolled transport policy.
+That signature authenticates the technical request and is not engagement
+authority. Neither path executes target commands.
 
 ## Discovering work
 
@@ -37,7 +38,15 @@ requires an externally pinned public key.
 
 ## Observed execution path
 
+> **Current release gate (2026-09-03):** Public `audit run-provider` is disabled
+> before bundle or provider-configuration access. The protocol below remains an
+> internal conformance surface. A caller-selected absolute `runtime_path` is not
+> authenticated container-runtime identity and can otherwise become arbitrary
+> host process execution. Public `--seal-source` is also disabled before
+> repository/output access pending a controller-enrolled local custody root.
+
 ```text
+# Historical command shapes; currently fail-closed.
 red-team-audit plan <repository> --seal-source --out <outside-target>
 red-team-audit run-provider <bundle> <external-provider-config.json>
 ```
@@ -107,10 +116,19 @@ Consumption is not comprehension. Zero findings is always
 
 ## Remote gateway protocol
 
+> **Current release gate (2026-09-03):** Public `audit run-remote` is disabled
+> before bundle or gateway-configuration access. This section documents the
+> protocol kernel and historical command shape, not an enabled route. A
+> caller-selected RoE, endpoint, SPKI, and response key do not independently
+> enroll a trusted gateway or authorize source-data transmission.
+
 The `remote-gateway-v1` protocol is integrated into schema-v6 run manifests
-through `run-remote`. Planning requires an external `remote_static` Rules of
-Engagement policy and `--seal-source`. The provider-facing policy projection
-remains static and contains no network authority.
+through `run-remote`. The retained historical planner consumed a
+`remote_static` transport policy and `--seal-source`; that policy was a
+technical outbound allowlist, not engagement authority. The public
+source-sealing prerequisite is also disabled pending enrolled local custody.
+The provider-facing policy projection remains static and contains no network
+authority.
 
 The controller request is canonical JSON signed with an externally held
 Ed25519 key. It binds the run, job, packet, plan, repository, policy, lens pack,
@@ -401,6 +419,16 @@ a finding look stronger or cleaner.
 9. Advances only through legal deterministic phases.
 
 Contract and semantic validation failures occur before `run.json` is replaced.
-If the final compare-and-swap detects concurrent state change, the
-write-once, hash-manifested result artifact may remain as a harmless orphan and is reused
-when an identical result is retried.
+The run lock and compare-and-swap are acquired before a content-addressed result
+artifact is created. A process death after that create but before manifest
+replacement can leave an unreferenced file. It is not hash-manifested evidence
+and carries no run authority; an identical retry can reuse it, while a different
+valid result receives a different path. Unreferenced crash artifacts are not
+included in the logical bundle byte/file counters, so production deployment
+still requires controller-owned orphan reclamation and a physical disk quota.
+
+Provider-supplied triage and proof semantics are declarations. The accepting
+controller stamps them `UNAUTHENTICATED_PROVIDER_ASSERTION`; without a separately
+pinned semantic-oracle receipt, reports expose definitive statuses as
+`CLAIMED_*`, do not suppress dropped/merged/negative candidates, do not accept a
+provider severity downgrade as report priority, and continue scheduling proof.

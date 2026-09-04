@@ -22,7 +22,7 @@ that `sha256:<64 hex>` value in the external provider configuration. Do not use
 this adapter to infer that a repository has no vulnerabilities.
 
 The separate `Dockerfile.conformance` enables hostile in-container probes with
-the exact resource limits used by `test/provider-docker-conformance.test.mjs`.
+the exact resource limits used by `conformance/provider-docker.conformance.mjs`.
 It checks denied root writes, `/work` no-exec behavior, absent outbound network
 and host state, Linux privilege state, cgroup limits, actual PID/file-descriptor
 exhaustion, and timeout cleanup:

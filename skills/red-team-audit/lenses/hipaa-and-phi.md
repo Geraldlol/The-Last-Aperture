@@ -134,10 +134,12 @@ frameworks:
   - hipaa-privacy-rule
   - hipaa-breach-notification-rule
   - 42-cfr-part-2
-  - nist-sp-800-66
+  - nist-sp-800-66r2
   - nist-sp-800-111
-  - nist-sp-800-52
-  - fips-140
+  - nist-sp-800-52r2
+  - nist-sp-800-77r1
+  - nist-sp-800-113
+  - fips-140-2-hhs-safe-harbor
 severity_floor: low
 ---
 
@@ -601,7 +603,16 @@ nomatch: |
 
 Two things in the source of this lens were dangerously wrong and are corrected here.
 
-**The encryption safe harbor is narrow and conditional.** Notification obligations attach to *unsecured* PHI. PHI is "secured" only when it has been rendered unusable, unreadable or indecipherable to unauthorized persons through a technology or methodology specified in the HHS guidance issued under HITECH §13402(h)(2) — which names NIST SP 800-111 for data at rest and FIPS 140-validated encryption consistent with NIST SP 800-52/800-77 for data in transit — **and** the decryption key was not also compromised. It therefore almost never applies to the common breach: stolen credentials, session hijacking, SQL injection, or a malicious insider, where the application decrypts for the attacker. "We are encrypted, so there is nothing to report" is not a conclusion this lens supports.
+**The encryption safe harbor is narrow and conditional.** Notification
+obligations attach to *unsecured* PHI. HHS guidance names NIST SP 800-111 for
+data at rest. For data in motion it permits encryption compliant, as
+appropriate, with NIST SP 800-52, SP 800-77, or SP 800-113, **or** another
+process validated to FIPS 140-2; those are alternatives, not a requirement to
+combine FIPS validation with every named special publication. The decryption
+key must not also have been compromised. The safe harbor therefore rarely
+applies to stolen credentials, session hijacking, injection, or a malicious
+insider where the application decrypts for the attacker. “We are encrypted, so
+there is nothing to report” is not a conclusion this lens supports.
 
 **An impermissible acquisition is presumed to be a breach.** Under §164.402, acquisition, access, use or disclosure of PHI not permitted by the Privacy Rule is presumed a breach unless the entity demonstrates a low probability that the PHI has been compromised, based on a risk assessment of at least four factors: the nature and extent of the PHI involved including the identifiers and the likelihood of re-identification; the unauthorized person who used it or received it; whether the PHI was actually acquired or viewed; and the extent to which the risk has been mitigated. §164.402 also carries three exceptions — good-faith unintentional acquisition by a workforce member acting within scope, inadvertent disclosure between authorized persons at the same entity, and a good-faith belief that the recipient could not reasonably have retained the information. §164.402 is a **definition** and its exceptions are exceptions to that definition: neither carries a mandate-strength label and neither can be violated — together they decide whether the notification obligations attach at all. The obligations are §164.404 — Mandatory — §164.406 — Mandatory — §164.408 — Mandatory — and §164.410 — Mandatory. The Breach Notification Rule has no Required/Addressable structure, so a §164.400-414 finding never carries one of those labels.
 

@@ -31,6 +31,30 @@ test('the documented public servers are present', () => {
   assert.ok(HOSTED_SERVERS.length >= 4)
 })
 
+test('every hosted transport refuses an arbitrary server before network I/O', async () => {
+  const fetchImpl = stubFetch(() => ok({}))
+  const common = {
+    server: '127.0.0.1:8443',
+    correlationId: CID,
+    secret: 's',
+    fetchImpl,
+  }
+
+  await assert.rejects(
+    () => registerHostedSession({ ...common, publicKeyBase64: 'UEs=' }),
+    /fixed hosted OOB server allowlist/,
+  )
+  await assert.rejects(
+    () => pollHostedSession({ ...common, privateKey: 'unused' }),
+    /fixed hosted OOB server allowlist/,
+  )
+  await assert.rejects(
+    () => deregisterHostedSession(common),
+    /fixed hosted OOB server allowlist/,
+  )
+  assert.deepEqual(fetchImpl.calls, [])
+})
+
 test('register posts to /register and succeeds on 200', async () => {
   const fetchImpl = stubFetch(() => ok({ message: 'registration successful' }))
   await registerHostedSession({
@@ -42,6 +66,7 @@ test('register posts to /register and succeeds on 200', async () => {
   })
   assert.match(fetchImpl.calls[0].url, /^https:\/\/oast\.fun\/register$/)
   assert.equal(fetchImpl.calls[0].init.method, 'POST')
+  assert.equal(fetchImpl.calls[0].init.redirect, 'error')
   assert.equal(JSON.parse(fetchImpl.calls[0].init.body)['correlation-id'], CID)
 })
 
@@ -86,6 +111,7 @@ test('poll decrypts every returned interaction', async () => {
   assert.equal(out[0].protocol, 'dns')
   assert.equal(out[1].protocol, 'http')
   assert.match(fetchImpl.calls[0].url, /\/poll\?id=c{20}&secret=s$/)
+  assert.equal(fetchImpl.calls[0].init.redirect, 'error')
 })
 
 test('poll returns an empty list when the server reports no data', async () => {
@@ -118,5 +144,6 @@ test('deregister posts the correlation id and secret', async () => {
   const fetchImpl = stubFetch(() => ok({ message: 'deregistration successful' }))
   await deregisterHostedSession({ server: 'oast.fun', correlationId: CID, secret: 's', fetchImpl })
   assert.match(fetchImpl.calls[0].url, /\/deregister$/)
+  assert.equal(fetchImpl.calls[0].init.redirect, 'error')
   assert.equal(JSON.parse(fetchImpl.calls[0].init.body)['secret-key'], 's')
 })

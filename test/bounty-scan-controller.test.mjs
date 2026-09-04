@@ -3,14 +3,28 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { digestAdversarialPlan } from '../scripts/lib/adversarial-validation-contracts.mjs'
+import { digestPolicySnapshot } from '../scripts/lib/bounty-contracts.mjs'
 import { runScan } from '../scripts/lib/bounty-scan-controller.mjs'
 import { normalizeCapturedRequest } from '../scripts/lib/bounty-authz-request.mjs'
+import { findRole } from '../scripts/lib/bounty-authz-roles.mjs'
+import { resolveIntensityProfile } from '../scripts/lib/bounty-intensity.mjs'
+import {
+  buildBountyScanPlan,
+  snapshotBountyScanRole,
+} from '../scripts/lib/bounty-scan-plan.mjs'
 import { startDnsListener } from '../scripts/lib/bounty-oob-dns.mjs'
 import {
   ingestSelfHostedEvent,
   mintOobPayload,
   openOobSession,
 } from '../scripts/lib/bounty-oob-controller.mjs'
+import {
+  OPERATOR_AUTHORIZATION_KIND,
+  OPERATOR_AUTHORIZATION_STATUS,
+  OPERATOR_CAMPAIGN_AUTHORIZATION_STATEMENT,
+  verifyBoundOperatorAuthorization,
+} from '../scripts/lib/operator-authorization.mjs'
 import { startAuthzTestbed } from './fixtures/authz-testbed.mjs'
 
 const NOW = new Date('2026-08-21T12:00:00.000Z')
@@ -22,23 +36,95 @@ const REGISTRY = {
 }
 const ENV = { TB_ALICE: 'Bearer alice-token' }
 
+function operatorAuthorizationFor({ scope, requests, classes, oobBinding = null }) {
+  const role = snapshotBountyScanRole(findRole(REGISTRY, 'alice'))
+  const plan = buildBountyScanPlan({
+    scope,
+    requests,
+    classes,
+    role,
+    profile: resolveIntensityProfile(scope),
+    oobBinding,
+  })
+  return verifyBoundOperatorAuthorization({
+    value: {
+      schema_version: '1.0.0',
+      kind: OPERATOR_AUTHORIZATION_KIND,
+      status: OPERATOR_AUTHORIZATION_STATUS,
+      operator_id: 'operator:scan-controller-test',
+      authorization_reference: `authorization:${plan.plan_id}`,
+      statement: OPERATOR_CAMPAIGN_AUTHORIZATION_STATEMENT,
+      declared_at: '2026-08-21T11:59:00.000Z',
+      target: structuredClone(plan.target),
+      plan_sha256: digestAdversarialPlan(plan),
+      scope_revision_sha256: plan.scope_revision_sha256,
+    },
+    planSha256: digestAdversarialPlan(plan),
+    scopeRevisionSha256: plan.scope_revision_sha256,
+    target: plan.target,
+    now: NOW,
+    fail(code, message) {
+      throw new Error(`${code}: ${message}`)
+    },
+  })
+}
+
 async function workspace(port, { activeTesting = true } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'bounty-scan-'))
-  await writeFile(join(dir, 'scope.json'), JSON.stringify({
+  const sealedScope = {
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/bounty-scope',
     engagement_id: 'scan-testbed',
+    platform: 'direct',
+    environment: 'non_production',
+    data_class: 'non_phi',
     // intensity is required: the scanner resolves breadth from the sealed tier and
     // fails closed without one. aggressive gives all three classes and no caps,
     // which is what these ground-truth assertions need.
     authorization: {
-      permissions: { rate_limit_rps: 100, active_testing: activeTesting, intensity: 'aggressive' },
+      mode: 'PROGRAM_POLICY_SEALED',
+      authorization_id: 'scan-testbed-auth',
+      statement: 'Synthetic authorization for the local scanner fixture.',
+      operator_id: 'operator-test',
+      authorized_by: 'test engagement owner',
+      authorization_reference: 'https://policy.example.test/scope',
+      attested_at: '2026-08-21T00:00:00.000Z',
+      independently_verified: false,
+      permissions: {
+        rate_limit_rps: 100,
+        active_testing: activeTesting,
+        production: false,
+        third_party: false,
+        phi: false,
+        mutation: false,
+        automation_allowed: true,
+        intensity: 'aggressive',
+        desync_probes: false,
+      },
     },
     validity: { not_before: '2026-08-21T00:00:00.000Z', not_after: '2026-08-22T00:00:00.000Z' },
+    program: {
+      program_handle: 'test-program',
+      policy_url: 'https://policy.example.test/scope',
+      policy_snapshot_sha256: 'a'.repeat(64),
+      required_user_agent: 'BugBounty-acme',
+    },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [port] }],
       deny: [],
       private_targets_sealed: true,
     },
-  }, null, 2), 'utf8')
+    stop_conditions: { max_findings: 10, operator_stop: false },
+  }
+  const scopeText = `${JSON.stringify(sealedScope, null, 2)}\n`
+  await writeFile(join(dir, 'scope.json'), scopeText, 'utf8')
+  await writeFile(join(dir, 'bundle.json'), `${JSON.stringify({
+    kind: 'red-team-audit/bounty-bundle',
+    schema_version: '1.0.0',
+    engagement_id: sealedScope.engagement_id,
+    scope_sha256: digestPolicySnapshot(scopeText),
+    created_at: sealedScope.authorization.attested_at,
+  }, null, 2)}\n`, 'utf8')
   return dir
 }
 
@@ -51,14 +137,27 @@ async function scan(paths, options = {}) {
   const testbed = await startAuthzTestbed()
   const dir = await workspace(testbed.port, options)
   try {
+    const requests = paths.map((path) => capture(testbed.origin, path))
+    const classes = options.classes ?? ['error-injection', 'passive']
+    const sealedScope = JSON.parse(await readFile(join(dir, 'scope.json'), 'utf8'))
+    const crafted = classes.includes('error-injection') || classes.includes('ssrf-oob')
     const summary = await runScan({
       bundlePath: dir,
-      requests: paths.map((path) => capture(testbed.origin, path)),
+      requests,
       registry: REGISTRY,
       roleId: 'alice',
       now: NOW,
       env: ENV,
-      classes: options.classes ?? ['error-injection', 'passive'],
+      classes,
+      ...(crafted ? {
+        operatorAuthorizationReceipt: operatorAuthorizationFor({
+          scope: sealedScope,
+          requests,
+          classes,
+        }),
+        isAuthorizationRevoked: async () => false,
+        isOperatorStopRequested: async () => false,
+      } : {}),
       sleep: async () => {},
       clock: () => 0,
     })
@@ -125,16 +224,22 @@ test('scanning refuses a scope without active_testing', async () => {
 
 test('scanning refuses an expired scope before any probe', async () => {
   const testbed = await startAuthzTestbed()
-  const dir = await mkdtemp(join(tmpdir(), 'bounty-scan-'))
+  const dir = await workspace(testbed.port)
   try {
-    await writeFile(join(dir, 'scope.json'), JSON.stringify({
-      engagement_id: 'expired',
-      // Complete apart from the expiry, so this fails for the reason it claims
-      // rather than incidentally on a missing intensity tier.
-      authorization: { permissions: { rate_limit_rps: 100, active_testing: true, intensity: 'normal' } },
-      validity: { not_before: '2026-06-01T00:00:00.000Z', not_after: '2026-07-01T00:00:00.000Z' },
-      scope_rules: { allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [testbed.port] }], deny: [], private_targets_sealed: true },
-    }), 'utf8')
+    const expired = JSON.parse(await readFile(join(dir, 'scope.json'), 'utf8'))
+    expired.validity = {
+      not_before: '2026-06-01T00:00:00.000Z',
+      not_after: '2026-07-01T00:00:00.000Z',
+    }
+    const scopeText = `${JSON.stringify(expired, null, 2)}\n`
+    await writeFile(join(dir, 'scope.json'), scopeText, 'utf8')
+    await writeFile(join(dir, 'bundle.json'), `${JSON.stringify({
+      kind: 'red-team-audit/bounty-bundle',
+      schema_version: '1.0.0',
+      engagement_id: expired.engagement_id,
+      scope_sha256: digestPolicySnapshot(scopeText),
+      created_at: expired.authorization.attested_at,
+    }, null, 2)}\n`, 'utf8')
     let touched = 0
     await assert.rejects(
       () => runScan({
@@ -166,10 +271,16 @@ test('a real blind SSRF is proven end to end through our own OOB listener', asyn
   const testbed = await startAuthzTestbed({ dnsServer: `127.0.0.1:${dns.port}` })
   const dir = await workspace(testbed.port)
   try {
-    await openOobSession({
+    const session = await openOobSession({
       bundlePath: dir, backend: 'self_hosted', server: 'oob.test.example',
       now: NOW, fetchImpl: async () => { throw new Error('no network') },
     })
+    const oobBinding = {
+      backend: session.backend,
+      server: session.server,
+      correlation_id: session.correlation_id,
+      created_at: session.created_at,
+    }
     const oob = {
       mint: (spec) => mintOobPayload({ bundlePath: dir, now: NOW, ...spec }),
       collect: async () => {
@@ -183,11 +294,21 @@ test('a real blind SSRF is proven end to end through our own OOB listener', asyn
         return out
       },
     }
+    const requests = [capture(testbed.origin, '/api/fetch?url=https://cdn.example/a.png')]
+    const sealedScope = JSON.parse(await readFile(join(dir, 'scope.json'), 'utf8'))
     const summary = await runScan({
       bundlePath: dir,
-      requests: [capture(testbed.origin, '/api/fetch?url=https://cdn.example/a.png')],
+      requests,
       registry: REGISTRY, roleId: 'alice', now: NOW, env: ENV,
       classes: ['ssrf-oob'], oob,
+      operatorAuthorizationReceipt: operatorAuthorizationFor({
+        scope: sealedScope,
+        requests,
+        classes: ['ssrf-oob'],
+        oobBinding,
+      }),
+      isAuthorizationRevoked: async () => false,
+      isOperatorStopRequested: async () => false,
       sleep: async () => {}, clock: () => 0,
     })
     const findings = JSON.parse(await readFile(join(dir, 'scan-findings.json'), 'utf8'))
@@ -208,16 +329,32 @@ test('SSRF payloads are not sprayed at non-url parameters', async () => {
   const dir = await workspace(testbed.port)
   try {
     let minted = 0
-    await openOobSession({
+    const session = await openOobSession({
       bundlePath: dir, backend: 'self_hosted', server: 'oob.test.example',
       now: NOW, fetchImpl: async () => { throw new Error('no network') },
     })
+    const oobBinding = {
+      backend: session.backend,
+      server: session.server,
+      correlation_id: session.correlation_id,
+      created_at: session.created_at,
+    }
+    const requests = [capture(testbed.origin, '/api/orders/2')]
+    const sealedScope = JSON.parse(await readFile(join(dir, 'scope.json'), 'utf8'))
     await runScan({
       bundlePath: dir,
       // A numeric id: no url name, no url-shaped value.
-      requests: [capture(testbed.origin, '/api/orders/2')],
+      requests,
       registry: REGISTRY, roleId: 'alice', now: NOW, env: ENV,
       classes: ['ssrf-oob'],
+      operatorAuthorizationReceipt: operatorAuthorizationFor({
+        scope: sealedScope,
+        requests,
+        classes: ['ssrf-oob'],
+        oobBinding,
+      }),
+      isAuthorizationRevoked: async () => false,
+      isOperatorStopRequested: async () => false,
       oob: {
         mint: async (spec) => { minted += 1; return mintOobPayload({ bundlePath: dir, now: NOW, ...spec }) },
         collect: async () => [],

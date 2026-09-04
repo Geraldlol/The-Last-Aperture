@@ -9,7 +9,7 @@ import {
   providerArtifacts,
   providerConfig,
   providerPacket,
-} from './helpers/provider-fixtures.mjs'
+} from '../test/helpers/provider-fixtures.mjs'
 
 const runtimePath = process.env.RTA_DOCKER_RUNTIME
 const image = process.env.RTA_PROVIDER_IMAGE
@@ -20,7 +20,7 @@ const TIMEOUT_CONFORMANCE_JOB = 'lens:docker-timeout-conformance'
 test('real Docker backend proves hostile isolation, brokers sealed bytes, and cleans timeouts', {
   skip: enabled
     ? false
-    : 'set RTA_DOCKER_RUNTIME and RTA_PROVIDER_IMAGE to run real-Docker conformance',
+    : 'use the explicit release-conformance launcher with enrolled Docker runtime and image',
   timeout: 120_000,
 }, async () => {
   const config = providerConfig({

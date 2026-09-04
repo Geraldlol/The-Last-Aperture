@@ -1,28 +1,24 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { openHttpAuthedCampaignLedger } from '../scripts/lib/http-authed-campaign-ledger.mjs'
 import {
-  buildActionCountersignaturePayload,
+  openHttpAuthedCampaignLedger,
+  requestHttpAuthedCampaignStop,
+} from '../scripts/lib/http-authed-campaign-ledger.mjs'
+import {
   canonicalJson,
-  httpAuthedCampaignLedgerBindingSha256,
   sha256Hex,
-  signHttpAuthedActionCountersignature,
-  verifyHttpAuthedWrittenAuthorization,
+  verifyHttpAuthedAuthorization,
 } from '../scripts/lib/http-authed-contracts.mjs'
 import {
   recoverDeclaredHttpAuthedMutation,
   runDeclaredHttpAuthedMutation,
   verifyTransientHttpAuthedJsonObservation,
 } from '../scripts/lib/http-authed-mutation-controller.mjs'
-import {
-  AUTHORIZATION_DOCUMENT,
-  writtenScope,
-} from './helpers/http-authed-fixtures.mjs'
+import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-16T12:00:00.000Z')
 const OPERATOR_ID = 'peerstar-security-operator'
@@ -33,8 +29,8 @@ const SECRET_RESPONSE = 'SYNTHETIC_SECRET_RESPONSE_BODY_VALUE'
 const SECRET_HEADER = 'SYNTHETIC_SECRET_HEADER_VALUE'
 const SECRET_HEADER_NAME = 'x-synthetic-patient-identifier-54321'
 
-async function campaign(t, suffix, { configureScope } = {}) {
-  const scope = writtenScope({ actionCount: 1 })
+async function campaign(t, suffix, { configureScope, faultInjector } = {}) {
+  const scope = attestedScope({ actionCount: 1 })
   scope.limits.min_interval_ms = 0
   scope.credential.binding_sha256 = sha256Hex(CREDENTIAL)
   scope.requests[0].request_body.sha256 = sha256Hex(MUTATION_BODY)
@@ -42,20 +38,22 @@ async function campaign(t, suffix, { configureScope } = {}) {
   scope.requests[0].rollback.request_body.sha256 = sha256Hex(ROLLBACK_BODY)
   scope.requests[0].rollback.request_body.byte_length = ROLLBACK_BODY.length
   configureScope?.(scope)
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const parent = await mkdtemp(join(tmpdir(), `rta-http-authed-mutation-${suffix}-`))
   const ledger = await openHttpAuthedCampaignLedger({
     directory: join(parent, 'ledger'),
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    independentlyVerified: scope.authorization.independently_verified,
     operatorId: OPERATOR_ID,
     initialize: true,
     now: () => NOW,
     limits: { lockTimeoutMs: 100, staleLockMs: 1, lockPollMs: 1 },
+    faultInjector,
   })
   t.after(async () => {
     await ledger.close()
@@ -97,18 +95,11 @@ function successfulTransport(calls, additions = {}) {
 function runOptions(campaignState, additions = {}) {
   return {
     ...campaignState,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     operatorId: OPERATOR_ID,
-    countersignature: {
-      opaque: 'SYNTHETIC_SECRET_COUNTERSIGNATURE_VALUE',
-      nonce: 'synthetic-test-approval-nonce-0001',
-      at: NOW.toISOString(),
-    },
     credentialValue: CREDENTIAL,
     requestBodyBytes: MUTATION_BODY,
     rollbackBodyBytes: ROLLBACK_BODY,
     now: () => NOW,
-    verifyCountersignature: async () => ({ keyId: campaignState.scope.approver.key_id }),
     verifyObservation: observationVerifier(),
     ...additions,
   }
@@ -161,11 +152,11 @@ async function interruptedMutation(t, suffix) {
       })
     }
   }
-  await state.ledger.consumeApproval({
+  await state.ledger.consumeAuthorization({
     actionId: lease.actionId,
     leaseId: lease.leaseId,
-    nonce: `synthetic-${suffix}-approval-nonce-0001`,
-    countersignatureBindingSha256: 'a'.repeat(64),
+    nonce: `synthetic-${suffix}-authorization-nonce-0001`,
+    dispatchPermitSha256: 'a'.repeat(64),
   })
   await state.ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -365,73 +356,26 @@ test('declared mutation can use the transient JSON verifier with ephemeral trans
   )
 })
 
-test('declared mutation verifies a real campaign-bound Ed25519 countersignature', async (t) => {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
-  const publicDer = publicKey.export({ type: 'spki', format: 'der' })
-  const state = await campaign(t, 'real-countersignature', {
-    configureScope(scope) {
-      scope.approver = {
-        mechanism: 'ed25519_file',
-        key_id: `ed25519:${sha256Hex(publicDer)}`,
-        public_key: {
-          format: 'spki_der_b64',
-          value_base64: publicDer.toString('base64'),
-        },
-        enrollment: {
-          enrolled_by: 'Independent synthetic approver',
-          enrolled_at: '2026-04-15T12:00:00.000Z',
-          provenance: 'Synthetic test-only approver enrollment',
-        },
-      }
-    },
-  })
-  const payload = buildActionCountersignaturePayload({
-    action: state.action,
-    planSha256: state.expectedCampaignGrantSha256,
-    campaignLedgerSha256: httpAuthedCampaignLedgerBindingSha256(state.ledger.directory),
-    nonce: 'synthetic-fresh-nonce-0001',
-    at: NOW.toISOString(),
-  })
-  const countersignature = signHttpAuthedActionCountersignature({
-    payload,
-    privateKeyBytes: privateKey.export({ type: 'pkcs8', format: 'pem' }),
-  })
+test('declared mutation derives and consumes a campaign-bound controller permit', async (t) => {
+  const state = await campaign(t, 'controller-dispatch-permit')
   const calls = []
   const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
-    countersignature,
-    verifyCountersignature: undefined,
     transport: successfulTransport(calls),
   }))
 
   assert.equal(result.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
   assert.equal(calls.filter(({ phase }) => phase === 'MUTATION').length, 1)
-
-  const secondRoot = await mkdtemp(join(tmpdir(), 'rta-http-authed-second-ledger-'))
-  const secondLedger = await openHttpAuthedCampaignLedger({
-    directory: join(secondRoot, 'ledger'),
-    campaignGrantSha256: state.expectedCampaignGrantSha256,
-    authorizationDocumentSha256: state.scope.authorization.written_authorization_sha256,
-    operatorId: OPERATOR_ID,
-    initialize: true,
-    now: () => NOW,
-  })
-  t.after(async () => {
-    await secondLedger.close()
-    await rm(secondRoot, { recursive: true, force: true })
-  })
-  let secondLedgerSends = 0
-  await assert.rejects(
-    () => runDeclaredHttpAuthedMutation(runOptions(
-      { ...state, ledger: secondLedger },
-      {
-        countersignature,
-        verifyCountersignature: undefined,
-        transport: async () => { secondLedgerSends += 1 },
-      },
-    )),
-    /countersignature|ledger binding/i,
+  const actionState = state.ledger.actionState(result.action.action_id)
+  assert.equal(actionState.authorization_consumed, true)
+  const records = await Promise.all(
+    (await readdir(state.ledger.directory))
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => readFile(join(state.ledger.directory, name), 'utf8')),
   )
-  assert.equal(secondLedgerSends, 0)
+  const ledgerText = records.join('\n')
+  assert.match(ledgerText, /AUTHORIZATION_CONSUMED/)
+  assert.match(ledgerText, /dispatch_permit_sha256/)
+  assert.doesNotMatch(ledgerText, /countersignature/i)
 })
 
 test('before-state mismatch terminalizes without dispatching a mutation', async (t) => {
@@ -451,6 +395,145 @@ test('before-state mismatch terminalizes without dispatching a mutation', async 
   assert.equal(result.outcome, 'FAILED_BEFORE_MUTATION')
   assert.equal(result.verification.before, false)
   assert.equal(state.ledger.actionState(result.action.action_id).outcome, 'FAILED_BEFORE_MUTATION')
+})
+
+test('before-state observer failure is ledgered and never reported as a mismatch', async (t) => {
+  const state = await campaign(t, 'before-observer-failure')
+  const calls = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: successfulTransport(calls),
+    verifyObservation: async ({ phase }) => {
+      if (phase === 'BEFORE_READ') {
+        throw new Error('SYNTHETIC_SENSITIVE_OBSERVER_FAILURE_DETAIL')
+      }
+      return { valueMatch: true, contextMatch: true }
+    },
+  }))
+  const action = state.ledger.actionState(result.action.action_id)
+  const renderedRecords = (await Promise.all(
+    (await readdir(state.ledger.directory))
+      .filter((name) => name.endsWith('.http-authed-campaign.json'))
+      .map((name) => readFile(join(state.ledger.directory, name), 'utf8')),
+  )).join('\n')
+
+  assert.deepEqual(calls, [
+    { phase: 'CREDENTIAL_PREFLIGHT', method: 'GET' },
+    { phase: 'BEFORE_READ', method: 'GET' },
+  ])
+  assert.equal(result.schema_version, '1.1.0')
+  assert.deepEqual(result.verification_failures, [{
+    phase: 'BEFORE_READ',
+    reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+  }])
+  assert.equal(result.terminal_reason_code, 'BEFORE_OBSERVATION_FAILED')
+  assert.equal(result.outcome, 'FAILED_BEFORE_MUTATION')
+  assert.equal(action.terminal_reason_code, 'BEFORE_OBSERVATION_FAILED')
+  assert.deepEqual(action.last_verification, {
+    failed: true,
+    reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+  })
+  assert.match(renderedRecords, /"type"\s*:\s*"VERIFICATION_FAILED"/)
+  assert.doesNotMatch(renderedRecords, /SYNTHETIC_SENSITIVE_OBSERVER_FAILURE_DETAIL/)
+})
+
+test('an out-of-band operator stop after the before-read prevents mutation dispatch', async (t) => {
+  const state = await campaign(t, 'stop-before-mutation')
+  const sent = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      if (request.phase === 'BEFORE_READ') {
+        await requestHttpAuthedCampaignStop({
+          directory: state.ledger.directory,
+          campaignGrantSha256: state.expectedCampaignGrantSha256,
+          operatorId: OPERATOR_ID,
+          now: () => NOW,
+        })
+      }
+      return {
+        status: request.phase === 'MUTATION' ? 201 : 200,
+        responseBytes: 0,
+        responseHeaderNames: ['content-type'],
+        body: Buffer.from('{}'),
+      }
+    },
+  }))
+
+  assert.deepEqual(sent, ['CREDENTIAL_PREFLIGHT', 'BEFORE_READ'])
+  assert.equal(result.outcome, 'FAILED_BEFORE_SEND')
+  assert.equal(state.ledger.snapshot().stopped, true)
+  assert.equal(state.ledger.actionState(result.action.action_id).authorization_consumed, false)
+})
+
+test('a stop committed with mutation pre-dispatch is settled before the write sends', async (t) => {
+  const state = await campaign(t, 'stop-with-mutation-pre-dispatch')
+  const durablePreDispatch = state.ledger.markPreDispatch.bind(state.ledger)
+  state.ledger.markPreDispatch = async (input) => {
+    const result = await durablePreDispatch(input)
+    if (input.phase === 'MUTATION') {
+      await requestHttpAuthedCampaignStop({
+        directory: state.ledger.directory,
+        campaignGrantSha256: state.expectedCampaignGrantSha256,
+        operatorId: OPERATOR_ID,
+        now: () => NOW,
+      })
+    }
+    return result
+  }
+  const sent = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      return {
+        status: request.phase === 'MUTATION' ? 201 : 200,
+        responseBytes: 0,
+        responseHeaderNames: ['content-type'],
+        body: Buffer.from('{}'),
+      }
+    },
+  }))
+  const action = state.ledger.actionState(result.action.action_id)
+
+  assert.deepEqual(sent, ['CREDENTIAL_PREFLIGHT', 'BEFORE_READ'])
+  assert.equal(result.outcome, 'FAILED_BEFORE_SEND')
+  assert.equal(state.ledger.snapshot().stopped, true)
+  assert.equal(action.authorization_consumed, true)
+  assert.equal(action.phase_outcomes.MUTATION.outcome, 'FAILED')
+  assert.equal(action.phase_outcomes.MUTATION.request_may_have_been_sent, false)
+})
+
+test('an operator stop after mutation dispatch is recorded while cleanup still completes', async (t) => {
+  const state = await campaign(t, 'stop-after-mutation')
+  const sent = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      if (request.phase === 'MUTATION') {
+        await requestHttpAuthedCampaignStop({
+          directory: state.ledger.directory,
+          campaignGrantSha256: state.expectedCampaignGrantSha256,
+          operatorId: OPERATOR_ID,
+          now: () => NOW,
+        })
+      }
+      return {
+        status: request.phase === 'MUTATION' ? 201 : 200,
+        responseBytes: 0,
+        responseHeaderNames: ['content-type'],
+        body: Buffer.from('{}'),
+      }
+    },
+  }))
+
+  assert.deepEqual(sent, [
+    'CREDENTIAL_PREFLIGHT', 'BEFORE_READ', 'MUTATION', 'AFTER_READ',
+    'ROLLBACK', 'ROLLBACK_VERIFY',
+  ])
+  assert.equal(result.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
+  assert.equal(state.ledger.snapshot().stopped, true)
 })
 
 test('credential preflight failure prevents reads and mutation dispatch', async (t) => {
@@ -516,7 +599,7 @@ test('mutation refuses to start when the authorization window cannot cover clean
 
   assert.deepEqual(sent, ['CREDENTIAL_PREFLIGHT', 'BEFORE_READ'])
   assert.equal(result.outcome, 'FAILED_BEFORE_SEND')
-  assert.equal(state.ledger.actionState(result.action.action_id).approval_consumed, false)
+  assert.equal(state.ledger.actionState(result.action.action_id).authorization_consumed, false)
 })
 
 test('a sealed cleanup extension can cover settlement near the action deadline', async (t) => {
@@ -600,6 +683,383 @@ test('an ambiguous mutation is not retried and enters its sealed idempotent clea
   assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET_RESPONSE))
 })
 
+test('a mutation response stop status survives verified rollback', async (t) => {
+  const state = await campaign(t, 'mutation-status-stop')
+  const calls = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      calls.push(request.phase)
+      await request.beforeSend()
+      return {
+        status: request.phase === 'MUTATION' ? 500 : 200,
+        responseBytes: 0,
+        responseHeaderNames: [],
+        body: Buffer.from('{}'),
+      }
+    },
+  }))
+
+  assert.deepEqual(calls, [
+    'CREDENTIAL_PREFLIGHT', 'BEFORE_READ', 'MUTATION', 'AFTER_READ',
+    'ROLLBACK', 'ROLLBACK_VERIFY',
+  ])
+  assert.equal(result.outcome, 'ROLLBACK_VERIFIED_AFTER_FAILURE')
+  assert.equal(result.stop_reason, 'TARGET_HEALTH_DEGRADED')
+})
+
+test('a linked mutation settlement append fault still completes rollback without replaying the write', async (t) => {
+  let injected = false
+  const state = await campaign(t, 'linked-settlement-fault', {
+    faultInjector: async (phase, details) => {
+      if (!injected && phase === 'after-record-linked' && details.sequence === 10) {
+        injected = true
+        throw new Error('synthetic linked mutation settlement fault')
+      }
+    },
+  })
+  const calls = []
+
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: successfulTransport(calls),
+  }))
+
+  assert.equal(injected, true)
+  assert.deepEqual(calls.map(({ phase }) => phase), [
+    'CREDENTIAL_PREFLIGHT', 'BEFORE_READ', 'MUTATION', 'AFTER_READ',
+    'ROLLBACK', 'ROLLBACK_VERIFY',
+  ])
+  assert.equal(calls.filter(({ phase }) => phase === 'MUTATION').length, 1)
+  assert.equal(result.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
+  assert.equal(state.ledger.actionState(result.action.action_id).terminal, true)
+})
+
+test('an unreconciled mutation settlement append fault erases its transient response and still cleans up', async (t) => {
+  let injected = 0
+  const state = await campaign(t, 'unreconciled-settlement-fault', {
+    faultInjector: async (phase, details) => {
+      if (
+        injected < 2
+        && phase === 'after-temporary-durable'
+        && details.sequence === 10
+      ) {
+        injected += 1
+        throw new Error('synthetic pre-link mutation settlement fault')
+      }
+    },
+  })
+  const calls = []
+  let mutationResponseBody
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      calls.push(request.phase)
+      await request.beforeSend()
+      const body = Buffer.alloc(32, 0x73)
+      if (request.phase === 'MUTATION') mutationResponseBody = body
+      return {
+        status: request.phase === 'MUTATION' ? 201 : 200,
+        responseBytes: body.length,
+        responseHeaderNames: [],
+        body,
+      }
+    },
+  }))
+
+  assert.equal(injected, 2)
+  assert.equal(calls.filter((phase) => phase === 'MUTATION').length, 1)
+  assert.equal(calls.filter((phase) => phase === 'ROLLBACK').length, 1)
+  assert.equal(calls.filter((phase) => phase === 'ROLLBACK_VERIFY').length, 1)
+  assert.equal(result.outcome, 'ROLLBACK_VERIFIED_AFTER_FAILURE')
+  assert.equal(mutationResponseBody.every((byte) => byte === 0), true)
+})
+
+for (const boundary of [
+  {
+    label: 'durable mutation settlement',
+    faultPhase: 'after-record-durable',
+    recordSequence: 10,
+  },
+  {
+    label: 'after-state verification',
+    faultPhase: 'after-temporary-durable',
+    recordSequence: 13,
+  },
+  {
+    label: 'rollback pre-dispatch',
+    faultPhase: 'after-record-linked',
+    recordSequence: 14,
+  },
+  {
+    label: 'rollback settlement',
+    faultPhase: 'after-record-durable',
+    recordSequence: 15,
+  },
+  {
+    label: 'rollback verification pre-dispatch',
+    faultPhase: 'after-record-linked',
+    recordSequence: 16,
+  },
+  {
+    label: 'rollback verification settlement',
+    faultPhase: 'after-record-durable',
+    recordSequence: 17,
+  },
+  {
+    label: 'rollback verification decision',
+    faultPhase: 'after-temporary-durable',
+    recordSequence: 18,
+  },
+  {
+    label: 'terminal outcome',
+    faultPhase: 'after-temporary-durable',
+    recordSequence: 19,
+  },
+]) {
+  test(`${boundary.label} append fault preserves verified cleanup and exact-once mutation`, async (t) => {
+    let injected = false
+    const state = await campaign(t, `append-boundary-${boundary.recordSequence}`, {
+      faultInjector: async (phase, details) => {
+        if (
+          !injected
+          && phase === boundary.faultPhase
+          && details.sequence === boundary.recordSequence
+        ) {
+          injected = true
+          throw new Error(`synthetic ${boundary.label} append fault`)
+        }
+      },
+    })
+    const calls = []
+
+    const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+      transport: successfulTransport(calls),
+    }))
+
+    assert.equal(injected, true)
+    assert.equal(calls.filter(({ phase }) => phase === 'MUTATION').length, 1)
+    assert.equal(calls.filter(({ phase }) => phase === 'ROLLBACK').length, 1)
+    assert.equal(calls.filter(({ phase }) => phase === 'ROLLBACK_VERIFY').length, 1)
+    assert.equal(result.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
+    const ledgerState = state.ledger.actionState(result.action.action_id)
+    assert.equal(ledgerState.terminal, true)
+    assert.equal(ledgerState.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
+  })
+}
+
+test('restart after rollback pre-dispatch never repeats the rollback request', async (t) => {
+  const state = await campaign(t, 'restart-after-rollback-pre-dispatch')
+  await state.ledger.enqueueCandidate({
+    candidateDraft: state.action,
+    provenance: 'SEALED_PLAN',
+  })
+  const lease = await state.ledger.leaseAction({
+    candidateDraft: state.action,
+    operatorId: OPERATOR_ID,
+  })
+  const settle = async (phase, status) => {
+    await state.ledger.markPreDispatch({
+      actionId: lease.actionId,
+      leaseId: lease.leaseId,
+      phase,
+      requestBindingSha256: sha256Hex(Buffer.from(`restart-${phase}`)),
+    })
+    await state.ledger.markOutcome({
+      actionId: lease.actionId,
+      leaseId: lease.leaseId,
+      phase,
+      outcome: 'SETTLED',
+      responseMetadata: {
+        status,
+        bytes: 0,
+        headerNames: [],
+        requestMayHaveBeenSent: true,
+      },
+    })
+  }
+  await settle('CREDENTIAL_PREFLIGHT', 200)
+  await settle('BEFORE_READ', 200)
+  await state.ledger.recordVerification({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'BEFORE_READ',
+    valueMatch: true,
+    contextMatch: true,
+  })
+  await state.ledger.consumeAuthorization({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    nonce: 'synthetic-restart-after-rollback-nonce-0001',
+    dispatchPermitSha256: 'a'.repeat(64),
+  })
+  await settle('MUTATION', 201)
+  await settle('AFTER_READ', 200)
+  await state.ledger.recordVerification({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'AFTER_READ',
+    valueMatch: true,
+    contextMatch: true,
+  })
+  await state.ledger.markPreDispatch({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'ROLLBACK',
+    requestBindingSha256: 'e'.repeat(64),
+  })
+  const directory = state.ledger.directory
+  await state.ledger.close()
+
+  const reopened = await openHttpAuthedCampaignLedger({
+    directory,
+    campaignGrantSha256: state.expectedCampaignGrantSha256,
+    authorizationBindingSha256: state.ledger.authorizationBindingSha256,
+    authorizationMode: state.ledger.authorizationMode,
+    independentlyVerified: state.ledger.independentlyVerified,
+    operatorId: OPERATOR_ID,
+    initialize: false,
+    now: () => NOW,
+  })
+  const sent = []
+  const result = await recoverDeclaredHttpAuthedMutation({
+    ledger: reopened,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    verifyObservation: observationVerifier(),
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      return {
+        status: 200,
+        responseBytes: 0,
+        responseHeaderNames: [],
+        body: Buffer.from('{}'),
+      }
+    },
+  })
+  await reopened.close()
+
+  assert.deepEqual(sent, ['ROLLBACK_VERIFY'])
+  assert.equal(result.outcome, 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED')
+})
+
+test('restart after a durable mutation settlement recovers cleanup without a second mutation', async (t) => {
+  let injected = false
+  const state = await campaign(t, 'restart-after-durable-settlement', {
+    faultInjector: async (phase, details) => {
+      if (!injected && phase === 'after-record-linked' && details.sequence === 10) {
+        injected = true
+        throw new Error('synthetic crash-tail append fault')
+      }
+    },
+  })
+  await state.ledger.enqueueCandidate({
+    candidateDraft: state.action,
+    provenance: 'SEALED_PLAN',
+  })
+  const lease = await state.ledger.leaseAction({
+    candidateDraft: state.action,
+    operatorId: OPERATOR_ID,
+  })
+  for (const phase of ['CREDENTIAL_PREFLIGHT', 'BEFORE_READ']) {
+    await state.ledger.markPreDispatch({
+      actionId: lease.actionId,
+      leaseId: lease.leaseId,
+      phase,
+      requestBindingSha256: sha256Hex(Buffer.from(`synthetic-${phase}`)),
+    })
+    await state.ledger.markOutcome({
+      actionId: lease.actionId,
+      leaseId: lease.leaseId,
+      phase,
+      outcome: 'SETTLED',
+      responseMetadata: {
+        status: 200,
+        bytes: 0,
+        headerNames: [],
+        requestMayHaveBeenSent: true,
+      },
+    })
+    if (phase === 'BEFORE_READ') {
+      await state.ledger.recordVerification({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase,
+        valueMatch: true,
+        contextMatch: true,
+      })
+    }
+  }
+  await state.ledger.consumeAuthorization({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    nonce: 'synthetic-restart-after-settlement-nonce-0001',
+    dispatchPermitSha256: 'a'.repeat(64),
+  })
+  await state.ledger.markPreDispatch({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'MUTATION',
+    requestBindingSha256: 'b'.repeat(64),
+  })
+  await state.ledger.markOutcome({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'MUTATION',
+    outcome: 'SETTLED',
+    responseMetadata: {
+      status: 201,
+      bytes: 0,
+      headerNames: [],
+      requestMayHaveBeenSent: true,
+    },
+  })
+  assert.equal(injected, true)
+  const directory = state.ledger.directory
+  await state.ledger.close()
+
+  const reopened = await openHttpAuthedCampaignLedger({
+    directory,
+    campaignGrantSha256: state.expectedCampaignGrantSha256,
+    authorizationBindingSha256: state.ledger.authorizationBindingSha256,
+    authorizationMode: state.ledger.authorizationMode,
+    independentlyVerified: state.ledger.independentlyVerified,
+    operatorId: OPERATOR_ID,
+    initialize: false,
+    now: () => NOW,
+  })
+  const sent = []
+  const result = await recoverDeclaredHttpAuthedMutation({
+    ledger: reopened,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    verifyObservation: observationVerifier(),
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      return {
+        status: 200,
+        responseBytes: 0,
+        responseHeaderNames: [],
+        body: Buffer.from('{}'),
+      }
+    },
+  })
+  await reopened.close()
+
+  assert.deepEqual(sent, ['ROLLBACK', 'ROLLBACK_VERIFY'])
+  assert.equal(sent.includes('MUTATION'), false)
+  assert.equal(result.outcome, 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED')
+})
+
 test('an interrupted durable mutation resumes cleanup only and never resends the write', async (t) => {
   const state = await campaign(t, 'recovery-cleanup')
   await state.ledger.enqueueCandidate({
@@ -639,11 +1099,11 @@ test('an interrupted durable mutation resumes cleanup only and never resends the
       })
     }
   }
-  await state.ledger.consumeApproval({
+  await state.ledger.consumeAuthorization({
     actionId: lease.actionId,
     leaseId: lease.leaseId,
-    nonce: 'synthetic-recovery-approval-nonce-0001',
-    countersignatureBindingSha256: 'a'.repeat(64),
+    nonce: 'synthetic-recovery-authorization-nonce-0001',
+    dispatchPermitSha256: 'a'.repeat(64),
   })
   await state.ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -671,7 +1131,6 @@ test('an interrupted durable mutation resumes cleanup only and never resends the
     scope: state.scope,
     action: lease.allocatedAction,
     existingLease: lease,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     rollbackBodyBytes: ROLLBACK_BODY,
@@ -696,6 +1155,53 @@ test('an interrupted durable mutation resumes cleanup only and never resends the
   assert.equal(state.ledger.actionState(lease.actionId).terminal, true)
 })
 
+test('cleanup observer failure is durably distinguished from rollback mismatch', async (t) => {
+  const { state, lease } = await interruptedMutation(t, 'cleanup-observer-failure')
+  const sent = []
+  const result = await recoverDeclaredHttpAuthedMutation({
+    ledger: state.ledger,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    verifyObservation: async () => {
+      throw new Error('SYNTHETIC_PRIVATE_RECOVERY_OBSERVER_DETAIL')
+    },
+    transport: async (request) => {
+      await request.beforeSend()
+      sent.push(request.phase)
+      return {
+        status: 200,
+        responseBytes: 0,
+        responseHeaderNames: ['content-type'],
+        body: Buffer.from('{}'),
+      }
+    },
+  })
+  const action = state.ledger.actionState(lease.actionId)
+
+  assert.deepEqual(sent, ['ROLLBACK', 'ROLLBACK_VERIFY'])
+  assert.equal(result.schema_version, '1.1.0')
+  assert.deepEqual(result.verification_failures, [{
+    phase: 'ROLLBACK_VERIFY',
+    reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+  }])
+  assert.equal(result.terminal_reason_code, 'RECOVERY_OBSERVATION_FAILED')
+  assert.equal(result.outcome, 'MANUAL_INTERVENTION_REQUIRED')
+  assert.equal(action.terminal_reason_code, 'RECOVERY_OBSERVATION_FAILED')
+  assert.deepEqual(action.last_verification, {
+    failed: true,
+    reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+  })
+  assert.doesNotMatch(
+    JSON.stringify(action),
+    /SYNTHETIC_PRIVATE_RECOVERY_OBSERVER_DETAIL/,
+  )
+})
+
 test('ledger-proven interrupted mutation can recover after action expiry until cleanup expiry', async (t) => {
   const { state, lease } = await interruptedMutation(t, 'post-expiry-recovery')
   const sent = []
@@ -706,7 +1212,6 @@ test('ledger-proven interrupted mutation can recover after action expiry until c
     scope: state.scope,
     action: lease.allocatedAction,
     existingLease: lease,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     rollbackBodyBytes: ROLLBACK_BODY,
@@ -739,7 +1244,6 @@ test('cleanup recovery sends nothing at or after cleanup_not_after', async (t) =
     scope: state.scope,
     action: lease.allocatedAction,
     existingLease: lease,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
     credentialValue: CREDENTIAL,
     rollbackBodyBytes: ROLLBACK_BODY,

@@ -20,6 +20,12 @@ export function assertApproved(value) {
 }
 
 export function gateCandidates({ sealedScope, candidates, port = DEFAULT_PORT }) {
+  // The program mandates an identifying marker, and this is the only route to a
+  // socket in this phase, so a scope without one must approve nothing. Refused
+  // rather than thrown, because that is how this gate already reports a scope it
+  // cannot use, and a distinct reason keeps the diagnosis unambiguous.
+  const userAgent = sealedScope?.program?.required_user_agent
+  const markerMissing = typeof userAgent !== 'string' || userAgent.length === 0
   const approved = []
   const refused = []
   for (const candidate of candidates) {
@@ -35,12 +41,19 @@ export function gateCandidates({ sealedScope, candidates, port = DEFAULT_PORT })
     const url = buildUrl(candidate.value, port)
     const decision = decideScope(sealedScope, url)
     if (decision.decision === SCOPE_ALLOW) {
+      // Checked here, not up front: a host that is out of scope deserves its own
+      // reason, and only a host we would otherwise probe needs the marker.
+      if (markerMissing) {
+        refused.push({ host: candidate.value, reason: 'sealed-scope-user-agent-missing', ruleId: decision.rule_id })
+        continue
+      }
       approved.push({
         [APPROVAL_BRAND]: true,
         host: candidate.value,
         port,
         url,
         ruleId: decision.rule_id,
+        userAgent,
       })
       continue
     }

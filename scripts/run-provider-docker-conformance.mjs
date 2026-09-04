@@ -16,7 +16,7 @@ if (!runtimePath || !image) {
     process.execPath,
     [
       '--test',
-      resolve('test/provider-docker-conformance.test.mjs'),
+      resolve('conformance/provider-docker.conformance.mjs'),
     ],
     {
       shell: false,

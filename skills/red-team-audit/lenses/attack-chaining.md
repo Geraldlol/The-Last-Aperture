@@ -40,7 +40,12 @@ It opens a file for exactly one reason: to confirm that two components actually 
 
 ### The record a chain writes
 
-**A chain is not a new record.** The schema requires `topic` on every record and requires that topic to be owned by the lens named in `lens`; this lens owns nothing, so there is no legal record to author. The chain is recorded on one existing record — the **host** — chosen as the component whose topic the composed impact actually lands on. That is usually the terminal hop: the one whose sink is the data, the session or the privilege the attacker ends up holding.
+**A chain is not a new record.** The schema has a zero-owner exemption, but this
+lens deliberately does not use it to originate chain records. Its policy is to
+record the chain on one existing record — the **host** — chosen as the component
+whose topic the composed impact actually lands on. That is usually the terminal
+hop: the one whose sink is the data, the session or the privilege the attacker
+ends up holding.
 
 The host keeps its `lens`, its `topic`, its `candidate_id`, its `location` and its `claimed_impact_severity` unchanged, and gains four fields:
 

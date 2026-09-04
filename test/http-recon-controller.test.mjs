@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { generateKeyPairSync } from 'node:crypto'
 import {
   mkdtemp,
   readFile,
@@ -10,17 +9,16 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { main as runHttpReconCli } from '../scripts/http-recon.mjs'
+import * as httpReconController from '../scripts/lib/http-recon-controller.mjs'
 import {
-  buildHttpReconPlan,
   canonicalJson,
   sha256Hex,
-  signHttpReconRoe,
-  signHttpReconTargetProof,
 } from '../scripts/lib/http-recon-contracts.mjs'
 import {
   finalizeHttpReconBundle,
+  goOperatorAttestedHttpRecon,
   nextHttpReconAction,
-  planHttpReconBundle,
   planOperatorAttestedHttpReconBundle,
   requestHttpReconStop,
   runHttpReconAction,
@@ -33,133 +31,202 @@ const DNS_SHA256 = sha256Hex(Buffer.from(JSON.stringify({
   hostname: 'target.example',
   answers: DNS_ANSWERS,
 })))
+
+test('signed authorization controller entry points are absent', () => {
+  assert.equal(Object.hasOwn(httpReconController, 'planHttpReconBundle'), false)
+  assert.equal(
+    Object.hasOwn(httpReconController.httpReconControllerConstants, 'ROE_FILE'),
+    false,
+  )
+})
+
+test('public HTTP recon execution reaches the controller without a repeat confirmation flag', async () => {
+  await assert.rejects(
+    () => runHttpReconCli([
+      'run',
+      'missing-bundle-for-controller-validation',
+      'action:controller-validation',
+      '--operator-id',
+      'operator:test',
+      '--rationale',
+      'exercise the authorized controller path',
+    ]),
+    (error) => error.code === 'ENOENT'
+      && error.code !== 'HTTP_RECON_LIVE_IO_DISABLED',
+  )
+})
+
+test('public HTTP recon retires signed routes and flags before artifact reads or target I/O', async (t) => {
+  const legacyInputs = [
+    [
+      'plan-signed',
+      '--roe', 'must-not-read-roe.json',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--owner-public-key', 'must-not-read-key.pem',
+      '--out', 'must-not-create-bundle',
+    ],
+    [
+      'next',
+      'must-not-read-bundle',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--owner-public-key', 'must-not-read-key.pem',
+    ],
+    [
+      'run',
+      'must-not-read-bundle',
+      'action:must-not-run',
+      '--operator-id', 'operator:test',
+      '--rationale', 'legacy signed route must remain retired',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--owner-public-key', 'must-not-read-key.pem',
+    ],
+    [
+      'finalize',
+      'must-not-read-bundle',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--owner-public-key', 'must-not-read-key.pem',
+    ],
+    [
+      'validate',
+      'must-not-read-bundle',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--owner-public-key', 'must-not-read-key.pem',
+    ],
+  ]
+  let controllerCalls = 0
+  for (const args of legacyInputs) {
+    await t.test(args[0], async () => {
+      await assert.rejects(
+        runHttpReconCli(args, {
+          planAttested: async () => { controllerCalls += 1 },
+          runAction: async () => { controllerCalls += 1 },
+          finalize: async () => { controllerCalls += 1 },
+        }),
+        (error) => /unknown command|does not support/.test(error.message)
+          && error.code !== 'ENOENT',
+      )
+    })
+  }
+  assert.equal(controllerCalls, 0)
+})
+
+test('go plans, executes, and finalizes one operator-attested target in one command', async () => {
+  const calls = []
+  let output = ''
+  let progress = ''
+  const plannedAction = {
+    action_id: 'action:operator-attested:1',
+    method: 'HEAD',
+    url: 'https://target.example/health',
+  }
+
+  await runHttpReconCli([
+    'go',
+    plannedAction.url,
+    '--out', 'operator-attested-go-bundle',
+    '--json',
+  ], {
+    planAttested: async (input) => {
+      calls.push(['plan', input])
+      return {
+        directory: 'operator-attested-go-bundle',
+        run: {
+          engagement_id: 'operator-attested-engagement',
+          actions: [plannedAction],
+        },
+      }
+    },
+    runAction: async (input) => {
+      calls.push(['run', input])
+      return {
+        run: { state: 'PROBE_PLAN_RUNNING' },
+        action: { ...plannedAction, state: 'COMPLETED' },
+      }
+    },
+    finalize: async (input) => {
+      calls.push(['finalize', input])
+      return {
+        run: {
+          engagement_id: 'operator-attested-engagement',
+          state: 'PROBE_PLAN_COMPLETE',
+        },
+        reportPath: 'operator-attested-go-bundle/http-recon-report.md',
+      }
+    },
+    write: (value) => { output += value },
+    progressWrite: (value) => { progress += value },
+  })
+
+  assert.equal(calls.length, 3)
+  assert.equal(calls[0][0], 'plan')
+  assert.equal(calls[0][1].targetUrl, plannedAction.url)
+  assert.equal('attestationConfirmed' in calls[0][1], false)
+  assert.match(calls[0][1].operatorAuthorization.operator_id, /^local:/)
+  assert.match(
+    calls[0][1].operatorAuthorization.authorization_reference,
+    /^operator-directive:/,
+  )
+  assert.deepEqual(calls[0][1].operatorAuthorization.target, {
+    kind: 'https_url',
+    url: plannedAction.url,
+  })
+  assert.equal(calls[1][0], 'run')
+  assert.equal(calls[1][1].bundle, 'operator-attested-go-bundle')
+  assert.equal(calls[1][1].actionId, plannedAction.action_id)
+  assert.equal(calls[1][1].authorizationConfirmed, true)
+  assert.equal(
+    calls[1][1].operatorId,
+    calls[0][1].operatorAuthorization.operator_id,
+  )
+  assert.equal(calls[2][0], 'finalize')
+  assert.equal(calls[2][1].bundle, 'operator-attested-go-bundle')
+  assert.match(progress, /Bundle ready for stop control: operator-attested-go-bundle/)
+  assert.deepEqual(JSON.parse(output), {
+    action: { ...plannedAction, state: 'COMPLETED' },
+    bundle: 'operator-attested-go-bundle',
+    engagement_id: 'operator-attested-engagement',
+    report: 'operator-attested-go-bundle/http-recon-report.md',
+    state: 'PROBE_PLAN_COMPLETE',
+  })
+})
+
+test('target-and-go controller refuses before planning without an operator authorization declaration', async () => {
+  let plans = 0
+  await assert.rejects(
+    goOperatorAttestedHttpRecon({
+      targetUrl: 'https://target.example/health',
+      operatorId: 'operator:test',
+      authorizedBy: 'Acme security owner',
+      authorizationReference: 'ticket:SEC-1234',
+      rationale: 'exercise the bounded target',
+      out: 'must-not-be-created',
+      planImpl: async () => { plans += 1 },
+    }),
+    (error) => error.code === 'HTTP_RECON_LIVE_EXECUTION_AUTHORIZATION_REQUIRED',
+  )
+  assert.equal(plans, 0)
+})
+
+test('target-and-go controller library does not infer authorization from omitted input', async () => {
+  let plans = 0
+  await assert.rejects(
+    goOperatorAttestedHttpRecon({
+      targetUrl: 'https://target.example/health',
+      out: 'must-not-be-created',
+      planImpl: async () => { plans += 1 },
+    }),
+    (error) => error.code === 'HTTP_RECON_LIVE_EXECUTION_AUTHORIZATION_REQUIRED',
+  )
+  assert.equal(plans, 0)
+})
 const CERTIFICATE_SHA256 = 'c'.repeat(64)
 const SPKI_SHA256 = 'a'.repeat(64)
-const AUTHORIZATION_BYTES = Buffer.from(
-  'Acme authorizes the exact bounded external HTTPS observations.\n',
-)
 
 function mutableClock(initial = '2026-08-04T12:00:00.000Z') {
   let current = Date.parse(initial)
   return {
     now: () => new Date(current),
     advance: (milliseconds) => { current += milliseconds },
-  }
-}
-
-function keyPair() {
-  const pair = generateKeyPairSync('ed25519')
-  return {
-    privateKeyBytes: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }),
-    publicKeyBytes: pair.publicKey.export({ type: 'spki', format: 'pem' }),
-  }
-}
-
-function roeDraft() {
-  return {
-    schema_version: '1.0.0',
-    kind: 'red-team-audit/http-recon-roe',
-    engagement_id: 'acme-controller-engagement',
-    environment: 'production',
-    authorization: {
-      authorization_id: 'acme-controller-auth',
-      statement: 'I authorize the bounded HTTP reconnaissance described by this RoE against the exact target, request list, and validity window.',
-      authorized_by: {
-        organization: 'Acme Corporation',
-        approver_name: 'A. Owner',
-        approver_role: 'Chief Information Security Officer',
-        contact: 'security@example.com',
-      },
-      emergency_stop_contact: {
-        name: 'Security Operations',
-        contact: 'soc@example.com',
-      },
-      document_sha256: sha256Hex(AUTHORIZATION_BYTES),
-    },
-    target: {
-      origin: 'https://target.example',
-      tls_spki_sha256: SPKI_SHA256,
-      proof: {
-        method: 'GET',
-        url: 'https://target.example/.well-known/red-team-authorization.json',
-        challenge_nonce: 'b'.repeat(64),
-        max_age_ms: 120_000,
-      },
-    },
-    validity: {
-      not_before: '2026-08-04T11:59:00.000Z',
-      not_after: '2026-08-04T12:04:00.000Z',
-    },
-    limits: {
-      max_probe_requests: 1,
-      max_target_proof_requests: 1,
-      max_target_proof_response_bytes: 16_384,
-      request_timeout_ms: 10_000,
-      max_response_bytes: 65_536,
-      max_aggregate_response_bytes: 131_072,
-      max_wall_time_ms: 300_000,
-      min_interval_ms: 1_000,
-      concurrency: 1,
-    },
-    evidence_handling: {
-      classification: 'CONFIDENTIAL',
-      retention_days: 30,
-    },
-    stop_conditions: [
-      'AUTHORIZATION_REVOKED',
-      'EMERGENCY_STOP_REQUESTED',
-      'AUTHORIZATION_WINDOW_CLOSED',
-      'TARGET_PROOF_INVALID',
-      'TARGET_IDENTITY_CHANGED',
-      'LIMIT_REACHED',
-      'UNEXPECTED_SIDE_EFFECT',
-    ],
-    requests: [{ method: 'HEAD', url: 'https://target.example/' }],
-  }
-}
-
-async function fixture(t) {
-  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-'))
-  t.after(() => rm(parent, { recursive: true, force: true }))
-  const keys = keyPair()
-  const roe = signHttpReconRoe({
-    roe: roeDraft(),
-    privateKeyBytes: keys.privateKeyBytes,
-  })
-  const plan = buildHttpReconPlan(roe)
-  const proof = signHttpReconTargetProof({
-    privateKeyBytes: keys.privateKeyBytes,
-    proof: {
-      schema_version: '1.0.0',
-      kind: 'red-team-audit/http-recon-target-proof',
-      engagement_id: roe.engagement_id,
-      authorization_id: roe.authorization.authorization_id,
-      authorization_document_sha256: roe.authorization.document_sha256,
-      target_origin: roe.target.origin,
-      target_tls_spki_sha256: roe.target.tls_spki_sha256,
-      proof_url: roe.target.proof.url,
-      challenge_nonce: roe.target.proof.challenge_nonce,
-      plan_sha256: plan.plan_sha256,
-      issued_at: '2026-08-04T11:59:59.000Z',
-      expires_at: '2026-08-04T12:01:30.000Z',
-    },
-  })
-  const roePath = join(parent, 'signed-roe.json')
-  const authorizationDocumentPath = join(parent, 'authorization.txt')
-  const ownerPublicKeyPath = join(parent, 'owner-public.pem')
-  await writeFile(roePath, `${JSON.stringify(roe, null, 2)}\n`)
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_BYTES)
-  await writeFile(ownerPublicKeyPath, keys.publicKeyBytes)
-  return {
-    parent,
-    out: join(parent, 'bundle'),
-    keys,
-    roe,
-    plan,
-    proof,
-    roePath,
-    authorizationDocumentPath,
-    ownerPublicKeyPath,
   }
 }
 
@@ -272,75 +339,6 @@ function recordedTransportIdentity(metadata) {
   }
 }
 
-function transports(fixtureValue, counters = { proof: 0, probe: 0 }) {
-  const proofBytes = Buffer.from(JSON.stringify(fixtureValue.proof))
-  return {
-    counters,
-    fetchProofImpl: async (options) => {
-      counters.proof += 1
-      assert.equal(options.url, fixtureValue.roe.target.proof.url)
-      assert.equal(options.method, 'GET')
-      assert.equal(options.tlsVerificationMode, 'PKIX_HOSTNAME_AND_SPKI_PIN')
-      assert.equal(options.tlsSpkiSha256, SPKI_SHA256)
-      await options.beforeSend(preDispatchMetadata({
-        url: options.url,
-        method: options.method,
-      }))
-      const headers = [{ name: 'content-type', value: 'application/json' }]
-      return baseTransport({
-        url: options.url,
-        method: options.method,
-        headers,
-        body: {
-          bytes: proofBytes,
-          sha256: sha256Hex(proofBytes),
-          size: proofBytes.length,
-          retained_size: proofBytes.length,
-          retained: true,
-          truncated: false,
-          digest_scope: 'complete',
-        },
-      })
-    },
-    probeImpl: async (options) => {
-      counters.probe += 1
-      assert.equal(options.url, fixtureValue.roe.requests[0].url)
-      assert.equal(options.method, 'HEAD')
-      assert.equal(options.tlsVerificationMode, 'PKIX_HOSTNAME_AND_SPKI_PIN')
-      assert.equal(options.expectedDnsSha256, DNS_SHA256)
-      await options.beforeSend(preDispatchMetadata({
-        url: options.url,
-        method: options.method,
-      }))
-      const headers = [
-        { name: 'content-type', value: 'text/html' },
-        { name: 'strict-transport-security', value: 'max-age=31536000' },
-      ]
-      return baseTransport({
-        url: options.url,
-        method: options.method,
-        headers,
-        body: {
-          bytes: null,
-          sha256: EMPTY_SHA256,
-          size: 0,
-          retained_size: 0,
-          retained: false,
-          truncated: false,
-          digest_scope: 'complete',
-        },
-      })
-    },
-  }
-}
-
-function trust(fixtureValue) {
-  return {
-    authorizationDocumentPath: fixtureValue.authorizationDocumentPath,
-    ownerPublicKeyPath: fixtureValue.ownerPublicKeyPath,
-  }
-}
-
 async function rewriteEventChain(bundle, mutate) {
   const eventPath = join(bundle, 'events.jsonl')
   const records = (await readFile(eventPath, 'utf8'))
@@ -425,62 +423,6 @@ function appendSyntheticEvent(records, run, type, details, at) {
   return records.at(-1)
 }
 
-async function synthesizeInterruptedProofDispatch(
-  bundle,
-  at,
-  { staleRoot = false } = {},
-) {
-  const runPath = join(bundle, 'run.json')
-  const eventPath = join(bundle, 'events.jsonl')
-  const run = JSON.parse(await readFile(runPath, 'utf8'))
-  const action = run.actions[0]
-  run.state = 'ACTIVE'
-  run.updated_at = at
-  run.budget.started_at = at
-  action.state = 'LEASED'
-  action.attempt_count = 1
-  action.leased_at = at
-
-  const records = (await readFile(eventPath, 'utf8'))
-    .trimEnd()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-  const lease = appendSyntheticEvent(records, run, 'ACTION_LEASED', {
-    action_id: action.action_id,
-    method: action.method,
-    url: action.url,
-    operator_id: 'operator-001',
-    rationale: 'approved bounded response metadata observation',
-    authorization_mode: 'EXTERNAL_SIGNED',
-    tls_policy: {
-      mode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
-      spki_sha256: SPKI_SHA256,
-    },
-    current_authorization_confirmed: null,
-    budget_before: structuredClone(run.budget),
-  })
-  const metadata = preDispatchMetadata({
-    url: run.target.proof.url,
-    method: 'GET',
-  })
-  appendSyntheticEvent(records, run, 'PROOF_REQUEST_PRE_DISPATCH', {
-    action_id: action.action_id,
-    method: 'GET',
-    url: run.target.proof.url,
-    transport_identity: recordedTransportIdentity(metadata),
-  })
-  run.event_chain = {
-    count: staleRoot ? lease.sequence : records.length,
-    last_sha256: staleRoot ? lease.record_sha256 : records.at(-1).record_sha256,
-  }
-  await writeFile(
-    eventPath,
-    `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
-  )
-  await writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`)
-}
-
 async function synthesizeStaleActionPreDispatch(bundle, at) {
   const runPath = join(bundle, 'run.json')
   const eventPath = join(bundle, 'events.jsonl')
@@ -532,96 +474,29 @@ async function synthesizeStaleActionPreDispatch(bundle, at) {
   await writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`)
 }
 
-async function synthesizeStaleVerifiedProof(bundle, proof, at) {
-  const runPath = join(bundle, 'run.json')
-  const eventPath = join(bundle, 'events.jsonl')
-  const run = JSON.parse(await readFile(runPath, 'utf8'))
-  const action = run.actions[0]
-  run.state = 'ACTIVE'
-  run.updated_at = at
-  run.budget.started_at = at
-  action.state = 'LEASED'
-  action.attempt_count = 1
-  action.leased_at = at
-  const records = (await readFile(eventPath, 'utf8'))
-    .trimEnd()
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
-  appendSyntheticEvent(records, run, 'ACTION_LEASED', {
-    action_id: action.action_id,
-    method: action.method,
-    url: action.url,
-    operator_id: 'operator-001',
-    rationale: 'approved bounded response metadata observation',
-    authorization_mode: 'EXTERNAL_SIGNED',
-    tls_policy: {
-      mode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
-      spki_sha256: SPKI_SHA256,
-    },
-    current_authorization_confirmed: null,
-    budget_before: structuredClone(run.budget),
-  }, at)
-  const metadata = preDispatchMetadata({
-    url: run.target.proof.url,
-    method: 'GET',
-  })
-  const identity = recordedTransportIdentity(metadata)
-  const proofPreDispatch = appendSyntheticEvent(
-    records,
-    run,
-    'PROOF_REQUEST_PRE_DISPATCH',
-    {
-      action_id: action.action_id,
-      method: 'GET',
-      url: run.target.proof.url,
-      transport_identity: identity,
-    },
-    at,
-  )
-  const proofBytes = Buffer.from(JSON.stringify(proof))
-  appendSyntheticEvent(records, run, 'TARGET_PROOF_VERIFIED', {
-    action_id: action.action_id,
-    proof: structuredClone(proof),
-    proof_sha256: sha256Hex(canonicalJson(proof)),
-    expires_at: proof.expires_at,
-    dns_sha256: identity.dns_sha256,
-    response_bytes: proofBytes.length,
-    transport_identity: identity,
-  }, at)
-  run.event_chain = {
-    count: proofPreDispatch.sequence,
-    last_sha256: proofPreDispatch.record_sha256,
-  }
-  await writeFile(
-    eventPath,
-    `${records.map((record) => JSON.stringify(record)).join('\n')}\n`,
-  )
-  await writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`)
-}
-
-async function planFixture(fixtureValue, clock) {
-  return planHttpReconBundle({
-    roePath: fixtureValue.roePath,
-    out: fixtureValue.out,
-    ...trust(fixtureValue),
-    now: clock.now,
-    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
-  })
-}
-
 async function attestedFixture(t, overrides = {}) {
   const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-attested-'))
   t.after(() => rm(parent, { recursive: true, force: true }))
   const clock = mutableClock()
   const out = join(parent, 'bundle')
+  const targetUrl = overrides.targetUrl ?? 'https://target.example/'
+  const declaredAt = clock.now().toISOString()
   const planned = await planOperatorAttestedHttpReconBundle({
-    targetUrl: 'https://target.example/',
+    targetUrl,
     operatorId: 'operator-001',
     authorizedBy: 'A. Asset Owner',
-    authorizationReference: 'owner approval conversation 2026-08-04',
+    authorizationReference: 'operator authorization reference 2026-08-04',
     environment: 'production',
-    attestationConfirmed: true,
+    operatorAuthorization: {
+      schema_version: '1.0.0',
+      kind: 'red-team-audit/operator-authorization',
+      status: 'OPERATOR_ASSERTED_AUTHORIZED',
+      operator_id: 'operator-001',
+      declared_at: declaredAt,
+      authorization_reference: 'operator authorization reference 2026-08-04',
+      statement: 'I confirm I am authorized to test this exact HTTPS target.',
+      target: { kind: 'https_url', url: targetUrl },
+    },
     out,
     now: clock.now,
     randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
@@ -642,10 +517,6 @@ function attestedTransports(
 ) {
   return {
     counters,
-    fetchProofImpl: async () => {
-      counters.proof += 1
-      throw new Error('operator-attested mode must not fetch a target proof')
-    },
     probeImpl: async (options) => {
       counters.probe += 1
       assert.equal(options.url, 'https://target.example/')
@@ -683,19 +554,9 @@ function attestedTransports(
 test('operator-attested mode needs no authority files and performs zero proof requests', async (t) => {
   const value = await attestedFixture(t)
   assert.equal(value.planned.run.authorization.mode, 'OPERATOR_ATTESTED')
-  assert.equal(value.planned.run.target.proof, null)
+  assert.equal(Object.hasOwn(value.planned.run.target, 'proof'), false)
   assert.deepEqual(value.planned.run.target.tls, { mode: 'PKIX_HOSTNAME' })
   assert.equal(value.planned.run.limits.max_target_proof_requests, 0)
-
-  await assert.rejects(
-    nextHttpReconAction({
-      bundle: value.out,
-      authorizationDocumentPath: 'not-used.txt',
-      ownerPublicKeyPath: 'not-used.pem',
-      now: value.clock.now,
-    }),
-    /do not accept signed-authority file options/,
-  )
 
   const next = await nextHttpReconAction({
     bundle: value.out,
@@ -709,7 +570,6 @@ test('operator-attested mode needs no authority files and performs zero proof re
       operatorId: 'operator-001',
       rationale: 'authorized bounded response metadata observation',
       now: value.clock.now,
-      fetchProofImpl: transport.fetchProofImpl,
       probeImpl: transport.probeImpl,
     }),
     /authorization is still current/,
@@ -724,7 +584,6 @@ test('operator-attested mode needs no authority files and performs zero proof re
       rationale: 'authorized bounded response metadata observation',
       authorizationConfirmed: true,
       now: value.clock.now,
-      fetchProofImpl: transport.fetchProofImpl,
       probeImpl: transport.probeImpl,
     }),
     /operator identity that created the sealed attestation/,
@@ -738,12 +597,14 @@ test('operator-attested mode needs no authority files and performs zero proof re
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   assert.equal(executed.action.state, 'COMMITTED')
   assert.equal(executed.observation.authority.mode, 'OPERATOR_ATTESTED')
-  assert.equal(executed.observation.authority.target_proof_sha256, null)
+  assert.equal(
+    Object.hasOwn(executed.observation.authority, 'target_proof_sha256'),
+    false,
+  )
   assert.equal(executed.observation.network.tls_verification, 'PKIX_HOSTNAME')
   assert.equal(executed.observation.network.peer_spki_sha256, SPKI_SHA256)
   assert.deepEqual(transport.counters, { proof: 0, probe: 1 })
@@ -754,8 +615,8 @@ test('operator-attested mode needs no authority files and performs zero proof re
   })
   assert.equal(finalized.run.state, 'PROBE_PLAN_COMPLETE')
   const report = await readFile(finalized.reportPath, 'utf8')
-  assert.match(report, /operator declaration only/i)
-  assert.match(report, /Independently verified owner authorization: \*\*no\*\*/)
+  assert.match(report, /Authorization source: operator declaration/i)
+  assert.match(report, /without independently deciding legal authority/i)
   assert.match(report, /no advance SPKI pin/i)
   assert.match(report, /Observed TLS SPKI SHA-256/)
   assert.match(report, /code coverage are NOT APPLICABLE/)
@@ -849,7 +710,6 @@ test('operator-attested mode may explicitly seal and enforce an advance SPKI pin
     rationale: 'authorized pinned response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   assert.equal(
@@ -880,7 +740,6 @@ test('controller rejects transport TLS evidence that contradicts a sealed pin', 
       rationale: 'authorized pinned response metadata observation',
       authorizationConfirmed: true,
       now: value.clock.now,
-      fetchProofImpl: transport.fetchProofImpl,
       probeImpl: transport.probeImpl,
     }),
     (error) => {
@@ -943,22 +802,14 @@ test('returned transport identity cannot differ from durable pre-dispatch eviden
   assert.equal(run.actions[0].state, 'DELIVERY_AMBIGUOUS')
 })
 
-test('pre-dispatch approval requires the active phase exact method and URL', async (t) => {
-  for (const phase of ['ACTION', 'PROOF']) {
-    for (const field of ['url', 'method']) {
-      await t.test(`${phase.toLowerCase()} ${field}`, async (subtest) => {
-        const signed = phase === 'PROOF'
-        const value = signed
-          ? await fixture(subtest)
-          : await attestedFixture(subtest)
-        const clock = signed ? mutableClock() : value.clock
-        if (signed) await planFixture(value, clock)
-        const actionId = signed
-          ? value.plan.actions[0].action_id
-          : (await nextHttpReconAction({
-              bundle: value.out,
-              now: clock.now,
-            })).action_id
+test('pre-dispatch authorization requires the active phase exact method and URL', async (t) => {
+  for (const field of ['url', 'method']) {
+    await t.test(`action ${field}`, async (subtest) => {
+        const value = await attestedFixture(subtest)
+        const actionId = (await nextHttpReconAction({
+          bundle: value.out,
+          now: value.clock.now,
+        })).action_id
         let adapterSent = false
         const wrongPhaseTransport = async (options) => {
           const attemptedUrl = field === 'url'
@@ -970,12 +821,10 @@ test('pre-dispatch approval requires the active phase exact method and URL', asy
           await options.beforeSend(preDispatchMetadata({
             url: attemptedUrl,
             method: attemptedMethod,
-            tlsVerification: signed
-              ? 'PKIX_HOSTNAME_AND_SPKI_PIN'
-              : 'PKIX_HOSTNAME',
+            tlsVerification: 'PKIX_HOSTNAME',
           }))
           adapterSent = true
-          throw new Error('adapter should not receive pre-dispatch approval')
+          throw new Error('adapter should not receive pre-dispatch authorization')
         }
         await assert.rejects(
           runHttpReconAction({
@@ -983,14 +832,9 @@ test('pre-dispatch approval requires the active phase exact method and URL', asy
             actionId,
             operatorId: 'operator-001',
             rationale: 'authorized bounded response metadata observation',
-            ...(signed ? trust(value) : { authorizationConfirmed: true }),
-            now: clock.now,
-            fetchProofImpl: signed
-              ? wrongPhaseTransport
-              : async () => assert.fail('attested mode must not fetch proof'),
-            probeImpl: signed
-              ? async () => assert.fail('proof rejection must block the action')
-              : wrongPhaseTransport,
+            authorizationConfirmed: true,
+            now: value.clock.now,
+            probeImpl: wrongPhaseTransport,
           }),
           (error) => {
             assert.equal(error.code, 'HTTP_RECON_PRE_DISPATCH_SCOPE_MISMATCH')
@@ -1006,11 +850,10 @@ test('pre-dispatch approval requires the active phase exact method and URL', asy
           .split('\n')
           .map((line) => JSON.parse(line))
         assert.equal(
-          events.some(({ type }) => type === `${phase}_REQUEST_PRE_DISPATCH`),
+          events.some(({ type }) => type === 'ACTION_REQUEST_PRE_DISPATCH'),
           false,
         )
-      })
-    }
+    })
   }
 })
 
@@ -1135,7 +978,6 @@ test('validation rejects a locally rehashed lease that drops current authorizati
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   await rewriteEventChain(value.out, (records) => {
@@ -1178,7 +1020,6 @@ test('validation re-correlates locally rehashed observations with action and TLS
       rationale: 'authorized bounded response metadata observation',
       authorizationConfirmed: true,
       now: value.clock.now,
-      fetchProofImpl: transport.fetchProofImpl,
       probeImpl: transport.probeImpl,
     })
     await rewriteObservationAndChain(value.out, mutate)
@@ -1208,7 +1049,6 @@ test('validation rejects a rehashed pre-dispatch peer identity substitution', as
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   await rewriteEventChain(value.out, (records) => {
@@ -1242,7 +1082,6 @@ test('validation recomputes public DNS evidence instead of trusting correlated h
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   await rewriteObservationAndChain(value.out, (observation) => {
@@ -1265,168 +1104,6 @@ test('validation recomputes public DNS evidence instead of trusting correlated h
   )
 })
 
-test('plan is offline and one signed action produces a bounded validated report', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  const planned = await planFixture(value, clock)
-  assert.equal(planned.run.state, 'PLANNED')
-  assert.equal(planned.run.actions.length, 1)
-  const transport = transports(value)
-  assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
-
-  await assert.rejects(
-    nextHttpReconAction({
-      bundle: value.out,
-      now: clock.now,
-    }),
-    /require --authorization-document and --owner-public-key/,
-  )
-
-  const next = await nextHttpReconAction({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(next.action_id, value.plan.actions[0].action_id)
-  const executed = await runHttpReconAction({
-    bundle: value.out,
-    actionId: next.action_id,
-    operatorId: 'operator-001',
-    rationale: 'approved bounded response metadata observation',
-    ...trust(value),
-    now: clock.now,
-    delayImpl: async (milliseconds, signal) => {
-      assert.equal(signal.aborted, false)
-      clock.advance(milliseconds)
-    },
-    fetchProofImpl: transport.fetchProofImpl,
-    probeImpl: transport.probeImpl,
-  })
-  assert.equal(executed.action.state, 'COMMITTED')
-  assert.equal(executed.run.state, 'ACTIVE')
-  assert.deepEqual(transport.counters, { proof: 1, probe: 1 })
-  assert.equal(executed.observation.body.retained, false)
-  assert.equal(executed.observation.authority.target_proof_sha256,
-    executed.run.target_proof.proof_sha256)
-
-  const finalized = await finalizeHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(finalized.run.state, 'PROBE_PLAN_COMPLETE')
-  const report = await readFile(finalized.reportPath, 'utf8')
-  assert.match(report, /code coverage are NOT APPLICABLE/)
-  assert.match(report, /NO_FINDINGS_OBSERVED_IN_AUTHORIZED_PROBED_SURFACE/)
-  assert.match(report, /no OWASP APTS or NIST SP 800-115 conformance/i)
-
-  clock.advance(86_400_000)
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.deepEqual(validation.errors, [])
-  assert.equal(validation.valid, true)
-})
-
-test('signed proof dispatch uncertainty is terminal and never downgraded to failed', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  const transport = transports(value)
-  transport.fetchProofImpl = async (options) => {
-    transport.counters.proof += 1
-    await options.beforeSend(preDispatchMetadata({
-      url: options.url,
-      method: options.method,
-    }))
-    const error = new Error('synthetic proof connection loss after send')
-    error.code = 'HTTP_RECON_REQUEST_FAILED'
-    error.request_may_have_been_sent = true
-    throw error
-  }
-  await assert.rejects(
-    runHttpReconAction({
-      bundle: value.out,
-      actionId: value.plan.actions[0].action_id,
-      operatorId: 'operator-001',
-      rationale: 'approved bounded response metadata observation',
-      ...trust(value),
-      now: clock.now,
-      fetchProofImpl: transport.fetchProofImpl,
-      probeImpl: transport.probeImpl,
-    }),
-    /proof connection loss after send/,
-  )
-  const run = JSON.parse(await readFile(join(value.out, 'run.json'), 'utf8'))
-  assert.equal(run.state, 'OUTCOME_UNCERTAIN')
-  assert.equal(run.actions[0].state, 'DELIVERY_AMBIGUOUS')
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(validation.valid, true)
-})
-
-test('restart recovery treats an unmatched durable proof pre-dispatch as uncertain', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  await synthesizeInterruptedProofDispatch(
-    value.out,
-    clock.now().toISOString(),
-    { staleRoot: true },
-  )
-  const finalized = await finalizeHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(finalized.run.state, 'OUTCOME_UNCERTAIN')
-  assert.equal(finalized.run.actions[0].state, 'DELIVERY_AMBIGUOUS')
-  assert.equal(
-    finalized.run.actions[0].error.code,
-    'DELIVERY_AMBIGUOUS',
-  )
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(validation.valid, true)
-})
-
-test('finalize replays a verified-proof event fsynced past a stale run root', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  await synthesizeStaleVerifiedProof(
-    value.out,
-    value.proof,
-    clock.now().toISOString(),
-  )
-  const finalized = await finalizeHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(finalized.run.state, 'FAILED')
-  assert.equal(finalized.run.actions[0].state, 'FAILED')
-  assert.equal(finalized.run.budget.proof_requests_used, 1)
-  assert.equal(
-    finalized.run.target_proof.proof_sha256,
-    sha256Hex(canonicalJson(value.proof)),
-  )
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(validation.valid, true)
-})
-
 test('finalize adopts an action pre-dispatch fsynced past a stale run root', async (t) => {
   const value = await attestedFixture(t)
   await synthesizeStaleActionPreDispatch(
@@ -1439,6 +1116,87 @@ test('finalize adopts an action pre-dispatch fsynced past a stale run root', asy
   })
   assert.equal(finalized.run.state, 'OUTCOME_UNCERTAIN')
   assert.equal(finalized.run.actions[0].state, 'DELIVERY_AMBIGUOUS')
+  const validation = await validateHttpReconBundle({
+    bundle: value.out,
+    now: value.clock.now,
+  })
+  assert.equal(validation.valid, true)
+})
+
+test('finalize preserves a response stop recovered from an ACTION_COMMITTED crash tail', async (t) => {
+  const value = await attestedFixture(t)
+  const next = await nextHttpReconAction({
+    bundle: value.out,
+    now: value.clock.now,
+  })
+  const transport = attestedTransports()
+  const originalProbe = transport.probeImpl
+  transport.probeImpl = async (options) => {
+    const error = new Error('synthetic response stop')
+    error.code = 'HTTP_RECON_STOP_CONDITION'
+    error.condition = 'TARGET_HEALTH_DEGRADED'
+    error.request_may_have_been_sent = true
+    error.result = {
+      ...await originalProbe(options),
+      status: 500,
+    }
+    throw error
+  }
+  const stopped = await runHttpReconAction({
+    bundle: value.out,
+    actionId: next.action_id,
+    operatorId: 'operator-001',
+    rationale: 'authorized bounded response metadata observation',
+    authorizationConfirmed: true,
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  assert.equal(stopped.run.state, 'STOPPED')
+  const normalStopReason = stopped.run.stop.reason
+
+  const eventPath = join(value.out, 'events.jsonl')
+  const runPath = join(value.out, 'run.json')
+  const events = (await readFile(eventPath, 'utf8'))
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const commitIndex = events.findIndex(({ type }) => type === 'ACTION_COMMITTED')
+  const commit = events[commitIndex]
+  const predecessor = events[commitIndex - 1]
+  const lease = events.find(({ type }) => type === 'ACTION_LEASED')
+  assert.notEqual(commitIndex, -1)
+  assert.notEqual(commit.details.stop_condition, null)
+  assert.equal(
+    normalStopReason,
+    `${commit.details.stop_condition.code}: ${commit.details.stop_condition.message}`,
+  )
+
+  const staleRun = JSON.parse(await readFile(runPath, 'utf8'))
+  staleRun.state = 'ACTIVE'
+  staleRun.stop = null
+  staleRun.report = null
+  staleRun.budget = structuredClone(lease.details.budget_before)
+  staleRun.actions[0].state = 'SENT'
+  staleRun.actions[0].completed_at = null
+  staleRun.actions[0].observation_path = null
+  staleRun.actions[0].observation_sha256 = null
+  staleRun.actions[0].error = null
+  staleRun.event_chain = {
+    count: predecessor.sequence,
+    last_sha256: predecessor.record_sha256,
+  }
+  await writeFile(
+    eventPath,
+    `${events.slice(0, commitIndex + 1).map((record) => JSON.stringify(record)).join('\n')}\n`,
+  )
+  await writeFile(runPath, `${JSON.stringify(staleRun, null, 2)}\n`)
+
+  const recovered = await finalizeHttpReconBundle({
+    bundle: value.out,
+    now: value.clock.now,
+  })
+  assert.equal(recovered.run.state, 'STOPPED')
+  assert.equal(recovered.run.stop.reason, normalStopReason)
   const validation = await validateHttpReconBundle({
     bundle: value.out,
     now: value.clock.now,
@@ -1460,7 +1218,6 @@ test('finalize adopts an exact fsynced finalization past an active run root', as
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   const firstFinalization = await finalizeHttpReconBundle({
@@ -1511,7 +1268,6 @@ test('forged finalization tail is rejected before its stale run root is adopted'
     rationale: 'authorized bounded response metadata observation',
     authorizationConfirmed: true,
     now: value.clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   const finalized = await finalizeHttpReconBundle({
@@ -1561,99 +1317,31 @@ test('forged finalization tail is rejected before its stale run root is adopted'
   assert.deepEqual(unchanged.event_chain, staleRoot)
 })
 
-test('signed validation requires its proof pre-dispatch identity and ordering', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  const transport = transports(value)
-  await runHttpReconAction({
-    bundle: value.out,
-    actionId: value.plan.actions[0].action_id,
-    operatorId: 'operator-001',
-    rationale: 'approved bounded response metadata observation',
-    ...trust(value),
-    now: clock.now,
-    delayImpl: async (milliseconds) => clock.advance(milliseconds),
-    fetchProofImpl: transport.fetchProofImpl,
-    probeImpl: transport.probeImpl,
-  })
-  await rewriteEventChain(value.out, (records) => {
-    const index = records.findIndex(
-      ({ type }) => type === 'PROOF_REQUEST_PRE_DISPATCH',
-    )
-    records.splice(index, 1)
-    for (let position = index; position < records.length; position += 1) {
-      records[position].sequence = position + 1
-    }
-  })
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(validation.valid, false)
-  assert.deepEqual(
-    validation.errors.map(({ code }) => code),
-    ['HTTP_RECON_TARGET_PROOF_HISTORY_INVALID'],
-  )
-})
-
-test('signed validation requires the correlated target-proof receipt', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  const transport = transports(value)
-  await runHttpReconAction({
-    bundle: value.out,
-    actionId: value.plan.actions[0].action_id,
-    operatorId: 'operator-001',
-    rationale: 'approved bounded response metadata observation',
-    ...trust(value),
-    now: clock.now,
-    delayImpl: async (milliseconds) => clock.advance(milliseconds),
-    fetchProofImpl: transport.fetchProofImpl,
-    probeImpl: transport.probeImpl,
-  })
-  const runPath = join(value.out, 'run.json')
-  const run = JSON.parse(await readFile(runPath, 'utf8'))
-  run.target_proof = null
-  await writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`)
-  const validation = await validateHttpReconBundle({
-    bundle: value.out,
-    ...trust(value),
-    now: clock.now,
-  })
-  assert.equal(validation.valid, false)
-  assert.deepEqual(
-    validation.errors.map(({ code }) => code),
-    ['HTTP_RECON_TARGET_PROOF_RECEIPT_MISSING'],
-  )
-})
-
 test('schema-valid mutable action, limits, or target edits fail before transport', async (t) => {
   const mutations = [
     (run) => { run.actions[0].url = 'https://target.example/admin' },
     (run) => { run.limits.min_interval_ms = 2_000 },
-    (run) => { run.target.proof.url = 'https://target.example/other-proof.json' },
+    (run) => {
+      run.target.tls = {
+        mode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
+        spki_sha256: SPKI_SHA256,
+      }
+    },
     (run) => { run.authorization.valid_until = '2026-08-04T12:05:00.000Z' },
   ]
-  for (const [index, mutate] of mutations.entries()) {
-    const value = await fixture(t)
-    value.out = join(value.parent, `bundle-${index}`)
-    const clock = mutableClock()
-    await planFixture(value, clock)
+  for (const mutate of mutations) {
+    const value = await attestedFixture(t)
     const runPath = join(value.out, 'run.json')
     const run = JSON.parse(await readFile(runPath, 'utf8'))
     mutate(run)
     await writeFile(runPath, `${JSON.stringify(run, null, 2)}\n`)
-    const transport = transports(value)
+    const transport = attestedTransports()
     await assert.rejects(
       nextHttpReconAction({
         bundle: value.out,
-        ...trust(value),
-        now: clock.now,
+        now: value.clock.now,
       }),
-      /differ from the signed RoE/,
+      /sealed operator attestation|scope does not match/,
     )
     assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
   }
@@ -1698,21 +1386,13 @@ test('CLI plans operator-attested scope without authority artifact paths', async
     '--authorized-by',
     'A. Asset Owner',
     '--authorization-reference',
-    'owner approval conversation 2026-08-04',
+    'operator authorization reference 2026-08-04',
     '--out',
     out,
   ]
-  const missingAttestation = spawnSync(
-    process.execPath,
-    planArgs,
-    { encoding: 'utf8', shell: false, windowsHide: true },
-  )
-  assert.equal(missingAttestation.status, 1)
-  assert.match(missingAttestation.stderr, /plan requires --attest-authorized/)
-
   const result = spawnSync(
     process.execPath,
-    [...planArgs, '--attest-authorized'],
+    planArgs,
     { encoding: 'utf8', shell: false, windowsHide: true },
   )
   assert.equal(result.status, 0, result.stderr)
@@ -1721,51 +1401,53 @@ test('CLI plans operator-attested scope without authority artifact paths', async
   assert.equal(run.authorization.mode, 'OPERATOR_ATTESTED')
   assert.equal(run.actions[0].method, 'HEAD')
   assert.deepEqual(run.target.tls, { mode: 'PKIX_HOSTNAME' })
-  assert.equal(run.target_proof, null)
+  assert.equal(Object.hasOwn(run, 'target_proof'), false)
   assert.equal(run.budget.proof_requests_used, 0)
+  const events = (await readFile(join(out, 'events.jsonl'), 'utf8'))
+    .trimEnd()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  assert.equal(
+    events[0].details.operator_authorization_receipt.authority_basis,
+    'OPERATOR_DECLARATION_ACCEPTED_AS_FACT',
+  )
 })
 
 test('event-chain tampering blocks selection before any request', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
+  const value = await attestedFixture(t)
   await writeFile(join(value.out, 'events.jsonl'), '')
   await assert.rejects(
     nextHttpReconAction({
       bundle: value.out,
-      ...trust(value),
-      now: clock.now,
+      now: value.clock.now,
     }),
-    /event root|signed plan commitment/,
+    /event root|sealed plan commitment/,
   )
 })
 
-test('out-of-band stop is idempotent and prevents proof or probe dispatch', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
+test('out-of-band stop is idempotent and prevents target dispatch', async (t) => {
+  const value = await attestedFixture(t)
   const first = await requestHttpReconStop({
     bundle: value.out,
     operatorId: 'operator-001',
     reason: 'asset owner requested immediate stop',
-    now: clock.now,
+    now: value.clock.now,
   })
   const second = await requestHttpReconStop({
     bundle: value.out,
     operatorId: 'operator-002',
     reason: 'confirm the existing emergency stop',
-    now: clock.now,
+    now: value.clock.now,
   })
   assert.deepEqual(second, first)
-  const transport = transports(value)
+  const transport = attestedTransports()
   const stopped = await runHttpReconAction({
     bundle: value.out,
-    actionId: value.plan.actions[0].action_id,
+    actionId: value.planned.run.actions[0].action_id,
     operatorId: 'operator-001',
     rationale: 'would have been authorized without stop',
-    ...trust(value),
-    now: clock.now,
-    fetchProofImpl: transport.fetchProofImpl,
+    authorizationConfirmed: true,
+    now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
   assert.equal(stopped.run.state, 'STOPPED')
@@ -1774,10 +1456,8 @@ test('out-of-band stop is idempotent and prevents proof or probe dispatch', asyn
 })
 
 test('out-of-band stop aborts an in-flight request and preserves uncertain delivery', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  const transport = transports(value)
+  const value = await attestedFixture(t)
+  const transport = attestedTransports()
   let confirmSent
   const sent = new Promise((resolvePromise) => { confirmSent = resolvePromise })
   transport.probeImpl = async (options) => {
@@ -1785,6 +1465,7 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
     await options.beforeSend(preDispatchMetadata({
       url: options.url,
       method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
     }))
     confirmSent()
     return new Promise((resolvePromise, rejectPromise) => {
@@ -1798,14 +1479,13 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
   }
   const running = runHttpReconAction({
     bundle: value.out,
-    actionId: value.plan.actions[0].action_id,
+    actionId: value.planned.run.actions[0].action_id,
     operatorId: 'operator-001',
     rationale: 'approved bounded response metadata observation',
-    ...trust(value),
-    now: clock.now,
-    delayImpl: async (milliseconds) => clock.advance(milliseconds),
+    authorizationConfirmed: true,
+    now: value.clock.now,
+    delayImpl: async (milliseconds) => value.clock.advance(milliseconds),
     stopPollIntervalMs: 5,
-    fetchProofImpl: transport.fetchProofImpl,
     probeImpl: transport.probeImpl,
   })
   await sent
@@ -1818,7 +1498,7 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
     bundle: value.out,
     operatorId: 'operator-002',
     reason: 'asset owner requested stop during request',
-    now: clock.now,
+    now: value.clock.now,
   })
   const result = await running
   assert.equal(result.run.state, 'OUTCOME_UNCERTAIN')
@@ -1827,15 +1507,14 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
 })
 
 test('delivery after pre-dispatch without a response is terminal and never replayed', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
-  const transport = transports(value)
+  const value = await attestedFixture(t)
+  const transport = attestedTransports()
   transport.probeImpl = async (options) => {
     transport.counters.probe += 1
     await options.beforeSend(preDispatchMetadata({
       url: options.url,
       method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
     }))
     const error = new Error('synthetic connection loss after send')
     error.code = 'HTTP_RECON_REQUEST_FAILED'
@@ -1845,13 +1524,12 @@ test('delivery after pre-dispatch without a response is terminal and never repla
   await assert.rejects(
     runHttpReconAction({
       bundle: value.out,
-      actionId: value.plan.actions[0].action_id,
+      actionId: value.planned.run.actions[0].action_id,
       operatorId: 'operator-001',
       rationale: 'approved bounded response metadata observation',
-      ...trust(value),
-      now: clock.now,
-      delayImpl: async (milliseconds) => clock.advance(milliseconds),
-      fetchProofImpl: transport.fetchProofImpl,
+      authorizationConfirmed: true,
+      now: value.clock.now,
+      delayImpl: async (milliseconds) => value.clock.advance(milliseconds),
       probeImpl: transport.probeImpl,
     }),
     /connection loss after send/,
@@ -1872,28 +1550,25 @@ test('delivery after pre-dispatch without a response is terminal and never repla
   )
   assert.equal(
     preDispatch.details.transport_identity.tls_verification,
-    'PKIX_HOSTNAME_AND_SPKI_PIN',
+    'PKIX_HOSTNAME',
   )
   await assert.rejects(
     nextHttpReconAction({
       bundle: value.out,
-      ...trust(value),
-      now: clock.now,
+      now: value.clock.now,
     }),
     /terminal|uncertain/i,
   )
 })
 
 test('stop marker can still be written when run.json is damaged', async (t) => {
-  const value = await fixture(t)
-  const clock = mutableClock()
-  await planFixture(value, clock)
+  const value = await attestedFixture(t)
   await writeFile(join(value.out, 'run.json'), '{damaged')
   const stopped = await requestHttpReconStop({
     bundle: value.out,
     operatorId: 'operator-001',
     reason: 'bundle integrity failed; stop all activity',
-    now: clock.now,
+    now: value.clock.now,
   })
   assert.equal(stopped.engagement_id, null)
   const marker = JSON.parse(await readFile(stopped.path, 'utf8'))

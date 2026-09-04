@@ -17,7 +17,7 @@ activates_on:
       state: not-consumed
 owns: []
 defers: {}
-frameworks: [cwe-top-25]
+frameworks: [cwe-top-25-2025]
 severity_floor: info
 ---
 
@@ -62,7 +62,11 @@ This lens writes a Stage 1 candidate record per `lenses/_schema.md` with:
 - `topic:` **the owning domain lens's slug**, taken from `lenses/_topics.md` and chosen by the *consequence*, not by the shape
 - `raised_by: ai-generated-code`, which `_schema.md` defines for exactly this case — "one lens raised it against another lens's topic" — and which is what keeps a cross-cutting lens from silently acquiring topics it does not own
 
-**One contract note, stated here because this is where it is used.** `_schema.md` invariant 2 reads "`topic` is owned by `lens` per `_topics.md`". Taken literally, no record this lens writes can satisfy it, because this lens owns nothing. The intent is the sentence beside it — a lens may raise against another lens's topic, recording `raised_by` — and the invariant needs the exemption written down: *`topic` is owned by `lens`, unless `lens` owns no slugs, in which case `raised_by` names it and `topic` is owned by some lens.* Until that amendment lands, a validator implementing invariant 2 as written will reject every candidate from this lens. Do not work around it by inventing a slug or by writing another lens's name into `lens`: the first breaks R1 and R2, the second falsifies the record's authorship.
+**Contract note.** `_schema.md` invariant 2 now implements the zero-owner
+exemption used here: `lens` and `raised_by` both remain
+`ai-generated-code`, while `topic` is the consequence owner's registered slug.
+Do not invent a slug or put the topic owner's name into `lens`; the first breaks
+the registry boundary and the second falsifies authorship.
 
 | Shape found | Route to `topic` | Owner |
 |---|---|---|
@@ -132,7 +136,10 @@ Name these where they bear on a finding rather than letting silence imply otherw
 
 Every item routes to a slug this lens does not own. Read `### Routing` before filing anything.
 
-CWE identifiers are cited inline where one applies. The `frameworks: [cwe-top-25]` entry claims that lineage for the subset that belongs to it — CWE-862 and CWE-863 among them — and the remaining identifiers are cited as plain CWEs with no Top-25 claim.
+CWE identifiers are cited inline where one applies. The
+`frameworks: [cwe-top-25-2025]` entry claims that edition-specific lineage for
+the subset that belongs to it — CWE-862 and CWE-863 among them — and the
+remaining identifiers are cited as plain CWEs with no Top-25 claim.
 
 ### 0. Highest-yield sweeps
 

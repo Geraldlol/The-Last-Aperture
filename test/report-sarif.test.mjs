@@ -92,13 +92,14 @@ test('line drift is an updated finding, never a synthetic fixed plus new pair', 
     new: 0,
     updated: 1,
     unchanged: 0,
+    'claimed-fixed': 0,
     fixed: 0,
     'not-observed': 0,
   })
   assert.match(comparison.resolution_authority, /provider-declared/)
 })
 
-test('an absent finding is fixed only when current coverage supports that conclusion', () => {
+test('an absent finding is only claimed fixed when current coverage supports that conclusion', () => {
   const baseline = run()
   const incomplete = run({
     run_id: 'run:test:0002',
@@ -117,12 +118,20 @@ test('an absent finding is fixed only when current coverage supports that conclu
     new: 0,
     updated: 0,
     unchanged: 0,
+    'claimed-fixed': 0,
     fixed: 0,
     'not-observed': 1,
   })
 
   const completed = run({ run_id: 'run:test:0003', findings: [] })
-  assert.equal(compareRuns(baseline, completed).counts.fixed, 1)
+  const comparison = compareRuns(baseline, completed)
+  assert.equal(comparison.counts['claimed-fixed'], 1)
+  assert.equal(comparison.counts.fixed, 0)
+  assert.equal(comparison.results[0].state, 'claimed-fixed')
+  assert.equal(
+    comparison.results[0].semantic_resolution_authority,
+    'UNAUTHENTICATED_COVERAGE_ABSENCE',
+  )
 })
 
 test('lifecycle authority never invents a provider declaration for absent or failed work', () => {
@@ -431,7 +440,7 @@ test('a resolved lens/file gap no longer vetoes lifecycle resolution', () => {
   })
 
   assert.equal(coverageSupportsResolution(current, finding()), true)
-  assert.equal(compareRuns(run(), current).counts.fixed, 1)
+  assert.equal(compareRuns(run(), current).counts['claimed-fixed'], 1)
 })
 
 test('unrelated or differently governed runs cannot claim a finding was fixed', () => {
@@ -564,7 +573,7 @@ test('database resolution requires the same assessed store, topic, adapter, and 
     }],
   })
   assert.equal(coverageSupportsResolution(assessed, database), true)
-  assert.equal(compareRuns(baseline, assessed).counts.fixed, 1)
+  assert.equal(compareRuns(baseline, assessed).counts['claimed-fixed'], 1)
 
   const storeGap = run({
     ...assessed,
@@ -674,7 +683,7 @@ test('report never presents an unfinished zero-finding run as clean', () => {
   assert.match(report, /src\/orders\.js/)
 })
 
-test('Markdown report preserves findings, removals, gaps and provenance', () => {
+test('Markdown report preserves findings, claimed removals, gaps and provenance', () => {
   const dropped = finding({
     candidate_id: 'cand:web:002',
     title: 'Dropped candidate',
@@ -693,7 +702,8 @@ test('Markdown report preserves findings, removals, gaps and provenance', () => 
     },
   }))
   assert.match(report, /Tenant object is loaded/)
-  assert.match(report, /Withdrawn candidates/)
+  assert.match(report, /CLAIMED_DROPPED/)
+  assert.doesNotMatch(report, /Withdrawn candidates/)
   assert.match(report, /The cited route does not exist/)
   assert.match(report, /binary input excluded/)
   assert.match(report, /Plan digest/)
@@ -1073,13 +1083,69 @@ test('Markdown report separates claimed severity from proof-backed status', () =
   )
 
   assert.match(report, /Claimed severity: `High`/)
-  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
+  assert.match(report, /Report priority \(authenticated gates only\): `High`/)
+  assert.match(report, /Provider-claimed effective severity: `Medium`/)
   assert.match(report, /Proof tier: `T0`/)
   assert.match(report, /Proof status: UNPROVEN.*Static mode/)
   assert.match(summary, /cand:web:001/)
   assert.match(summary, /cand:web:disproved/)
-  assert.doesNotMatch(summary, /cand:web:confirmed/)
-  assert.match(report, /DISPROVED.*falsified.*tenant-scoped lookup/)
+  assert.match(summary, /cand:web:confirmed/)
+  assert.match(report, /CLAIMED DISPROVED.*falsified.*tenant-scoped lookup/)
+})
+
+test('reports vulnerability confirmation separately from unattempted remediation', () => {
+  const confirmed = finding({
+    candidate_id: 'cand:web:confirmed-without-patch',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+    existence_check: {
+      status: 'located',
+      method: 'planned snapshot lookup',
+    },
+    pre_result: {
+      assertion: 'expected 403, received 200 containing CANARY-A',
+      path_reached: 'src/orders.js:42',
+      control: 'the owner request returned only the owner record',
+      control_status: 'passed',
+    },
+    remediation: {
+      status: 'NOT_ATTEMPTED',
+      detail: 'no candidate patch was supplied',
+    },
+  })
+  const current = run({ findings: [confirmed] })
+  const report = renderMarkdownReport(current)
+  const sarif = renderSarif(current).runs[0].results[0]
+
+  assert.match(report, /Proof status: CLAIMED CONFIRMED/)
+  assert.match(report, /Remediation: `NOT_ATTEMPTED`.*no candidate patch was supplied/)
+  assert.doesNotMatch(report, /CONFIRMED; proof result/)
+  assert.equal(sarif.properties.remediation_status, 'NOT_ATTEMPTED')
+  assert.equal(sarif.properties.remediation_detail, 'no candidate patch was supplied')
+})
+
+test('reports a legacy passing post-result as claimed remediation verification', () => {
+  const legacy = finding({
+    candidate_id: 'cand:web:legacy-confirmed',
+    verification_status: 'CONFIRMED',
+    proof_tier: 'T1',
+    existence_check: {
+      status: 'located',
+      method: 'planned snapshot lookup',
+    },
+    post_result: {
+      status: 'passed',
+      regressions: 'none observed',
+    },
+  })
+  const current = run({ findings: [legacy] })
+  const report = renderMarkdownReport(current)
+  const sarif = renderSarif(current).runs[0].results[0]
+
+  assert.match(report, /Proof status: CLAIMED CONFIRMED/)
+  assert.match(report, /Remediation: `CLAIMED_FIX_VERIFIED`.*legacy post-result passed.*none observed/)
+  assert.equal(sarif.properties.remediation_status, 'CLAIMED_FIX_VERIFIED')
+  assert.match(sarif.properties.remediation_detail, /legacy post-result passed/)
 })
 
 test('Markdown report neutralizes provider-controlled markup and line breaks', () => {
@@ -1135,7 +1201,7 @@ test('Markdown report neutralizes provider-controlled markup and line breaks', (
   assert.equal((report.match(/^## Provenance$/gm) ?? []).length, 1)
 })
 
-test('disproved and not-reproduced candidates are preserved but not reported as findings', () => {
+test('unauthenticated negative proof claims remain open findings', () => {
   const disproved = finding({
     verification_status: 'DISPROVED',
     reason: 'The cited route uses a tenant-scoped lookup in the resolved implementation.',
@@ -1149,33 +1215,23 @@ test('disproved and not-reproduced candidates are preserved but not reported as 
   const report = renderMarkdownReport(current)
   const sarif = renderSarif(current)
 
-  assert.match(report, /\| 0 \| 0 \| 0 \| 0 \| 0 \|/)
-  assert.doesNotMatch(report, /### Medium .*Tenant object/)
-  assert.match(report, /Withdrawn candidates/)
-  assert.match(report, /DISPROVED/)
-  assert.match(report, /NOT_REPRODUCED/)
+  assert.match(report, /\| 0 \| 2 \| 0 \| 0 \| 0 \|/)
+  assert.match(report, /claimed disproved/)
+  assert.match(report, /claimed not reproduced/)
+  assert.doesNotMatch(report, /Withdrawn candidates/)
+  assert.match(report, /CLAIMED DISPROVED/)
+  assert.match(report, /CLAIMED NOT REPRODUCED/)
   assert.equal(sarif.runs[0].results.length, 2)
-  assert.deepEqual(
-    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].kind),
-    ['external', 'external'],
-  )
-  assert.deepEqual(
-    sarif.runs[0].results.map(({ suppressions }) => suppressions[0].status),
-    ['accepted', 'accepted'],
-  )
-  assert.match(
-    sarif.runs[0].results[0].suppressions[0].justification,
-    /DISPROVED|NOT REPRODUCED/,
-  )
+  assert.ok(sarif.runs[0].results.every((entry) => !Object.hasOwn(entry, 'suppressions')))
   const properties = sarif.runs[0].invocations[0].properties
-  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
-  assert.equal(properties.withdrawn_candidates, 2)
-  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(properties.findings_state, 'FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 0)
+  assert.equal(properties.withdrawn_high_impact_candidates, 0)
   assert.equal(properties.unverified_high_impact_claims, 2)
   assert.equal(compareRuns(run(), current).counts.unchanged, 0)
 })
 
-test('SARIF records a dropped Critical instead of emitting a clean empty result set', () => {
+test('SARIF keeps unauthenticated dropped and merged Critical claims open', () => {
   const dropped = finding({
     candidate_id: 'cand:web:dropped',
     claimed_impact_severity: 'Critical',
@@ -1191,9 +1247,9 @@ test('SARIF records a dropped Critical instead of emitting a clean empty result 
   const sarif = renderSarif(run({ findings: [dropped, merged] }))
   const properties = sarif.runs[0].invocations[0].properties
 
-  assert.equal(properties.findings_state, 'NO_FINDINGS_REPORTED')
-  assert.equal(properties.withdrawn_candidates, 2)
-  assert.equal(properties.withdrawn_high_impact_candidates, 2)
+  assert.equal(properties.findings_state, 'FINDINGS_REPORTED')
+  assert.equal(properties.withdrawn_candidates, 0)
+  assert.equal(properties.withdrawn_high_impact_candidates, 0)
   assert.equal(sarif.runs[0].results.length, 2)
   assert.deepEqual(
     sarif.runs[0].results.map(({ properties: entry }) => entry.candidate_id),
@@ -1201,19 +1257,16 @@ test('SARIF records a dropped Critical instead of emitting a clean empty result 
   )
   assert.deepEqual(
     sarif.runs[0].results.map(({ properties: entry }) => entry.triage_disposition),
-    ['dropped', 'merged'],
+    ['CLAIMED_DROPPED', 'CLAIMED_MERGED'],
   )
   assert.equal(
     sarif.runs[0].results[1].properties.merged_into_candidate_id,
     'cand:web:dropped',
   )
-  assert.match(
-    sarif.runs[0].results[0].suppressions[0].justification,
-    /DROPPED before proof: The cited route is unreachable/,
-  )
+  assert.ok(sarif.runs[0].results.every((entry) => !Object.hasOwn(entry, 'suppressions')))
 })
 
-test('SARIF suppresses only withdrawn candidates and leaves survivors as open results', () => {
+test('SARIF does not suppress an unauthenticated provider drop', () => {
   const survivor = finding()
   const dropped = finding({
     candidate_id: 'cand:web:dropped',
@@ -1226,13 +1279,13 @@ test('SARIF suppresses only withdrawn candidates and leaves survivors as open re
   assert.equal(sarif.runs[0].results.length, 2)
   assert.equal(Object.hasOwn(first, 'suppressions'), false)
   assert.equal(first.properties.candidate_id, 'cand:web:001')
-  assert.equal(second.suppressions.length, 1)
+  assert.equal(Object.hasOwn(second, 'suppressions'), false)
   assert.equal(second.properties.candidate_id, 'cand:web:dropped')
   assert.equal(
     sarif.runs[0].invocations[0].properties.findings_state,
     'FINDINGS_REPORTED',
   )
-  assert.equal(sarif.runs[0].invocations[0].properties.withdrawn_candidates, 1)
+  assert.equal(sarif.runs[0].invocations[0].properties.withdrawn_candidates, 0)
 })
 
 test('SARIF carries stable rule IDs, locations, fingerprints and run honesty', () => {
@@ -1320,7 +1373,7 @@ test('SARIF level carries claimed impact, not confidence-gated priority', () => 
   )
 })
 
-test('SARIF rank carries the confidence-gated priority', () => {
+test('SARIF rank ignores an unauthenticated provider confidence upgrade', () => {
   const result = renderSarif(run()).runs[0].results[0]
   assert.equal(typeof result.rank, 'number')
   assert.ok(result.rank >= 0 && result.rank <= 100, 'rank is a SARIF 0-100 score')
@@ -1332,9 +1385,10 @@ test('SARIF rank carries the confidence-gated priority', () => {
       proof_tier: 'T1',
     })],
   })).runs[0].results[0]
-  assert.ok(
-    confirmed.rank > result.rank,
-    'a demonstrated finding outranks the same claim left unproven',
+  assert.equal(
+    confirmed.rank,
+    result.rank,
+    'a provider-claimed confirmation cannot raise report priority without authenticated authority',
   )
 })
 
@@ -1401,7 +1455,7 @@ test('a finding heading leads with claimed impact, qualified by confidence', () 
   assert.doesNotMatch(report, /^### Medium — Unproven critical claim/m)
 })
 
-test('a confirmed finding says so in its heading', () => {
+test('an unauthenticated confirmed finding is qualified in its heading', () => {
   const report = renderMarkdownReport(run({
     findings: [finding({
       title: 'Confirmed claim',
@@ -1411,7 +1465,7 @@ test('a confirmed finding says so in its heading', () => {
       proof_tier: 'T1',
     })],
   }))
-  assert.match(report, /^### High \(confirmed\) — Confirmed claim/m)
+  assert.match(report, /^### High \(claimed confirmed\) — Confirmed claim/m)
 })
 
 test('the severity summary counts claimed impact, not gated priority', () => {
@@ -1430,7 +1484,8 @@ test('the severity summary counts claimed impact, not gated priority', () => {
 test('the gated value is not labelled a severity', () => {
   const report = renderMarkdownReport(run())
   assert.doesNotMatch(report, /Effective severity:/)
-  assert.match(report, /Priority \(confidence-gated\): `Medium`/)
+  assert.match(report, /Report priority \(authenticated gates only\): `High`/)
+  assert.match(report, /Provider-claimed effective severity: `Medium`/)
 })
 
 test('a forged verification status cannot inject markup into a heading', () => {

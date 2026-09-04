@@ -1,5 +1,13 @@
 # Evidence-Class Foundation Implementation Plan (Plan 1 of 5)
 
+> **Historical implementation plan.** Payload digests in the legacy bundle do
+> not authenticate profile semantics, acquisition-plan identity, or a trusted
+> signer. Public audit evidence-bundle import is disabled pending a canonical
+> controller-signed manifest and atomic single-read verification.
+> ADR 0021 supersedes the higher-assurance signed-authority route described
+> below. Only an authenticated operator target/scope statement creates
+> authority; controller signatures retain technical evidence integrity.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the pure-data evidence-class registry, the validated `evidence-bundle` envelope with a reader/writer that can create, seal, verify and read a bundle, the `_evidence-adapters/contract.md` acquisition contract, and one shared adapter conformance suite — with no adapter, no network, and no change to the audit control plane.

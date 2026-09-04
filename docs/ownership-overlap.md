@@ -5,49 +5,56 @@
 | Topic slug | Owning lens | Lenses deferring to it |
 |---|---|---|
 | `action-and-workflow-ref-pinning` | cicd-and-supply-chain | cloud-and-iac, threat-modeling |
+| `adversarial-input-and-evasion-resilience` | ai-model-and-mlops-security | llm-and-ai |
 | `agentforce-action-authorization` | salesforce-platform | llm-and-ai |
 | `apex-crud-fls-enforcement` | salesforce-platform | hipaa-and-phi, privacy-and-data-protection, threat-modeling, web-and-api |
 | `apex-entry-point-exposure` | salesforce-platform | web-and-api |
 | `apex-sharing-declaration` | salesforce-platform | cloud-and-iac, mobile-app-security, threat-modeling, web-and-api |
 | `api-inventory-and-version-deprecation` | web-and-api | — |
-| `application-log-and-url-content` | web-and-api | crypto-and-key-management, hipaa-and-phi, privacy-and-data-protection |
+| `application-log-and-url-content` | web-and-api | crypto-and-key-management, hipaa-and-phi, privacy-and-data-protection, security-observability-and-response |
 | `architecture-trust-design-gaps` | threat-modeling | cloud-and-iac, web-and-api |
-| `artifact-signing-and-provenance-emission` | cicd-and-supply-chain | cloud-and-iac, crypto-and-key-management, privacy-and-data-protection, salesforce-platform, threat-modeling |
+| `artifact-signing-and-provenance-emission` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, crypto-and-key-management, privacy-and-data-protection, salesforce-platform, threat-modeling |
 | `asymmetric-scheme-pitfalls` | crypto-and-key-management | cicd-and-supply-chain, mobile-app-security |
 | `attack-tree-construction` | threat-modeling | llm-and-ai, web-and-api |
 | `attacker-profile-model` | threat-modeling | cicd-and-supply-chain, mobile-app-security |
-| `authentication-and-credential-flows` | web-and-api | crypto-and-key-management, threat-modeling |
+| `audit-log-integrity-and-access` | security-observability-and-response | web-and-api |
+| `authentication-and-credential-flows` | web-and-api | ai-model-and-mlops-security, crypto-and-key-management, threat-modeling |
 | `authz-function-level` | web-and-api | database-and-data-stores, mobile-app-security, threat-modeling |
 | `authz-object-level` | web-and-api | cicd-and-supply-chain, cloud-and-iac, crypto-and-key-management, database-and-data-stores, hipaa-and-phi, mobile-app-security, privacy-and-data-protection, threat-modeling |
 | `authz-property-level` | web-and-api | database-and-data-stores, hipaa-and-phi, mobile-app-security, privacy-and-data-protection |
 | `automated-decision-making-rights` | privacy-and-data-protection | llm-and-ai |
 | `baa-coverage-determination` | hipaa-and-phi | cicd-and-supply-chain, llm-and-ai, privacy-and-data-protection |
 | `baas-security-rules` | cloud-and-iac | mobile-app-security |
-| `backup-and-replica-configuration` | cloud-and-iac | database-and-data-stores, hipaa-and-phi, privacy-and-data-protection |
+| `backup-and-replica-configuration` | cloud-and-iac | database-and-data-stores, failure-semantics-and-resilience, hipaa-and-phi, privacy-and-data-protection |
 | `breach-notification-exposure` | hipaa-and-phi | crypto-and-key-management |
+| `browser-origin-and-runtime-trust` | web-and-api | — |
 | `cache-poisoning-and-deception` | web-and-api | — |
 | `certificate-pinning-implementation` | mobile-app-security | crypto-and-key-management, threat-modeling, web-and-api |
-| `chat-exfiltration-channels` | llm-and-ai | — |
+| `chat-exfiltration-channels` | llm-and-ai | ai-model-and-mlops-security |
 | `childrens-data-and-age-assurance` | privacy-and-data-protection | mobile-app-security |
 | `ci-oidc-workflow-configuration` | cicd-and-supply-chain | cloud-and-iac |
 | `ci-secret-and-token-handling` | cicd-and-supply-chain | cloud-and-iac, crypto-and-key-management, hipaa-and-phi, mobile-app-security, salesforce-platform |
-| `client-trusted-business-rules` | web-and-api | — |
+| `cleanup-and-resource-release` | failure-semantics-and-resilience | native-and-memory-safety, security-observability-and-response, web-and-api |
+| `client-trusted-business-rules` | web-and-api | failure-semantics-and-resilience |
 | `cloud-oidc-trust-policy` | cloud-and-iac | cicd-and-supply-chain |
 | `collection-side-minimization` | privacy-and-data-protection | hipaa-and-phi |
 | `connected-app-configuration` | salesforce-platform | crypto-and-key-management, threat-modeling |
 | `consent-gating-of-trackers` | privacy-and-data-protection | hipaa-and-phi, web-and-api |
 | `consumer-health-data-outside-hipaa` | privacy-and-data-protection | hipaa-and-phi |
-| `control-plane-audit-logging` | cloud-and-iac | database-and-data-stores, hipaa-and-phi, privacy-and-data-protection, web-and-api |
+| `control-failure-observability` | security-observability-and-response | failure-semantics-and-resilience, web-and-api |
+| `control-plane-audit-logging` | cloud-and-iac | database-and-data-stores, failure-semantics-and-resilience, hipaa-and-phi, privacy-and-data-protection, security-observability-and-response, web-and-api |
 | `cookie-lawfulness-and-lifetime` | privacy-and-data-protection | web-and-api |
 | `cors-policy` | web-and-api | salesforce-platform, threat-modeling |
 | `cross-border-transfer-route` | privacy-and-data-protection | cloud-and-iac, llm-and-ai |
-| `cross-boundary-attribution-logging` | threat-modeling | web-and-api |
+| `cross-boundary-attribution-logging` | threat-modeling | security-observability-and-response, web-and-api |
+| `crypto-agility-and-migration` | crypto-and-key-management | — |
+| `cryptographic-inventory-and-discovery` | crypto-and-key-management | — |
 | `csprng-and-token-entropy` | crypto-and-key-management | threat-modeling, web-and-api |
 | `csrf` | web-and-api | crypto-and-key-management, privacy-and-data-protection, threat-modeling |
 | `data-region-inventory` | cloud-and-iac | privacy-and-data-protection |
 | `database-audit-identity-and-coverage` | database-and-data-stores | — |
 | `database-backup-restore-and-clone-security` | database-and-data-stores | — |
-| `database-integrity-transactions-and-concurrency` | database-and-data-stores | — |
+| `database-integrity-transactions-and-concurrency` | database-and-data-stores | failure-semantics-and-resilience |
 | `database-lifecycle-and-copy-propagation` | database-and-data-stores | — |
 | `database-migration-security-drift` | database-and-data-stores | — |
 | `database-native-authorization-and-tenant-isolation` | database-and-data-stores | — |
@@ -57,123 +64,149 @@
 | `database-resource-governance-and-availability` | database-and-data-stores | — |
 | `debug-and-admin-endpoint-exposure` | web-and-api | mobile-app-security, threat-modeling |
 | `deep-link-and-ipc-surface` | mobile-app-security | threat-modeling, web-and-api |
-| `denial-of-wallet-controls` | llm-and-ai | — |
+| `denial-of-wallet-controls` | llm-and-ai | ai-model-and-mlops-security, failure-semantics-and-resilience |
 | `dependency-confusion-and-registry-config` | cicd-and-supply-chain | web-and-api |
 | `dependency-eol-and-abandonment` | cicd-and-supply-chain | database-and-data-stores, web-and-api |
-| `dependency-pinning-and-lockfiles` | cicd-and-supply-chain | cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
-| `deploy-time-signature-enforcement` | cloud-and-iac | cicd-and-supply-chain |
-| `derived-store-data-inheritance` | llm-and-ai | database-and-data-stores, hipaa-and-phi, privacy-and-data-protection |
-| `deserialization-and-xxe` | web-and-api | salesforce-platform |
-| `dockerfile-and-image-content` | cloud-and-iac | cicd-and-supply-chain |
+| `dependency-pinning-and-lockfiles` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, native-and-memory-safety, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
+| `deploy-time-signature-enforcement` | cloud-and-iac | ai-model-and-mlops-security, cicd-and-supply-chain |
+| `derived-store-data-inheritance` | llm-and-ai | ai-model-and-mlops-security, database-and-data-stores, hipaa-and-phi, privacy-and-data-protection |
+| `deserialization-and-xxe` | web-and-api | native-and-memory-safety, salesforce-platform |
+| `detection-alerting-and-escalation` | security-observability-and-response | web-and-api |
+| `dockerfile-and-image-content` | cloud-and-iac | cicd-and-supply-chain, native-and-memory-safety |
 | `dsr-fulfillment-mechanics` | privacy-and-data-protection | llm-and-ai, salesforce-platform, web-and-api |
-| `encryption-at-rest-configuration` | cloud-and-iac | cicd-and-supply-chain, crypto-and-key-management, database-and-data-stores, hipaa-and-phi, llm-and-ai, privacy-and-data-protection |
-| `error-handling-and-verbose-responses` | web-and-api | hipaa-and-phi |
+| `encryption-at-rest-configuration` | cloud-and-iac | ai-model-and-mlops-security, cicd-and-supply-chain, crypto-and-key-management, database-and-data-stores, hipaa-and-phi, llm-and-ai, privacy-and-data-protection |
+| `error-handling-and-verbose-responses` | web-and-api | failure-semantics-and-resilience, hipaa-and-phi |
 | `exfiltration-path-enumeration` | threat-modeling | hipaa-and-phi, privacy-and-data-protection, web-and-api |
 | `file-upload-handling` | web-and-api | — |
 | `fingerprinting-and-tracking-techniques` | privacy-and-data-protection | web-and-api |
 | `flow-run-context-and-authz` | salesforce-platform | threat-modeling |
 | `graphql-api-surface` | web-and-api | hipaa-and-phi, threat-modeling |
 | `guest-user-and-site-exposure` | salesforce-platform | web-and-api |
-| `hardcoded-credentials-and-key-material` | crypto-and-key-management | cicd-and-supply-chain, database-and-data-stores, web-and-api |
+| `hardcoded-credentials-and-key-material` | crypto-and-key-management | ai-model-and-mlops-security, cicd-and-supply-chain, database-and-data-stores, security-observability-and-response, web-and-api |
 | `helm-and-manifest-source-pinning` | cloud-and-iac | — |
 | `hipaa-policy-documentation-retention` | hipaa-and-phi | cloud-and-iac, salesforce-platform, threat-modeling |
 | `hmac-and-constant-time-comparison` | crypto-and-key-management | cicd-and-supply-chain, threat-modeling, web-and-api |
-| `iam-policy-and-privilege-scope` | cloud-and-iac | cicd-and-supply-chain, database-and-data-stores, llm-and-ai, mobile-app-security, salesforce-platform, threat-modeling, web-and-api |
-| `image-cve-exposure` | cloud-and-iac | cicd-and-supply-chain |
+| `iam-policy-and-privilege-scope` | cloud-and-iac | ai-model-and-mlops-security, cicd-and-supply-chain, database-and-data-stores, llm-and-ai, mobile-app-security, salesforce-platform, threat-modeling, web-and-api |
+| `image-cve-exposure` | cloud-and-iac | cicd-and-supply-chain, native-and-memory-safety |
 | `imds-hardening` | cloud-and-iac | threat-modeling, web-and-api |
 | `in-app-consent-mechanisms` | mobile-app-security | privacy-and-data-protection |
 | `injection-command-and-template` | web-and-api | llm-and-ai, salesforce-platform |
 | `injection-sql-nosql-orm` | web-and-api | cicd-and-supply-chain, cloud-and-iac, database-and-data-stores, llm-and-ai, salesforce-platform, threat-modeling |
 | `install-and-lifecycle-scripts` | cicd-and-supply-chain | llm-and-ai |
 | `jwt-jws-and-jwks-verification` | crypto-and-key-management | cloud-and-iac, mobile-app-security, salesforce-platform, threat-modeling, web-and-api |
-| `key-separation-derivation-and-destruction` | crypto-and-key-management | database-and-data-stores, hipaa-and-phi, llm-and-ai, privacy-and-data-protection, threat-modeling |
-| `kms-key-lifecycle-and-policy` | cloud-and-iac | crypto-and-key-management, hipaa-and-phi, llm-and-ai, salesforce-platform |
+| `key-separation-derivation-and-destruction` | crypto-and-key-management | ai-model-and-mlops-security, database-and-data-stores, hipaa-and-phi, llm-and-ai, native-and-memory-safety, privacy-and-data-protection, threat-modeling |
+| `kms-key-lifecycle-and-policy` | cloud-and-iac | ai-model-and-mlops-security, crypto-and-key-management, hipaa-and-phi, llm-and-ai, salesforce-platform |
 | `kubernetes-rbac-and-admission` | cloud-and-iac | — |
-| `kubernetes-workload-hardening` | cloud-and-iac | cicd-and-supply-chain, threat-modeling |
+| `kubernetes-workload-hardening` | cloud-and-iac | cicd-and-supply-chain, native-and-memory-safety, threat-modeling |
 | `lawful-basis-and-consent-capture` | privacy-and-data-protection | llm-and-ai, mobile-app-security, salesforce-platform, web-and-api |
-| `legacy-hash-and-cipher-primitives` | crypto-and-key-management | mobile-app-security |
-| `llm-data-flow-inventory` | llm-and-ai | hipaa-and-phi, privacy-and-data-protection |
+| `legacy-hash-and-cipher-primitives` | crypto-and-key-management | mobile-app-security, native-and-memory-safety |
+| `llm-data-flow-inventory` | llm-and-ai | ai-model-and-mlops-security, hipaa-and-phi, privacy-and-data-protection |
 | `lwc-aura-vf-output-sinks` | salesforce-platform | web-and-api |
 | `lwc-client-state-exposure` | salesforce-platform | — |
 | `managed-secret-service-configuration` | cloud-and-iac | crypto-and-key-management, llm-and-ai, salesforce-platform, web-and-api |
 | `marketing-opt-out-mechanics` | privacy-and-data-protection | — |
 | `mass-assignment-and-parameter-binding` | web-and-api | salesforce-platform |
-| `mcp-server-trust` | llm-and-ai | cicd-and-supply-chain |
+| `mcp-server-trust` | llm-and-ai | ai-model-and-mlops-security, cicd-and-supply-chain |
+| `memory-bounds-and-integer-conversion` | native-and-memory-safety | — |
 | `minimum-necessary` | hipaa-and-phi | privacy-and-data-protection, web-and-api |
-| `mobile-build-and-runtime-flags` | mobile-app-security | — |
+| `mobile-build-and-runtime-flags` | mobile-app-security | native-and-memory-safety |
 | `mobile-cleartext-and-ats-config` | mobile-app-security | — |
 | `mobile-local-data-storage` | mobile-app-security | cloud-and-iac, hipaa-and-phi, privacy-and-data-protection, threat-modeling, web-and-api |
 | `mobile-ui-and-notification-leakage` | mobile-app-security | hipaa-and-phi |
-| `model-artifact-provenance` | llm-and-ai | cicd-and-supply-chain, crypto-and-key-management, database-and-data-stores, mobile-app-security |
-| `model-output-taint-propagation` | llm-and-ai | web-and-api |
-| `multi-agent-trust-propagation` | llm-and-ai | — |
+| `model-artifact-integrity-and-change-control` | ai-model-and-mlops-security | llm-and-ai |
+| `model-artifact-provenance` | llm-and-ai | ai-model-and-mlops-security, cicd-and-supply-chain, crypto-and-key-management, database-and-data-stores, mobile-app-security |
+| `model-extraction-and-weight-theft` | ai-model-and-mlops-security | llm-and-ai |
+| `model-inversion-and-membership-inference` | ai-model-and-mlops-security | llm-and-ai |
+| `model-output-taint-propagation` | llm-and-ai | ai-model-and-mlops-security, web-and-api |
+| `model-security-monitoring-drift-and-rollback` | ai-model-and-mlops-security | llm-and-ai |
+| `model-serving-resource-exhaustion` | ai-model-and-mlops-security | llm-and-ai |
+| `multi-agent-trust-propagation` | llm-and-ai | ai-model-and-mlops-security |
 | `named-and-external-credentials` | salesforce-platform | crypto-and-key-management |
 | `native-app-oauth-integration` | mobile-app-security | — |
-| `network-exposure-and-segmentation` | cloud-and-iac | database-and-data-stores, llm-and-ai, threat-modeling, web-and-api |
+| `native-compiler-and-platform-hardening` | native-and-memory-safety | — |
+| `native-concurrency-and-data-races` | native-and-memory-safety | — |
+| `native-fuzzing-and-sanitizer-coverage` | native-and-memory-safety | — |
+| `native-parser-and-state-machine-safety` | native-and-memory-safety | — |
+| `native-resource-lifetime-and-double-release` | native-and-memory-safety | — |
+| `network-exposure-and-segmentation` | cloud-and-iac | ai-model-and-mlops-security, database-and-data-stores, llm-and-ai, threat-modeling, web-and-api |
+| `null-default-and-unknown-state-handling` | failure-semantics-and-resilience | security-observability-and-response, web-and-api |
 | `oauth-oidc-flow-correctness` | crypto-and-key-management | mobile-app-security, salesforce-platform, web-and-api |
 | `object-storage-exposure` | cloud-and-iac | hipaa-and-phi, mobile-app-security, privacy-and-data-protection, threat-modeling, web-and-api |
 | `open-redirect` | web-and-api | crypto-and-key-management, mobile-app-security, salesforce-platform |
 | `ota-update-integrity` | mobile-app-security | cicd-and-supply-chain |
-| `package-dependency-cves` | cicd-and-supply-chain | cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, web-and-api |
+| `package-dependency-cves` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, native-and-memory-safety, web-and-api |
 | `package-name-squatting` | cicd-and-supply-chain | llm-and-ai |
+| `partial-operation-and-rollback` | failure-semantics-and-resilience | security-observability-and-response, web-and-api |
 | `password-hashing-and-kdf-parameters` | crypto-and-key-management | cloud-and-iac, hipaa-and-phi, mobile-app-security, web-and-api |
 | `path-traversal-and-file-access` | web-and-api | — |
 | `payment-page-script-authorization` | privacy-and-data-protection | cicd-and-supply-chain |
-| `pci-scope-and-cardholder-data` | privacy-and-data-protection | cloud-and-iac, crypto-and-key-management, hipaa-and-phi, salesforce-platform, threat-modeling, web-and-api |
+| `pci-scope-and-cardholder-data` | privacy-and-data-protection | cloud-and-iac, crypto-and-key-management, hipaa-and-phi, salesforce-platform, security-observability-and-response, threat-modeling, web-and-api |
 | `permission-set-and-profile-grants` | salesforce-platform | — |
-| `personal-data-severity-uplift` | privacy-and-data-protection | cloud-and-iac, hipaa-and-phi, salesforce-platform, threat-modeling, web-and-api |
-| `phi-access-audit-controls` | hipaa-and-phi | cloud-and-iac, database-and-data-stores, llm-and-ai, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
-| `phi-classification` | hipaa-and-phi | cloud-and-iac, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, web-and-api |
+| `personal-data-severity-uplift` | privacy-and-data-protection | ai-model-and-mlops-security, cloud-and-iac, hipaa-and-phi, salesforce-platform, security-observability-and-response, threat-modeling, web-and-api |
+| `phi-access-audit-controls` | hipaa-and-phi | cloud-and-iac, database-and-data-stores, llm-and-ai, privacy-and-data-protection, salesforce-platform, security-observability-and-response, threat-modeling, web-and-api |
+| `phi-classification` | hipaa-and-phi | cloud-and-iac, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, security-observability-and-response, web-and-api |
 | `phi-deidentification-standard` | hipaa-and-phi | — |
 | `phi-encryption-sufficiency` | hipaa-and-phi | crypto-and-key-management |
 | `phi-in-lower-environments` | hipaa-and-phi | cicd-and-supply-chain |
-| `phi-severity-uplift` | hipaa-and-phi | cloud-and-iac, database-and-data-stores, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
-| `pii-inventory-and-data-map` | privacy-and-data-protection | database-and-data-stores, threat-modeling |
-| `pipeline-scanner-gating` | cicd-and-supply-chain | cloud-and-iac, salesforce-platform, threat-modeling |
+| `phi-severity-uplift` | hipaa-and-phi | cloud-and-iac, database-and-data-stores, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, security-observability-and-response, threat-modeling, web-and-api |
+| `pii-inventory-and-data-map` | privacy-and-data-protection | ai-model-and-mlops-security, database-and-data-stores, security-observability-and-response, threat-modeling |
+| `pipeline-scanner-gating` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, failure-semantics-and-resilience, native-and-memory-safety, salesforce-platform, threat-modeling |
 | `pivot-feasibility` | threat-modeling | cloud-and-iac |
 | `platform-keystore-key-custody` | mobile-app-security | cloud-and-iac, crypto-and-key-management, hipaa-and-phi, salesforce-platform |
 | `privacy-by-default-settings` | privacy-and-data-protection | — |
 | `privacy-manifest-and-store-declarations` | mobile-app-security | privacy-and-data-protection |
 | `privileged-deploy-gate` | cicd-and-supply-chain | cloud-and-iac, hipaa-and-phi |
-| `processor-contracts-and-dpa` | privacy-and-data-protection | cicd-and-supply-chain, hipaa-and-phi, mobile-app-security |
-| `prompt-injection` | llm-and-ai | hipaa-and-phi, mobile-app-security, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
-| `pseudonymization-and-reidentification-risk` | privacy-and-data-protection | crypto-and-key-management, hipaa-and-phi |
-| `race-conditions-and-toctou` | web-and-api | database-and-data-stores |
-| `rag-retrieval-authorization` | llm-and-ai | cloud-and-iac, database-and-data-stores, salesforce-platform, threat-modeling, web-and-api |
-| `rate-limiting-and-request-quotas` | web-and-api | database-and-data-stores, llm-and-ai, mobile-app-security, threat-modeling |
+| `processor-contracts-and-dpa` | privacy-and-data-protection | cicd-and-supply-chain, hipaa-and-phi, mobile-app-security, security-observability-and-response |
+| `prompt-injection` | llm-and-ai | ai-model-and-mlops-security, hipaa-and-phi, mobile-app-security, privacy-and-data-protection, salesforce-platform, threat-modeling, web-and-api |
+| `pseudonymization-and-reidentification-risk` | privacy-and-data-protection | ai-model-and-mlops-security, crypto-and-key-management, hipaa-and-phi |
+| `race-conditions-and-toctou` | web-and-api | database-and-data-stores, failure-semantics-and-resilience, native-and-memory-safety |
+| `rag-retrieval-authorization` | llm-and-ai | ai-model-and-mlops-security, cloud-and-iac, database-and-data-stores, salesforce-platform, threat-modeling, web-and-api |
+| `rate-limiting-and-request-quotas` | web-and-api | ai-model-and-mlops-security, database-and-data-stores, failure-semantics-and-resilience, llm-and-ai, mobile-app-security, threat-modeling |
 | `request-smuggling-and-proxy-normalization` | web-and-api | — |
+| `resource-exhaustion-and-bounded-work` | failure-semantics-and-resilience | native-and-memory-safety, security-observability-and-response, web-and-api |
 | `resource-tls-enforcement-flags` | cloud-and-iac | crypto-and-key-management, database-and-data-stores |
-| `retention-lawfulness-and-deletion-completeness` | privacy-and-data-protection | cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, threat-modeling |
-| `runner-and-build-environment-trust` | cicd-and-supply-chain | cloud-and-iac |
+| `retention-lawfulness-and-deletion-completeness` | privacy-and-data-protection | ai-model-and-mlops-security, cloud-and-iac, crypto-and-key-management, database-and-data-stores, llm-and-ai, mobile-app-security, security-observability-and-response, threat-modeling |
+| `retry-backoff-and-redelivery-safety` | failure-semantics-and-resilience | security-observability-and-response, web-and-api |
+| `runner-and-build-environment-trust` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, failure-semantics-and-resilience |
+| `safe-degradation-and-last-resort-handling` | failure-semantics-and-resilience | security-observability-and-response, web-and-api |
 | `salesforce-platform-logging-surface` | salesforce-platform | hipaa-and-phi |
 | `salesforce-redirect-and-trusted-sites` | salesforce-platform | web-and-api |
 | `saml-assertion-validation` | crypto-and-key-management | salesforce-platform, web-and-api |
-| `sbom-generation-and-attachment` | cicd-and-supply-chain | cloud-and-iac, llm-and-ai, mobile-app-security, privacy-and-data-protection, web-and-api |
+| `sbom-generation-and-attachment` | cicd-and-supply-chain | ai-model-and-mlops-security, cloud-and-iac, llm-and-ai, mobile-app-security, privacy-and-data-protection, web-and-api |
 | `secrets-in-browser-bundle` | web-and-api | crypto-and-key-management, llm-and-ai |
 | `secrets-in-mobile-binary` | mobile-app-security | cicd-and-supply-chain, crypto-and-key-management, llm-and-ai, salesforce-platform |
+| `security-control-failure-mode` | failure-semantics-and-resilience | security-observability-and-response, web-and-api |
+| `security-event-coverage` | security-observability-and-response | web-and-api |
 | `security-headers-and-csp` | web-and-api | cloud-and-iac, llm-and-ai, salesforce-platform |
+| `security-telemetry-pipeline-resilience` | security-observability-and-response | web-and-api |
 | `serverless-function-exposure` | cloud-and-iac | web-and-api |
 | `session-and-cookie-management` | web-and-api | cloud-and-iac, crypto-and-key-management, privacy-and-data-protection, salesforce-platform, threat-modeling |
 | `sfdx-deploy-exposure` | salesforce-platform | cicd-and-supply-chain |
 | `shield-encryption-caveats` | salesforce-platform | crypto-and-key-management, hipaa-and-phi, privacy-and-data-protection |
 | `signature-malleability-and-curve-validation` | crypto-and-key-management | — |
 | `soql-sosl-injection` | salesforce-platform | web-and-api |
+| `specialized-interpreter-and-format-injection` | web-and-api | — |
 | `ssrf-application-path` | web-and-api | cloud-and-iac, hipaa-and-phi, llm-and-ai |
 | `stride-decomposition` | threat-modeling | crypto-and-key-management, hipaa-and-phi, llm-and-ai, salesforce-platform, web-and-api |
-| `symmetric-encryption-and-nonce-handling` | crypto-and-key-management | cloud-and-iac, hipaa-and-phi, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, web-and-api |
-| `system-prompt-as-control` | llm-and-ai | — |
+| `symmetric-encryption-and-nonce-handling` | crypto-and-key-management | cloud-and-iac, failure-semantics-and-resilience, hipaa-and-phi, llm-and-ai, mobile-app-security, native-and-memory-safety, privacy-and-data-protection, salesforce-platform, web-and-api |
+| `system-prompt-as-control` | llm-and-ai | ai-model-and-mlops-security |
 | `tenant-isolation-enforcement` | web-and-api | database-and-data-stores, threat-modeling |
 | `terraform-state-protection` | cloud-and-iac | cicd-and-supply-chain |
 | `third-party-api-response-trust` | web-and-api | — |
-| `third-party-destination-inventory` | privacy-and-data-protection | hipaa-and-phi, llm-and-ai, web-and-api |
+| `third-party-destination-inventory` | privacy-and-data-protection | hipaa-and-phi, llm-and-ai, security-observability-and-response, web-and-api |
 | `third-party-script-integrity-sri` | web-and-api | cicd-and-supply-chain, privacy-and-data-protection |
-| `threat-detectability-gap` | threat-modeling | — |
-| `tls-and-certificate-validation` | crypto-and-key-management | cloud-and-iac, database-and-data-stores, hipaa-and-phi, mobile-app-security, salesforce-platform, web-and-api |
-| `tool-call-authority-and-mediation` | llm-and-ai | salesforce-platform, threat-modeling, web-and-api |
+| `threat-detectability-gap` | threat-modeling | failure-semantics-and-resilience, security-observability-and-response |
+| `tls-and-certificate-validation` | crypto-and-key-management | cloud-and-iac, database-and-data-stores, hipaa-and-phi, mobile-app-security, native-and-memory-safety, salesforce-platform, web-and-api |
+| `tool-call-authority-and-mediation` | llm-and-ai | ai-model-and-mlops-security, salesforce-platform, threat-modeling, web-and-api |
+| `training-and-finetuning-poisoning` | ai-model-and-mlops-security | llm-and-ai |
+| `training-data-provenance-and-integrity` | ai-model-and-mlops-security | llm-and-ai |
 | `trust-boundary-inventory` | threat-modeling | cicd-and-supply-chain, crypto-and-key-management, hipaa-and-phi, llm-and-ai, mobile-app-security, privacy-and-data-protection, salesforce-platform, web-and-api |
 | `unauthenticated-build-trigger` | cicd-and-supply-chain | — |
-| `vendored-native-code-provenance` | mobile-app-security | cicd-and-supply-chain |
-| `webhook-handler-integrity` | web-and-api | cicd-and-supply-chain, crypto-and-key-management, privacy-and-data-protection |
+| `uninitialized-memory-and-information-exposure` | native-and-memory-safety | — |
+| `unsafe-ffi-and-language-boundaries` | native-and-memory-safety | — |
+| `use-after-free-and-ownership-lifetime` | native-and-memory-safety | — |
+| `vendored-native-code-provenance` | mobile-app-security | cicd-and-supply-chain, native-and-memory-safety |
+| `webhook-handler-integrity` | web-and-api | cicd-and-supply-chain, crypto-and-key-management, failure-semantics-and-resilience, privacy-and-data-protection |
 | `websocket-and-sse-authorization` | web-and-api | — |
 | `webview-bridge-trust` | mobile-app-security | web-and-api |
 | `workflow-trigger-and-script-injection` | cicd-and-supply-chain | cloud-and-iac |

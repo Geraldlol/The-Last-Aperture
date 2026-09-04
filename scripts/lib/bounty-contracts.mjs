@@ -19,10 +19,28 @@ function scopeValidator() {
   return compiledScopeValidator
 }
 
-export function assertValidBountyScope(value) {
+export function bountyScopeErrors(value) {
   const validate = scopeValidator()
-  if (validate(value)) return
-  const detail = (validate.errors ?? [])
+  return validate(value) ? [] : [...(validate.errors ?? [])]
+}
+
+// `required_user_agent` was added to the sealed program block after bundles were
+// already in the field. A bundle missing only that field was sealed before the
+// mandate; it is not malformed, and the commands that contact a target refuse on
+// their own. Distinguished here so inspection can stay open without weakening
+// the schema for everything else.
+export function sealedBeforeUserAgentMandate(value) {
+  const errors = bountyScopeErrors(value)
+  return errors.length > 0 && errors.every((error) =>
+    error.keyword === 'required'
+    && error.instancePath === '/program'
+    && error.params?.missingProperty === 'required_user_agent')
+}
+
+export function assertValidBountyScope(value) {
+  const errors = bountyScopeErrors(value)
+  if (errors.length === 0) return
+  const detail = errors
     .map((error) => `${error.instancePath || '/'} ${error.message}${
       error.params?.additionalProperty ? ` (${error.params.additionalProperty})` : ''
     }`)

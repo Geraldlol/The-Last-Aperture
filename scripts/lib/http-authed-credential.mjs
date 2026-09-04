@@ -100,6 +100,7 @@ export async function resolveHttpAuthedCredential({
   transientCredential,
   credentialInput,
   readStdin = readHttpAuthedCredentialFromStdin,
+  signal,
 }) {
   const reference = credential?.ref ?? ''
   const envMatch = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(reference)
@@ -148,7 +149,7 @@ export async function resolveHttpAuthedCredential({
           'credential stdin reader is unavailable',
         )
       }
-      ownedSource = await readStdin(credentialInput)
+      ownedSource = await readStdin(credentialInput, { signal })
       source = ownedSource
     }
   } else {
@@ -172,7 +173,10 @@ export async function resolveHttpAuthedCredential({
   }
 }
 
-export async function readHttpAuthedCredentialFromStdin(stream = process.stdin) {
+export async function readHttpAuthedCredentialFromStdin(
+  stream = process.stdin,
+  { signal } = {},
+) {
   if (stream?.isTTY === true) {
     throw credentialError(
       'HTTP_AUTHED_CREDENTIAL_STDIN_TTY_REFUSED',
@@ -185,12 +189,43 @@ export async function readHttpAuthedCredentialFromStdin(stream = process.stdin) 
       'credential stdin is unavailable',
     )
   }
+  if (
+    signal !== undefined
+    && (
+      typeof signal?.aborted !== 'boolean'
+      || typeof signal?.addEventListener !== 'function'
+      || typeof signal?.removeEventListener !== 'function'
+    )
+  ) {
+    throw credentialError(
+      'HTTP_AUTHED_CREDENTIAL_STDIN_INVALID',
+      'credential stdin abort signal is invalid',
+    )
+  }
+  if (signal?.aborted === true) {
+    throw credentialError(
+      'HTTP_AUTHED_CREDENTIAL_READ_ABORTED',
+      'credential stdin read was stopped by the campaign controller',
+    )
+  }
 
   const chunks = []
   let combined
+  let aborted = false
+  const abortRead = () => {
+    aborted = true
+    try {
+      stream.destroy?.()
+    } catch {
+      // The abort state remains authoritative even if a custom stream's
+      // teardown hook rejects synchronous destruction.
+    }
+  }
+  signal?.addEventListener('abort', abortRead, { once: true })
   try {
     let total = 0
     for await (const chunk of stream) {
+      if (aborted) break
       const copy = copyBytes(chunk)
       chunks.push(copy)
       total += copy.length
@@ -200,6 +235,12 @@ export async function readHttpAuthedCredentialFromStdin(stream = process.stdin) 
           'the credential exceeds the credential byte limit',
         )
       }
+    }
+    if (aborted) {
+      throw credentialError(
+        'HTTP_AUTHED_CREDENTIAL_READ_ABORTED',
+        'credential stdin read was stopped by the campaign controller',
+      )
     }
     combined = Buffer.concat(chunks, total)
     let end = combined.length
@@ -216,12 +257,19 @@ export async function readHttpAuthedCredentialFromStdin(stream = process.stdin) 
       throw error
     }
   } catch (cause) {
+    if (aborted) {
+      throw credentialError(
+        'HTTP_AUTHED_CREDENTIAL_READ_ABORTED',
+        'credential stdin read was stopped by the campaign controller',
+      )
+    }
     if (cause instanceof HttpAuthedCredentialError) throw cause
     throw credentialError(
       'HTTP_AUTHED_CREDENTIAL_STDIN_READ_FAILED',
       'the redirected credential could not be read',
     )
   } finally {
+    signal?.removeEventListener('abort', abortRead)
     combined?.fill(0)
     for (const chunk of chunks) chunk.fill(0)
   }
