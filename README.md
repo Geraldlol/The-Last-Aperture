@@ -233,10 +233,11 @@ executable. Run them only from this trusted local checkout with local
 maintainer-controlled paths and environment. Default `npm test` does not
 auto-discover the shell or real-Docker conformance files.
 
-CI never checks out or executes pull-request head code. Tests run only after a
-change reaches the protected `main` ref; stateful HTTPS and Docker conformance
-also require a manual workflow dispatch through the protected
-`release-conformance` environment. Review proposed changes before merge—the
+CI never checks out or executes pull-request head code. CI verification runs
+after a change reaches the protected `main` ref. The dedicated stateful HTTPS
+and Docker conformance jobs also require a manual workflow dispatch through
+the protected `release-conformance` environment. Default `npm test` does
+include synthetic loopback HTTPS tests. Review proposed changes before merge—the
 trusted main checkout is part of the maintainer test boundary.
 
 ## Quick start

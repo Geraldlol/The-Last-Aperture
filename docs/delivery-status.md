@@ -40,5 +40,6 @@ The review fixed provider-error disclosure in the new preflight command,
 preserved literal inventory filenames in repair briefs, exposed recorded
 triage/remediation claims in human output, and replaced locale-sensitive
 doctor ordering with the canonical sorter. No dependencies were added. Live
-targets and optional real Docker/HTTPS conformance were not exercised in this
-pass.
+targets and the optional Docker and dedicated HTTPS conformance commands were
+not exercised in this pass. The default suite did run synthetic loopback HTTPS
+tests.
