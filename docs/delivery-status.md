@@ -1,6 +1,23 @@
 # Assessment improvement delivery status
 
-## Latest passive-check slice (2026-09-05)
+## CI compatibility follow-up (2026-09-05)
+
+The optional proxy-store test module no longer crashes Node 20 during import.
+Its eight tests now report explicit unsupported-dependency skips when a runtime
+older than Node 24 lacks `node:sqlite`; Node 24 still imports the module normally
+and executes all eight unchanged test bodies. Missing SQLite or other import
+errors on Node 24 remain failures. Production modules and CI gates are unchanged.
+
+Verification: the original Node 20.20.2 import crash was reproduced, followed
+by eight named skips and zero failures after the test-only correction. On Node
+24.13.0 all eight tests pass with zero skips. Review confirmed that the Node 20
+public support promise covers planning/manual ingestion, not this optional store.
+
+This is a partial CI fix. Campaign-timeout failures remain unchanged, no full
+suite or new GitHub run is claimed, and no changes have been pushed or merged.
+The fixture portability fix described below is already in the local history.
+
+## Passive-check slice (2026-09-05)
 
 The next additive slice introduces a standalone, explicitly scoped JavaScript
 TLS-pattern checker, fixed-text repair guidance, and synthetic evaluation.

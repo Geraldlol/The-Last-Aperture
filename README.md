@@ -250,6 +250,10 @@ trusted main checkout is part of the maintainer test boundary.
 ## Quick start
 
 Requirements: Node.js 20 or newer for planning and manual `next`/`ingest`.
+The optional SQLite proxy-store tests require `node:sqlite`: all eight execute
+on Node 24; older runtimes without that builtin report eight explicit dependency
+skips. This does not add Node 20 support for that store or waive unrelated test
+failures. A missing SQLite builtin on Node 24 still fails the suite.
 Public T1 and narrow T2 additionally require the controller-owned Docker CLI
 path, a local Docker daemon, and a prebuilt worker image satisfying the external
 worker configuration. Provider and remote execution remain internal conformance
