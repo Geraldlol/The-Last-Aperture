@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -2138,6 +2139,55 @@ test('scope revision drift blocks the concrete action before dispatch', async ()
   assert.equal(dispatches, 0)
   assert.match(result.stop_reasons.join(' '), /exact current action.*scope revision/i)
 })
+
+for (const mode of ['timeout', 'settled']) {
+  const title = mode === 'timeout'
+    ? 'action timeout aborts in an isolated process with no other active handles'
+    : 'settled action releases its deadline before an isolated process exits'
+  test(title, () => {
+    const plan = exactPlan({
+      targetKind: 'local_service',
+      overrides: { limits: limits({ max_action_time_ms: mode === 'timeout' ? 20 : 60_000 }) },
+    })
+    // No test-runner handles or real transport in the child can keep the abort
+    // deadline alive accidentally. A settled operation must clear that deadline.
+    const child = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+      import assert from 'node:assert/strict'
+      import { executeAdversarialCampaign } from ${JSON.stringify(new URL('../scripts/lib/adversarial-runtime.mjs', import.meta.url).href)}
+      const plan = JSON.parse(process.argv[1])
+      const mode = process.argv[2]
+      let aborts = 0
+      const operation = executeAdversarialCampaign({
+        plan,
+        dispatch: async (_action, { signal }) => {
+          if (mode === 'settled') return { status: 'OBSERVED', output_bytes: 1, escalation_triggers: [] }
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              aborts += 1
+              reject(signal.reason)
+            }, { once: true })
+          })
+        },
+      })
+      if (mode === 'timeout') {
+        await assert.rejects(operation, { code: 'ADVERSARIAL_ACTION_TIMEOUT' })
+        assert.equal(aborts, 1)
+      } else {
+        const result = await operation
+        assert.equal(result.dispatched_actions, plan.actions.length)
+        assert.equal(aborts, 0)
+      }
+      process.stdout.write('settled')
+    `, JSON.stringify(plan), mode], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      windowsHide: true,
+    })
+    assert.ifError(child.error)
+    assert.equal(child.status, 0, child.stderr)
+    assert.equal(child.stdout, 'settled')
+  })
+}
 
 test('action timeout propagates an abort signal to the trusted transport', async () => {
   const plan = exactPlan({

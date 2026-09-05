@@ -1,6 +1,28 @@
 # Assessment improvement delivery status
 
-## CI compatibility follow-up (2026-09-05)
+## Timeout stop-state fix (2026-09-05)
+
+The abort deadline now keeps the process alive until the pending operation
+settles, so early event-loop exit cannot bypass abort and durable terminal-stop
+bookkeeping. The existing settlement cleanup still clears the timer and removes
+the cancellation listener. Scope, authorization, activation, adapters, and action
+selection are unchanged.
+
+Two new isolated-process regressions cover abort with no other active handles
+and prompt exit after successful settlement despite a long deadline. Before the
+fix, the isolated abort test failed on Node 24 with an unsettled top-level await;
+the existing durable-stop test was cancelled on Node 20. After the fix, all six
+focused lifecycle tests and the release-wiring check pass on both Node 20.20.2
+and Node 24.13.0, with no failures or cancellations among the selected tests.
+The durable-stop test also verifies zero repeat dispatches after reopening.
+Lens lint passes. All runtime tests used stubbed operations, without real target
+execution or network access.
+
+Full-suite and Linux GitHub CI confirmation remain pending; no push or merge
+has been performed. These focused results do not establish green CI. The earlier
+sections below record the state at each preceding local slice.
+
+## Earlier: CI compatibility follow-up (2026-09-05)
 
 The optional proxy-store test module no longer crashes Node 20 during import.
 Its eight tests now report explicit unsupported-dependency skips when a runtime
@@ -17,7 +39,7 @@ This is a partial CI fix. Campaign-timeout failures remain unchanged, no full
 suite or new GitHub run is claimed, and no changes have been pushed or merged.
 The fixture portability fix described below is already in the local history.
 
-## Passive-check slice (2026-09-05)
+## Earlier: Passive-check slice (2026-09-05)
 
 The next additive slice introduces a standalone, explicitly scoped JavaScript
 TLS-pattern checker, fixed-text repair guidance, and synthetic evaluation.
