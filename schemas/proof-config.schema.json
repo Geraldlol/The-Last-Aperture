@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.invalid/schemas/proof-config.schema.json",
   "title": "Proof execution configuration",
-  "description": "Names a proof job, provider-authored harness files, bounded attack/control commands, and an optional candidate patch executed in a disposable mirror. Version 1 remains readable; version 2 is the adversarial-validation contract.",
+  "description": "Names a proof job, provider-authored harness files, bounded attack/control commands, and an optional candidate patch executed in a disposable mirror. Version 1 remains readable, version 2 is the T1 adversarial-validation contract, and version 3 adds a controller-confined loopback service for T2.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": ["1.0.0", "2.0.0"]
+      "enum": ["1.0.0", "2.0.0", "3.0.0"]
     },
     "job_id": {
       "type": "string",
@@ -44,6 +44,9 @@
     "control_command": {
       "description": "Version 2 command that validates the harness without exercising the attack condition.",
       "$ref": "#/$defs/command"
+    },
+    "service": {
+      "$ref": "#/$defs/service"
     },
     "strategy": {
       "type": "object",
@@ -157,6 +160,43 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "3.0.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "strategy",
+          "control_command",
+          "oracle",
+          "limits",
+          "reproducer",
+          "service"
+        ],
+        "properties": {
+          "command": { "$ref": "#/$defs/serviceProofCommand" },
+          "control_command": { "$ref": "#/$defs/serviceProofCommand" },
+          "service": { "$ref": "#/$defs/service" },
+          "job_id": { "type": "string", "pattern": "^proof-verification:" },
+          "destination_guard": {
+            "type": "object",
+            "properties": { "installed": { "type": "boolean", "const": true } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": { "schema_version": { "const": "3.0.0" } },
+          "required": ["schema_version"]
+        }
+      },
+      "then": {
+        "properties": { "service": false }
+      }
     }
   ],
   "$defs": {
@@ -201,6 +241,54 @@
             "type": "string",
             "maxLength": 4096
           }
+        }
+      }
+    },
+    "serviceProofCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "args"],
+      "properties": {
+        "program": {
+          "enum": ["node", "npm"]
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol",
+        "command",
+        "port",
+        "startup_timeout_ms",
+        "probe_interval_ms"
+      ],
+      "properties": {
+        "protocol": { "const": "loopback-tcp-v1" },
+        "command": { "$ref": "#/$defs/serviceProofCommand" },
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "startup_timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 120000
+        },
+        "probe_interval_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
         }
       }
     },

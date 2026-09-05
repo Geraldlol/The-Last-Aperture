@@ -61,6 +61,17 @@ test('R6 flags a domain lens with an empty activates_on', () => {
   assert.ok(v.some((x) => /must match something/i.test(x.message)))
 })
 
+test('R6 flags invalid activation collection shapes before counting selectors', () => {
+  const v = checkShapes([l('web', {
+    runs_in: 'fanout',
+    activates_on: { paths: 'a', signals: null },
+    owns: ['csrf'],
+    defers: {},
+  })])
+  assert.ok(v.some((x) => /paths must be an array/.test(x.message)))
+  assert.ok(v.some((x) => /signals must be an array/.test(x.message)))
+})
+
 test('R6 flags missing required keys', () => {
   const v = checkShapes([l('web', { runs_in: 'fanout' })])
   assert.ok(v.some((x) => /missing/i.test(x.message)))

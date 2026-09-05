@@ -113,7 +113,6 @@ function runAttestedCampaign(files, scope, ledgerDirectory, overrides = {}) {
     expectedCampaignGrantSha256: files.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ...overrides,
   })
 }

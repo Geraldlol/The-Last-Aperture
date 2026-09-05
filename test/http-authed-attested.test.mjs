@@ -441,7 +441,6 @@ test('attested-campaign runtime uses sealed stdin and persists no credential, PH
     expectedCampaignGrantSha256: planned.summary.campaign_grant_sha256,
     ledgerDirectory: files.ledgerDirectory,
     operatorId: 'security-researcher',
-    authorizationConfirmed: true,
     clock: () => NOW,
     env: {},
     credentialInput: Symbol('sealed campaign stdin credential'),
@@ -531,7 +530,7 @@ test('attested-campaign runtime uses sealed stdin and persists no credential, PH
   assert.match(ledgerText, /"authorization_binding_sha256"\s*:\s*"[a-f0-9]{64}"/)
 })
 
-test('attested-campaign runtime rejects missing launch confirmation and operator drift before ledger or network', async (t) => {
+test('attested-campaign runtime rejects operator drift before ledger or network', async (t) => {
   const files = await fixture(t, 'pre-dispatch')
   const planned = await planAttested(files)
   let credentialReads = 0
@@ -553,20 +552,7 @@ test('attested-campaign runtime rejects missing launch confirmation and operator
   await assert.rejects(
     runHttpAuthedAttestedCampaign({
       ...deps,
-      operatorId: 'security-researcher',
-      authorizationConfirmed: false,
-    }),
-    /requires explicit controller launch confirmation/i,
-  )
-  assert.equal(credentialReads, 0)
-  assert.equal(transportCalls, 0)
-  await assert.rejects(access(files.ledgerDirectory), { code: 'ENOENT' })
-
-  await assert.rejects(
-    runHttpAuthedAttestedCampaign({
-      ...deps,
       operatorId: 'different-security-researcher',
-      authorizationConfirmed: true,
     }),
     /operator.*match|operator.*mismatch/i,
   )
@@ -676,7 +662,6 @@ test('campaign runtime rejects the retired authorization mode before credentials
       expectedCampaignGrantSha256: 'a'.repeat(64),
       ledgerDirectory: files.ledgerDirectory,
       operatorId: 'peerstar-security-operator',
-      authorizationConfirmed: true,
       clock: () => NOW,
       env: {},
       credentialInput: Symbol('sealed campaign stdin credential'),
@@ -704,7 +689,6 @@ test('attested-campaign runtime rechecks scope and candidate bytes immediately b
     expectedCampaignGrantSha256: planned.summary.campaign_grant_sha256,
     ledgerDirectory: files.ledgerDirectory,
     operatorId: 'security-researcher',
-    authorizationConfirmed: true,
     clock: () => NOW,
     env: {},
     credentialInput: Symbol('sealed campaign stdin credential'),
@@ -807,7 +791,6 @@ test('attested mutation campaign durably qualifies authorization, verification, 
     ledgerDirectory: files.ledgerDirectory,
     materialsDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: mutationCredential },
     clock: () => NOW,
     protectedTransport: async (request) => {

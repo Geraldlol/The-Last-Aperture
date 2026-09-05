@@ -27,8 +27,40 @@ const PROOF_CONFIG_SCHEMA_URL = new URL(
 const validateProofConfigSchema = new Ajv2020({ strict: true, allErrors: true })
   .compile(JSON.parse(readFileSync(PROOF_CONFIG_SCHEMA_URL, 'utf8')))
 
+const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i
+
+function assertCanonicalProofPath(path, label) {
+  const segments = path.split('/')
+  if (
+    segments.some((segment) => (
+      segment.length === 0
+      || segment === '.'
+      || segment === '..'
+      || segment.includes(':')
+      || /[. ]$/.test(segment)
+      || WINDOWS_RESERVED_BASENAME.test(segment)
+    ))
+  ) {
+    throw new Error(
+      `proof configuration is invalid: ${label} must be a canonical portable path`,
+    )
+  }
+}
+
 export function assertValidProofConfig(config) {
   if (validateProofConfigSchema(config)) {
+    for (const [index, file] of config.proof_files.entries()) {
+      assertCanonicalProofPath(file.path, `proof_files[${index}].path`)
+    }
+    for (const [index, file] of (config.patch_files ?? []).entries()) {
+      assertCanonicalProofPath(file.path, `patch_files[${index}].path`)
+    }
+    if (config.destination_guard?.path) {
+      assertCanonicalProofPath(config.destination_guard.path, 'destination_guard.path')
+    }
+    if (config.reproducer?.path) {
+      assertCanonicalProofPath(config.reproducer.path, 'reproducer.path')
+    }
     const proofPaths = config.proof_files.map(({ path }) => path)
     const patchPaths = (config.patch_files ?? []).map(({ path }) => path)
     if (new Set(proofPaths).size !== proofPaths.length) {
@@ -42,20 +74,28 @@ export function assertValidProofConfig(config) {
       throw new Error('proof configuration is invalid: proof and patch paths must be disjoint')
     }
     if (
-      config.schema_version === '2.0.0'
+      ['2.0.0', '3.0.0'].includes(config.schema_version)
       && !proofSet.has(config.reproducer.path)
     ) {
       throw new Error(
         'proof configuration is invalid: reproducer path must name a declared proof file',
       )
     }
-    if (config.schema_version === '2.0.0') {
+    if (['2.0.0', '3.0.0'].includes(config.schema_version)) {
       const attackCodes = new Set(config.oracle.attack_exit_codes)
       if (config.oracle.control_exit_codes.some((code) => attackCodes.has(code))) {
         throw new Error(
           'proof configuration is invalid: attack and control oracle exit codes must be disjoint',
         )
       }
+    }
+    if (
+      config.schema_version === '3.0.0'
+      && config.service.probe_interval_ms > config.service.startup_timeout_ms
+    ) {
+      throw new Error(
+        'proof configuration is invalid: service probe_interval_ms must not exceed startup_timeout_ms',
+      )
     }
     return config
   }
@@ -88,26 +128,39 @@ export async function executeProof({
       .join('; ')
     throw new Error(`${label} is not authorized by the run policy: ${detail}`)
   }
+  if (config.schema_version === '3.0.0') {
+    authorizeCommand(config.service.command, 'service boot command')
+  }
   authorizeCommand(config.command, 'proof command')
   if (config.control_command) authorizeCommand(config.control_command, 'control command')
 
   await createMirror(targetRoot, mirrorRoot)
   const owned = new Set()
   let mirrorRetained = false
+  let activePhase = null
+  let demonstration = null
+  let control = null
+  let remediation = null
   try {
-    for (const path of await materializeFiles(mirrorRoot, config.proof_files)) {
+    for (const path of await materializeFiles(
+      mirrorRoot,
+      config.proof_files,
+      { requireAbsent: true },
+    )) {
       owned.add(path)
     }
     // The demonstration runs against the unmodified mirror. It must fail here,
     // or the proof did not reproduce the bug it claims.
-    const demonstration = await spawn(
+    activePhase = 'demonstration'
+    demonstration = await spawn(
       config.command.program,
       config.command.args,
       mirrorRoot,
       config.limits,
     )
 
-    const control = config.control_command
+    activePhase = 'control'
+    control = config.control_command
       ? await spawn(
           config.control_command.program,
           config.control_command.args,
@@ -116,11 +169,11 @@ export async function executeProof({
         )
       : null
 
-    let remediation = null
     if (Array.isArray(config.patch_files) && config.patch_files.length > 0) {
       for (const path of await materializeFiles(mirrorRoot, config.patch_files)) {
         owned.add(path)
       }
+      activePhase = 'remediation'
       remediation = await spawn(
         config.command.program,
         config.command.args,
@@ -129,6 +182,7 @@ export async function executeProof({
       )
     }
 
+    activePhase = null
     await assertTargetUnchanged(targetRoot, expectedTreeDigest, inventoryOptions)
 
     return {
@@ -140,6 +194,21 @@ export async function executeProof({
       mirrorRetained,
     }
   } catch (error) {
+    if (config.schema_version === '3.0.0' && error instanceof Error) {
+      if (error.partial_result !== undefined) {
+        if (activePhase === 'demonstration') demonstration = error.partial_result
+        if (activePhase === 'control') control = error.partial_result
+        if (activePhase === 'remediation') remediation = error.partial_result
+      }
+      error.proof_outcome = {
+        demonstration,
+        control,
+        remediation,
+        ownedPaths: [...owned].sort(compareCanonicalStrings),
+        mirrorRoot,
+        mirrorRetained,
+      }
+    }
     // A mutated target is the one failure where the evidence of what happened
     // matters more than tidiness, so the mirror survives for inspection.
     if (error instanceof MirrorMutationError) mirrorRetained = true

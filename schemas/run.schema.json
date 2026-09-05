@@ -91,6 +91,9 @@
     "lens_pack_digest": {
       "$ref": "#/$defs/sha256"
     },
+    "lens_shared_contract_digest": {
+      "$ref": "#/$defs/sha256"
+    },
     "repository": {
       "$ref": "#/$defs/repository"
     },
@@ -166,10 +169,18 @@
           "artifact_kind": {
             "enum": [
               "apk",
+              "desktop-package",
               "dist-bundle",
+              "firmware-image",
               "ipa",
               "jar",
-              "oci-image"
+              "model-bundle",
+              "native-executable",
+              "oci-image",
+              "sbom",
+              "shared-library",
+              "smart-contract-build",
+              "vex"
             ]
           },
           "coverage_state": {
@@ -240,6 +251,79 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 512
+              }
+            }
+          }
+        },
+        "bundle_coverage": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "evidence_id",
+              "evidence_class",
+              "root_sha256",
+              "state",
+              "consumer_lenses",
+              "reason"
+            ],
+            "properties": {
+              "evidence_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+              },
+              "evidence_class": {
+                "enum": [
+                  "source",
+                  "built-artifact",
+                  "deployed-state",
+                  "live-runtime"
+                ]
+              },
+              "artifact_kind": {
+                "enum": [
+                  "apk",
+                  "desktop-package",
+                  "dist-bundle",
+                  "firmware-image",
+                  "ipa",
+                  "jar",
+                  "model-bundle",
+                  "native-executable",
+                  "oci-image",
+                  "sbom",
+                  "shared-library",
+                  "smart-contract-build",
+                  "vex"
+                ]
+              },
+              "root_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "state": {
+                "enum": [
+                  "COVERED",
+                  "PARTIAL",
+                  "INVENTORY_ONLY",
+                  "NOT_ASSESSED"
+                ]
+              },
+              "consumer_lenses": {
+                "type": "array",
+                "maxItems": 256,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                }
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
               }
             }
           }
@@ -355,10 +439,18 @@
               "items": {
                 "enum": [
                   "apk",
+                  "desktop-package",
                   "dist-bundle",
+                  "firmware-image",
                   "ipa",
                   "jar",
-                  "oci-image"
+                  "model-bundle",
+                  "native-executable",
+                  "oci-image",
+                  "sbom",
+                  "shared-library",
+                  "smart-contract-build",
+                  "vex"
                 ]
               }
             },
@@ -496,6 +588,78 @@
             "enum": [
               "7.0.0"
             ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "attempt_events": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "backend": {
+                  "const": "SERVICE_PROOF_CONTAINER"
+                }
+              },
+              "required": [
+                "backend"
+              ]
+            }
+          }
+        },
+        "required": [
+          "attempt_events"
+        ]
+      },
+      "then": {
+        "properties": {
+          "schema_version": {
+            "const": "7.0.0"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "7.0.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "evidence_declarations",
+          "evidence_bundles",
+          "evidence_coverage"
+        ],
+        "properties": {
+          "jobs": {
+            "items": {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "LENS"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {
+                "required": [
+                  "lens_digest",
+                  "owned_topics",
+                  "topic_obligations",
+                  "topic_assessments"
+                ]
+              }
+            }
           }
         }
       }
@@ -699,7 +863,8 @@
         "backend": {
           "enum": [
             "SEALED_CONTAINER",
-            "REMOTE_GATEWAY"
+            "REMOTE_GATEWAY",
+            "SERVICE_PROOF_CONTAINER"
           ]
         },
         "provider_config_sha256": {
@@ -749,6 +914,66 @@
           "maxLength": 128,
           "pattern": "^[a-z0-9][a-z0-9_.-]+$"
         },
+        "proof_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "proof_worker_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "service_container_names": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attack",
+            "control"
+          ],
+          "properties": {
+            "attack": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^rta-proof-[a-z0-9][a-z0-9-]{7,64}$"
+            },
+            "control": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^rta-proof-[a-z0-9][a-z0-9-]{7,64}$"
+            }
+          }
+        },
+        "service_session_budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attack_controller_wall_clock_ms",
+            "control_controller_wall_clock_ms",
+            "capture_grace_ms",
+            "controller_wall_clock_ms"
+          ],
+          "properties": {
+            "attack_controller_wall_clock_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 6720000
+            },
+            "control_controller_wall_clock_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 6720000
+            },
+            "capture_grace_ms": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 600000
+            },
+            "controller_wall_clock_ms": {
+              "type": "integer",
+              "minimum": 3000,
+              "maximum": 14040000
+            }
+          }
+        },
         "remote_gateway_config_sha256": {
           "$ref": "#/$defs/sha256"
         },
@@ -777,6 +1002,9 @@
           "$ref": "#/$defs/nonEmptyString"
         },
         "recoverable": {
+          "type": "boolean"
+        },
+        "cleanup_verified": {
           "type": "boolean"
         },
         "execution_artifact_sha256": {
@@ -822,7 +1050,6 @@
               "policy_sha256",
               "source_snapshot_sha256",
               "control_snapshot_sha256",
-              "budgets",
               "expires_at"
             ],
             "oneOf": [
@@ -835,6 +1062,7 @@
                   }
                 },
                 "required": [
+                  "budgets",
                   "provider_config_sha256",
                   "sandbox_policy_sha256",
                   "container_name"
@@ -850,6 +1078,26 @@
                       "required": [
                         "request_artifact_key"
                       ]
+                    },
+                    {
+                      "required": [
+                        "proof_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service_container_names"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "proof_worker_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service_session_budget"
+                      ]
                     }
                   ]
                 }
@@ -862,6 +1110,7 @@
                 },
                 "required": [
                   "backend",
+                  "budgets",
                   "remote_gateway_config_sha256",
                   "controller_key_id",
                   "gateway_key_id",
@@ -884,6 +1133,94 @@
                     {
                       "required": [
                         "container_name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "proof_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service_container_names"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "proof_worker_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "service_session_budget"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "properties": {
+                  "backend": {
+                    "const": "SERVICE_PROOF_CONTAINER"
+                  }
+                },
+                "required": [
+                  "backend",
+                  "proof_config_sha256",
+                  "proof_worker_config_sha256",
+                  "service_container_names",
+                  "service_session_budget"
+                ],
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "budgets"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "provider_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "sandbox_policy_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "container_name"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "remote_gateway_config_sha256"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "controller_key_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "gateway_key_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "request_id"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "request_artifact_key"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "request_artifact_sha256"
                       ]
                     }
                   ]
@@ -971,6 +1308,23 @@
             "required": [
               "failure_artifact_key",
               "failure_artifact_sha256"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "cleanup_verified"
+            ]
+          },
+          "then": {
+            "properties": {
+              "event": {
+                "const": "FAILED"
+              }
+            },
+            "required": [
+              "event"
             ]
           }
         }
@@ -1175,6 +1529,7 @@
               "status": {
                 "enum": [
                   "RAN",
+                  "PARTIAL",
                   "NOT_TRIGGERED",
                   "NOT_ASSESSED",
                   "FAILED"
@@ -1205,6 +1560,7 @@
                     "status": {
                       "enum": [
                         "NOT_TRIGGERED",
+                        "PARTIAL",
                         "NOT_ASSESSED",
                         "FAILED"
                       ]
@@ -1326,6 +1682,17 @@
         "lens": {
           "$ref": "#/$defs/name"
         },
+        "lens_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owned_topics": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
         "state": {
           "enum": [
             "DORMANT",
@@ -1431,6 +1798,21 @@
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
           }
+        },
+        "topic_obligations": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "topic_assessments": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/topicAssessment"
+          }
         }
       },
       "allOf": [
@@ -1468,6 +1850,144 @@
           "then": {
             "required": [
               "reason"
+            ]
+          }
+        }
+      ]
+    },
+    "topicAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topic",
+        "disposition",
+        "reason"
+      ],
+      "properties": {
+        "topic": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "disposition": {
+          "enum": [
+            "finding",
+            "examined-clean",
+            "partial",
+            "not-applicable",
+            "not-assessed"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "evidence_paths": {
+          "type": "array",
+          "maxItems": 65536,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "finding_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+          }
+        },
+        "coverage_gap_areas": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "finding"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "finding_ids"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "examined-clean",
+                  "not-applicable"
+                ]
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence",
+              "coverage_gap_areas"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "not-assessed"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "coverage_gap_areas"
             ]
           }
         }

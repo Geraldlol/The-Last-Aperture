@@ -56,6 +56,8 @@ function terminalResult(packet, examinedFiles) {
       && packet.lens === 'database-and-data-stores'
     )
   )
+  const semanticGapReason =
+    'reference-byte-consumer verifies broker conformance only and performs no semantic vulnerability analysis'
   return {
     schema_version: '1.0.0',
     run_id: packet.run_id,
@@ -73,9 +75,16 @@ function terminalResult(packet, examinedFiles) {
     findings: [],
     coverage_gaps: [{
       area: packet.job_id,
-      reason:
-        'reference-byte-consumer verifies broker conformance only and performs no semantic vulnerability analysis',
+      reason: semanticGapReason,
     }],
+    topic_assessments: unsupported
+      ? []
+      : (packet.topic_obligations ?? []).map((topic) => ({
+          topic,
+          disposition: 'not-assessed',
+          reason: semanticGapReason,
+          coverage_gap_areas: [packet.job_id],
+        })),
     ...(unsupported ? {
       error: {
         code: 'REFERENCE_ADAPTER_NO_SEMANTIC_ANALYZER',

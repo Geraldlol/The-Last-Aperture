@@ -297,7 +297,7 @@ test('dispatch fails closed if the enrolled adapter manifest changes after autho
   )
 })
 
-test('built-in registry refuses generic live target I/O under operator authorization', async () => {
+test('verified operator authority reaches adapter resolution before missing generic live transport refuses I/O', async () => {
   const fixture = provisionEnrollment({ targetKind: 'live' })
   await assert.rejects(
     () => executeEnrolledAdversarialCampaign({
@@ -308,8 +308,14 @@ test('built-in registry refuses generic live target I/O under operator authoriza
       now: NOW,
       clock: () => Date.parse(NOW),
     }),
-    (error) => error instanceof AdversarialCliControllerError
-      && error.code === 'ADVERSARIAL_LIVE_ADAPTER_UNAVAILABLE',
+    (error) => {
+      assert.ok(error instanceof AdversarialCliControllerError)
+      assert.equal(error.code, 'ADVERSARIAL_LIVE_ADAPTER_UNAVAILABLE')
+      assert.match(error.message, /verified operator statement was accepted as the authority fact/i)
+      assert.match(error.message, /technically unavailable.*no trusted transport\/provider adapter is enrolled/i)
+      assert.match(error.message, /reauthorization cannot activate a missing route/i)
+      return true
+    },
   )
   assert.equal(
     readdirSync(fixture.enrollmentDirectory).includes('approval-nonces'),
@@ -317,7 +323,7 @@ test('built-in registry refuses generic live target I/O under operator authoriza
   )
 })
 
-test('public repository and local-service L3 execution refuses before target I/O', async (t) => {
+test('verified operator authority reaches L3 controller resolution before missing services refuse target I/O', async (t) => {
   let localServiceRequests = 0
   const server = createServer((_request, response) => {
     localServiceRequests += 1
@@ -350,8 +356,14 @@ test('public repository and local-service L3 execution refuses before target I/O
         now: NOW,
         clock: () => Date.parse(NOW),
       }),
-      (error) => error instanceof AdversarialCliControllerError
-        && error.code === 'ADVERSARIAL_L3_CLI_CONTROL_PLANE_UNAVAILABLE',
+      (error) => {
+        assert.ok(error instanceof AdversarialCliControllerError)
+        assert.equal(error.code, 'ADVERSARIAL_L3_CLI_CONTROL_PLANE_UNAVAILABLE')
+        assert.match(error.message, /verified operator statement was accepted as the authority fact/i)
+        assert.match(error.message, /technically unavailable until controller-owned live preflight/i)
+        assert.match(error.message, /reauthorization cannot activate missing controller services/i)
+        return true
+      },
       targetKind,
     )
     assert.equal(

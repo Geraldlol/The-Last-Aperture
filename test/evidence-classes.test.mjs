@@ -66,18 +66,33 @@ test('INVENTORY_ONLY and NOT_ASSESSED never clear', () => {
 test('artifact kinds and claim kinds are closed canonical sets', () => {
   assert.deepEqual(EVIDENCE_ARTIFACT_KINDS, [
     'apk',
+    'desktop-package',
     'dist-bundle',
+    'firmware-image',
     'ipa',
     'jar',
+    'model-bundle',
+    'native-executable',
     'oci-image',
+    'sbom',
+    'shared-library',
+    'smart-contract-build',
+    'vex',
   ])
   assert.ok(isEvidenceArtifactKind('oci-image'))
   assert.equal(isEvidenceArtifactKind('docker-image'), false)
   assert.deepEqual(EVIDENCE_CLAIM_KINDS, [
+    'artifact-signature-invalid',
+    'binary-hardening-missing',
     'drift-from-source',
+    'firmware-trust-gap',
+    'model-integrity-or-robustness-gap',
+    'resilience-policy-misconfiguration',
     'runtime-misconfiguration',
     'secret-present-in-artifact',
     'sensitive-data-at-rest',
+    'smart-contract-deployment-drift',
+    'telemetry-delivery-failure',
     'unexpected-artifact-content',
     'vulnerable-component-present',
   ])

@@ -95,7 +95,7 @@ activates_on:
     - 'google-cloud-storage'
     - 'google-auth'
     - '@google-cloud/'
-    - 'kubernetes (python client)'
+    - any_of: ['from kubernetes', 'kubernetes.client']
     - '@kubernetes/client-node'
     - 'k8s.io/client-go'
     - 'apiVersion: rbac.authorization.k8s.io'
@@ -116,9 +116,9 @@ activates_on:
     - 'iam.gke.io/gcp-service-account'
     - 'azure.workload.identity/use'
     - 'token.actions.githubusercontent.com'
-    - 'FROM ...:latest'
+    - ':latest'
     - 'USER root'
-    - 'RUN curl ... | sh'
+    - 'curl -fsSL'
     - 'COPY .env'
     - '--mount=type=secret'
     - '169.254.169.254'
@@ -2530,7 +2530,7 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **canary fixture set**, the **socket-layer destination recorder**, and the **registry-driven enumerator**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** **T1** is a proof the repository's own test command executes — including a static checker, provided it asserts *both* directions over a fixture pair, per `## Severity calibration`. **T2** requires the auditor to stand up infrastructure the repository does not already stand up, and the user is asked every time. A recipe the auditor writes but cannot run is reported **UNPROVEN**, never silently omitted.
+**Tier rule.** **T1** is a proof the repository's own test command executes — including a static checker, provided it asserts *both* directions over a fixture pair, per `## Severity calibration`. **T2** starts infrastructure the repository does not already start. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller. A recipe that lacks that route is **UNPROVEN** with the technical transport gap, never silently omitted.
 
 **This lens has almost no T1 runtime story, and that must be said in the report rather than discovered by the reader.** Unauthenticated bucket sweeps, pod-escape demonstrations, RBAC `can-i` matrices and live IMDS probes all require either a cluster or an account. What is genuinely T1 here is *assertions over rendered artifacts*, and P1 below carries most of the weight.
 
@@ -2594,7 +2594,7 @@ Assert the *enforcement mode* as well as the rule: a policy whose `validationFai
 
 ### T2 — and why most cloud findings will not have one
 
-The user is asked every time, and most repositories will decline:
+When the accepted authenticated operator statement names one of these T2 launches, it is authority without another prompt. Execute only through a matching implemented controller; where no route or platform capability exists, record `UNPROVEN` with that technical gap:
 
 - **LocalStack** for an unauthenticated-access sweep against a bucket (`403`/`404` assertions) and for state-backend behaviour.
 - **kind or k3d** for everything cluster-side: `kubectl apply --dry-run=server` against a PSA-labelled namespace, a `kubectl auth can-i` matrix over the RBAC in the repository, a pod-escape demonstration from a runtime-socket mount, and the ServiceAccount-token request to `kubernetes.default`.

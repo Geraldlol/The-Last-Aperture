@@ -1,6 +1,6 @@
 # Red Team Audit: security lens modernization
 
-Research snapshot: 2026-09-03
+Research snapshot: 2026-09-03; implementation status updated 2026-09-04
 Decision status: implemented and contract-validated
 Scope: evidence-first repository audits; deployed-state and live-runtime conclusions require separately consumed evidence
 
@@ -10,12 +10,21 @@ Red Team Audit is an evidence-first security review system for source repositori
 
 Its core value is defensible precision: a risky keyword is only a lead, a framework category is not a severity, and an absent repository control is not proof that an external control does not exist. Static findings are kept separate from executed proofs, deployment assumptions, and live operational claims. The result is a report engineering and leadership can act on without treating scanner noise as fact or silence as assurance.
 
-This modernization expanded the registry from **15 to 19 lenses**, from **174 to 207 uniquely owned security topics**, and from **963 to 1,315 contract-mapped activation selectors**. The 15 domain lenses partition those 207 topics; the four cross-cutting lenses (`ai-generated-code`, `attack-chaining`, `business-logic`, and `completeness`) intentionally own zero registered topics and use the schema's explicit zero-owner rules. Four previously material blind spots now have dedicated domain owners:
+This modernization and target-driven expansion grew the registry from **15 to
+22 lenses**, from **174 to 243 uniquely owned security topics**, and from **963
+to 1,471 contract-mapped activation selectors**. The 18 domain lenses partition
+those 243 topics; the four cross-cutting lenses (`ai-generated-code`,
+`attack-chaining`, `business-logic`, and `completeness`) intentionally own zero
+registered topics and use the schema's explicit zero-owner rules. Seven
+previously material blind spots now have dedicated domain owners:
 
 1. adversarial AI model and MLOps security;
 2. native code and memory safety;
 3. security observability and response;
-4. exceptional states, failure semantics, and resilience.
+4. exceptional states, failure semantics, and resilience;
+5. desktop and thick-client trust boundaries;
+6. embedded, IoT, OT, and cyber-physical systems; and
+7. smart contracts and Web3 state/economic invariants.
 
 The existing web, crypto, mobile, LLM, CI/CD, business-logic, and completeness lenses were also updated with current, edition-qualified requirements and explicit framework/nonconformance boundaries. Where an upstream project has conflicting or living release metadata, this memo says so instead of claiming a false version lock.
 
@@ -27,12 +36,16 @@ The existing web, crypto, mobile, LLM, CI/CD, business-logic, and completeness l
 | Add `native-and-memory-safety` | bounds and integer conversions, lifetime/UAF, uninitialized memory, double release, unsafe FFI, native races, parser state, fuzz/sanitizer coverage, compiler/platform hardening | No prior lens owned first-party C/C++ memory corruption or unsafe native boundaries. CISA and the 2025 CWE Top 25 make this too consequential to remain an informal sub-check. |
 | Add `security-observability-and-response` | security-event obligations, application audit integrity, detection and escalation, telemetry loss, security-control failure signals | The web lens covered unsafe log content and threat modeling covered architectural detectability; neither followed the source-visible signal chain from decision through event, rule, route, and loss handling. |
 | Add `failure-semantics-and-resilience` | fail-open controls, partial state and rollback, retry/redelivery, bounded work, unknown/default states, cleanup, degraded/last-resort behavior | OWASP Top 10:2025 made exceptional-condition handling a standalone category. HTTP error disclosure alone does not cover secure state when dependencies and operations fail. |
+| Add `desktop-and-thick-client-security` | installer/update trust, local storage, IPC/process identity, URI/file handlers, web-to-native bridges, extensions, privilege brokers, diagnostics, and shell/OS integration | Desktop applications cross local process, operating-system, package, and embedded-web boundaries that neither mobile nor web ownership closes. |
+| Add `embedded-iot-ot-security` | device onboarding, boot/update trust, debug and field protocols, physical access, cyber-physical safety, reset/disposal, radio provisioning, command/telemetry, and remote maintenance | Firmware and control systems need physical, lifecycle, safety, and hardware-root evidence that a generic native-code lens cannot infer. |
+| Add `smart-contract-and-web3-security` | on-chain roles, initialization/upgrades, external calls, reentrancy, proxies, oracles, economic invariants, ordering/MEV, token accounting, gas/liveness, signatures, bridges, and emergency governance | Publicly callable deterministic state and economic composition create ownership and proof requirements distinct from web/API business logic. |
+| Harden activation, semantic coverage, evidence, and lifecycle contracts | bounded `any_of` signals, dependency/dependent scope, per-topic assessments, per-lens benchmark gates, expanded artifact kinds, structured framework/chain records, and per-lens comparison | File-byte coverage and whole-pack equality were too coarse: they could hide an unassessed topic, miss adjacent source context, or discard valid history for an unchanged lens. |
 | Extend `web-and-api` | browser messaging/origin trust and specialized interpreter/format injection | ASVS 5.0.0 identifies concrete checks that generic XSS/injection coverage can miss: `postMessage`, DOM clobbering, JSONP/XSSI, Fetch Metadata/CORP, prototype pollution, CSV formulas, JNDI, memcache, format strings, mail protocols, and ReDoS. |
 | Extend `crypto-and-key-management` | reproducible crypto inventory, agility, migration, and post-quantum planning | Primitive misuse checks cannot answer “where is this algorithm used, can it rotate, and how will it be retired?” Two inaccurate strength statements were also corrected. |
 | Extend completeness and business logic | trusted high-value-flow denominator, selected-framework requirement ledger, maker-checker proof | Route and file coverage can be complete while a multi-step abuse path or unreviewed framework requirement remains invisible. The controller now validates, seals, and dispatches these optional denominators while distinguishing unavailable (`null`) from explicitly empty (`[]`). |
 | Version-pin mobile and supply-chain references | MASVS/MASWE/MASTG chain, SLSA Build and Source tracks, OSPS and SCVS | “OWASP-aligned” and “SLSA” are too ambiguous to audit or reproduce. Exact editions and requirement dispositions are now required. |
 
-## The 19 lenses and what they target
+## The 22 lenses and what they target
 
 ### Cross-cutting and audit-control lenses
 
@@ -52,6 +65,8 @@ The existing web, crypto, mobile, LLM, CI/CD, business-logic, and completeness l
 | `cloud-and-iac` | Cloud IAM and OIDC trust, network/storage exposure, secrets/KMS, Terraform state, containers/images, Kubernetes/admission, serverless, BaaS, backups, and deployed configuration evidence. |
 | `crypto-and-key-management` | TLS, JWT/JWS/JWKS, SAML/OAuth/OIDC, password KDFs, symmetric/asymmetric constructions, signatures, randomness, key material, inventory, agility, and migration. |
 | `database-and-data-stores` | Database principals, native authorization/tenancy, privileged code, integrity/concurrency, encryption, replication/CDC/history/copies, lifecycle, and resource controls across supported engines. |
+| `desktop-and-thick-client-security` | Desktop package/update trust, local storage, IPC and process identity, URI/file handlers, embedded web/native bridges, plugin/script trust, privilege brokers, diagnostics, and OS launch integration. |
+| `embedded-iot-ot-security` | Device onboarding, boot and firmware trust, update/rollback, debug and service protocols, physical-access assumptions, safety interlocks, lifecycle/reset, wireless provisioning, telemetry, and OT remote maintenance. |
 | `failure-semantics-and-resilience` | Security-control failures, rollback/partial operations, bounded retry and work, null/unknown defaults, cleanup, safe degradation, and last-resort handlers. |
 | `hipaa-and-phi` | PHI classification, minimum necessary, access audit, encryption sufficiency, de-identification, BAA perimeter, lower environments, tracking, breach exposure, and severity uplift. |
 | `llm-and-ai` | LLM application data flow, prompt injection, system-prompt misuse, tool/agent/MCP authority, RAG and derived stores, output sinks, exfiltration, spend controls, and model origin/loading safety. |
@@ -60,10 +75,45 @@ The existing web, crypto, mobile, LLM, CI/CD, business-logic, and completeness l
 | `privacy-and-data-protection` | Personal-data inventory, minimization, lawful basis/consent, cookies/tracking, processors/destinations, retention/deletion, data-subject rights, children, transfers, automated decisions, pseudonymization, and PCI scope. |
 | `salesforce-platform` | Apex sharing/CRUD/FLS and entry points, SOQL/SOSL, Flow context, LWC/Aura/VF sinks, guest/site exposure, Named Credentials/Connected Apps, Shield caveats, and Agentforce actions. |
 | `security-observability-and-response` | Security-event completeness, application audit integrity/access, detection rules and escalation, telemetry-pipeline resilience, and distinguishable security-control failures. |
+| `smart-contract-and-web3-security` | Contract roles and initialization, external-call/reentrancy order, proxy/delegate trust, upgrades, oracles, economic invariants, transaction ordering, tokens, gas/liveness, block context, signed authorization, bridges, and emergency governance. |
 | `threat-modeling` | Trust boundaries, attacker profiles, STRIDE decomposition, attack trees, exfiltration paths, cross-boundary attribution, architectural trust gaps, and detectability gaps. |
 | `web-and-api` | Authentication, authorization and tenancy, sessions/CSRF/CORS/headers, injection/XSS/deserialization/XXE, files/SSRF, proxy/cache behavior, GraphQL/streaming, APIs/webhooks, browser trust, logs/errors, quotas, and races. |
 
-The generated topic registry remains the authority for the detailed 207-topic partition; a lens may raise context for another owner, but it may not silently claim that owner's topic.
+The generated topic registry remains the authority for the detailed 243-topic partition; a lens may raise context for another owner, but it may not silently claim that owner's topic.
+
+## Control-plane contract changes
+
+1. Every planned lens shard seals its owned topics as `topic_obligations` and a
+   successful result must return one evidence-backed `topic_assessments`
+   disposition per topic. `partial` and `not-assessed` retain named gaps even
+   when every scoped byte was consumed.
+2. Signal activation accepts a scalar literal or a bounded `any_of` list of
+   2-32 atomic literals. Regex selectors and prose pretending to be compound
+   selectors are rejected. Direct text matches expand deterministically across
+   repository-local dependencies and dependents for at most two hops and 256
+   additional files, with truncation recorded as a gap.
+3. `business-logic` receives a bounded active domain-lens source union and the
+   merged candidate set for invariant analysis, normalization, and
+   false-positive challenge. Cross-cutting zero-topic lenses cannot inflate
+   the packet; truncation remains a named gap. `attack-chaining` follows with
+   only the controller-validated source locations of its components.
+4. Evaluation publishes per-lens TP/FN/recall and
+   `minimum_vulnerable_lens_recall`; the release profile requires vulnerable
+   representation for all 18 domain lenses as well as the existing per-topic
+   floor.
+5. The artifact vocabulary adds desktop packages, firmware images, native
+   executables, shared libraries, and smart-contract builds, with bounded claim
+   kinds for signature, hardening, firmware trust, deployment drift, embedded
+   secrets, unexpected content, and vulnerable components. Provider packets
+   seal the complete shared lens-support set as trusted control, not only the
+   selected top-level lens file.
+6. Findings can carry versioned requirement-level `framework_refs`. Attack
+   chains carry prerequisites, blast radius, and ordered component steps with
+   consumed/produced state and joint evidence. Historical comparisons remain
+   whole-run non-comparable when packs differ, but an unchanged lens digest,
+   sorted topic contract, and shared schema/harness/adapter digest can support
+   explicitly per-lens partial comparability. The generated additive
+   `_topics.md` registry is deliberately excluded from that shared digest.
 
 ## Standards reconciliation
 
@@ -87,7 +137,7 @@ The generated topic registry remains the authority for the detailed 207-topic pa
 - [SLSA 1.2](https://slsa.dev/spec/v1.2/) is the approved current specification. The CI lens now assesses Build and Source tracks independently and does not infer branch-control enforcement from a checkout.
 - [OpenSSF OSPS Baseline 2026.08.28](https://baseline.openssf.org/versions/2026-08-28) supplies open-source project controls with explicit maturity applicability. Provider settings such as MFA and branch protection remain unverified unless exported evidence is consumed.
 - [CISA Secure by Design product bad-practice guidance](https://www.cisa.gov/news-events/alerts/2025/01/17/cisa-and-fbi-release-updated-guidance-product-security-bad-practices) and [NIST SSDF 1.1](https://csrc.nist.gov/pubs/sp/800/218/final) inform the future product-security posture track; they are not converted into repository vulnerabilities when the needed organizational evidence is absent.
-- [NIST IR 8259 Rev. 1](https://csrc.nist.gov/pubs/ir/8259/r1/final) and [NIST SP 800-82 Rev. 3](https://csrc.nist.gov/pubs/sp/800/82/r3/final) support a future IoT/OT/cyberphysical lens.
+- [NIST IR 8259 Rev. 1](https://csrc.nist.gov/pubs/ir/8259/r1/final) and [NIST SP 800-82 Rev. 3](https://csrc.nist.gov/pubs/sp/800/82/r3/final) support the dedicated IoT/OT/cyber-physical lens. Its OWASP ISVS reference is pinned to the selected `1.0.0-rc2` artifact rather than silently treating inconsistent release channels as interchangeable.
 
 ## Exact requirement upgrades that materially change results
 
@@ -108,9 +158,6 @@ The next useful additions are not “more OWASP lists”; they are scopes with a
 
 | Candidate | Recommendation | Why deferred from this tranche |
 |---|---|---|
-| Embedded/IoT/OT/cyberphysical | Highest-priority next lens when firmware, devices, protocols, or control systems are in scope | OWASP's ISVS release notes describe an official 1.0 release, while its README, site warning, requirement counts, and GitHub Releases remain inconsistent. Pin an exact artifact and commit before adoption; OT/IoT also needs distinct safety, physical-access, update, identity, and lifecycle evidence. |
-| Desktop/thick client | Add when Electron/.NET/Java/native desktop artifacts are common audit targets | OWASP TCASVS is relevant, but its README and Releases currently disagree on the latest stable version. Pin an exact artifact and commit; no official OWASP “TCSTG” baseline was identified in this research. |
-| Smart contract/Web3 | Add on Solidity/Vyper/chain artifacts | The OWASP Smart Contract Top 10 2026 is current; deeper SCSVS/SCSTG material is less mature, and chain-specific state/economic proofs need their own harness. |
 | Product-security lifecycle and maintainer governance | Add as a posture/control assessment, not ordinary vulnerability findings | SSDF, Secure by Design, SAMM, and OSPS often require policy, staffing, provider settings, disclosure, support, and governance evidence outside a checkout. |
 | WebRTC profile | Add conditionally inside or beside web/API | ASVS V17 has exact requirements, but only real media/RTC code justifies activation. |
 | Machine/workload/non-human identity | Design the ownership partition first | CI OIDC, cloud IAM, service identities, secrets, and agent identities already have partial owners; a premature lens would duplicate all of them. |
@@ -125,6 +172,9 @@ The updated audit intentionally does **not** claim from repository source alone 
 - an alert is delivered or acknowledged, an on-call responder acts, or an incident playbook succeeds;
 - a production model is robust, private, unpoisoned, drift-free, or the same artifact represented in source;
 - a shipped binary has ASLR, DEP/NX, RELRO, CFI/CFG, stack canaries, PAC/MTE, or sanitizers active;
+- a shipped desktop package or firmware image is authentic, a hardware trust
+  control is fused/enforced, or a deployed smart contract matches its reviewed
+  build without the corresponding consumed artifact or deployment evidence;
 - a framework level or regulatory regime is satisfied end to end.
 
 Every selected verification framework needs a requirement applicability ledger with one disposition per in-scope requirement: `mapped-and-tested`, `mapped-not-tested`, `not-applicable` with evidence, `not-repository-provable` with the required external artifact, or `not-assessed` with a reason. Representative requirement mappings never become blanket conformance.
@@ -134,12 +184,12 @@ CISA KEV may raise priority when an affected component is known exploited; absen
 ## Verification completed
 
 - Lens linter: **PASS**, rules R1–R9 and ledger gate clean.
-- Registry: **19 lenses, 207 uniquely owned topics**.
-- Activation contract: **1,315/1,315 typed selectors mapped exactly once**, with hash locks, exact rendered-family checks, and regressions for absence-shaped observability and failure paths.
-- Evidence declarations: all 19 lenses explicitly declare source, built-artifact, deployed-state, and live-runtime consumption.
+- Registry: **22 lenses, 243 uniquely owned topics**.
+- Activation contract: **1,471/1,471 typed selectors mapped exactly once**, with hash locks, exact rendered-family checks, bounded `any_of` literals, and regressions for absence-shaped observability and failure paths.
+- Evidence declarations: all 22 lenses explicitly declare source, built-artifact, deployed-state, and live-runtime consumption.
 - Generated registry and ownership overlap: regenerated and drift-checkable.
 - Full project suite: required before release; use the named CI run or current command output as the count authority rather than embedding a total that drifts during development.
 
 ## Recommended next move
 
-Adopt this 19-lens set as the new repository-audit baseline. For a high-assurance engagement, select applicable verification profiles up front, export provider/deployment evidence as separate declared evidence classes, and require the completeness lens to close both the high-value business-flow denominator and the version-pinned requirement ledger. Start the next lens tranche only when actual target repositories justify IoT/OT, desktop, Web3, WebRTC, or non-human-identity activation.
+Adopt this 22-lens set as the repository-audit baseline. For a high-assurance engagement, select applicable verification profiles up front, export provider/deployment evidence as separate declared evidence classes, and require the controller to close file and topic obligations plus any high-value business-flow and version-pinned requirement ledgers. Start another lens tranche only when actual target repositories justify WebRTC, product-security posture, or non-human-identity ownership that cannot be expressed by the current domains.

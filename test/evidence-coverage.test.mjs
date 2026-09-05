@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  acquiredEvidenceHasGaps,
   buildEvidenceCoverage,
   evidenceCoverageIndex,
 } from '../scripts/lib/evidence-coverage.mjs'
@@ -116,6 +117,54 @@ test('a supplied bundle carries its own coverage state into the matrix', () => {
   assert.match(artifact.reason, /peerstar-api-image/)
 })
 
+test('missing controller analysis state cannot produce non-source COVERED', () => {
+  const coverage = buildEvidenceCoverage({
+    lenses: LENSES,
+    activatedLenses: ['cloud-and-iac'],
+    bundles: [{
+      evidence_id: 'unproven-image-analysis',
+      evidence_class: 'built-artifact',
+      artifact_kind: 'oci-image',
+      coverage_state: 'COVERED',
+      root_sha256: '8'.repeat(64),
+    }],
+  })
+  const artifact = cell(
+    coverage,
+    'cloud-and-iac',
+    'container-image-content',
+    'built-artifact',
+  )
+
+  assert.equal(artifact.state, 'PARTIAL')
+  assert.match(artifact.reason, /controller analysis state is missing/)
+  assert.equal(coverage.bundle_coverage[0].state, 'PARTIAL')
+})
+
+test('an acquired class without supported provider delivery remains NOT_ASSESSED', () => {
+  const coverage = buildEvidenceCoverage({
+    lenses: LENSES,
+    activatedLenses: ['cloud-and-iac'],
+    bundles: [{
+      evidence_id: 'prod-cluster',
+      evidence_class: 'deployed-state',
+      coverage_state: 'COVERED',
+      root_sha256: 'c'.repeat(64),
+      analysis_state: 'NOT_ASSESSED',
+      analysis_reason: 'provider evidence-byte delivery is not implemented',
+    }],
+  })
+  const deployed = cell(
+    coverage,
+    'cloud-and-iac',
+    'container-image-content',
+    'deployed-state',
+  )
+  assert.equal(deployed.state, 'NOT_ASSESSED')
+  assert.match(deployed.reason, /provider evidence-byte delivery/i)
+  assert.ok(coverage.summary.unreached_classes.includes('deployed-state'))
+})
+
 test('an artifact kind no activated lens declares is INVENTORY_ONLY, never silence', () => {
   const coverage = buildEvidenceCoverage({
     lenses: LENSES,
@@ -164,4 +213,209 @@ test('cells are canonically ordered so the run digest is stable', () => {
     bundles: [],
   })
   assert.deepEqual(first.cells, second.cells)
+})
+
+test('only attached evidence with non-clear audit coverage forces a final gap', () => {
+  const base = {
+    evidence_bundles: [],
+    evidence_coverage: {
+      cells: [{
+        lens: 'cloud-and-iac',
+        topic: 'container-image-content',
+        evidence_class: 'deployed-state',
+        state: 'NOT_ASSESSED',
+        reason: 'no deployed-state evidence was acquired',
+      }],
+    },
+  }
+  assert.equal(acquiredEvidenceHasGaps(base), false)
+
+  const attachedUnsupported = structuredClone(base)
+  attachedUnsupported.evidence_bundles.push({
+    evidence_class: 'deployed-state',
+  })
+  assert.equal(acquiredEvidenceHasGaps(attachedUnsupported), true)
+
+  const attachedTruncated = {
+    evidence_bundles: [{ evidence_class: 'built-artifact' }],
+    evidence_coverage: {
+      cells: [{
+        lens: 'cloud-and-iac',
+        topic: 'container-image-content',
+        evidence_class: 'built-artifact',
+        state: 'PARTIAL',
+        reason: 'the OCI locator index was truncated',
+      }],
+    },
+  }
+  assert.equal(acquiredEvidenceHasGaps(attachedTruncated), true)
+})
+
+test('every acquired bundle has controller-owned delivery coverage, even with no consumer', () => {
+  const bundles = ['model-bundle', 'sbom', 'vex'].map((artifactKind, index) => ({
+    evidence_id: `portable-${artifactKind}`,
+    evidence_class: 'built-artifact',
+    artifact_kind: artifactKind,
+    adapter_id: 'artifact',
+    coverage_state: 'COVERED',
+    root_sha256: String(index + 1).repeat(64),
+    analysis_state: 'NOT_ASSESSED',
+    analysis_reason: 'no supported complete locator index is available',
+  }))
+  const coverage = buildEvidenceCoverage({
+    lenses: LENSES,
+    activatedLenses: ['cloud-and-iac'],
+    bundles,
+  })
+
+  assert.deepEqual(
+    coverage.bundle_coverage.map((record) => ({
+      evidence_id: record.evidence_id,
+      artifact_kind: record.artifact_kind,
+      state: record.state,
+      consumer_lenses: record.consumer_lenses,
+    })),
+    [
+      {
+        evidence_id: 'portable-model-bundle',
+        artifact_kind: 'model-bundle',
+        state: 'INVENTORY_ONLY',
+        consumer_lenses: [],
+      },
+      {
+        evidence_id: 'portable-sbom',
+        artifact_kind: 'sbom',
+        state: 'INVENTORY_ONLY',
+        consumer_lenses: [],
+      },
+      {
+        evidence_id: 'portable-vex',
+        artifact_kind: 'vex',
+        state: 'INVENTORY_ONLY',
+        consumer_lenses: [],
+      },
+    ],
+  )
+  assert.ok(coverage.bundle_coverage.every(({ reason }) =>
+    /no lens declares/i.test(reason)))
+  assert.equal(acquiredEvidenceHasGaps({
+    evidence_bundles: bundles,
+    evidence_coverage: coverage,
+  }), true)
+})
+
+test('positive-only controller analysis stays PARTIAL after delivery', () => {
+  const coverage = buildEvidenceCoverage({
+    lenses: LENSES,
+    activatedLenses: ['cloud-and-iac'],
+    bundles: [{
+      evidence_id: 'peerstar-api-image',
+      evidence_class: 'built-artifact',
+      artifact_kind: 'oci-image',
+      adapter_id: 'artifact',
+      coverage_state: 'COVERED',
+      root_sha256: 'a'.repeat(64),
+      analysis_state: 'READY',
+      analysis_reason: 'controller analysis completed',
+    }],
+  })
+
+  assert.deepEqual(coverage.bundle_coverage, [{
+    evidence_id: 'peerstar-api-image',
+    evidence_class: 'built-artifact',
+    artifact_kind: 'oci-image',
+    root_sha256: 'a'.repeat(64),
+    state: 'PARTIAL',
+    consumer_lenses: ['cloud-and-iac'],
+    reason: 'controller analysis completed; current controller analysis is positive-only, '
+      + 'not exhaustive; delivered to cloud-and-iac',
+  }])
+  assert.equal(acquiredEvidenceHasGaps({
+    evidence_bundles: [{ evidence_class: 'built-artifact' }],
+    evidence_coverage: coverage,
+  }), true)
+})
+
+test('NOT_APPLICABLE on an acquired bundle is non-clear bundle coverage', () => {
+  const bundle = {
+    evidence_id: 'misclassified-image',
+    evidence_class: 'built-artifact',
+    artifact_kind: 'oci-image',
+    adapter_id: 'artifact',
+    coverage_state: 'NOT_APPLICABLE',
+    root_sha256: 'f'.repeat(64),
+    analysis_state: 'READY',
+    analysis_reason: 'controller analysis completed',
+  }
+  const coverage = buildEvidenceCoverage({
+    lenses: LENSES,
+    activatedLenses: ['cloud-and-iac'],
+    bundles: [bundle],
+  })
+
+  assert.equal(coverage.bundle_coverage[0].state, 'NOT_ASSESSED')
+  assert.match(coverage.bundle_coverage[0].reason, /cannot have NOT_APPLICABLE/)
+  assert.equal(
+    cell(coverage, 'cloud-and-iac', 'container-image-content', 'built-artifact').state,
+    'NOT_ASSESSED',
+  )
+  assert.equal(acquiredEvidenceHasGaps({
+    evidence_bundles: [bundle],
+    evidence_coverage: coverage,
+  }), true)
+})
+
+test('one delivery cannot cover two active declared consumers', () => {
+  const peerLens = {
+    frontmatter: {
+      name: 'container-security',
+      owns: ['container-image-peer-review'],
+      activates_on: {
+        evidence_classes: {
+          source: { state: 'not-consumed' },
+          'built-artifact': {
+            state: 'consumed',
+            artifact_kinds: ['oci-image'],
+          },
+          'deployed-state': { state: 'not-consumed' },
+          'live-runtime': { state: 'not-consumed' },
+        },
+      },
+    },
+  }
+  const bundle = {
+    evidence_id: 'shared-image',
+    evidence_class: 'built-artifact',
+    artifact_kind: 'oci-image',
+    coverage_state: 'COVERED',
+    root_sha256: '7'.repeat(64),
+    analysis_state: 'READY',
+    analysis_reason: 'controller analysis completed',
+  }
+  const coverage = buildEvidenceCoverage({
+    lenses: [...LENSES, peerLens],
+    activatedLenses: ['cloud-and-iac', 'container-security'],
+    bundles: [bundle],
+    jobs: [{
+      lens: 'cloud-and-iac',
+      evidence: [{ evidence_context: { evidence_id: bundle.evidence_id } }],
+    }],
+  })
+
+  assert.deepEqual(coverage.bundle_coverage[0].consumer_lenses, ['cloud-and-iac'])
+  assert.equal(coverage.bundle_coverage[0].state, 'NOT_ASSESSED')
+  assert.match(coverage.bundle_coverage[0].reason, /missing container-security/)
+  assert.equal(
+    cell(coverage, 'cloud-and-iac', 'container-image-content', 'built-artifact').state,
+    'PARTIAL',
+  )
+  assert.equal(
+    cell(
+      coverage,
+      'container-security',
+      'container-image-peer-review',
+      'built-artifact',
+    ).state,
+    'NOT_ASSESSED',
+  )
 })

@@ -16,6 +16,12 @@
       "value": 22
     },
     {
+      "id": "all-domain-lenses-have-vulnerable-cases",
+      "metric": "counts.vulnerable_lenses",
+      "operator": ">=",
+      "value": 18
+    },
+    {
       "id": "minimum-clean-case-count",
       "metric": "counts.clean_cases",
       "operator": ">=",
@@ -36,6 +42,12 @@
     {
       "id": "minimum-vulnerable-topic-recall",
       "metric": "rates.minimum_vulnerable_topic_recall",
+      "operator": ">=",
+      "value": 0.8
+    },
+    {
+      "id": "minimum-vulnerable-lens-recall",
+      "metric": "rates.minimum_vulnerable_lens_recall",
       "operator": ">=",
       "value": 0.8
     },

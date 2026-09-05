@@ -369,7 +369,6 @@ export async function main(
       actionId: positionals[1],
       operatorId: options['operator-id'],
       rationale: options.rationale,
-      authorizationConfirmed: true,
       now,
     })
     if (options.json) printJson(result)

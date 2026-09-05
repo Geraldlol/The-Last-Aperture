@@ -24,6 +24,13 @@ import {
   exactCoverageGapId,
   filterResolvedCoverageGaps,
 } from './coverage-gaps.mjs'
+import { parseEvidenceLocation } from './evidence-locator.mjs'
+import { sourcePathsForJob } from './job-source-scope.mjs'
+import { acquiredEvidenceHasGaps } from './evidence-coverage.mjs'
+import {
+  OCI_EVIDENCE_RULE_CLAIMS,
+  OCI_EVIDENCE_RULE_SUPPORT,
+} from './evidence-oci-rules.mjs'
 import {
   measureCoverageClosure,
   refreshCategoryDenominators,
@@ -368,20 +375,159 @@ export function beginJob(run, jobId) {
   return next
 }
 
+function hasSealedSourceScope(job) {
+  return job.kind === 'LENS'
+    || (job.kind === 'TRIAGE' && job.lens === 'business-logic')
+    || (job.kind === 'TRIAGE' && job.lens === 'attack-chaining')
+    || job.kind === 'PROOF'
+}
+
+function sealedSourceScope(run, job, sidecar) {
+  if (!hasSealedSourceScope(job)) return new Set()
+  return new Set(sourcePathsForJob(
+    run,
+    job,
+    sidecar ?? {},
+    {
+      files: run.coverage.inventory.map((path) => ({ path })),
+    },
+  ))
+}
+
 function ensureExaminedScope(run, job, sidecar, jobResult) {
   const inventory = new Set(run.coverage.inventory)
-  const scoped = new Set(sidecar?.scoped_files ?? [])
+  const scoped = sealedSourceScope(run, job, sidecar)
   for (const path of jobResult.examined_files) {
     if (!inventory.has(path)) {
       throw resultError(`job ${job.job_id} examined path outside inventory: ${path}`)
     }
-    if (job.kind === 'LENS' && !scoped.has(path)) {
+    if (hasSealedSourceScope(job) && !scoped.has(path)) {
       throw resultError(`job ${job.job_id} examined path outside its scoped files: ${path}`)
     }
   }
   if (job.kind === 'LENS' && sidecar === undefined) {
     throw resultError(`lens job ${job.job_id} requires its immutable job sidecar`)
   }
+  if (
+    job.kind === 'TRIAGE'
+    && job.lens === 'business-logic'
+    && sidecar === undefined
+  ) {
+    throw resultError(
+      `business-logic triage job ${job.job_id} requires its immutable job sidecar`,
+    )
+  }
+}
+
+function ensureTopicAssessments(job, sidecar, jobResult) {
+  const assessments = jobResult.topic_assessments ?? []
+  if (job.kind !== 'LENS') {
+    if (assessments.length > 0) {
+      throw resultError(`only LENS jobs may report topic assessments`)
+    }
+    return []
+  }
+
+  const jobObligations = job.topic_obligations
+  if (Array.isArray(jobObligations)) {
+    if (!Array.isArray(sidecar?.topic_obligations)) {
+      throw resultError(`job ${job.job_id} requires sealed topic obligations in its sidecar`)
+    }
+    if (
+      stableJson(jobObligations) !== stableJson(sidecar.topic_obligations)
+      || stableJson(jobObligations) !== stableJson(sidecar.owned_topics ?? [])
+    ) {
+      throw resultError(`job ${job.job_id} topic obligations do not match sealed ownership`)
+    }
+  }
+
+  const obligations = Array.isArray(sidecar?.topic_obligations)
+    ? sidecar.topic_obligations
+    : null
+  const owned = new Set(sidecar?.owned_topics ?? [])
+  const known = new Set(sidecar?.known_topics ?? [])
+  const byTopic = new Map()
+  const examined = new Set(jobResult.examined_files)
+  const scoped = new Set(sidecar?.scoped_files ?? [])
+  const findingsById = new Map(
+    jobResult.findings.map((finding) => [finding.candidate_id, finding]),
+  )
+  const gapAreas = new Set(jobResult.coverage_gaps.map(({ area }) => area))
+
+  for (const assessment of assessments) {
+    if (byTopic.has(assessment.topic)) {
+      throw resultError(`job ${job.job_id} reports duplicate topic assessment ${assessment.topic}`)
+    }
+    byTopic.set(assessment.topic, assessment)
+    if (owned.size > 0) {
+      if (!owned.has(assessment.topic)) {
+        throw resultError(`job ${job.job_id} does not own topic ${assessment.topic}`)
+      }
+    } else if (assessment.topic !== job.lens && !known.has(assessment.topic)) {
+      throw resultError(
+        `zero-owner lens ${job.job_id} must assess a registered topic or its own triage label`,
+      )
+    }
+    for (const path of assessment.evidence_paths ?? []) {
+      if (!examined.has(path)) {
+        throw resultError(
+          `topic assessment ${assessment.topic} cites evidence path ${path} without reporting it examined`,
+        )
+      }
+      if (!scoped.has(path)) {
+        throw resultError(
+          `topic assessment ${assessment.topic} cites evidence path outside ${job.job_id} scope: ${path}`,
+        )
+      }
+    }
+    for (const candidateId of assessment.finding_ids ?? []) {
+      const finding = findingsById.get(candidateId)
+      if (!finding) {
+        throw resultError(
+          `topic assessment ${assessment.topic} references unknown finding ${candidateId}`,
+        )
+      }
+      if (finding.topic !== assessment.topic) {
+        throw resultError(
+          `topic assessment ${assessment.topic} references finding ${candidateId} for topic ${finding.topic}`,
+        )
+      }
+    }
+    for (const area of assessment.coverage_gap_areas ?? []) {
+      if (!gapAreas.has(area)) {
+        throw resultError(
+          `topic assessment ${assessment.topic} references unknown coverage gap area ${area}`,
+        )
+      }
+    }
+  }
+
+  if (jobResult.state === 'SUCCEEDED' && obligations !== null) {
+    for (const topic of obligations) {
+      if (!byTopic.has(topic)) {
+        throw resultError(`job ${job.job_id} is missing topic assessment for ${topic}`)
+      }
+    }
+    if (byTopic.size !== obligations.length) {
+      const unexpected = [...byTopic.keys()].find((topic) => !obligations.includes(topic))
+      throw resultError(`job ${job.job_id} does not own topic ${unexpected}`)
+    }
+    for (const finding of jobResult.findings) {
+      if (!owned.has(finding.topic)) continue
+      const assessment = byTopic.get(finding.topic)
+      if (
+        assessment?.disposition !== 'finding'
+        || !(assessment.finding_ids ?? []).includes(finding.candidate_id)
+      ) {
+        throw resultError(
+          `finding ${finding.candidate_id} is not linked from its ${finding.topic} topic assessment`,
+        )
+      }
+    }
+  }
+
+  return [...assessments]
+    .sort((left, right) => compareCanonicalStrings(left.topic, right.topic))
 }
 
 function findingLocationPath(location) {
@@ -390,26 +536,318 @@ function findingLocationPath(location) {
     .replaceAll('\\', '/')
 }
 
+function exactEvidenceBundle(run, finding, parsed) {
+  const context = finding.evidence_context
+  if (!context || context.evidence_id !== parsed.evidence_id) {
+    throw resultError(
+      `finding ${finding.candidate_id} evidence location prefix does not match its evidence_context`,
+    )
+  }
+  const matches = (run.evidence_bundles ?? []).filter(
+    ({ evidence_id: evidenceId }) => evidenceId === parsed.evidence_id,
+  )
+  if (matches.length === 0) {
+    throw resultError(
+      `evidence bundle "${parsed.evidence_id}" is not present in this run`,
+    )
+  }
+  if (matches.length !== 1) {
+    throw resultError(
+      `evidence bundle "${parsed.evidence_id}" is not unique in this run`,
+    )
+  }
+  const [bundle] = matches
+  if (
+    bundle.evidence_class !== context.evidence_class
+    || bundle.adapter_id !== context.adapter_id
+  ) {
+    throw resultError(
+      `finding ${finding.candidate_id} evidence context does not match run bundle `
+      + `"${parsed.evidence_id}"`,
+    )
+  }
+  return bundle
+}
+
+function exactPacketEvidenceAuthority(job, sidecar, bundle, parsed, finding) {
+  const authorities = (sidecar?.evidence ?? []).filter(
+    (authority) =>
+      authority?.evidence_context?.evidence_id === parsed.evidence_id,
+  )
+  if (authorities.length === 0) {
+    throw resultError(
+      `job ${job.job_id} immutable packet carries no authority for evidence `
+      + `"${parsed.evidence_id}"`,
+    )
+  }
+  if (authorities.length !== 1) {
+    throw resultError(
+      `job ${job.job_id} immutable packet has ambiguous authority for evidence `
+      + `"${parsed.evidence_id}"`,
+    )
+  }
+  const [authority] = authorities
+  const context = authority.evidence_context
+  if (
+    context.evidence_class !== bundle.evidence_class
+    || context.adapter_id !== bundle.adapter_id
+    || authority.root_sha256 !== bundle.root_sha256
+    || (authority.artifact_kind ?? null) !== (bundle.artifact_kind ?? null)
+  ) {
+    throw resultError(
+      `job ${job.job_id} evidence authority for "${parsed.evidence_id}" `
+      + 'does not match its exact run bundle',
+    )
+  }
+  if (stableJson(finding.evidence_context, 0) !== stableJson(context, 0)) {
+    throw resultError(
+      `finding ${parsed.evidence_id}:${parsed.locator} evidence_context does not `
+      + `match job ${job.job_id}'s immutable packet authority`,
+    )
+  }
+  if (authority.locator_index_kind === 'unsupported') {
+    throw resultError(
+      `job ${job.job_id} does not support evidence-qualified findings for `
+      + `${context.evidence_class}/${authority.artifact_kind ?? 'no-artifact-kind'}: `
+      + `${authority.unsupported_reason ?? 'no supported provider evidence delivery'}`,
+    )
+  }
+  if (authority.locator_index_kind !== 'oci-layer-v1') {
+    throw resultError(
+      `job ${job.job_id} has no supported complete evidence index for "${parsed.evidence_id}"`,
+    )
+  }
+  if (authority.entry_index_unreadable !== false) {
+    throw resultError(
+      authority.entry_index_unreadable === true
+        ? `job ${job.job_id} evidence index for "${parsed.evidence_id}" is unreadable`
+        : `job ${job.job_id} has no complete evidence index for "${parsed.evidence_id}"`,
+    )
+  }
+  if (!Number.isSafeInteger(authority.truncated_entry_count)) {
+    throw resultError(
+      `job ${job.job_id} has no complete evidence index for "${parsed.evidence_id}"`,
+    )
+  }
+  if (!Array.isArray(authority.entries)) {
+    throw resultError(
+      `job ${job.job_id} has no complete evidence index for "${parsed.evidence_id}"`,
+    )
+  }
+  const expectedClaim = OCI_EVIDENCE_RULE_CLAIMS[finding.adapter_rule_id]
+  if (expectedClaim === undefined) {
+    throw resultError(
+      `finding ${finding.candidate_id} must name a controller-evaluated OCI adapter_rule_id`,
+    )
+  }
+  const ruleSupport = OCI_EVIDENCE_RULE_SUPPORT[finding.adapter_rule_id]
+  if (
+    ruleSupport?.lens !== job.lens
+    || ruleSupport.topic !== finding.topic
+  ) {
+    throw resultError(
+      `finding ${finding.candidate_id} cannot use ${finding.adapter_rule_id}; `
+      + `that controller rule belongs to ${ruleSupport?.lens ?? 'no lens'}/`
+      + `${ruleSupport?.topic ?? 'no topic'}`,
+    )
+  }
+  if (
+    authority.rule_analysis?.controller_evaluated !== true
+    || !(authority.rule_analysis.evaluated_rule_ids ?? [])
+      .includes(finding.adapter_rule_id)
+  ) {
+    throw resultError(
+      `job ${job.job_id} carries no controller analysis for ${finding.adapter_rule_id}`,
+    )
+  }
+  const locatorEntries = authority.entries.filter(
+    (entry) => entry?.locator === parsed.locator,
+  )
+  if (locatorEntries.length !== 1) {
+    throw resultError(
+      `finding ${parsed.evidence_id}:${parsed.locator} cites a locator outside `
+      + `job ${job.job_id}'s sealed evidence index`,
+    )
+  }
+  if (finding.evidence_claim !== expectedClaim) {
+    throw resultError(
+      `finding ${finding.candidate_id} claim ${finding.evidence_claim} does not match `
+      + `${finding.adapter_rule_id} (${expectedClaim})`,
+    )
+  }
+  if (!(locatorEntries[0].matched_rule_ids ?? []).includes(finding.adapter_rule_id)) {
+    throw resultError(
+      `finding ${finding.candidate_id} rule ${finding.adapter_rule_id} did not match `
+      + `${parsed.evidence_id}:${parsed.locator} in the sealed controller analysis`,
+    )
+  }
+}
+
+function expectedRequiredEvidenceMatches(job, sidecar) {
+  if (job.kind !== 'LENS') return []
+  const expected = []
+  for (const authority of sidecar?.evidence ?? []) {
+    const complete = authority.locator_index_kind === 'oci-layer-v1'
+      && authority.entry_index_unreadable === false
+      && Number.isSafeInteger(authority.truncated_entry_count)
+      && authority.truncated_entry_count >= 0
+      && authority.rule_analysis?.controller_evaluated === true
+    if (complete) {
+      for (const entry of authority.entries ?? []) {
+        for (const ruleId of entry.matched_rule_ids ?? []) {
+          const support = OCI_EVIDENCE_RULE_SUPPORT[ruleId]
+          if (support?.lens !== job.lens) continue
+          expected.push({
+            evidence_id: authority.evidence_context.evidence_id,
+            locator: entry.locator,
+            adapter_rule_id: ruleId,
+            topic: support.topic,
+            evidence_claim: support.claim,
+          })
+        }
+      }
+    }
+    const declared = authority.required_matches
+    const authorityExpected = expected.filter(
+      ({ evidence_id: evidenceId }) =>
+        evidenceId === authority.evidence_context.evidence_id,
+    )
+    authorityExpected.sort((left, right) =>
+      compareCanonicalStrings(left.evidence_id, right.evidence_id)
+      || compareCanonicalStrings(left.locator, right.locator)
+      || compareCanonicalStrings(left.adapter_rule_id, right.adapter_rule_id))
+    if (
+      !Array.isArray(declared)
+      || stableJson(declared) !== stableJson(authorityExpected)
+    ) {
+      throw resultError(
+        `job ${job.job_id} required evidence matches do not match its sealed controller analysis`,
+      )
+    }
+  }
+  return expected.sort((left, right) =>
+    compareCanonicalStrings(left.evidence_id, right.evidence_id)
+    || compareCanonicalStrings(left.locator, right.locator)
+    || compareCanonicalStrings(left.adapter_rule_id, right.adapter_rule_id))
+}
+
+function ensureRequiredEvidenceFindings(job, sidecar, jobResult) {
+  if (job.kind !== 'LENS' || jobResult.state !== 'SUCCEEDED') return
+  const requiredMatches = expectedRequiredEvidenceMatches(job, sidecar)
+  const groupKey = ({
+    evidence_id: evidenceId,
+    adapter_rule_id: ruleId,
+    topic,
+    evidence_claim: evidenceClaim,
+  }) => `${evidenceId}\0${ruleId}\0${topic}\0${evidenceClaim}`
+  const byGroup = new Map()
+  for (const required of requiredMatches) {
+    const key = groupKey(required)
+    const group = byGroup.get(key) ?? {
+      ...required,
+      qualified_locations: [],
+    }
+    group.qualified_locations.push(`${required.evidence_id}:${required.locator}`)
+    byGroup.set(key, group)
+  }
+
+  // A Finding carries at most 128 locations. Partition each same-authority
+  // match set deterministically so equivalent controller evidence has the same
+  // lifecycle fingerprint on every run.
+  const expectedGroups = []
+  for (const group of byGroup.values()) {
+    group.qualified_locations.sort(compareCanonicalStrings)
+    for (let offset = 0; offset < group.qualified_locations.length; offset += 128) {
+      expectedGroups.push({
+        key: groupKey(group),
+        locations: group.qualified_locations.slice(offset, offset + 128),
+        rule_id: group.adapter_rule_id,
+      })
+    }
+  }
+  const expectedBySignature = new Map(expectedGroups.map((group) => [
+    `${group.key}\0${stableJson(group.locations, 0)}`,
+    { ...group, count: 0 },
+  ]))
+  const requiredLocationsByKey = new Map(
+    [...byGroup].map(([key, group]) => [key, new Set(group.qualified_locations)]),
+  )
+
+  for (const finding of jobResult.findings) {
+    if (!finding.evidence_context) continue
+    const key = groupKey({
+      evidence_id: finding.evidence_context.evidence_id,
+      adapter_rule_id: finding.adapter_rule_id,
+      topic: finding.topic,
+      evidence_claim: finding.evidence_claim,
+    })
+    const requiredLocations = requiredLocationsByKey.get(key)
+    if (!requiredLocations || !finding.location.some((item) => requiredLocations.has(item))) {
+      continue
+    }
+    const signature = `${key}\0${stableJson(finding.location, 0)}`
+    const expected = expectedBySignature.get(signature)
+    if (!expected) {
+      throw resultError(
+        `job ${job.job_id} must report required controller matches in canonical `
+        + 'sorted groups of at most 128 same-authority locators',
+      )
+    }
+    expected.count += 1
+  }
+
+  for (const expected of expectedBySignature.values()) {
+    if (expected.count !== 1) {
+      throw resultError(
+        `job ${job.job_id} must report exactly one finding for required controller match `
+        + `group ${expected.rule_id} at ${expected.locations[0]}; received ${expected.count}`,
+      )
+    }
+  }
+}
+
 function ensureFindingLocations(run, job, finding, options = {}) {
   const inventory = new Set(run.coverage.inventory)
-  const scoped = new Set(options.sidecar?.scoped_files ?? [])
+  const scoped = sealedSourceScope(run, job, options.sidecar)
   const examined = new Set(options.examinedFiles ?? [])
   const previousLocations = new Set(options.previous?.location ?? [])
 
   for (const location of finding.location) {
+    const isNewLocation = !previousLocations.has(location)
+    const evidenceLocation = parseEvidenceLocation(location)
+    if (evidenceLocation) {
+      const bundle = exactEvidenceBundle(run, finding, evidenceLocation)
+      if (isNewLocation) {
+        exactPacketEvidenceAuthority(
+          job,
+          options.sidecar,
+          bundle,
+          evidenceLocation,
+          finding,
+        )
+      }
+      // Acquired evidence is not a repository path. Its bundle and packet
+      // authority above replace inventory/scope/examined-file authority.
+      continue
+    }
+
     const path = findingLocationPath(location)
     if (!inventory.has(path)) {
       throw resultError(
         `finding ${finding.candidate_id} cites a path outside inventory: ${path}`,
       )
     }
-    if (job.kind === 'LENS' && !scoped.has(path)) {
+    if (
+      hasSealedSourceScope(job)
+      && (job.kind === 'LENS' || isNewLocation)
+      && !scoped.has(path)
+    ) {
       throw resultError(
         `finding ${finding.candidate_id} cites a path outside ${job.job_id} scope: ${path}`,
       )
     }
     if (
-      (job.kind === 'LENS' || !previousLocations.has(location))
+      (job.kind === 'LENS' || isNewLocation)
       && !examined.has(path)
     ) {
       throw resultError(
@@ -843,8 +1281,10 @@ function evidenceEnforcementContext(run) {
 }
 
 // A finding citing evidence is graded against the evidence actually in the run.
-// A bundle absent from the run is `not_located` — a statement about the claim,
-// not the harness — which is what invariant 14 requires before any grade.
+// The originating LENS transition already bound its locator, rule, context, and
+// bundle digest to the immutable controller-evaluated sidecar. Proof records
+// that accepted authority plus continued bundle presence; it does not pretend
+// the provider received or re-read raw evidence bytes.
 function evidenceExistenceCheck(run, finding) {
   const cited = finding.evidence_context?.evidence_id
   if (!cited) return undefined
@@ -853,8 +1293,9 @@ function evidenceExistenceCheck(run, finding) {
   return present
     ? {
         status: 'located',
-        method: `evidence bundle "${cited}" is present in this run; locator `
-          + `${finding.location?.[0] ?? '(none)'} resolves at proof against its sealed payload`,
+        method: `evidence bundle "${cited}" is present in this run; originating `
+          + `lens acceptance bound ${finding.location?.[0] ?? '(none)'} and `
+          + `${finding.adapter_rule_id ?? '(no rule)'} to its sealed, controller-evaluated index`,
       }
     : {
         status: 'not_located',
@@ -995,6 +1436,10 @@ function applyFindings(run, job, findings, options = {}) {
         throw resultError(`unsupported proof operation ${job.job_id}`)
       }
       assertValidFinding(finding, { stage: 3, evidence })
+      ensureFindingLocations(run, job, finding, {
+        ...options,
+        previous,
+      })
       assertValidFindingTransition(previous, finding)
       run.findings[existingIndex] = finding
       continue
@@ -1207,6 +1652,11 @@ export function applyJobResult(run, jobResult, options = {}) {
   }
 
   ensureExaminedScope(next, job, options.sidecar, jobResult)
+  const topicAssessments = ensureTopicAssessments(
+    job,
+    options.sidecar,
+    jobResult,
+  )
   applyStoreContributions(next, job, jobResult, {
     sidecar: options.sidecar,
   })
@@ -1220,8 +1670,7 @@ export function applyJobResult(run, jobResult, options = {}) {
         inventoryEntries: options.inventoryEntries,
       })
     : []
-  updateCoverage(next, job, options.sidecar, jobResult)
-
+  ensureRequiredEvidenceFindings(job, options.sidecar, jobResult)
   replaceJob(next, index, {
     state: jobResult.state,
     input_sha256: jobResult.input_sha256,
@@ -1230,8 +1679,15 @@ export function applyJobResult(run, jobResult, options = {}) {
       ? {}
       : { coverage_authority: 'PROVIDER_DECLARED' }),
     ...(candidateIds.length > 0 ? { candidate_ids: candidateIds } : {}),
+    ...(Array.isArray(job.topic_obligations)
+      ? { topic_assessments: topicAssessments }
+      : {}),
     ...(jobResult.state === 'FAILED' ? { reason: jobResult.error.message } : {}),
   })
+  updateCoverage(next, job, options.sidecar, jobResult)
+  if (job.kind === 'LENS') {
+    next.coverage.lenses = finalizedFanoutLensRows(next)
+  }
   if (jobResult.state === 'FAILED') {
     next.errors.push({
       error_id: `${job.job_id}:error:${next.errors.length + 1}`,
@@ -1699,10 +2155,12 @@ function hasFinalGaps(run) {
       run.coverage.closure
       && run.coverage.closure.status !== 'CONVERGED'
     ) ||
-    run.coverage.lenses.some(({ status }) => ['NOT_ASSESSED', 'FAILED'].includes(status)) ||
+    run.coverage.lenses.some(({ status }) =>
+      ['PARTIAL', 'NOT_ASSESSED', 'FAILED'].includes(status)) ||
     (run.store_profiles ?? []).some(
       ({ coverage_state: state }) => state !== 'ASSESSED',
     ) ||
+    acquiredEvidenceHasGaps(run) ||
     run.jobs.some(({ state }) => state === 'FAILED') ||
     run.errors.length > 0
   )

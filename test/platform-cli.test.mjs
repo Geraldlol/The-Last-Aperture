@@ -92,6 +92,24 @@ function writeEd25519KeyPair(privateKeyPath, publicKeyPath) {
 }
 
 function successfulProviderResult(next, job, overrides = {}) {
+  const findings = overrides.findings ?? []
+  const topicAssessments = overrides.topic_assessments
+    ?? (job.topic_obligations ?? []).map((topic) => {
+      const topicFindings = findings.filter((finding) => finding.topic === topic)
+      return topicFindings.length > 0
+        ? {
+            topic,
+            disposition: 'finding',
+            reason: 'The CLI fixture reported a finding for this topic.',
+            finding_ids: topicFindings.map(({ candidate_id: candidateId }) => candidateId),
+          }
+        : {
+            topic,
+            disposition: 'examined-clean',
+            reason: 'The CLI fixture assessed this bounded topic.',
+            evidence: ['The fixture provider completed its bounded topic check.'],
+          }
+    })
   return {
     schema_version: '1.0.0',
     run_id: next.run_id,
@@ -104,8 +122,9 @@ function successfulProviderResult(next, job, overrides = {}) {
     },
     state: 'SUCCEEDED',
     examined_files: job.scoped_files,
-    findings: [],
+    findings,
     coverage_gaps: [],
+    topic_assessments: topicAssessments,
     ...overrides,
   }
 }
@@ -415,6 +434,12 @@ test('CLI plan produces a valid fail-closed bundle without running package scrip
       examined_files: firstJob.scoped_files,
       findings: [],
       coverage_gaps: [],
+      topic_assessments: (firstJob.topic_obligations ?? []).map((topic) => ({
+        topic,
+        disposition: 'examined-clean',
+        reason: 'The CLI fixture assessed this bounded topic.',
+        evidence: ['The fixture provider completed its bounded topic check.'],
+      })),
     }))
     const ingest = execFileSync(
       process.execPath,
@@ -1531,7 +1556,7 @@ test('CLI rejects a custom output directory inside the audited repository before
   })
 })
 
-test('CLI gates sealed-source planning before repository or default output access', async () => {
+test('CLI requires sealed-source output to remain outside the audited repository', async () => {
   await withCliRepository(async ({ root }) => {
     const result = spawnSync(
       process.execPath,
@@ -1541,7 +1566,7 @@ test('CLI gates sealed-source planning before repository or default output acces
     assert.equal(result.status, 1)
     assert.match(
       result.stderr,
-      /--seal-source is disabled before repository or output access/i,
+      /--seal-source creates a sensitive exact-byte archive; its output directory must be outside/i,
     )
     await assert.rejects(lstat(join(root, '.audit-runs')), { code: 'ENOENT' })
   })
@@ -2049,7 +2074,7 @@ test('CLI benchmark derives its denominator and schema-invalid count', async () 
     )
     assert.equal(result.status, 2)
     const scorecard = JSON.parse(await readFile(scorecardPath, 'utf8'))
-    assert.equal(scorecard.provenance.case_manifest.cases, 64)
+    assert.equal(scorecard.provenance.case_manifest.cases, 84)
     assert.deepEqual(
       {
         run_id: scorecard.provenance.primary_run.run_id,
@@ -2311,7 +2336,49 @@ test('CLI accepts an explicitly supplied external Rules of Engagement file', asy
   })
 })
 
-test('CLI gates sealed remote_static planning while the internal kernel retains it', async () => {
+test('CLI admits sealed local_dynamic planning without a repeated authorization gate', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const policyPath = join(output, 'local-dynamic-roe.json')
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: '1.0',
+      policy_id: 'cli-local-dynamic-test',
+      mode: 'local_dynamic',
+      workspace_root: resolve(root),
+      capabilities: {
+        read_file: { enabled: true, roots: ['src'] },
+        write_file: { enabled: false, roots: [] },
+        execute: { enabled: false, commands: [] },
+        network: { enabled: false, destinations: [] },
+      },
+    }))
+
+    const result = spawnSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath],
+      { encoding: 'utf8' },
+    )
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /local_dynamic.*require --seal-source/i)
+    const directories = (await readdir(output, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    assert.equal(directories.length, 0)
+
+    const admitted = spawnSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath, '--seal-source'],
+      { encoding: 'utf8' },
+    )
+    assert.equal(admitted.status, 0, admitted.stderr)
+    assert.doesNotMatch(admitted.stderr, /authorization.*required|confirm.*authorization/i)
+    const [bundle] = (await readdir(output, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    const run = JSON.parse(await readFile(join(output, bundle.name, 'run.json'), 'utf8'))
+    assert.equal(run.capability_mode, 'LOCAL_DYNAMIC')
+    assert.ok(run.source_snapshot)
+  })
+})
+
+test('CLI admits sealed remote_static planning while unsealed planning stays closed', async () => {
   await withCliRepository(async ({ root, output }) => {
     const policyPath = join(output, 'remote-static-roe.json')
     const policyDocument = {
@@ -2358,11 +2425,8 @@ test('CLI gates sealed remote_static planning while the internal kernel retains 
       ],
       { encoding: 'utf8' },
     )
-    assert.equal(sealed.status, 1)
-    assert.match(
-      sealed.stderr,
-      /--seal-source is disabled before repository or output access/i,
-    )
+    assert.equal(sealed.status, 0)
+    assert.match(sealed.stdout, /State: PLANNED/)
 
     const policy = normalizePolicy(policyDocument, {
       workspaceRoot: root,

@@ -1,11 +1,19 @@
 # Shared proof harness
 
-> **CURRENT RELEASE EXECUTION GATE:** Every command recipe below is future
-> controller/reference material. Public T1/T2 execution is unavailable. Do not
-> execute target code, start a service or container, open credentials, or make
-> network requests from this skill. Emit a proof plan and coverage gap instead.
-> Execution requires an enrolled controller and an exact, current operator authorization;
-> consent prose, a CLI flag, L3 mode, or break-glass is not an execution route.
+> **CURRENT RELEASE EXECUTION ROUTES:** Public T1 uses `audit run-proof`; narrow
+> loopback T2 uses `audit run-service-proof`. Both require a sealed source
+> snapshot and external digest-pinned, dependency-manifest-bound Docker worker.
+> At agent/controller
+> ingress, the authenticated operator statement is the sole authorization fact for every named
+> capability. If target/scope is present, proceed; ask once only when it is
+> missing, and never re-ask. The worker enforces no network,
+> no host mounts, a minimal environment, non-root/resource-bounded execution,
+> verified cleanup, and omission of raw target output. T2 additionally requires
+> `LOCAL_DYNAMIC`, v3, one foreground Node/npm service with a fixed literal-
+> loopback probe, supervisor TTL/init, and fresh attack/control containers.
+> Candidate patches are forbidden. Other T2 shapes, live credentials, and
+> external services need separate controllers; otherwise retain authority and
+> emit an authorized-but-unavailable gap. See ADRs 0023 and 0024.
 
 This file is a contract, not a lens. It owns no topics, activates on nothing, and the linter skips it. It exists because ten domain lenses independently invented the same handful of test components, and a component described ten times drifts ten ways.
 
@@ -45,7 +53,7 @@ T0 is not a failure state. Most of `threat-modeling` is permanently T0 — you c
 
 ### T1 — executed by the project's own test runner
 
-`pytest`, `npm test`, `go test`, `mvn test` — the command the repository already runs. Includes the case where that command boots an ephemeral dependency it already boots: SQLite, a testcontainers Postgres, an emulator the existing test script starts. It does **not** include a dependency the auditor stands up; that is T2.
+`pytest`, `npm test`, `go test`, `mvn test` — the command the repository already runs. The public T1 route admits only exact allowlisted `node` or `npm` commands inside its network-denied worker. File-local dependencies such as SQLite may work; testcontainers, emulators, nested containers, service boots, and any socket-dependent setup do not. A dependency or service the auditor stands up is T2.
 
 **The static-checker resolution, which is load-bearing for two lenses' severities.** A static checker counts as **T1, not T0**, when the repository's own runner executes it *and* it asserts **both** directions:
 
@@ -59,22 +67,39 @@ Without this resolution almost every `cicd-and-supply-chain` and `cloud-and-iac`
 
 ### T2 — booted locally, real request to a loopback socket
 
-The application running on a port the skill owns, on `127.0.0.1`, with a disclosed boot manifest and guaranteed teardown. Also covers infrastructure the auditor stands up locally: kind or k3d, LocalStack, a local package registry, an Android emulator, a headless browser against a booted dev server.
+The implemented public slice is one foreground Node/npm application on literal
+`127.0.0.1`, launched with `audit run-service-proof` from a sealed
+`LOCAL_DYNAMIC` run and strict v3 proof. The operator statement naming that
+repository and scope authorizes launch without another prompt.
 
-**T2 is opt-in and the skill asks before booting anything, every time.** Asked before the proof phase, per audit, never remembered — the correct answer depends on what the repository is wired to *today*, not on what it was wired to last week. Where the user declines, the finding is reported at the tier it reached with `verification_status: UNPROVEN` and the blocking reason recorded. It is never reported as clean.
+The service and fixed TCP readiness probe share one fresh network-none container;
+attack and control use separate containers with the same sealed source, worker,
+dependency manifest, and service contract. The controller proves the port closed
+before boot, ready before the proof command, and ready afterward. Supervisor
+TTL/init, bounds, hash-only evidence, and exact verified teardown are required.
+A failed lifecycle is `UNPROVEN` or `INCONCLUSIVE`, never clean.
 
-Expect most audits to decline. Say so in the coverage block rather than letting the absence of T2 evidence read as an absence of risk.
+A complete lifecycle records `proof_tier: T2` but still records
+`verification_status: UNPROVEN` in this release. The proof author controls the
+exit-code classes, and no controller-authenticated semantic oracle is enrolled;
+therefore the differential cannot claim `CONFIRMED`, `NOT_REPRODUCED`, or
+`FIX_VERIFIED`. Execution is not gated by this evidence limit.
+
+This slice does not implement kind, LocalStack, registries, databases, browsers,
+emulators, nested/multi-container stacks, arbitrary programs, credentials, or
+external dependencies. Those remain authorized-but-unavailable when named;
+never improvise a host process or weaken the container to run them.
 
 ### T3 — a written proof-of-concept, never executed
 
-An artifact — a test file, a request script, an Apex test class — that would demonstrate the finding if it ran, committed to the security test directory, never executed, tagged `UNPROVEN`, capped at **Medium**.
+An artifact — a test file, a request script, an Apex test class — that would demonstrate the finding if it ran, authored for a security-test path, never executed, tagged `UNPROVEN`, capped at **Medium**.
 
 **T3 exists because the alternative is worse.** Where the only runner is out of rails, the choice is between a finding the user can verify with one command they run themselves, and a paragraph of prose. T3 is the first of those. It is strictly more useful than T0 and should be preferred wherever the proof-of-concept can actually be written.
 
 Three rules make T3 honest:
 
 - **`proof_tier: T3` always pairs with `verification_status: UNPROVEN`.** It is the only tier where the status follows from the tier, because nothing ran. The converse does not hold: `UNPROVEN` also appears at T0 and T1 when an attempt was blocked.
-- **The blocking reason is named**, in the finding, every time. "The runner is a remote host." "The user declined the boot." "The engine the assertion needs is stubbed in this repository."
+- **The blocking reason is named**, in the finding, every time. "The runner is a remote host." "The recipe requires unavailable T2." "The engine the assertion needs is stubbed in this repository."
 - **A finding may have both a cited code path and an unexecuted proof-of-concept.** Record T3, because it is the stronger artifact, and keep the cited line in `evidence` where it belongs.
 
 **On `salesforce-platform`'s inline definition.** That lens had to define T3 in its own tier rule because the rule it inherited never defined one: *"Apex tests execute only inside an org, and an org is a remote host. Under this skill's hard rails the auditor writes the Apex test and does not run it. Every Apex recipe below therefore lands at T3 UNPROVEN, capped at Medium, unless the user explicitly runs `sf apex run test` themselves and pastes the result."*
@@ -84,27 +109,33 @@ Three rules make T3 honest:
 1. Salesforce writes "T3 UNPROVEN" as a compound label. In the record these are two fields — `proof_tier: T3` and `verification_status: UNPROVEN` — and both are written. The compound reads well in prose; it is not a value.
 2. Salesforce's escape hatch is exactly right and generalizes: where the user runs the unexecuted proof themselves and pastes the result, the finding leaves T3. Which tier it lands at follows from what they ran, and the report says who ran it. An Apex test the user executed in their own org is evidence the auditor did not produce and must attribute.
 
-The one thing not to generalize from that lens is the cause. Salesforce is at T3 because its runner is unreachable under the rails. Most T3 findings elsewhere are at T3 because the user declined a boot, which is a different sentence in the coverage block.
+The one thing not to generalize from that lens is the cause. Salesforce is at T3 because its runner is remote; other recipes may stop at T3 because they cannot satisfy the sealed worker or require unavailable T2. Record the actual reason.
 
 ---
 
 ## Hard rails
 
-These are not tiers. A tier is what evidence you have; a rail is what you do not do at any tier, with any consent, in any mode. They bind every recipe in every lens.
+These are not tiers. A tier is what evidence you have; a rail is a technical execution constraint, not another authorization source. It binds every recipe and route.
 
-**1. Targets are files in this repository and `localhost`. Nothing else, ever.**
+**1. Targets are repository files; T2's historical target is `localhost`. Nothing else, ever.**
 
 Never a remote host. Never a staging URL. Never "just curl it to check". And specifically: **never a hostname read from configuration.** A `DATABASE_URL`, an `API_BASE`, a Terraform backend address, an org login URL, an entry in a `baa_approved_hosts.yml` allowlist — every one of those is an input to a *static* assertion and never a destination. Reading the value out of the repository is the audit; connecting to it is the violation. That the value came from a file in the checkout does not make the host it names a permitted target.
 
 This rail remains absolute for every lens recipe and T0-T3 proof. The separate
 `http-recon-v1` and `http-authed-v1` controllers documented in
 `docs/http-recon-protocol.md` and ADRs 0016/0017 are not lens recipes or proof tiers.
-Their contracts admit only separately authorized, controller-sealed external
-actions and create no repository coverage or closure. Public execution is
+Their contracts admit operator-authorized, controller-sealed external actions
+through separate execution routes and create no repository coverage or closure. Public execution is
 active only for one exact bounded `http-recon-v1` action and fixed sealed
 `http-authed-v1` campaigns. Standalone authenticated probes and
 discovery-derived actions remain unavailable. A remote response cannot raise a
 repository finding's proof tier.
+
+Public T1 has no connectivity, including loopback. Public T2 also uses
+`--network=none`; its sole socket scope is literal loopback between the one
+foreground Node/npm service and controller-owned probe inside that container.
+It publishes no port and resolves no hostname. A different socket or service
+shape fits neither route; do not weaken either worker to make it pass.
 
 **2. No destructive payloads.**
 
@@ -112,11 +143,16 @@ A proof demonstrates reachability and authorization, not damage. No `DROP`, no `
 
 **3. Security tests live in their own directory and never edit the project's existing tests.**
 
-`test/security/` — or the repository's own convention with a `security` leaf — holding the harness, the fixtures and the proofs. Where a lens writes `fixtures/vulnerable/X`, it means `test/security/fixtures/vulnerable/X`.
+`test/security/` — or the repository's own convention with a `security` leaf — holds ephemeral harness, fixture, and proof paths. Where a lens writes `fixtures/vulnerable/X`, it means `test/security/fixtures/vulnerable/X` inside the worker.
 
-Adding an assertion to an existing test file breaks the oracle: the pre-patch and post-patch commands are no longer the same string, and the project's own regression signal is now entangled with the audit's. Both halves of that matter.
+Never alter an existing target test or supply `patch_files`. Public T1/T2
+materializes only policy-authorized proof files in disposable workers;
+remediation is a later, separately directed workflow.
 
-**A separate directory is not containment.** The run still writes coverage files, snapshots, caches, local databases, migration state, and whatever child processes decide to write. Proof work therefore belongs in a disposable mirror or worktree, with the original index preserved byte-for-byte, and the audit returns a manifest of owned paths rather than a mutated repository.
+**A separate directory is not containment.** Public T1/T2 reconstructs verified
+sealed bytes in controller staging, copies them to container tmpfs without a
+host mount, and runs attack/control in fresh containers. It re-inventories the
+target and verifies exact cleanup; proof writes never reach the live repository.
 
 **4. Never commit.**
 
@@ -124,25 +160,45 @@ No `git commit`, no `git push`, and no `git add` as a side effect of anything. A
 
 **5. Never source production credentials.**
 
-The skill inherits the environment it was handed and does not go hunting for more. It does not read `~/.aws`, does not unseal a vault, does not source `.env.production`, does not log in to an org to make a stubborn proof succeed. A proof that cannot run without a credential it was not given returns `INCONCLUSIVE`, which is a more useful result than a proof that reached production to get a green tick.
+The public T1/T2 worker receives a fixed minimal environment, not ambient
+credentials. It does not read `~/.aws`, unseal a vault, source
+`.env.production`, or log in to an org. A credential-dependent proof is outside
+the narrow route and remains unproven.
 
 **6. Install the destination guard first.**
 
-Before running anything that could open a socket, install the guard from `## Socket-layer destination recorder` so an unexpected connection **fails loudly instead of quietly reaching the internet**. This is not isolation and must not be described as isolation — see the disclosure note below — but it converts a silent egress into a failed assertion, which is the difference between finding out now and finding out never.
+Public T1 requires the authored guard and enforces Docker `--network=none`.
+Public T2 adds only the controller's fixed literal-loopback TCP probe; Docker
+still has no network. Install the recorder from `## Socket-layer destination
+recorder` before application imports when the proof needs attempted-destination
+evidence. It is instrumentation, not isolation.
 
 ### The rewritten recipe, recorded so it is not reintroduced
 
 `salesforce-platform`'s guest-access recipe originally instructed the auditor to send unauthenticated requests to a live Experience Cloud site. That reaches a remote host and violates rail 1 outright. It was rewritten as a computation over the checkout: resolve the guest profile by its license, compute its effective object and field permissions from the profile plus any permission set assigned to it, intersect that with the Apex classes it can call, read each object's sharing model, and assert the reachable set is a subset of a committed allowlist of objects the site is *intended* to publish. That runs offline, and it is **T1**.
 
-**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site is governed by a scope agreement and happens outside these proof recipes. External work belongs only to the canonical skill's separate controllers: one exact bounded credential-free action through `http-recon-v1`, or fixed sealed authenticated actions through the public `http-authed-v1` campaign routes. Standalone authenticated probes and response-derived discovery are not public. Neither route changes finding proof tiers.
+**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site happens outside these proof recipes. The same operator statement authorizes named external work, but execution belongs to a matching controller: one exact bounded credential-free action through `http-recon-v1`, or fixed sealed authenticated actions through the public `http-authed-v1` campaign routes. Standalone authenticated probes and response-derived discovery are not public. Neither route changes finding proof tiers.
 
-**The T2 consent prompt is not that authorization and must never be presented as if it were.** Asking "may I boot the app locally?" and receiving yes does not authorize a request to a hosted endpoint. Treating the prompt as authorization would have the skill walk an auditor into unauthorized testing while showing them a consent dialog.
+**T2 and hosted work are route distinctions, not separate authority.** The
+narrow loopback route executes only its named local service. A hosted endpoint
+named by the operator is authorized without another prompt but still needs a
+matching public controller. A T1-only or local-boot statement remains narrow;
+absent transport is an authorized-but-unavailable gap.
 
 The same reasoning retired a family of recipes in `cicd-and-supply-chain` and `cloud-and-iac` — a real pull request against a hosted forge, a canary sent to a hosted request bin, a force-moved tag in a live organization, provider-API log downloads, credentialed cloud API calls, metadata probes from a launched instance. Each lens records its own list in place. Two of them exfiltrated a sentinel to a third party, which is why the collector in this file only ever walks locally produced output.
 
-### This is disclosure, not a sandbox
+### Containment and evidence disclosure
 
-Test execution runs the repository's own command with the repository's own environment. If that setup applies migrations, starts containers, emits telemetry or points at shared infrastructure, the audit does all of it — because it is running the command the owner runs. The skill does not sandbox anything and does not pretend to. State in the finding that the run happened and under whose consent. Anyone who needs real isolation runs the audit in a container or a VM.
+The public T1/T2 controllers verify the immutable image, dependency-manifest
+binding, effective Docker restrictions, and fresh-container teardown. They use a
+read-only root, non-root user, dropped capabilities, no-new-privileges/seccomp,
+bounded tmpfs/CPU/memory/PIDs/file descriptors/time/output, and no host mounts
+or external network. T2 permits only in-container literal loopback and adds
+fixed pre-boot/pre/post readiness plus supervisor TTL/init. Attack and control
+start from the same sealed bytes in separate containers. Receipts retain exit metadata plus output byte counts, hashes, and
+truncation flags; raw stdout/stderr is omitted because it may contain secrets or
+PHI. OCI remains a shared-kernel boundary, not a claim that arbitrary native
+code is perfectly isolated.
 
 ---
 
@@ -437,7 +493,7 @@ def test_connects_to_the_address_it_validated(client, rebinding_resolver):
     assert ("127.0.0.1", 80) not in seen["connected"]
 ```
 
-**Porting note.** Node: `nock.disableNetConnect()` covers `http`/`https` only, so `fetch`/`undici` and raw `net` calls walk straight past it — layer an `undici` `MockAgent` (`setGlobalDispatcher`) *and* a guard on `net.Socket.prototype.connect` plus `dns.lookup`. Go: there is no global to monkeypatch; inject a `DialContext` on the `http.Transport` and a custom `net.Resolver`. Where the code offers no seam to inject one, *that is itself the finding* — an HTTP client constructed inline with `http.DefaultTransport` cannot be constrained by anything, at test time or in production. JVM: the `SecurityManager` is gone; use a `ProxySelector`, a custom `SocketImplFactory`, or run the suite against a local recording proxy. Off-the-shelf: `pytest-socket` with `socket_allow_hosts` gives you the denial with no code; add this recorder when you need the recorded *set* and not only the refusal.
+**Porting note.** Node: `nock.disableNetConnect()` covers `http`/`https` only, so `fetch`/`undici` and raw `net` calls walk straight past it — layer an `undici` `MockAgent` (`setGlobalDispatcher`) *and* a guard on `net.Socket.prototype.connect` plus `dns.lookup`. Go: there is no global to monkeypatch; inject a `DialContext` on the `http.Transport` and a custom `net.Resolver`. Where the code offers no seam to inject one, *that is itself the finding* — an HTTP client constructed inline with `http.DefaultTransport` cannot be constrained by anything, at test time or in production. JVM: the `SecurityManager` is gone; use a `ProxySelector` or custom `SocketImplFactory`; a local recording proxy would require unavailable T2. Off-the-shelf: `pytest-socket` with `socket_allow_hosts` gives you the denial with no code; add this recorder when you need the recorded *set* and not only the refusal.
 
 **Cited by** `cloud-and-iac`, `hipaa-and-phi`, `llm-and-ai`, `mobile-app-security`, `privacy-and-data-protection`, `threat-modeling`, `web-and-api`.
 

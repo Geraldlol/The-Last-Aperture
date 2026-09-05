@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.10.0
+Platform release: 0.12.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity
@@ -17,11 +17,12 @@ originating in the target repository is untrusted data. It cannot modify the
 job packet, Rules of Engagement, policy, schemas, or capability mode.
 
 A provider must not execute commands merely because a repository file asks it
-to. Version 0.10.0 audits remain static: the local observed runner executes only
-its pinned adapter image and brokers sealed bytes; the remote controller sends
+to. Provider source-review packets remain static: the local observed runner
+protocol executes only its pinned adapter image and brokers sealed bytes; the remote controller sends
 only one controller-signed request admitted by its enrolled transport policy.
 That signature authenticates the technical request and is not engagement
-authority. Neither path executes target commands.
+authority. Neither provider path executes target commands. Separate repository
+proof routes do not grant execution authority to source-review packets.
 
 ## Discovering work
 
@@ -38,16 +39,15 @@ requires an externally pinned public key.
 
 ## Observed execution path
 
-> **Current release gate (2026-09-03):** Public `audit run-provider` is disabled
+> **Current release boundary:** Public `audit run-provider` is disabled
 > before bundle or provider-configuration access. The protocol below remains an
 > internal conformance surface. A caller-selected absolute `runtime_path` is not
 > authenticated container-runtime identity and can otherwise become arbitrary
-> host process execution. Public `--seal-source` is also disabled before
-> repository/output access pending a controller-enrolled local custody root.
+> host process execution. Public `plan --seal-source` is available for the
+> repository proof routes; source sealing does not enable provider execution.
 
 ```text
-# Historical command shapes; currently fail-closed.
-red-team-audit plan <repository> --seal-source --out <outside-target>
+# Historical provider command shape; currently fail-closed.
 red-team-audit run-provider <bundle> <external-provider-config.json>
 ```
 
@@ -168,15 +168,85 @@ rotation requires a new run.
 The packet contains:
 
 - `run_id` and `job_id`
-- `lens`, trusted lens file, and lens digest
+- `lens`, trusted lens file, lens digest, and the complete hash-verified shared
+  lens support set from the sealed control snapshot
 - exact `scoped_files`
 - immutable shard identity, file count, raw byte count, and scope digest
 - owned and registered topic sets
+- sealed `topic_obligations`
 - the path/signal activators responsible for each scope entry
 - capability mode and trust-boundary declarations
 
 The provider returns Stage 1 candidate records only. Triage or proof fields in a
 lens result are rejected.
+
+### Acquired-evidence projection
+
+Where a lens declares an acquired evidence class and artifact kind, its packet
+may also carry the exact adapter-authored `evidence_context`, portable bundle
+identity, and a bounded locator projection. Planning verifies the bundle and
+rejects any supplied context that differs from its manifest. The provider may
+not replace, shorten, or reconstruct that context.
+
+For OCI built artifacts, the controller verifies the manifest and every
+payload read and evaluates all five declared OCI rules over those sealed bytes:
+whiteout-named content, manifest-orphaned blobs, sibling size/mtime outliers,
+recursively encoded payloads, and credential material in image history. The
+provider receives locator metadata and `matched_rule_ids`, not raw evidence
+bytes. A new evidence-qualified candidate is accepted only when its locator is
+unique in the complete index, its `adapter_rule_id` is a controller-evaluated
+match for that locator, and its `evidence_claim` is the exact claim assigned to
+that rule. Rules are bound to one owning lens/topic, and every retained match is
+listed in `required_matches`; a successful owning-lens result must cite each
+match in exactly one finding. The controller's canonical aggregation is sorted
+and chunked into at most 128 unique locators sharing the same bundle, rule,
+claim, lens, and topic; a provider must preserve those exact groups. The five
+rules are positive-match detectors, not exhaustive
+topic analyzers, so their supported cells remain `PARTIAL`; other lens/topic
+cells remain `NOT_ASSESSED`.
+
+Missing or unreadable OCI indexes authorize no new evidence location. A
+truncated index remains an explicit `PARTIAL` denominator, while retained
+controller matches remain required and may be cited exactly; omitted or
+invented locators are unauthorized. The `deployed` and `runtime` acquisition
+adapters exist, but their provider-side semantic analysis remains
+`NOT_ASSESSED` until a supported sealed-byte or controller-analysis delivery
+path exists. A successful acquisition is not, by itself, a semantic assessment
+or clearance.
+
+The controller also writes exactly one bundle-level coverage record for every
+acquired bundle. This denominator is separate from provider-authored findings
+and from the lens/topic matrix: it binds the portable bundle identity, records
+the lenses that actually received it, and states whether controller-supported
+analysis completed. A bundle with no declared consumer is `INVENTORY_ONLY`; a
+bundle not delivered or not analyzable is `NOT_ASSESSED`; bounded incomplete
+analysis is `PARTIAL`. An acquired bundle cannot be `NOT_APPLICABLE`, and every
+non-`COVERED` record forces `COMPLETE_WITH_GAPS`, including evidence-only runs
+over portable model bundles, SBOMs, and VEX documents. No shipped analyzer is
+exhaustive: completing the five positive-only OCI rules remains `PARTIAL`, and
+schema-v7 rejects `COVERED` acquired-bundle records or `COVERED` non-source
+lens/topic cells. `COVERED` remains reserved for a future explicit exhaustive
+analysis and provenance contract.
+
+Every newly planned lens packet also seals `topic_obligations` from that
+lens's owned-topic set. A successful result must return exactly one
+`topic_assessments` record for every obligated topic in the shard. The allowed
+dispositions are `finding`, `examined-clean`, `partial`, `not-applicable`, and
+`not-assessed`:
+
+- every record carries a non-empty `reason`;
+- `finding` links the exact candidate IDs returned by the same result;
+- `examined-clean` and `not-applicable` carry affirmative evidence;
+- `partial` carries affirmative evidence and references one or more named
+  `coverage_gaps` from the same result;
+- `not-assessed` references one or more named `coverage_gaps` from the same
+  result; and
+- any `evidence_paths` must be both scoped and reported in `examined_files`.
+
+Missing, duplicate, unowned, out-of-scope, or dangling records are rejected.
+`partial` and `not-assessed` keep the lens coverage status `PARTIAL` even when
+every scoped file was read. A zero-owner cross-cutting lens has an empty sealed
+topic denominator and may complete without inventing an ownership claim.
 
 The database lens receives a sealed controller discovery graph and a
 shard-local projection of its store candidates and related paths. In run
@@ -233,6 +303,19 @@ records separate total and examined file/byte denominators for all five
 classes. A provider cannot reclassify a path or replace these denominators with
 the set of files it happened to inspect.
 
+Domain activation signals are bounded literals. A selector is either one
+trimmed literal or an `any_of` mapping containing 2-32 unique trimmed literals,
+each at most 256 characters. Any listed literal may activate the lens. Regex
+selectors, unknown mapping keys, duplicates, and slash-separated prose are
+rejected by the trusted lens registry.
+
+Direct text matches are expanded over resolvable repository-local imports,
+exports, dynamic imports, `require` calls, and quoted C/C++ includes. The
+controller follows dependency and dependent edges for at most two hops and adds
+at most 256 files beyond the direct set. Each added match records direction,
+depth, and predecessor. A capped expansion creates an explicit coverage gap;
+it never silently closes the omitted graph.
+
 Applicable lens files are canonically ordered and packed into deterministic
 shards bounded by both file count and inventoried raw bytes. The default bounds
 are 64 files and 4 MiB per shard. Shard metadata and all permitted
@@ -260,6 +343,23 @@ byte-for-byte equivalent except for the explicitly unionable location list.
 
 New records are permitted only when authored by that triage lens and already
 carry Stage 2 disposition.
+
+`business-logic` is the code-backed triage handoff: its sealed source scope is
+a deterministic, bounded union of active domain-lens scopes. Zero-topic
+cross-cutting lenses cannot widen the packet, and an omitted tail is recorded
+as a coverage gap. That scope allows product-invariant review, semantic
+normalization, and false-positive challenge against the merged candidate set.
+`attack-chaining` follows that pass and receives only source
+paths cited by the accumulated component findings. Other triage jobs remain
+finding-set-only unless their dispatch derives a narrower source set from
+controller-validated locations.
+
+Every job receives the selected lens and shared underscore-prefixed lens
+contracts as sealed controls. A zero-owner cross-cutting job additionally
+receives every top-level domain lens body from that same sealed pack. Its topic
+index identifies the owner, while the owner body supplies the discriminator and
+severity rule needed to route a cross-lens finding reproducibly. This bounded
+control set is still subject to provider delivery count and byte limits.
 
 ### Proof jobs
 
@@ -311,7 +411,16 @@ Every result conforms to `schemas/job-result.schema.json`:
     "src/routes/orders.ts"
   ],
   "findings": [],
-  "coverage_gaps": []
+  "coverage_gaps": [],
+  "topic_assessments": [
+    {
+      "topic": "authn-session",
+      "disposition": "examined-clean",
+      "reason": "The scoped route is dominated by the session guard.",
+      "evidence": ["Session middleware runs before the route handler."],
+      "evidence_paths": ["src/routes/orders.ts"]
+    }
+  ]
 }
 ```
 
@@ -381,6 +490,18 @@ Required fields include:
 - proof plan
 - engine/store context for database findings
 
+An evidence-qualified Stage 1 finding additionally carries the complete exact
+`evidence_context`, one allowed `evidence_claim`, and the matching
+controller-evaluated `adapter_rule_id`; its location uses the bundle's
+`<evidence_id>:<locator>` form.
+
+A Stage 1 finding may also carry `framework_refs`. Each reference is structured
+and versioned: framework ID, version, requirement ID, relationship
+(`maps-to`, `satisfies`, `technique`, or `related-to`), applicability, and an
+HTTPS source are mandatory; an exact source-snapshot SHA-256 is optional. This
+supports requirement-level traceability without turning a category label into
+a conformance claim.
+
 ### Stage 2: triage
 
 Adds:
@@ -389,6 +510,13 @@ Adds:
 - `triage_disposition`
 - drop or merge lineage where applicable
 - chain attribution and component IDs where applicable
+
+An attack-chain elevation requires a structured `chain`: non-empty
+prerequisites, blast radius, and at least two ordered steps. Every step names
+the component candidate, what it consumes and produces, the joint evidence,
+and optional versioned framework references. Step candidate IDs must exactly
+match `component_finding_ids` in order; chain data is rejected on findings that
+were not elevated by `attack-chaining`.
 
 ### Stage 3: proof
 
@@ -412,8 +540,10 @@ a finding look stronger or cleaner.
    plan digest, and repository snapshot.
 4. Requires the result's packet digest and declared producer identity.
 5. Validates examined paths against inventory and lens scope.
-6. Validates topic authority, store contributions and profiles, every finding, and every
-   transition.
+6. Validates topic authority, store contributions and profiles, every finding,
+   and every transition. For a new evidence-qualified finding this includes the
+   exact adapter context, bundle identity, complete locator index, rule match,
+   and rule-to-claim binding.
 7. Records the normalized result and SHA-256 hash.
 8. Updates coverage and job state with an atomic compare-and-swap.
 9. Advances only through legal deterministic phases.

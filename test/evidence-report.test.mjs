@@ -6,7 +6,7 @@ function run(overrides = {}) {
   return {
     schema_version: '7.0.0',
     run_id: 'run-2026-08-08-aaaa',
-    state: 'COMPLETE',
+    state: 'COMPLETED',
     phase: 'REPORT',
     created_at: '2026-08-08T14:00:00Z',
     capability_mode: 'STATIC',
@@ -72,7 +72,7 @@ test('an unreached class is stated as a blind spot, not omitted', () => {
   )
 })
 
-test('a run with every class covered says so without the blind-spot notice', () => {
+test('an acquired class with bounded coverage avoids the not-acquired notice', () => {
   const covered = run({
     evidence_bundles: [{
       evidence_id: 'peerstar-api-image',
@@ -83,11 +83,20 @@ test('a run with every class covered says so without the blind-spot notice', () 
       root_sha256: 'c'.repeat(64),
     }],
     evidence_coverage: {
+      bundle_coverage: [{
+        evidence_id: 'peerstar-api-image',
+        evidence_class: 'built-artifact',
+        artifact_kind: 'oci-image',
+        root_sha256: 'c'.repeat(64),
+        state: 'PARTIAL',
+        consumer_lenses: ['cloud-and-iac'],
+        reason: 'controller OCI analysis is positive-only, not exhaustive',
+      }],
       cells: [{
         lens: 'cloud-and-iac',
         topic: 'container-image-content',
         evidence_class: 'built-artifact',
-        state: 'COVERED',
+        state: 'PARTIAL',
         reason: 'peerstar-api-image (cccccccccccc)',
       }],
       summary: {
@@ -156,7 +165,7 @@ test('SARIF for a fully covered run raises no notification', () => {
       cells: [],
       summary: {
         cell_count: 0,
-        bundle_count: 1,
+        bundle_count: 0,
         unreached_class_count: 0,
         unreached_classes: [],
         not_assessed_cell_count: 0,
@@ -166,6 +175,74 @@ test('SARIF for a fully covered run raises no notification', () => {
   })
   const notifications = renderSarif(covered).runs[0].invocations?.[0]?.toolExecutionNotifications ?? []
   assert.deepEqual(notifications, [])
+})
+
+test('SARIF preserves evidence locators literally when source-path URIs need encoding', () => {
+  const locator = 'peerstar-api-image:layer/naïve#part%20?.txt:42'
+  const evidenceContext = {
+    evidence_id: 'peerstar-api-image', evidence_class: 'built-artifact',
+    adapter_id: 'artifact', target_identity: 'sha256:' + 'a'.repeat(64),
+  }
+  const sarif = renderSarif(run({ findings: [{
+    candidate_id: 'container-image-content:locator', lens: 'cloud-and-iac',
+    topic: 'container-image-content', title: 'Artifact content requires review',
+    claimed_impact_severity: 'Medium', location: [locator],
+    impact: 'The artifact contains unexpected content.',
+    evidence_context: evidenceContext,
+  }] }))
+  const result = sarif.runs[0].results[0]
+  assert.deepEqual(result.locations, [])
+  assert.deepEqual(result.properties.evidence_locations, [{
+    evidence_id: 'peerstar-api-image', locator: 'layer/naïve#part%20?.txt:42',
+  }])
+  assert.deepEqual(result.properties.evidence_context, evidenceContext)
+})
+
+test('unconsumed acquired bundles are explicit in Markdown and SARIF', () => {
+  const uncovered = run({
+    state: 'COMPLETE_WITH_GAPS',
+    evidence_bundles: [{
+      evidence_id: 'portable-model',
+      evidence_class: 'built-artifact',
+      adapter_id: 'artifact',
+      artifact_kind: 'model-bundle',
+      coverage_state: 'COVERED',
+      root_sha256: 'd'.repeat(64),
+    }],
+    evidence_coverage: {
+      cells: [],
+      bundle_coverage: [{
+        evidence_id: 'portable-model',
+        evidence_class: 'built-artifact',
+        artifact_kind: 'model-bundle',
+        root_sha256: 'd'.repeat(64),
+        state: 'INVENTORY_ONLY',
+        consumer_lenses: [],
+        reason: 'model-bundle was acquired; no lens declares it consumed',
+      }],
+      summary: {
+        cell_count: 0,
+        bundle_count: 1,
+        unreached_class_count: 0,
+        unreached_classes: [],
+        not_assessed_cell_count: 0,
+        inventory_only_cell_count: 0,
+      },
+    },
+  })
+
+  const markdown = renderMarkdownReport(uncovered)
+  assert.match(markdown, /Acquired bundle coverage/)
+  assert.match(markdown, /portable-model.*model-bundle.*INVENTORY_ONLY/s)
+  assert.match(markdown, /no lens declares it consumed/)
+
+  const invocation = renderSarif(uncovered).runs[0].invocations[0]
+  const notifications = invocation.toolExecutionNotifications ?? []
+  assert.ok(notifications.some(({ descriptor, message }) =>
+    descriptor.id === 'evidence-bundle-not-assessed/portable-model'
+    && /no lens declares it consumed/i.test(message.text)))
+  assert.equal(invocation.properties.evidence_bundle_count, 1)
+  assert.equal(invocation.properties.evidence_bundle_gap_count, 1)
 })
 
 test('a PHI-bearing bundle is named in the report without its contents', () => {

@@ -45,28 +45,27 @@ activates_on:
     - '**/*gtm*'
     - '**/*tagmanager*'
   signals:
-    - 'fhir.resources / fhirclient / fhir-kit-client / @types/fhir / hapi-fhir / org.hl7.fhir'
-    - 'hl7apy / python-hl7 / node-hl7-client / nhapi'
-    - 'smart-on-fhir, launch/patient, scopes like patient/*.read or user/Observation.read'
-    - '@google-cloud/healthcare / google-cloud-healthcare, boto3.client("healthlake"), Azure.Health.Deidentification'
-    - 'epic / cerner / oracle-health / athenahealth / redox / metriport / 1up.health / canvas-medical SDKs or base URLs'
-    - 'stedi / pyx12 / availity / changehealthcare, X12 837/835/270/271 parsing'
-    - 'icd10 / simple_icd_10 / snomed / loinc / cpt / rxnorm / npi lookup libraries'
-    - 'column or field names: mrn, medical_record_number, date_of_birth, dob, ssn, member_id, subscriber_id, diagnosis_code, icd10_code, npi'
-    - 'HealthCloudGA__ objects, PersonAccount, Salesforce Shield Platform Encryption, Event Monitoring'
-    - 'plain (non-Health-Cloud) Salesforce ePHI model: identifier-bearing fields in objects/**/*.field-meta.xml, and Case, Contact or Account carrying the patient record'
-    - 'Salesforce declarative outbound destinations: namedCredentials/*.namedCredential-meta.xml, remoteSiteSettings/*.remoteSite-meta.xml, cspTrustedSites/*.cspTrustedSite-meta.xml, endpoints held in customMetadata/*.md-meta.xml'
-    - 'Salesforce declarative over-grants on the ePHI object: <viewAllFields>, <viewAllRecords>, <modifyAllRecords> in permissionsets/ or profiles/'
-    - 'telemetry SDKs on a PHI path: @sentry/*, datadog / dd-trace, logrocket, mixpanel, amplitude, @segment/analytics, posthog, newrelic — match the import or the initializer, never the bare vendor name'
-    - 'session replay / heatmap: fullstory, hotjar, clarity.ms, smartlook'
-    - 'trackers in markup or first-party bundles: googletagmanager.com/gtm.js, gtag(, connect.facebook.net, fbq(, _fbp, google-analytics.com, googleads'
-    - 'exclusion the three lines above depend on: committed build output and vendored bundles — dist/, build/, out/, .next/, public/vendor/, node_modules/, vendor/, *.min.js, *.bundle.js, *.chunk.js. A hit there is not a telemetry finding until a first-party import or call site is named'
-    - 'messaging clients used with patient data: twilio, @sendgrid/mail, mailgun, boto3 ses, firebase-admin messaging / apns payloads'
-    - 'LLM clients on clinical text: anthropic, openai, azure-openai, bedrock-runtime invoke_model'
-    - 'literal markers: PHI, ePHI, "business associate", "Safe Harbor", "minimum necessary", "break glass", "break-glass"'
-    - 'audit-trail idioms: audit_log, access_log table with actor_id + record_id, pgaudit, CloudTrail data events, trigger-based history tables'
-    - 'Salesforce audit idioms, which live in metadata and never in Apex: Shield Event Monitoring (EventLogFile, ApiEvent, ReportEvent), Field Audit Trail (FieldHistoryArchive, <historyRetentionPolicy>), Setup Audit Trail, <enableHistory> and <trackHistory> in object and field metadata'
-    - 'de-identification idioms: faker + patient, synthea, scrub, redact, tokenize, crosswalk, re-identification key'
+    - any_of: ['fhir.resources', 'fhirclient', 'fhir-kit-client', '@types/fhir', 'hapi-fhir', 'org.hl7.fhir']
+    - any_of: ['hl7apy', 'python-hl7', 'node-hl7-client', 'nhapi']
+    - any_of: ['smart-on-fhir', 'launch/patient', 'patient/*.read', 'user/Observation.read']
+    - any_of: ['@google-cloud/healthcare', 'google-cloud-healthcare', 'boto3.client("healthlake")', 'Azure.Health.Deidentification']
+    - any_of: ['epic', 'cerner', 'oracle-health', 'athenahealth', 'redox', 'metriport', '1up.health', 'canvas-medical']
+    - any_of: ['stedi', 'pyx12', 'availity', 'changehealthcare', 'X12 837', 'X12 835', 'X12 270', 'X12 271']
+    - any_of: ['icd10', 'simple_icd_10', 'snomed', 'loinc', 'cpt', 'rxnorm', 'npi']
+    - any_of: ['mrn', 'medical_record_number', 'date_of_birth', 'dob', 'ssn', 'member_id', 'subscriber_id', 'diagnosis_code', 'icd10_code', 'npi']
+    - any_of: ['PersonAccount', 'Platform Encryption', 'Event Monitoring']
+    - any_of: ['<fullName>Case.', '<fullName>Contact.', '<fullName>Account.']
+    - any_of: ['namedCredentials/', 'remoteSiteSettings/', 'cspTrustedSites/', 'customMetadata/']
+    - any_of: ['<viewAllFields>', '<viewAllRecords>', '<modifyAllRecords>']
+    - any_of: ['@sentry/', 'dd-trace', 'logrocket', 'mixpanel', 'amplitude', '@segment/analytics', 'posthog', 'newrelic']
+    - any_of: ['fullstory', 'hotjar', 'clarity.ms', 'smartlook']
+    - any_of: ['googletagmanager.com/gtm.js', 'gtag(', 'connect.facebook.net', 'fbq(', '_fbp', 'google-analytics.com', 'googleads']
+    - any_of: ['twilio', '@sendgrid/mail', 'mailgun', 'boto3 ses', 'firebase-admin messaging', 'apns']
+    - any_of: ['anthropic', 'openai', 'azure-openai', 'bedrock-runtime', 'invoke_model']
+    - any_of: ['PHI', 'ePHI', 'business associate', 'Safe Harbor', 'minimum necessary', 'break glass', 'break-glass']
+    - any_of: ['audit_log', 'access_log', 'actor_id', 'record_id', 'pgaudit', 'CloudTrail data events', 'history table']
+    - any_of: ['EventLogFile', 'ApiEvent', 'ReportEvent', 'FieldHistoryArchive', '<historyRetentionPolicy>', 'Setup Audit Trail', '<enableHistory>', '<trackHistory>']
+    - any_of: ['faker', 'synthea', 'scrub', 'redact', 'tokenize', 'crosswalk', 're-identification key']
   evidence_classes:
     source:
       state: consumed
@@ -747,7 +746,7 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **registry-driven enumerator**, the **socket-layer destination recorder**, the **canary fixture set**, the **capturing log handler**, and the **clock control** (`freezegun` / `jest.setSystemTime`). Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes. T2 requires the auditor to stand up infrastructure the repo does not already stand up, and the user is asked every time. A recipe that cannot run reports `UNPROVEN` with the blocking reason, capped at Medium — never as a silent pass.
+**Tier rule.** T1 is a proof the repository's own test command executes. T2 starts infrastructure the repository does not already start. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller. A recipe that lacks that route reports `UNPROVEN` with the technical transport gap, capped at Medium — never as a silent pass.
 
 ### R1 — Registry-driven ePHI canary sweep of every output sink (T1)
 

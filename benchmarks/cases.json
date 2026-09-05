@@ -433,6 +433,106 @@
       "description": "DLS/FLS plus a filtered alias and a second role"
     },
     {
+      "case_id": "C-043",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/training_dataset.py"
+      ],
+      "manifest_fixture_label": "training_dataset.py",
+      "description": "moving training data with no integrity admission"
+    },
+    {
+      "case_id": "C-044",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/failure_policy.py"
+      ],
+      "manifest_fixture_label": "failure_policy.py",
+      "description": "authorization dependency failure that permits export"
+    },
+    {
+      "case_id": "C-045",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/native_frame.c"
+      ],
+      "manifest_fixture_label": "native_frame.c",
+      "description": "narrowed allocation followed by a wider copy"
+    },
+    {
+      "case_id": "C-046",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/patient_chart_audit.py"
+      ],
+      "manifest_fixture_label": "patient_chart_audit.py",
+      "description": "ePHI access logged only as a pooled service identity"
+    },
+    {
+      "case_id": "C-047",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/privacy_consent.py"
+      ],
+      "manifest_fixture_label": "privacy_consent.py",
+      "description": "a pre-selected marketing consent control"
+    },
+    {
+      "case_id": "C-048",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/security_grant.ts"
+      ],
+      "manifest_fixture_label": "security_grant.ts",
+      "description": "a privileged role mutation with no security event"
+    },
+    {
+      "case_id": "C-049",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/internal_identity.py"
+      ],
+      "manifest_fixture_label": "internal_identity.py",
+      "description": "network position used as workload identity"
+    },
+    {
+      "case_id": "C-050",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/device_enrollment.py"
+      ],
+      "manifest_fixture_label": "device_enrollment.py",
+      "description": "serial-number and default-password device enrollment"
+    },
+    {
+      "case_id": "C-051",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/desktop_update.js"
+      ],
+      "manifest_fixture_label": "desktop_update.js",
+      "description": "settings-controlled update feed"
+    },
+    {
+      "case_id": "C-052",
+      "expectation": "clean",
+      "topic": "clean-canary",
+      "fixture_selectors": [
+        "clean/AssetSweep.sol"
+      ],
+      "manifest_fixture_label": "AssetSweep.sol",
+      "description": "caller-selectable asset sweep guarded only by transaction origin"
+    },
+    {
       "case_id": "V-001",
       "expectation": "vulnerable",
       "topic": "authz-object-level",
@@ -704,6 +804,126 @@
       "manifest_fixture_label": "vulnerable/database/elastic_role_union.json",
       "lens": "database-and-data-stores",
       "description": "An unrestricted secondary role defeats DLS/FLS on the same index while a filtered alias creates a false boundary"
+    },
+    {
+      "case_id": "V-023",
+      "expectation": "vulnerable",
+      "topic": "training-data-provenance-and-integrity",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/training_dataset.py"
+      ],
+      "manifest_fixture_label": "vulnerable/training_dataset.py",
+      "lens": "ai-model-and-mlops-security",
+      "description": "A moving training-data URI reaches the trainer without immutable identity or integrity admission"
+    },
+    {
+      "case_id": "V-024",
+      "expectation": "vulnerable",
+      "topic": "security-control-failure-mode",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/failure_policy.py"
+      ],
+      "manifest_fixture_label": "vulnerable/failure_policy.py",
+      "lens": "failure-semantics-and-resilience",
+      "description": "Authorization-service failure returns an allow decision"
+    },
+    {
+      "case_id": "V-025",
+      "expectation": "vulnerable",
+      "topic": "memory-bounds-and-integer-conversion",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/native_frame.c"
+      ],
+      "manifest_fixture_label": "vulnerable/native_frame.c",
+      "lens": "native-and-memory-safety",
+      "description": "A narrowed allocation length is followed by a copy using the original wider length"
+    },
+    {
+      "case_id": "V-026",
+      "expectation": "vulnerable",
+      "topic": "phi-access-audit-controls",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/patient_chart_audit.py"
+      ],
+      "manifest_fixture_label": "vulnerable/patient_chart_audit.py",
+      "lens": "hipaa-and-phi",
+      "description": "A pooled service identity makes the acting human unrecoverable from ePHI-read audit records"
+    },
+    {
+      "case_id": "V-027",
+      "expectation": "vulnerable",
+      "topic": "lawful-basis-and-consent-capture",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/privacy_consent.py"
+      ],
+      "manifest_fixture_label": "vulnerable/privacy_consent.py",
+      "lens": "privacy-and-data-protection",
+      "description": "Marketing consent is pre-selected rather than obtained by affirmative action"
+    },
+    {
+      "case_id": "V-028",
+      "expectation": "vulnerable",
+      "topic": "security-event-coverage",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/security_grant.ts"
+      ],
+      "manifest_fixture_label": "vulnerable/security_grant.ts",
+      "lens": "security-observability-and-response",
+      "description": "A privileged role grant commits with no durable attributed security event"
+    },
+    {
+      "case_id": "V-029",
+      "expectation": "vulnerable",
+      "topic": "architecture-trust-design-gaps",
+      "expected_severity": "High",
+      "fixture_selectors": [
+        "vulnerable/internal_identity.py"
+      ],
+      "manifest_fixture_label": "vulnerable/internal_identity.py",
+      "lens": "threat-modeling",
+      "description": "Network position is promoted to service identity at a trust crossing"
+    },
+    {
+      "case_id": "V-030",
+      "expectation": "vulnerable",
+      "topic": "device-identity-and-secure-onboarding",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/device_enrollment.py"
+      ],
+      "manifest_fixture_label": "vulnerable/device_enrollment.py",
+      "lens": "embedded-iot-ot-security",
+      "description": "A shared default credential and public serial number authorize device owner binding"
+    },
+    {
+      "case_id": "V-031",
+      "expectation": "vulnerable",
+      "topic": "desktop-update-authenticity-and-rollback",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/desktop_update.js"
+      ],
+      "manifest_fixture_label": "vulnerable/desktop_update.js",
+      "lens": "desktop-and-thick-client-security",
+      "description": "A settings-controlled feed reaches the updater without signed metadata, a version floor, or an expected payload digest"
+    },
+    {
+      "case_id": "V-032",
+      "expectation": "vulnerable",
+      "topic": "contract-access-control-and-privileged-roles",
+      "expected_severity": "Medium",
+      "fixture_selectors": [
+        "vulnerable/AssetSweep.sol"
+      ],
+      "manifest_fixture_label": "vulnerable/AssetSweep.sol",
+      "lens": "smart-contract-and-web3-security",
+      "description": "`tx.origin` authorizes a complete token sweep to a caller-selected destination"
     }
   ]
 }

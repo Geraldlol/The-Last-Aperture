@@ -92,7 +92,7 @@ Trust boundary:
 
 Exit codes:
   0  command succeeded
-  1  invalid input, refused execution, or failed controller gate
+  1  invalid input, refused execution, or failed technical controller check
 `
 
 function parseArguments(values) {

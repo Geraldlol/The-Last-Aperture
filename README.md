@@ -8,15 +8,17 @@ owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
 and stores they examined. The optional sealed runner can prove byte consumption
 and the optional remote gateway can prove acceptance of one signed provider
-request; neither proves model comprehension. External HTTP reconnaissance has
-its own authorization, action denominator, stop path, and nonclaims. It never
-becomes repository coverage.
+request; neither proves model comprehension. External HTTP reconnaissance uses
+the same operator-statement authorization with its own execution controller,
+action denominator, stop path, and nonclaims. It never becomes repository coverage.
 
-At authenticated controller ingress, an explicit operator statement authorizing
-the named target and scope is accepted as the controller's authorization fact.
-The controller seals it without requiring an external RoE, ownership, or legal-
-proof artifact or repeated certification of unchanged authority. The statement
-is not independent proof of its legal basis; the operator remains accountable.
+At agent/controller ingress, the authenticated operator statement naming target
+and scope is the sole authorization fact for every capability it names, including T2/service
+boots, controller-referenced credentials, and named external services. If
+target/scope is already supplied, proceed; ask once only when it is missing.
+Never require another consent, RoE, ownership, or legal check. A T1-only
+statement stays narrow, and the operator remains accountable. See
+[ADR 0023](docs/adr/0023-operator-authority-governs-named-capabilities.md).
 
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
@@ -24,13 +26,13 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-> **Current boundary:** one exact bounded operator-directed HTTP-recon action and
-> fixed, already-sealed authenticated HTTP campaigns are active through their
-> protocol controllers. Generic live/L3, proof, provider, remote, bounty/OOB,
-> acquisition, database, and transparency execution remain gated. Public
-> `--seal-source` and evidence-bundle import are also disabled pending controller-
-> enrolled local custody and signed semantic manifests. Static repository
-> inventory, offline planning/validation, and manual result ingestion remain
+> **Current boundary:** repository T1 and the narrow Node/npm loopback T2 route
+> are active through sealed, network-none Docker workers. One exact bounded
+> operator-directed HTTP-recon action and fixed, already-sealed authenticated
+> HTTP campaigns are also active through their protocol controllers. Generic
+> live/L3, other T2/service shapes, provider, remote, bounty/OOB, acquisition,
+> database, transparency, and evidence-bundle import remain technically unavailable. Static repository inventory, source
+> sealing, offline planning/validation, and manual result ingestion are
 > available.
 
 Manual provider decisions are not semantic authority in this release. The
@@ -41,11 +43,19 @@ remove it from proof scheduling. Likewise, comparable-coverage absence is
 `claimed-fixed`; the unqualified `fixed` state is reserved for a future
 authenticated semantic-negative oracle.
 
+The latest assessment updates add read-only `status`, `verdict`, `doctor`,
+`capabilities`, and repair/retest briefs; packet-bound review templates and
+result preflight; and per-repeat benchmark measurement. These supporting
+workflows do not perform automated semantic analysis or independently verify
+security conclusions. See [assessment improvements](docs/assessment-improvements.md)
+for commands and [delivery status](docs/delivery-status.md) for the remaining
+work and verification record.
+
 Version 0.12.0 adds authenticated HTTP campaigns to the v0.11
 authorized-reconnaissance and v0.10 repository-audit foundation:
 
 - A separate `http-authed-v1` protocol and `audit:http-authed` CLI. The
-  authenticated operator's exact target/scope statement is the sole
+  operator's exact target/scope statement at agent/controller ingress is the sole
   authorization primitive. Optional governance material is evidence only; it
   cannot select a more capable route or increase limits. The controller does not
   independently verify vendor/program permission, ownership, legal authority,
@@ -67,7 +77,8 @@ authorized-reconnaissance and v0.10 repository-audit foundation:
   discovery values are not persisted. Operators must use synthetic non-PHI
   identifiers and bodies.
 
-It retains the separately authorized `http-recon-v1` observation contract:
+It retains the route-specific `http-recon-v1` observation contract under that
+same operator-statement authorization:
 
 - A separate `http-recon-v1` protocol with no repository, lens, closure, code
   coverage, or T0-T3 proof-tier claim.
@@ -81,7 +92,14 @@ It retains the separately authorized `http-recon-v1` observation contract:
 
 - Hidden-aware, deterministic repository inventory with handle-bound file reads.
 - SHA-256-hashed repository and lens-pack manifests.
-- Exact lens activation with deterministic file-and-byte-bounded shards.
+- A 22-lens registry: four cross-cutting controls plus 18 domain lenses owning
+  243 security topics, including desktop/thick-client, embedded/IoT/OT, and
+  smart-contract/Web3 security.
+- Exact lens activation with deterministic file-and-byte-bounded shards. Signal
+  selectors are bounded literals or an explicit `any_of` list of bounded
+  literals; repository-controlled regex programs are not accepted.
+- Bounded, deterministic activation-scope expansion across local dependencies
+  and dependents (two hops and at most 256 additional text files per lens).
 - Separate canonical-source, generated-code, test, documentation, and binary
   file/byte denominators.
 - Hash-bound dormant retry templates and fixed-point completeness rounds.
@@ -96,8 +114,20 @@ It retains the separately authorized `http-recon-v1` observation contract:
 - External read/write/execute/network policy decisions.
 - Provider-neutral job packets and result ingestion.
 - Packet/result binding and declared producer provenance.
-- Internal exact-byte source and trusted-control snapshot support with no live
-  target mount; public `--seal-source` is currently disabled.
+- Per-shard topic obligations and evidence-backed topic assessments, so byte
+  coverage alone cannot be mistaken for semantic coverage.
+- Public exact-byte source sealing to an explicit local directory outside the
+  target, with no live target mount during proof execution.
+- Public T1 proof through a v2 proof config and an external, exact-image-ID,
+  dependency-manifest-bound Docker worker config. Attack and control execute in
+  separate fresh containers from the same sealed bytes, with no network or host
+  mounts, a minimal environment, non-root/resource-bounded execution, verified
+  cleanup, and raw target output omitted.
+- Public narrow T2 proof through a v3 proof config on a `LOCAL_DYNAMIC`, sealed-
+  source run. One foreground Node/npm service and one proof command share each
+  network-none container over fixed literal loopback; attack and control use
+  separate fresh containers with supervisor TTL/init, bounded readiness,
+  hash-only evidence, and verified teardown.
 - Durable, hash-chained, one-use provider attempts with retry history.
 - A digest-pinned, no-network Docker stdio runner with bounded resources and
   verified effective isolation settings.
@@ -131,6 +161,9 @@ It retains the separately authorized `http-recon-v1` observation contract:
   digests, one-use request IDs, signed gateway acceptance receipts, and
   hash-chained schema-v6 attempt recovery.
 - Separate existence and proof transitions.
+- Versioned, requirement-level framework references and structured attack
+  chains with prerequisites, ordered component steps, evidence flow, and blast
+  radius in both Markdown and SARIF.
 - Per-store database adapter routing, shard-local contributions, and
   controller-synthesized coverage profiles.
 - A standalone digest-pinned PostgreSQL 18.4/MySQL 8.4.10 conformance lab with
@@ -146,14 +179,20 @@ It retains the separately authorized `http-recon-v1` observation contract:
 - Separate unique-file, lens/file-obligation, conceptual-gap, and raw-gap
   reporting with bounded samples.
 - Baseline comparison that distinguishes unauthenticated `claimed-fixed` from
-  `not-observed`; `fixed` is reserved for a future authenticated semantic oracle.
-- TP/FP/TN/FN, false-clear, severity, and repeated-run stability metrics.
+  `not-observed`, including per-lens partial comparability when an unrelated
+  lens changes; `fixed` is reserved for a future authenticated semantic oracle.
+- TP/FP/TN/FN, false-clear, severity, per-topic and per-lens recall, and
+  repeated-run stability metrics.
 
-The general dynamic T1/T2 target proof broker is not enabled. T2 retains its
-historical meaning: a locally booted application reached only through
-loopback. `http-recon-v1` is not T2 and cannot verify a repository finding.
-Local static mode does not execute target code or intentionally create socket
-traffic. Caller-selected filesystem paths remain trusted endpoints and may
+Public T1 is enabled only through `run-proof`; narrow loopback T2 is enabled only
+through `run-service-proof`. An operator directive naming the local repository
+and requested dynamic scope is sufficient launch authority; do not ask again.
+T1 never boots a service. T2 admits one foreground Node/npm service in the same
+network-none container as its fixed loopback probe and proof command. Other T2
+shapes retain their authority but remain unavailable without a matching route.
+`http-recon-v1` is not T2 and cannot verify a repository finding. Local
+static mode does not execute target code or intentionally create socket traffic.
+Caller-selected filesystem paths remain trusted endpoints and may
 resolve through symlinks, junctions, mapped drives, or remote-backed volumes;
 the lexical path guard is not local-volume attestation. Public `remote_static`
 and local provider execution are currently
@@ -184,7 +223,7 @@ serialized inventory records the effective values. There is deliberately no
 wall-clock traversal timeout because it would make the inventory and its digest
 machine-load-dependent.
 
-The `gen`, `gen:benchmarks`, `gen:evidence-fixtures`, `scan:residue`,
+The `gen`, `gen:benchmarks`, `gen:capabilities`, `gen:evidence-fixtures`, `scan:residue`,
 `test:cloud-iac:conformance`, `conformance:bounty-kernel`, and real-service or
 real-container conformance commands are trusted-checkout maintainer tools, not
 product audit entry points and not covered by the product CLI path/no-egress
@@ -203,20 +242,154 @@ trusted main checkout is part of the maintainer test boundary.
 ## Quick start
 
 Requirements: Node.js 20 or newer for planning and manual `next`/`ingest`.
-Provider and remote execution are internal conformance surfaces in this release;
-their public commands fail closed pending trusted-controller enrollment. The
-default development test suite does not execute shell snippets embedded in
-lenses. Run `npm run test:cloud-iac:conformance` explicitly from a trusted
-checkout when Bash and ripgrep are available.
+Public T1 and narrow T2 additionally require the controller-owned Docker CLI
+path, a local Docker daemon, and a prebuilt worker image satisfying the external
+worker configuration. Provider and remote execution remain internal conformance
+surfaces whose public commands fail closed. The default development test suite
+does not execute shell snippets embedded in lenses. Run
+`npm run test:cloud-iac:conformance` explicitly from a trusted checkout when
+Bash and ripgrep are available.
 
 ```powershell
-npm.cmd install
+npm.cmd ci --ignore-scripts
 npm.cmd test
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --require-source-closure
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
+
+### Authorized repository T1 proof
+
+An operator request that names a local repository and asks for dynamic tests is
+the launch directive for public T1. Do not request a second confirmation. It is
+the sole authorization fact for every capability it explicitly names; an
+ordinary T1-only request remains narrow. This T1 worker cannot boot services,
+resolve live credentials, contact external services, or remediate. When broader
+capabilities were named, retain their authority and use a matching implemented
+controller; if none exists, report an authorized-but-unavailable gap without
+asking again or inventing execution.
+
+Create a `test`-mode technical policy whose execute allowlist contains the exact
+`node` or `npm` attack and control commands, whose write roots are security-test
+leaves, and whose network capability is disabled. Seal the source into an
+explicit local output directory outside the target:
+
+```powershell
+npm.cmd run audit -- plan C:\path\to\repository `
+  --out C:\audit-runs --roe C:\trusted\test-roe.json --seal-source
+```
+
+Complete the bounded fan-out, triage, and proof-existence jobs through `next`
+and `ingest`. When the matching `proof-verification:*` job is current, provide a
+v2 proof config and external Docker worker config, both outside the target and
+bundle:
+
+```powershell
+npm.cmd run audit -- run-proof C:\audit-runs\<run-directory> `
+  C:\trusted\proof-config.json --worker C:\trusted\proof-worker.json
+```
+
+The worker config must satisfy
+[`schemas/proof-worker.schema.json`](schemas/proof-worker.schema.json): it binds
+the fixed controller Docker path, an exact immutable local image ID, the
+controller-derived `package.json`/`package-lock.json` dependency-manifest
+digest, and hard resource limits. The controller verifies that manifest in the
+sealed source, worker image, and copied execution tree. The v2 proof config must
+satisfy [`schemas/proof-config.schema.json`](schemas/proof-config.schema.json),
+declare the attack/control oracle and guard, and contain no `patch_files`.
+
+Each command receives a fresh non-root container reconstructed from the same
+sealed bytes. The controller permits no network or host mount, passes only a
+minimal environment, enforces a read-only root, dropped capabilities,
+no-new-privileges/seccomp and time/CPU/memory/PID/file/output bounds, then
+verifies exact container removal. Receipts retain exit metadata and output byte
+counts, hashes, and truncation flags; raw stdout/stderr is omitted because it
+may contain secrets or PHI. If any prerequisite or cleanup proof fails, record
+the run as inconclusive or a coverage gap—never fall back to host execution.
+
+Candidate patches are deliberately rejected by public `run-proof`.
+Remediation requires a separate operator directive and a new audit after the
+fix. See [`ADR 0022`](docs/adr/0022-public-sealed-t1-proof.md).
+
+### Authorized repository T2 loopback proof
+
+An authenticated operator request naming the repository and local-dynamic
+service proof is the launch directive; do not request another consent, RoE, ownership, or legal
+check. Create a `LOCAL_DYNAMIC` technical policy that permits only the exact
+Node/npm service, attack, and control commands and the exact
+`127.0.0.1:<port>` network target. Seal the source outside the target:
+
+```powershell
+npm.cmd run audit -- plan C:\path\to\repository `
+  --out C:\audit-runs --roe C:\trusted\local-dynamic-policy.json --seal-source
+```
+
+After the matching `proof-verification:*` job becomes current, supply a strict
+v3 proof config and the external worker config:
+
+```powershell
+npm.cmd run audit -- run-service-proof C:\audit-runs\<run-directory> `
+  C:\trusted\service-proof-v3.json --worker C:\trusted\proof-worker.json
+```
+
+The v3 contract adds one `loopback-tcp-v1` foreground service with an exact
+`node` or `npm` argv, unprivileged port, startup deadline, and probe interval.
+The controller proves the port closed before boot, starts the service only after
+sealed-source and dependency checks, waits with a fixed controller-owned TCP
+probe, runs the proof, and verifies readiness again. Docker init plus the
+controller supervisor TTL bounds descendants even if the client disappears.
+Each attack or control session also has one monotonic controller deadline across
+setup, execution, transfer, and verified teardown; individual operation timeouts
+are capped to its remaining budget rather than restarting the clock.
+
+Attack and control receive different fresh containers with the same sealed
+source, immutable image, manifests, policy, and service contract. Each container
+has `--network=none`, no host mounts or published ports, minimal environment,
+resource/output bounds, and exact verified teardown. Receipts contain only
+controller-derived lifecycle facts, counts, hashes, exit classes, immutable
+bindings, and cleanup status; raw service/proof output is omitted.
+
+Before Docker is contacted, the controller durably records a v7 hash-chained
+attempt lease binding the packet, configs, budget, and exact attack/control
+container names. The attempt advances through `LEASED`, `STARTED`,
+`RESULT_CAPTURED`, `VALIDATED`, and `COMMITTED`. After interruption, an expired
+lease is recovered without reauthorization: a never-started attempt can be
+retried directly; a started attempt must authenticate and prove both bound
+containers absent before fresh names are issued; a captured receipt is validated
+and committed without rerunning Docker. Ambiguous identity or cleanup fails
+closed and cannot be treated as T2 evidence.
+A process-owned command lock prevents takeover while the original controller is
+still alive, including after lease expiry; only a dead owner's stable lock may be
+atomically reclaimed.
+
+A completed run genuinely executes both service sessions and records
+`proof_tier: T2`. It remains `verification_status: UNPROVEN` in this release:
+the attack/control exit classes are provider-authored and no
+controller-authenticated semantic oracle is enrolled. The lifecycle receipt is
+reviewable evidence, but it cannot by itself claim `CONFIRMED`,
+`NOT_REPRODUCED`, or `FIX_VERIFIED`.
+
+This route does not resolve live credentials or start browsers, mobile
+emulators, databases, registries, LocalStack, nested containers, multi-container
+stacks, or external dependencies. Record those as authorized-but-unavailable
+unless their own controller exists. Candidate patches remain forbidden. See
+[`ADR 0024`](docs/adr/0024-public-sealed-t2-loopback-service-proof.md).
+
+Maintainers can exercise the actual Docker lifecycle from a trusted checkout:
+
+```powershell
+docker build --file containers/node-proof-worker.Dockerfile `
+  --tag red-team-audit-node-proof-worker:conformance .
+$env:RTA_DOCKER_RUNTIME = (Get-Command docker.exe).Source
+$env:RTA_PROOF_WORKER_IMAGE = docker image inspect `
+  --format '{{.Id}}' red-team-audit-node-proof-worker:conformance
+npm.cmd run test:service-proof:docker
+```
+
+The immutable image must be rebuilt whenever `package.json` or
+`package-lock.json` changes. This is an explicit conformance launcher, not an
+additional product transport, and ordinary `npm test` does not discover it.
 
 ### Authorized external HTTP reconnaissance
 
@@ -297,13 +470,14 @@ with the authorization model in
 > required. Adaptive response-derived discovery remains outside this public lane.
 
 This path is separate from both repository proof and `http-recon-v1`. The
-authenticated operator target/scope statement is its sole authorization source.
+operator target/scope statement at agent/controller ingress is its sole
+authorization source.
 
 `plan-attested` creates lower-assurance
 `OPERATOR_ATTESTED_AUTHED` from the operator's explicit declaration and exact
 scope. The controller accepts that statement as its authorization fact without
-requesting an external legal-proof artifact or later recertification. It is
-suitable only when the operator actually holds authorization, such
+requesting an external legal-proof artifact or later recertification. The
+operator remains accountable for that statement and its underlying basis, such
 as an applicable bug-bounty or security-testing engagement. The controller does
 not fetch or interpret that program, and does not independently verify
 vendor/program permission, ownership, legal authority, external scope coverage,
@@ -488,9 +662,57 @@ input changed after planning.
 A custom `--out` must be outside the audited repository so creating the bundle
 cannot change its own snapshot denominator. Omit `--out` to use the built-in
 `.audit-runs` directory for a hash-only plan, which inventory excludes
-explicitly. Public `--seal-source` currently refuses before repository or output
-access: a filesystem destination is an outbound-data endpoint, and source
-archiving requires a controller-enrolled local custody root.
+explicitly. `--seal-source` requires an explicit local `--out` outside the
+repository and creates a sensitive exact-byte archive. Protect that bundle as
+source code; sealing grants no provider, remote, or network execution authority.
+
+Inspect progress at any point, including after an interrupted session:
+
+```powershell
+npm.cmd run audit -- status C:\audit-runs\<run-directory>
+npm.cmd run audit -- status C:\audit-runs\<run-directory> --json
+```
+
+`status` verifies the saved control bundle and reports phase, job states,
+retained findings, verification claims, file and topic coverage, open gaps,
+errors, and active attempt leases. It reads no current target files and changes
+no bundle state, so historical inspection works after a checkout moves. A
+concurrent manifest change asks the caller to repeat the read. It can use
+`--receipt-public-key` to verify an existing receipt against a supplied key;
+root authenticity remains `UNANCHORED`. Use `validate` with a root attestation
+for that separate verification.
+
+The JSON summary has version `1.0.0`; detail lists show at most 20 entries and
+include omitted counts. Diagnostic text is bounded; the full records remain in
+the bundle. Examined files, closed topic obligations, and successful jobs have
+separate counts. Zero findings remains `NO_FINDINGS_REPORTED`; an expired lease
+does not prove the original controller stopped. The suggested next step is
+informational and never dispatches work or performs recovery.
+
+Readiness, evidence assessment, and repair handoffs are also read-only:
+
+```powershell
+node scripts/doctor.mjs --json
+npm.cmd run audit -- capabilities --json
+npm.cmd run audit -- doctor --bundle C:\audit-runs\<run-directory> --json
+npm.cmd run audit -- verdict C:\audit-runs\<run-directory>
+npm.cmd run audit -- repair-brief C:\audit-runs\<run-directory> --json
+```
+
+The standalone doctor works before dependency installation. It checks local
+metadata without launching Docker, a service, or network requests. With a
+saved bundle, doctor lists environment indicators from recorded filenames;
+these are not runtime support or deployed-state evidence. `verdict` explains
+recorded claims and missing evidence without authenticating them. `repair-brief`
+provides source references and an acceptance/retest checklist, not a generated
+patch or verified fix; optional `--baseline <bundle>` retains absent historical
+findings in that handoff. Neither command reads current target files. Raw
+finding narratives are withheld, but identifiers and source paths still need
+appropriate handling.
+
+See the generated [capability reference](docs/capabilities.md),
+[assessment command guide](docs/assessment-improvements.md), and
+[delivery status](docs/delivery-status.md) for explicit remaining gaps.
 
 Inspect the bounded jobs:
 
@@ -499,7 +721,28 @@ npm.cmd run audit -- next C:\audit-runs\<run-directory>
 ```
 
 A provider consumes one returned job packet and emits a job result satisfying
-[`schemas/job-result.schema.json`](schemas/job-result.schema.json). Ingest it:
+[`schemas/job-result.schema.json`](schemas/job-result.schema.json). Newly
+planned lens jobs seal `topic_obligations`; a successful result must disposition
+each one in `topic_assessments`, so reading every file cannot by itself close a
+lens. Clean and not-applicable dispositions require affirmative evidence;
+partial and not-assessed dispositions retain named coverage gaps.
+
+For a pending LENS job, export an inert result template and check a completed
+review before ingestion:
+
+```powershell
+npm.cmd run audit -- review-template C:\audit-runs\<run-directory> --job <job-id>
+npm.cmd run audit -- check-result C:\audit-runs\<run-directory> provider-result.json --json
+```
+
+`review-template` does not analyze source; its null producer/state placeholders
+intentionally fail validation. Complete the separate `result_template` object
+after review. `check-result` performs the existing ingestion validation against
+the current source snapshot without persisting results or advancing the run.
+It returns `applied: false` even when valid, and exit code 1 with a fixed error
+stage on rejection. Parser and provider error text is withheld to avoid copying
+sensitive content into diagnostics. Validation does not authenticate a security
+conclusion. Ingest a checked result separately:
 
 ```powershell
 npm.cmd run audit -- ingest C:\audit-runs\<run-directory> provider-result.json
@@ -515,6 +758,13 @@ The final bundle contains `report.md`, `results.sarif`, hash-bound
 `coverage.json`, raw normalized job results, inventory hashes, policy, and the
 canonical `run.json`. `coverage-plan.json` is the immutable planning snapshot;
 it is deliberately distinct from final coverage.
+
+SARIF source locations encode literal filenames as relative URIs, including
+spaces, Unicode, percent signs, `#`, and `?`. Evidence locators retain their
+original meaning. Each result records only successful jobs explicitly bound to
+that candidate; missing historical bindings are `NOT_RECORDED`. Audit errors
+and incomplete or gap-bearing runs appear as tool notifications rather than
+synthetic findings. A completed retry retains earlier errors as warning history.
 
 Anchor a terminal bundle with a signing key and output path kept outside both
 the target and bundle:
@@ -595,15 +845,15 @@ output cannot raise them later.
 > **Current release gate:** Public `run-provider` refuses before reading the
 > bundle or provider configuration. The protocol remains for conformance
 > testing, but an absolute caller-selected runtime path is not authenticated
-> container-runtime identity. Public `--seal-source` is also disabled before
-> repository/output access. Re-enable only with a controller-enrolled,
-> identity-pinned runtime, local custody root, and protected execution environment.
+> container-runtime identity. Public source sealing is available for T1 but
+> does not activate provider execution. Re-enable `run-provider` only with a
+> controller-enrolled, identity-pinned runtime and protected execution
+> environment.
 
 Create a sensitive runner-ready bundle only when exact source-byte archiving is
 acceptable:
 
 ```powershell
-# Historical command shape; currently fail-closed.
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --seal-source
 # Historical command shape; currently fail-closed.
 npm.cmd run audit -- run-provider C:\audit-runs\<run-directory> C:\trusted\provider-config.json
@@ -625,15 +875,16 @@ attempts remain in the hash-chained event history. See
 > **Current release gate:** Public `run-remote` refuses before reading the run
 > bundle or gateway configuration. The protocol implementation remains for
 > conformance testing, but caller-supplied RoE/config files cannot establish an
-> independently enrolled gateway or authorize transmission of source data.
-> Its required `--seal-source` input is itself disabled pending local custody.
-> Re-enable only through a privileged controller enrollment and explicit
-> outbound-data policy.
+> matching enrolled gateway or transmit source data. An operator statement may
+> authorize named remote transmission, but source sealing alone does not. Route
+> activation still requires the matching technical controller and outbound-data
+> policy.
 
 The historical remote protocol also consumes a `remote_static` technical
 outbound-network policy whose allowlist contains the exact gateway endpoint.
-That file is transport policy, not legal proof or the operator authorization
-fact. An operator statement cannot activate the currently unavailable route:
+That file is transport policy, not the operator authorization fact. The operator
+statement may authorize the work, but the currently unavailable route cannot
+dispatch it:
 
 ```powershell
 # Historical command shape; currently fail-closed.
@@ -757,6 +1008,72 @@ The separate HTTP-reconnaissance states and nonclaims are defined in
 
 Finding count never decides run state.
 
+## Activation and triage scope
+
+Domain lenses activate from declared path globs and bounded literal signals. A
+signal is either one trimmed literal or an `any_of` mapping containing 2-32
+unique trimmed literals of at most 256 characters each. `any_of` means that any
+listed literal can activate the lens; arbitrary regex and slash-separated prose
+are rejected so a lens pack cannot introduce an unbounded matching program.
+
+After direct activation, the controller follows repository-local quoted
+import/export, dynamic-import, `require`, and C/C++ include edges in both
+directions. It adds at most two dependency/dependent hops and 256 text files
+beyond the direct matches, records why each path was added, and exposes
+truncation instead of silently claiming full scope. This is a source-context
+expansion, not a new activation authority: a lens still needs a direct path,
+signal, or declared evidence match.
+
+At the fan-out barrier, `business-logic` receives the exact union of active
+fan-out source scopes together with the accumulated candidate set. It performs
+the code-backed invariant review and normalization/false-positive handoff before
+`attack-chaining`; the chaining job receives source only for paths cited by its
+component findings. Triage therefore has the source it is contractually allowed
+to use without gaining permission to widen repository scope.
+
+The built-artifact vocabulary now adds `desktop-package`, `firmware-image`,
+`model-bundle`, `native-executable`, `sbom`, `shared-library`,
+`smart-contract-build`, and `vex`. The matching claim vocabulary adds
+`artifact-signature-invalid`, `binary-hardening-missing`, `firmware-trust-gap`,
+`model-integrity-or-robustness-gap`, `resilience-policy-misconfiguration`,
+`smart-contract-deployment-drift`, and `telemetry-delivery-failure`. Each lens
+declares its allowed artifact and claim subset; an undeclared class or missing
+acquired evidence cannot become a clean result.
+
+Within the retained evidence-import kernel, `evidence_context` is authored by
+the acquisition adapter and preserved exactly: planning verifies the bundle,
+derives its portable identity from the manifest, and rejects a caller-supplied
+context that differs. For OCI images, the controller verifies the manifest and
+every payload read, then evaluates all five shipped OCI artifact rules over
+those sealed bytes. A provider receives only a bounded locator projection with
+the controller's per-locator rule matches, never the raw evidence bytes. A new
+evidence-qualified finding must bind an indexed locator, the matching rule ID,
+that rule's exact claim kind, and the rule's owning lens/topic. Every retained
+controller match is a sealed output obligation: a successful owning-lens result
+must report it exactly once. These are positive-match detectors, not exhaustive
+clearance; supported topic cells remain `PARTIAL`, and topics with no owned rule
+remain `NOT_ASSESSED`.
+
+An absent or unreadable OCI index cannot authorize an evidence-qualified
+finding. A truncated index remains a non-clear `PARTIAL` denominator, but exact
+retained controller matches stay required positive authority; omitted or
+invented locators remain unauthorized. The `deployed` and `runtime` acquisition
+adapters exist, but provider-side semantic analysis for `deployed-state` and
+`live-runtime` remains `NOT_ASSESSED` until a supported sealed-byte or
+controller-analysis delivery path is implemented.
+
+Planning creates one controller-owned coverage record for every acquired
+bundle, even when the repository is empty or no lens declares that artifact
+kind. The record binds bundle identity, lists actual consumer lenses, and
+distinguishes `COVERED` analysis from `PARTIAL`, `INVENTORY_ONLY`, and
+`NOT_ASSESSED`. Acquired evidence is never `NOT_APPLICABLE`; every non-covered
+bundle keeps the terminal result at `COMPLETE_WITH_GAPS`. This prevents a
+portable model bundle, SBOM, VEX document, or other unconsumed acquisition from
+disappearing behind an all-`NOT_APPLICABLE` lens matrix. `COVERED` is reserved
+for a future exhaustive analyzer/provenance contract: the current five OCI
+rules are positive-only, so a complete rule pass is still `PARTIAL`, and v7
+rejects forged `COVERED` bundle records or acquired non-source cells.
+
 ## Job protocol
 
 The state machine is:
@@ -782,7 +1099,12 @@ npm.cmd run test:platform
 npm.cmd run lint
 npm.cmd run gen -- --check
 npm.cmd run gen:benchmarks -- --check
+npm.cmd run gen:capabilities -- --check
 ```
+
+The [dated local verification record](docs/delivery-status.md#local-verification-2026-09-05)
+documents the tested checkout, test totals, and platform limitations. These
+checks validate controller behavior, not real-world security-analysis accuracy.
 
 Real-container conformance is trusted-checkout maintainer infrastructure, not a
 product CLI guarantee or target-testing route. Its test module lives outside
@@ -817,15 +1139,25 @@ Benchmark input and configurable release gates are documented in
 name and exactly match one normalized repeated run; the scorecard records that
 binding so stability cannot be supplied from an unrelated evidence set.
 
+Each submitted repeat receives its own accuracy, severity, false-clear,
+invalid-record, and assessment scorecard, with aggregate metric ranges.
+Read matrix accuracy alongside assessed, abstained, and unspecified case
+counts: a missing finding is not proof that a case was assessed. Optional
+model, harness, and corpus versions remain caller-declared provenance,
+not independent accuracy measurements.
+
 ```powershell
 npm.cmd run audit -- benchmark evaluation.json `
   --thresholds benchmarks/thresholds.json `
   --out scorecard.json
 ```
 
-The development profile currently requires all 64 committed vulnerable/clean
-cases, zero clean-case findings, zero explicit false clears, zero invalid
-records, and repeated-run stability measurements. Thresholds are versioned
+The committed development corpus contains 84 cases: 32 vulnerable and 52 clean,
+with a vulnerable/clean pair for every one of the 18 domain lenses. The release
+profile requires at least 64 total, 22 vulnerable, and 42 clean cases; all 18
+domain lenses represented by a vulnerable case; minimum global, per-topic, and
+per-lens recall; zero clean-case findings, explicit false clears, or invalid
+records; and repeated-run stability measurements. Thresholds are versioned
 configuration, not hidden product claims.
 
 ## Result lifecycle
@@ -837,26 +1169,38 @@ npm.cmd run audit -- compare baseline\run.json current\run.json
 ```
 
 An absent finding is classified `claimed-fixed` only when the current run covers
-the relevant file under the relevant lens, no attributable coverage gap can
-hide it, and both runs use the same repository root, lens pack, and Rules of
-Engagement. Database findings additionally require the same assessed store,
-topic, adapter, engine/version/deployment semantics, and effective principal.
-Otherwise the finding is `not-observed`; unrelated or differently governed runs
-are explicitly non-comparable. The unqualified `fixed` state is reserved for a
-future authenticated semantic-negative oracle and is never emitted in this
-release. Lifecycle output preserves whether the absence basis was
-provider-declared or controller-observed byte consumption; neither is
-independent semantic proof.
+the relevant file under the relevant lens and no attributable coverage gap can
+hide it. Repository root and Rules of Engagement must still match. When the
+whole lens-pack digest changes, the controller compares the finding's lens
+contract separately: its lens digest, sorted owned-topic set, and
+`lens_shared_contract_digest` must be unchanged in both runs. The shared digest
+covers shared schema, harness, and adapter support while excluding the additive
+generated `_topics.md` registry. That makes the overall comparison
+`partially_comparable` and permits an absence claim only for unchanged lenses;
+a changed or unavailable lens or shared contract remains `not-observed`.
+For zero-owner cross-cutting lenses, the baseline finding topic must also remain
+present in the current run's sealed owned-topic contracts; an unchanged empty
+owner set cannot authorize a removed or renamed registry topic.
+Database findings additionally require
+the same assessed store, topic, adapter, engine/version/deployment semantics,
+and effective principal. Evidence-qualified findings additionally require one
+exact `COVERED` lens/topic/class cell and a matching `COVERED` acquisition in
+the current run; built-artifact comparisons also require the same artifact kind
+from the baseline bundle. The unqualified `fixed` state is reserved for a future
+authenticated semantic-negative oracle and is never emitted in this release.
+Lifecycle output preserves whether the absence basis was provider-declared or
+controller-observed byte consumption; neither is independent semantic proof.
 
 Historical bundles remain validatable and reportable from their own hashed
 manifests after the installed lens pack advances. Without an externally pinned
 root attestation they are explicitly `UNANCHORED`; with a caller-supplied
 attestation/key pair, exact raw-byte manifest replacement is detected and the
 result is `SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY`. That status does not claim the
-key identity is controller-enrolled. Active `next`, `ingest`, and `finalize` operations
-additionally require the installed trusted pack to match the planned pack; old
-and new packs compare as explicitly non-comparable rather than making the
-baseline unreadable.
+key identity is controller-enrolled. Active `next`, `ingest`, and `finalize`
+operations additionally require the installed trusted pack to match the planned
+pack. Historical comparison does not relax that execution invariant: it reports
+whole-run non-comparability plus the per-lens compatibility described above
+rather than making the baseline unreadable.
 
 ## Coverage closure
 
@@ -871,6 +1215,13 @@ packs them into deterministic jobs bounded by both file count and bytes. A
 single available text file larger than the configured byte bound is a planning
 error. Shard identity is derived from its ordered scope rather than filesystem
 enumeration order.
+
+Every lens shard also seals the full owned-topic set as its semantic
+denominator. Successful providers return one assessment per obligation:
+`finding`, `examined-clean`, `partial`, `not-applicable`, or `not-assessed`.
+Missing, duplicate, unowned, out-of-scope, and dangling assessments fail
+validation; partial or not-assessed topics keep coverage partial even when all
+shard bytes were consumed.
 
 Completeness measures applicable lens/file pairs, not only unique paths. If a
 pair remains uncovered, the controller may activate the already sealed dormant
@@ -935,9 +1286,9 @@ variants after the v1 result and lifecycle contracts have operational history.
 
 - Do not upload source, evidence, secrets, PII, or PHI by default.
 - Do not run repository T1/T2 proof against production. Production HTTP actions
-  require a separate `http-authed-v1` campaign. The authenticated operator
-  statement is accepted as the controller authorization fact but does not
-  independently prove its underlying legal basis.
+  use a route-specific `http-authed-v1` campaign. The same operator statement is
+  sufficient when it names that target and work; do not ask again. The route is
+  an execution and evidence boundary, not a separate authorization source.
 - Do not infer completeness from zero findings.
 - Do not automatically apply patches; external mutation requires its declared
   reversible action and one-use technical dispatch receipt.

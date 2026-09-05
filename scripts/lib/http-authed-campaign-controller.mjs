@@ -225,7 +225,6 @@ export async function runHttpAuthedCampaign({
   scope,
   expectedCampaignGrantSha256,
   operatorId,
-  authorizationConfirmed,
   ledger,
   executeProbe,
   executeMutation,
@@ -234,12 +233,6 @@ export async function runHttpAuthedCampaign({
   now = () => new Date(),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }) {
-  if (authorizationConfirmed !== true) {
-    throw campaignError(
-      'HTTP_AUTHED_CURRENT_AUTHORIZATION_REQUIRED',
-      'campaign execution requires current authorization confirmation',
-    )
-  }
   if (
     !ledger
     || typeof ledger.enqueueCandidate !== 'function'
@@ -253,7 +246,7 @@ export async function runHttpAuthedCampaign({
       'campaign execution requires an open durable campaign ledger',
     )
   }
-  exactFunction(reauthorize, 'campaign reauthorization')
+  exactFunction(reauthorize, 'campaign scope revalidation')
   exactFunction(executeProbe, 'campaign probe executor')
   exactFunction(wait, 'campaign interval wait')
   if (executeMutation !== undefined) exactFunction(executeMutation, 'campaign mutation executor')
@@ -316,6 +309,8 @@ export async function runHttpAuthedCampaign({
     )
   }
   if (entryCleanupTarget === null) {
+    // This ledger event records the controller-derived binding of a verified
+    // scope to this runtime session; it is not repeat operator consent.
     await ledger.confirmCampaignSession({
       operatorId,
       authorizationMode: scope.authorization.mode,

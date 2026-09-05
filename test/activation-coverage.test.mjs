@@ -37,7 +37,7 @@ function family(id, label, status, anchor, evidence, paths = '', signals = '') {
 // Each selector index addresses one complete scalar in the hash-locked
 // activates_on.paths or activates_on.signals array. The test below materializes
 // the raw scalar-to-family relation and requires exactly one family for every
-// scalar. The hash makes an insertion, removal, reorder or text edit fail before
+// selector. The hash makes an insertion, removal, reorder or text edit fail before
 // an old positional assignment can silently inherit the changed activator.
 const CONTRACT = {
   'ai-model-and-mlops-security': {
@@ -82,7 +82,7 @@ const CONTRACT = {
     ],
   },
   'failure-semantics-and-resilience': {
-    hash: 'f7d76c755e998cf6',
+    hash: 'd12e562c9d42a1d8',
     families: [
       family(
         'exception-handlers',
@@ -131,7 +131,7 @@ const CONTRACT = {
     ],
   },
   'native-and-memory-safety': {
-    hash: '3a97077af300a698',
+    hash: '3f2ae400a2b22908',
     families: [
       family(
         'c-cpp-source',
@@ -342,7 +342,7 @@ const CONTRACT = {
     ],
   },
   'cicd-and-supply-chain': {
-    hash: '4bf21bc4b88d373c',
+    hash: 'ad046e20373e4c08',
     families: [
       family(
         'github-actions',
@@ -400,7 +400,7 @@ const CONTRACT = {
     ],
   },
   'cloud-and-iac': {
-    hash: '7efcc62f3b991bef',
+    hash: '5f5658aefaf48143',
     families: [
       family(
         'terraform-hcl',
@@ -509,7 +509,7 @@ const CONTRACT = {
     ],
   },
   'crypto-and-key-management': {
-    hash: '7eab8f327c8b1374',
+    hash: '9bdac4858568a170',
     families: [
       family(
         'primitive-umbrellas',
@@ -575,7 +575,7 @@ const CONTRACT = {
     ],
   },
   'hipaa-and-phi': {
-    hash: 'aa0e6dabc1a8c60d',
+    hash: 'ec8f8c6879c5ae84',
     families: [
       family(
         'phi-discovery',
@@ -584,7 +584,7 @@ const CONTRACT = {
         'phi-classification',
         'Classification and audit checks exist; broad vocabulary activation is not proof that every data flow was traced',
         '0-7,12,13,15,22,23',
-        '7,18,19',
+        '7,17,18',
       ),
       family(
         'health-formats',
@@ -610,7 +610,7 @@ const CONTRACT = {
         'phi-deidentification-standard',
         'Safe Harbor, expert-determination and re-identification checks exist; runtime data cannot be established from source alone',
         '16,17',
-        '21',
+        '20',
       ),
       family(
         'lower-environments',
@@ -627,7 +627,7 @@ const CONTRACT = {
         'phi-classification',
         'Metadata detectors and reading paths exist; licensed org controls and deployed grants remain external',
         '26-34',
-        '8-11,20',
+        '8-11,19',
       ),
       family(
         'tracking-messaging-llm',
@@ -636,7 +636,7 @@ const CONTRACT = {
         'phi-tracking-technologies',
         'Destination and telemetry checks exist; vendor defaults and complete data-flow tracing remain manual',
         '35-39',
-        '12-17',
+        '12-16',
       ),
       family(
         'unsupported-clinical',
@@ -650,7 +650,7 @@ const CONTRACT = {
     ],
   },
   'llm-and-ai': {
-    hash: '245a86b33db633d4',
+    hash: '73a8abff874b916f',
     families: [
       family(
         'mcp',
@@ -1010,7 +1010,7 @@ const CONTRACT = {
     ],
   },
   'threat-modeling': {
-    hash: '99b41150a62b9d60',
+    hash: '4459507c06195849',
     families: [
       family(
         'architecture-docs',
@@ -1019,7 +1019,7 @@ const CONTRACT = {
         'threat-model-input-anchors',
         'Text-backed participants and flows can be inventoried; there is no committed fixture pair',
         '0-7,9,10',
-        '0,1,12,13',
+        '0,1,10',
       ),
       family(
         'drawio',
@@ -1036,7 +1036,7 @@ const CONTRACT = {
         'trust-boundary-inventory',
         'Transport and policy inventories exist; deployed topology still requires anchoring',
         '11,16-21,23-25',
-        '2-5',
+        '2,3',
       ),
       family(
         'transport-integration',
@@ -1045,7 +1045,7 @@ const CONTRACT = {
         'exfiltration-path-enumeration',
         'Code-derived boundary and egress inventories exist; runtime destinations and broker policy remain external',
         '',
-        '7,10',
+        '5,8',
       ),
       family(
         'tenancy-identity',
@@ -1054,7 +1054,7 @@ const CONTRACT = {
         'trust-boundary-inventory',
         'Tenant and identity boundaries can be inventoried; deployed isolation and broker policy still require proof',
         '',
-        '8,9',
+        '6,7',
       ),
       family(
         'admin-user-surfaces',
@@ -1063,7 +1063,7 @@ const CONTRACT = {
         'architecture-trust-design-gaps',
         'Privilege-boundary review paths exist; route reachability and deployed guard order require anchoring',
         '',
-        '11',
+        '9',
       ),
       family(
         'unsupported-formats',
@@ -1072,12 +1072,12 @@ const CONTRACT = {
         null,
         'Discovery or inventory only; no format-specific threat semantics',
         '12-15,22',
-        '6',
+        '4',
       ),
     ],
   },
   'web-and-api': {
-    hash: 'eb757277a921c03f',
+    hash: '0c721a9cb69b10bb',
     families: [
       family(
         'express-node',
@@ -1221,6 +1221,156 @@ const CONTRACT = {
         'Activation-only or isolated literals with no dedicated actionable body path',
         '31,33',
         '1,12,13,26,27,36,51,52,54,55',
+      ),
+    ],
+  },
+  'embedded-iot-ot-security': {
+    hash: 'b687b351698fdf35',
+    families: [
+      family(
+        'firmware-rtos-board-boot',
+        'Firmware, RTOS, board, and boot configuration',
+        'PARTIAL',
+        'firmware-boot-integrity-and-hardware-root-of-trust',
+        'Source establishes requested policy and a supplied firmware image can contradict it; ROM behavior, fuses, board state, and installed identity remain external.',
+        '0,2-12',
+        '0,1,4-14',
+      ),
+      family(
+        'update-debug-recovery',
+        'Update, recovery, debug, and manufacturing APIs',
+        'PARTIAL',
+        'firmware-update-authenticity-and-rollback-protection',
+        'Control order and source gates are reviewable; production keys and device state are external.',
+        '',
+        '2,3,15-17',
+      ),
+      family(
+        'device-industrial-protocols',
+        'Device and industrial protocols',
+        'PARTIAL',
+        'device-service-and-local-protocol-hardening',
+        'Parsers and command handlers are in scope; deployed services, topology, and wire behavior need exported evidence.',
+        '1',
+        '18-23,35',
+      ),
+      family(
+        'wireless-identity-lifecycle',
+        'Wireless onboarding and identity',
+        'PARTIAL',
+        'wireless-pairing-and-provisioning',
+        'Pairing and enrollment source can be traced; proximity, user presence, radio range, and fleet uniqueness cannot.',
+        '',
+        '24-28',
+      ),
+      family(
+        'cyberphysical-ot-physical',
+        'Cyber-physical and OT maintenance paths',
+        'PARTIAL',
+        'cyberphysical-safety-interlocks-and-fail-safe-control',
+        'Source interlocks and declared zones are reviewable; plant topology and physical consequences are not inferred.',
+        '',
+        '29-34',
+      ),
+    ],
+  },
+  'desktop-and-thick-client-security': {
+    hash: '7a15937c31b258fc',
+    families: [
+      family(
+        'electron-web-shells',
+        'Electron and embedded web desktop shells',
+        'PARTIAL',
+        'desktop-webview-and-native-bridge-trust',
+        'Main/preload/renderer source and policy are reviewable; the shipped runtime, origins, flags, and loaded content are not consumed.',
+        '',
+        '0-4,11-13',
+      ),
+      family(
+        'tauri-wails-native-web',
+        'Tauri, Wails, and native web bridges',
+        'PARTIAL',
+        'desktop-local-ipc-and-process-boundaries',
+        'Command exposure and authorization can be traced; generated bindings and installed policy require local evidence.',
+        '9,10',
+        '14-17',
+      ),
+      family(
+        'desktop-os-integration',
+        'Windows, macOS, Linux, Qt, and GTK desktop integration',
+        'PARTIAL',
+        'desktop-os-integration-and-shell-invocation',
+        'Source launch, broker, IPC, and storage paths are in scope; ACLs, entitlements, signatures, and runtime peers are external.',
+        '0',
+        '18-30',
+      ),
+      family(
+        'installer-updater-metadata',
+        'Installer and updater metadata',
+        'PARTIAL',
+        'desktop-update-authenticity-and-rollback',
+        'Source verification order and supplied package/signature evidence are reviewable; delivery, installation, channel state, and deployed updater policy remain external.',
+        '1-8,11-17',
+        '8,31-35',
+      ),
+      family(
+        'plugins-diagnostics-uri',
+        'Plugins, diagnostics, URI and file handlers',
+        'PARTIAL',
+        'desktop-plugin-extension-and-scripting-trust',
+        'Enumerated handlers and gates can be fixture-tested; complete OS registration and loaded extension inventory are unavailable.',
+        '',
+        '5-7,9,10',
+      ),
+    ],
+  },
+  'smart-contract-and-web3-security': {
+    hash: '3ea10a49a12adc46',
+    families: [
+      family(
+        'solidity-vyper-evm',
+        'Solidity, Vyper, and EVM toolchains',
+        'PARTIAL',
+        'reentrancy-and-external-call-ordering',
+        'Source, local fixtures, and supplied build bytecode/metadata are reviewable; deployed state and chain behavior are not consumed.',
+        '0,1,4-15',
+        '0-24',
+      ),
+      family(
+        'move',
+        'Move modules',
+        'PARTIAL',
+        'contract-access-control-and-privileged-roles',
+        'Signer/capability/resource invariants can be traced; package publication and chain state require runtime evidence.',
+        '2,16',
+        '30,31',
+      ),
+      family(
+        'cairo-starknet',
+        'Cairo and Starknet',
+        'PARTIAL',
+        'block-context-randomness-and-time-dependence',
+        'Caller, storage, L1/L2 messaging, and arithmetic source are in scope; sequencer and deployed-class state are not.',
+        '3,17',
+        '32,33',
+      ),
+      family(
+        'solana-anchor',
+        'Solana and Anchor signals',
+        'PARTIAL',
+        'contract-initialization-and-deployment-state',
+        'Account constraints, signer/PDA and CPI paths can be traced when signals activate; program deployment and account state are unavailable.',
+        '18',
+        '34-37',
+      ),
+      family(
+        'defi-oracle-bridge-governance',
+        'DeFi, oracle, bridge, and governance composition',
+        'PARTIAL',
+        'flash-loan-and-economic-invariant-abuse',
+        'Repository invariants and deterministic mocks can be assessed; real liquidity, ordering, feeds, remote domains, and governance state remain gaps.',
+        '',
+        '25-29',
       ),
     ],
   },
@@ -1385,13 +1535,18 @@ function fixtureActivatesFamily(fixtureId, familySpec, rawActivators, fixtures) 
     const logicalPath = fixturePath.replace(/^(?:vulnerable|clean)\//, '')
     if (pathPatterns.some((pattern) => pathActivatorMatches(pattern, logicalPath))) return true
     const content = readFileSync(join('fixtures', fixturePath), 'utf8')
-    return signalLiterals.some((signal) => content.includes(signal))
+    return signalLiterals.some((signal) => signalActivatorMatches(signal, content))
   })
 }
 
 function isCompoundActivator(kind, scalar) {
   if (kind === 'paths') return /\{[^{}]*,[^{}]*\}/.test(scalar)
+  if (typeof scalar !== 'string') return false
   return scalar.includes(',') || scalar.includes(' / ')
+}
+
+function selectorIdentity(selector) {
+  return typeof selector === 'string' ? selector : JSON.stringify(selector)
 }
 
 test('fixture relevance matching expands brace globs and globstars', () => {
@@ -1488,15 +1643,16 @@ test('absence-shaped observability and failure checks activate on neutral source
   }
 })
 
-test('COVERED compound classification distinguishes paths from signals', () => {
+test('COVERED compound classification distinguishes ambiguous prose from typed alternatives', () => {
   assert.equal(isCompoundActivator('paths', '**/server.{js,ts,mjs}'), true)
   assert.equal(isCompoundActivator('paths', '**/server.js'), false)
   assert.equal(isCompoundActivator('signals', 'claude -p / codex exec'), true)
   assert.equal(isCompoundActivator('signals', 'first, second'), true)
   assert.equal(isCompoundActivator('signals', 'express'), false)
+  assert.equal(isCompoundActivator('signals', { any_of: ['first', 'second'] }), false)
 })
 
-test('all nineteen lenses have an exact, drift-checked activation coverage disposition', () => {
+test('all twenty-two lenses have an exact, drift-checked activation coverage disposition', () => {
   const files = readdirSync(LENS_DIR)
     .filter((name) => name.endsWith('.md') && !name.startsWith('_'))
   const lenses = files.map((file) => {
@@ -1505,27 +1661,27 @@ test('all nineteen lenses have an exact, drift-checked activation coverage dispo
   })
   const fixtures = fixtureIndex()
 
-  assert.equal(lenses.length, 19)
+  assert.equal(lenses.length, 22)
   assert.deepEqual(
     new Set(lenses.map(({ lens }) => lens.name)),
     new Set([...Object.keys(CONTRACT), ...NO_ACTIVATION.keys()]),
   )
   const typedActivationEntries = lenses.flatMap(({ lens }) => ['paths', 'signals'].flatMap((kind) =>
     (lens.frontmatter.activates_on?.[kind] ?? [])
-      .map((scalar, index) => `${lens.name}\0${kind}\0${index}\0${scalar}`)))
-  assert.equal(typedActivationEntries.length, 1315, 'the exact contract must own all 1315 typed activation entries')
+      .map((selector, index) => `${lens.name}\0${kind}\0${index}\0${selectorIdentity(selector)}`)))
+  assert.equal(typedActivationEntries.length, 1471, 'the exact contract must own all 1471 typed activation entries')
   assert.equal(
     new Set(typedActivationEntries).size,
-    1315,
+    1471,
     'lens + kind + index + scalar activation identities must remain unique',
   )
   const lensQualifiedRawScalars = lenses.flatMap(({ lens }) => [
     ...(lens.frontmatter.activates_on?.paths ?? []),
     ...(lens.frontmatter.activates_on?.signals ?? []),
-  ].map((scalar) => `${lens.name}\0${scalar}`))
+  ].map((scalar) => `${lens.name}\0${selectorIdentity(scalar)}`))
   assert.equal(
     new Set(lensQualifiedRawScalars).size,
-    1314,
+    1470,
     'raw scalar duplication drifted; audit repeated text separately from typed ownership',
   )
 
@@ -1572,14 +1728,15 @@ test('all nineteen lenses have an exact, drift-checked activation coverage dispo
           1,
           `${lens.name}/${kind}[${index}] ${JSON.stringify(scalar)} must map exactly once; got ${matches.map(({ id }) => id).join(', ') || 'none'}`,
         )
-        if (scalarOwners.has(scalar)) {
+        const identity = selectorIdentity(scalar)
+        if (scalarOwners.has(identity)) {
           assert.equal(
             matches[0].id,
-            scalarOwners.get(scalar),
+            scalarOwners.get(identity),
             `${lens.name}: duplicate raw scalar ${JSON.stringify(scalar)} must retain one family owner across paths and signals`,
           )
         } else {
-          scalarOwners.set(scalar, matches[0].id)
+          scalarOwners.set(identity, matches[0].id)
         }
       }
       for (const familySpec of contract.families) {

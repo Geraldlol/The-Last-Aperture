@@ -22,11 +22,11 @@ severity_floor: info
 
 ## Scope
 
-This lens reads **findings, not code.** Its input is the merged candidate-finding set after triage's structural dedup, semantic dedup, reachability gate and false-positive sweep — the one point in the pipeline where every lens's output is visible at once. No fan-out auditor can do this work: each one receives its own lens file and its own file list, and a composition whose hops were filed by three different lenses is invisible from inside any of them.
+This lens starts from **findings, not a fresh code search.** Its input is the normalized candidate set emitted by the preceding `business-logic` triage stage after structural dedup, semantic dedup, reachability adjudication, and the false-positive sweep — the one point in the pipeline where every lens's output is visible at once. No fan-out auditor can do this work: each one receives its own lens file and its own file list, and a composition whose hops were filed by three different lenses is invisible from inside any of them.
 
 Its job is the one thing no per-lens pass can produce: **individually-Medium findings that compose into account takeover, data exfiltration or privilege escalation.** The unit of output is a *chain* — an ordered sequence of filed records where each hop supplies a precondition the next hop needs — written step by step, with the components' `candidate_id`s recorded in `component_finding_ids`.
 
-It opens a file for exactly one reason: to confirm that two components actually meet, meaning the value one produces is the value the other consumes. It never authors a hop from code no lens filed. **A hop with no `candidate_id` is not a hop** — see `## Severity calibration`.
+The controller delivers the sealed source locations cited by the component records. It opens those files for exactly one reason: to confirm that two components actually meet, meaning the value one produces is the value the other consumes. It never authors a hop from code no lens filed. **A hop with no `candidate_id` is not a hop** — see `## Severity calibration`.
 
 ### Does not own
 
@@ -47,28 +47,31 @@ whose topic the composed impact actually lands on. That is usually the terminal
 hop: the one whose sink is the data, the session or the privilege the attacker
 ends up holding.
 
-The host keeps its `lens`, its `topic`, its `candidate_id`, its `location` and its `claimed_impact_severity` unchanged, and gains four fields:
+The host keeps its `lens`, its `topic`, its `candidate_id`, its `location` and its `claimed_impact_severity` unchanged, and gains five fields:
 
 | Field | Value |
 |---|---|
 | `triage_disposition` | `elevated` |
 | `raised_by` | `attack-chaining`. **Required** — an `effective_severity` above the claim with no `raised_by` is a contract violation, not a stylistic gap |
 | `component_finding_ids` | Every component, **including the host**, in execution order: first hop first |
+| `chain` | Prerequisites, blast radius, and one structured step per component with `candidate_id`, `produces`, `consumes`, `joint_evidence`, and optional versioned `framework_refs` |
 | `effective_severity` | The composed impact, subject to every cap in `## Severity calibration` |
 
-**`component_finding_ids` is ordered, and the order is the chain.** One step per id, one id per step. This is the cheapest integrity mechanism available to this lens, because it makes the chain checkable without a new field: a reader walks the ids in order and sees the composition.
+**`component_finding_ids` and `chain.steps` are both ordered and must carry the
+same candidate IDs in the same order.** One step per id, one id per step. The
+validator rejects a missing structured chain or any mismatch; consumers no
+longer reconstruct joints from prose.
 
 **A step with no `candidate_id` is not a step.** Either the finding exists and nobody filed it — in which case raise it first, through the lens that owns the topic, so it gets its own id and its own proof — or it is an assumption, and an assumption cannot be a hop. This is the rule that stops a chain from being completed by an invented hop, which is the characteristic failure of chain reasoning and the reason chain findings have a bad reputation.
 
 **Components stay `queued` at their own severities.** A component does not dissolve into the chain. Each keeps its own `candidate_id` and its own report line, because a patch that breaks the chain at one joint leaves every other component live and reportable.
 
-**Where the step-by-step narrative lives, and the gap in the contract.** Stage 1's `attack` is the filing lens's own text and no later stage overwrites it. The schema defines no Stage 2 narrative field, and inventing one is the specific error the ATT&CK rule in `threat-modeling` names: a key the merge contract does not define has no consumer downstream, so an annotation written into it is a claim nobody can see. So the steps are written in the **report line for the host record**, keyed by its `candidate_id`, one numbered step per entry in `component_finding_ids`, and each step names four things:
-
-```
-step N | <candidate_id> | acts on <file:line> | produces <the value> | next step consumes <the same value>
-```
-
-The machine-readable half of the chain is the ordered id list; the prose half is the report line. **This is a known thinness, stated rather than papered over:** there is no mechanical walk from a record to its chain narrative, exactly as there is no mechanical walk from a `merged` record to its survivor. A `chain` field at Stage 2 would close it, and that is a contract change to be decided once, not improvised per run.
+**Where the step-by-step narrative lives.** Stage 1's `attack` remains
+immutable. Stage 2 writes the composition into `chain`: `prerequisites` states
+attacker premises, `blast_radius` bounds the terminal effect, and every ordered
+step names the value it consumes, the value it produces, and the exact joint
+evidence. Markdown and SARIF render from this object; provider prose is not a
+second source of truth.
 
 ### ATT&CK annotation — cite technique identifiers or do not claim the framework
 
@@ -76,11 +79,11 @@ The machine-readable half of the chain is the ordered id list; the prose half is
 
 So **every chain elevation carries technique identifiers, one per step, or the annotation is not written for that finding.** Not "MITRE ATT&CK informed this analysis" — identifiers, or nothing.
 
-**Where the identifier goes.** The schema has a `cwe` field and no ATT&CK field, and the host record's `attack` is immutable Stage 1 text belonging to the filing lens. So there is no record field that can hold the sequence without either overwriting Stage 1 or inventing a Stage 2 key, and both are forbidden. The sequence therefore leads the chain narrative's first line in the report, in this exact shape, so it is greppable:
-
-```
-[ATT&CK Enterprise <version> | T1190 -> T1552.005 -> T1078.004] <the composed path>
-```
+**Where the identifier goes.** Each step uses `framework_refs` with
+`framework_id: mitre-attack`, a version, the technique identifier,
+`relationship: technique`, `applicability: applicable`, and its canonical HTTPS
+source. A run may additionally map the host finding to other versioned
+framework requirements through the finding-level `framework_refs` array.
 
 Five rules, all load-bearing:
 
@@ -132,11 +135,17 @@ The schema's invariants are per record; a chain is a claim about several records
 
 ### The proof-queue consequence, stated because it bites
 
-The proof queue is ordered by `claimed_impact_severity`, and nothing edits that field. A chain elevated to Critical out of five claimed-Medium components therefore **does not move up the queue**: its components sit in the best-effort Medium band, which is precisely the set whose proof would justify the elevation.
+The proof queue is ordered by `claimed_impact_severity`, and nothing edits that
+field. The controller also propagates an attack-chain host's stronger effective
+severity to every ID in `component_finding_ids` for queue ordering. A chain
+elevated to Critical therefore promotes its Medium components as one proof
+priority without rewriting any component claim.
 
-**Do not fix this by editing `claimed_impact_severity` on any component.** That is a contract violation and it destroys the immutability the report's auditability rests on. Fix it in the output: the triage result names the chain's components as a **proof unit** — all or nothing, since an unproven hop caps the composition anyway — and requests them together at the head of the Medium band. Where the budget does not reach them, the chain ships at Medium with `elevation unpaid: N of M components proven` in the coverage block, never at Critical.
-
-**A contract edit is needed and is reported rather than made:** the schema's proof-queue invariant enqueues every Critical and High by claim and has no clause for a chain-elevated composition. Until it does, the proof unit is a request in the triage output, not a guarantee.
+**Do not edit `claimed_impact_severity` on any component.** That is a contract
+violation and destroys the immutability the report's auditability rests on.
+Where the proof budget still does not reach every component, the chain ships at
+Medium with `elevation unpaid: N of M components proven` in the coverage block,
+never at Critical.
 
 ## Known false positives
 
@@ -156,7 +165,7 @@ Each entry is a shape that reads as a chain and is not one. **None of them is a 
 4. **Re-stating reachability as hop 0.** `reachable_from` already names the entry point the component is reachable from. Wrapping it as a first hop double-counts the same fact and inflates the step count.
    **What survives:** a hop that *changes* reachability — a finding that turns an authenticated path into an unauthenticated one, or reaches an internal route from an external one.
 
-5. **A composition only demonstrable off this machine.** A hop through a cloud API, a hosted forge or an identity provider cannot be executed under the rails at any tier, and "it is a sandbox" is not an exemption.
+5. **A composition only demonstrable off this machine.** A hop through a cloud API, hosted forge, or identity provider is never repository proof. An accepted authenticated operator statement naming every external destination, scope, effect, and credential use may authorize separate external evidence without another prompt, but only through matching destination-bound controllers; otherwise record the technical gap. External observations do not promote the chain's repository proof tier.
    **What survives:** the chain up to the last local hop, with the remaining hops recorded as unproven steps naming what each would demonstrate, and the composition capped accordingly. `threat-modeling` records `pivot-feasibility` as unprovable for exactly this reason; a chain in the same position inherits that status rather than escaping it.
 
 6. **The same path shipped twice — once as `pivot-feasibility`, once as a chain.** Merge, keeping both `candidate_id`s so any report line or chain that cited either still resolves, and ship one.
@@ -179,7 +188,7 @@ A chain has **two proof obligations and both are required.**
 
 Neither half substitutes for the other. All five oracle conditions apply to the composition test, and its `verification_status` is capped by its weakest component per `## Severity calibration`.
 
-### C1 — The end-to-end composition test (T1; T2 where a boot is separately consented)
+### C1 — The end-to-end composition test (T1; T2 where the accepted operator statement names the boot and a matching implemented controller exists)
 
 One test, one command, hops in order, one process and one session per principal. Six rules, and the first is the one that decides whether the test proves a chain or proves nothing.
 
@@ -207,8 +216,8 @@ A chain has a cheapest break point, and the post-patch run must show **the chain
 ### Where the rails stop a chain, and what that costs
 
 - **A terminal hop that can only be shown by damage** — delete the tenant's data, issue the refund, send the mail, make the payment — is written and not executed: `proof_tier: T3`, `verification_status: UNPROVEN`, capped at Medium, with the blocking reason named. Demonstrate authorization and reachability up to the destructive call and assert on the call, not its effect.
-- **A hop that leaves this machine is not executed at any tier**, including a scratch tenant, a sandbox, or an environment the user owns. The chain stops at the last local hop; the remaining hops are recorded as unproven steps with what each would have demonstrated.
-- **Where a component's own proof is unavailable** — a declined boot, a stubbed engine, a runner out of rails — the chain is capped by that component. Record which one, by `candidate_id`. "The chain is unproven" is not a finding anybody can act on; "hop 2, `<id>`, is `UNPROVEN` because the user declined the local boot" is.
+- **A hop that leaves this machine is never repository proof.** The repository-proof chain stops at the last local hop and records the remaining hops as unproven steps. An accepted authenticated operator statement that names the external destination, scope, effect, and any credential use authorizes a separate external-evidence route without another prompt; the operator is accountable for that statement, and the auditor does not independently adjudicate legal authority. Execution requires a matching implemented destination-bound controller and explicitly supplied or controller-referenced credential material. If either is absent, record the technical transport or credential gap as `UNPROVEN`; authority does not conjure either. Never infer a destination from repository configuration, and never promote an external observation into a repository proof tier.
+- **Where a component's own proof is unavailable** — an authorized boot with no matching implemented controller, a stubbed engine, a runner out of rails — the chain is capped by that component. Record which one, by `candidate_id`. "The chain is unproven" is not a finding anybody can act on; "hop 2, `<id>`, is `UNPROVEN` because the T2 boot has a technical transport gap" is. Do not ask the operator to re-authorize a boot already named in the accepted statement.
 
 ### Where no shared component applies, plainly
 

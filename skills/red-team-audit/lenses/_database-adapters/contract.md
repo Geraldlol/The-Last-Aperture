@@ -495,9 +495,14 @@ Also run:
   and both vulnerable and clean fixtures. Otherwise it is `NOT_ASSESSED`.
 - T1 is allowed only when the repository's own test runner already starts the
   ephemeral store. Starting a database, container, emulator, or local service
-  is T2 and requires the user's local-dynamic consent.
-- All dynamic destinations are loopback. Never connect to a hostname found in a
-  connection string or provider configuration.
+  is T2. An accepted authenticated operator statement naming the target, scope,
+  and T2 launch is authority without another prompt. The operator is accountable
+  for that statement; the auditor does not independently adjudicate legal
+  authority. Execute only through a matching implemented controller; otherwise
+  record `UNPROVEN` with the technical transport gap.
+- All repository-proof dynamic destinations are controller-bound loopback
+  endpoints. Never infer a destination from a connection string or provider
+  configuration.
 - Use disposable data and bounded operations. Do not use `DROP`, `TRUNCATE`,
   mass mutation, or a production-shaped credential.
 - Assert the authorization decision and persisted side effect, not an error

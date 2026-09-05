@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { compareEvidenceClassPrecedence } from './evidence-classes.mjs'
+import { acquiredEvidenceCoverageGaps } from './evidence-coverage.mjs'
 import {
   isUnresolvedDatabaseDescriptor,
   routeDatabaseAdapter,
@@ -94,6 +95,7 @@ const TRIAGE_FIELDS = new Set([
   'drop_reason',
   'raised_by',
   'component_finding_ids',
+  'chain',
   'merged_into_candidate_id',
 ])
 
@@ -119,6 +121,7 @@ const STAGE_ONE_FIELDS = new Set([
   'claimed_impact_severity',
   'location',
   'cwe',
+  'framework_refs',
   'evidence',
   'source_anchors',
   'quotes',
@@ -853,6 +856,44 @@ function findingInvariantErrors(record) {
     }
   }
 
+  if (record.chain !== undefined) {
+    const componentIds = Array.isArray(record.component_finding_ids)
+      ? record.component_finding_ids
+      : []
+    const stepIds = Array.isArray(record.chain?.steps)
+      ? record.chain.steps.map(({ candidate_id: candidateId }) => candidateId)
+      : []
+    if (!isDeepStrictEqual(componentIds, stepIds)) {
+      addError(
+        errors,
+        'CHAIN_STEP_IDS_MISMATCH',
+        '/chain/steps',
+        'chain step candidate IDs must exactly match component_finding_ids in execution order',
+      )
+    }
+    if (record.raised_by !== 'attack-chaining' || record.triage_disposition !== 'elevated') {
+      addError(
+        errors,
+        'CHAIN_WITHOUT_ELEVATION',
+        '/chain',
+        'a structured chain is valid only on an attack-chaining elevation',
+      )
+    }
+  }
+
+  if (
+    record.raised_by === 'attack-chaining'
+    && record.triage_disposition === 'elevated'
+    && record.chain === undefined
+  ) {
+    addError(
+      errors,
+      'CHAIN_DETAILS_REQUIRED',
+      '/chain',
+      'attack-chaining elevation requires structured prerequisites, steps, joints, and blast radius',
+    )
+  }
+
   if (
     record.triage_disposition === 'elevated'
     && effectiveSeverity
@@ -1485,6 +1526,69 @@ function attemptInvariantErrors(run) {
           )
         }
       }
+      const isServiceProofFailure = event?.event === 'FAILED'
+        && prior.lease?.backend === 'SERVICE_PROOF_CONTAINER'
+      if (isServiceProofFailure) {
+        if (['RESULT_CAPTURED', 'VALIDATED'].includes(prior.state)) {
+          addError(
+            errors,
+            'SERVICE_PROOF_CAPTURED_RESULT_MUST_RESUME',
+            `${pointer}/event`,
+            'a captured service-proof result must resume validation or commit and cannot be failed',
+          )
+        }
+
+        const carriesRecoveryMetadata = event.recoverable === true
+          || event.cleanup_verified !== undefined
+          || event.service_container_names !== undefined
+        if (carriesRecoveryMetadata) {
+          const serviceLeaseExpiresAt = parseContractTimestamp(
+            prior.lease?.expires_at,
+          )
+          if (
+            !Number.isFinite(occurredAt)
+            || !Number.isFinite(serviceLeaseExpiresAt)
+            || occurredAt < serviceLeaseExpiresAt
+          ) {
+            addError(
+              errors,
+              'SERVICE_PROOF_RECOVERY_BEFORE_EXPIRY',
+              `${pointer}/occurred_at`,
+              'service-proof recovery may fail an attempt only at or after its lease expiry',
+            )
+          }
+          if (prior.state === 'STARTED') {
+            if (event.recoverable === true && event.cleanup_verified !== true) {
+              addError(
+                errors,
+                'SERVICE_PROOF_RETRY_WITHOUT_VERIFIED_CLEANUP',
+                `${pointer}/cleanup_verified`,
+                'a STARTED service-proof attempt may become retryable only after verified cleanup',
+              )
+            }
+            if (!isDeepStrictEqual(
+              event.service_container_names,
+              prior.lease?.service_container_names,
+            )) {
+              addError(
+                errors,
+                'SERVICE_PROOF_RECOVERY_CONTAINER_NAMES_MISMATCH',
+                `${pointer}/service_container_names`,
+                'service-proof cleanup must bind the exact attack and control container names from the lease',
+              )
+            }
+          }
+        }
+
+        if (event.failure_artifact_key !== undefined) {
+          addError(
+            errors,
+            'SERVICE_PROOF_PROVIDER_FAILURE_ARTIFACT_FORBIDDEN',
+            `${pointer}/failure_artifact_key`,
+            'service-proof attempts cannot attach provider failure envelopes',
+          )
+        }
+      }
       prior.state = event?.event
       prior.last_event = event
       if (['RESULT_CAPTURED', 'VALIDATED', 'COMMITTED'].includes(event?.event)) {
@@ -1583,6 +1687,66 @@ function attemptInvariantErrors(run) {
             'REMOTE_ATTEMPT_REQUEST_ARTIFACT_MISMATCH',
             `${pointer}/request_artifact_sha256`,
             'remote request artifact digest differs from its lease',
+          )
+        }
+      }
+      if (event?.backend === 'SERVICE_PROOF_CONTAINER') {
+        if (run?.schema_version !== '7.0.0') {
+          addError(
+            errors,
+            'SERVICE_PROOF_BACKEND_REQUIRES_V7',
+            `${pointer}/backend`,
+            'SERVICE_PROOF_CONTAINER attempts are defined only by the v7 run contract',
+          )
+        }
+        if (
+          job?.kind !== 'PROOF'
+          || !String(job?.job_id ?? '').startsWith('proof-verification:')
+          || !Array.isArray(job?.candidate_ids)
+          || job.candidate_ids.length !== 1
+        ) {
+          addError(
+            errors,
+            'SERVICE_PROOF_ATTEMPT_JOB_INVALID',
+            `${pointer}/job_id`,
+            'service-proof attempts require one proof-verification candidate',
+          )
+        }
+        const names = event.service_container_names
+        if (names?.attack === names?.control) {
+          addError(
+            errors,
+            'SERVICE_PROOF_CONTAINER_NAMES_ALIASED',
+            `${pointer}/service_container_names`,
+            'attack and control service-proof container names must be distinct',
+          )
+        }
+        const budget = event.service_session_budget
+        const exactBudget = budget?.attack_controller_wall_clock_ms
+          + budget?.control_controller_wall_clock_ms
+          + budget?.capture_grace_ms
+        if (
+          !Number.isSafeInteger(exactBudget)
+          || budget?.controller_wall_clock_ms !== exactBudget
+        ) {
+          addError(
+            errors,
+            'SERVICE_PROOF_ATTEMPT_BUDGET_MISMATCH',
+            `${pointer}/service_session_budget/controller_wall_clock_ms`,
+            'service-proof controller budget must equal both sessions plus capture grace',
+          )
+        }
+        if (
+          Number.isFinite(leaseOccurredAt)
+          && Number.isFinite(expiresAt)
+          && Number.isSafeInteger(budget?.controller_wall_clock_ms)
+          && expiresAt < leaseOccurredAt + budget.controller_wall_clock_ms
+        ) {
+          addError(
+            errors,
+            'SERVICE_PROOF_ATTEMPT_EXPIRY_UNDERSTATED',
+            `${pointer}/expires_at`,
+            'service-proof lease expiry must cover its complete controller budget',
           )
         }
       }
@@ -2774,6 +2938,267 @@ function runInvariantErrors(run, { final = false } = {}) {
   if (new Set(jobIds).size !== jobIds.length) {
     addError(errors, 'DUPLICATE_JOB_ID', '/jobs', 'job_id must be unique within a run')
   }
+  const evidenceIds = (run.evidence_bundles ?? [])
+    .map((bundle) => bundle?.evidence_id)
+    .filter((evidenceId) => typeof evidenceId === 'string')
+  if (new Set(evidenceIds).size !== evidenceIds.length) {
+    addError(
+      errors,
+      'DUPLICATE_EVIDENCE_ID',
+      '/evidence_bundles',
+      'evidence_id must be unique within a run',
+    )
+  }
+  const evidenceBundles = run.evidence_bundles ?? []
+  const bundleCoverage = run.evidence_coverage?.bundle_coverage
+  if (
+    run.schema_version === '7.0.0'
+    && evidenceBundles.length > 0
+    && !Array.isArray(bundleCoverage)
+  ) {
+    addError(
+      errors,
+      'EVIDENCE_BUNDLE_COVERAGE_REQUIRED',
+      '/evidence_coverage/bundle_coverage',
+      'every acquired bundle requires a controller-owned bundle coverage record',
+    )
+  }
+  if (Array.isArray(bundleCoverage)) {
+    const coverageIds = bundleCoverage
+      .map((record) => record?.evidence_id)
+      .filter((evidenceId) => typeof evidenceId === 'string')
+    if (new Set(coverageIds).size !== coverageIds.length) {
+      addError(
+        errors,
+        'DUPLICATE_EVIDENCE_BUNDLE_COVERAGE',
+        '/evidence_coverage/bundle_coverage',
+        'an acquired evidence_id must have exactly one bundle coverage record',
+      )
+    }
+    if (bundleCoverage.length !== evidenceBundles.length) {
+      addError(
+        errors,
+        'EVIDENCE_BUNDLE_COVERAGE_COUNT_MISMATCH',
+        '/evidence_coverage/bundle_coverage',
+        'bundle coverage records must be one-to-one with acquired evidence bundles',
+      )
+    }
+    if (run.evidence_coverage?.summary?.bundle_count !== evidenceBundles.length) {
+      addError(
+        errors,
+        'EVIDENCE_BUNDLE_SUMMARY_COUNT_MISMATCH',
+        '/evidence_coverage/summary/bundle_count',
+        'the evidence coverage bundle count must equal the acquired bundle count',
+      )
+    }
+    for (const [bundleIndex, bundle] of evidenceBundles.entries()) {
+      const recordIndex = bundleCoverage.findIndex(
+        (entry) => entry?.evidence_id === bundle?.evidence_id,
+      )
+      if (recordIndex < 0) {
+        addError(
+          errors,
+          'EVIDENCE_BUNDLE_COVERAGE_MISSING',
+          `/evidence_bundles/${bundleIndex}/evidence_id`,
+          `acquired evidence ${bundle?.evidence_id} has no bundle coverage record`,
+        )
+        continue
+      }
+      const record = bundleCoverage[recordIndex]
+      for (const field of ['evidence_class', 'artifact_kind', 'root_sha256']) {
+        if (record?.[field] !== bundle?.[field]) {
+          addError(
+            errors,
+            'EVIDENCE_BUNDLE_COVERAGE_IDENTITY_MISMATCH',
+            `/evidence_coverage/bundle_coverage/${recordIndex}/${field}`,
+            `bundle coverage ${field} must match acquired evidence ${bundle?.evidence_id}`,
+          )
+        }
+      }
+      const expectedConsumers = [...new Set((run.jobs ?? [])
+        .filter((job) =>
+          job?.kind === 'LENS'
+          && job.closure_round === undefined
+          && (job.evidence_ids ?? []).includes(bundle?.evidence_id))
+        .map(({ lens }) => lens))]
+        .sort(compareCanonicalStrings)
+      const requiredConsumers = (run.activated_lenses ?? [])
+        .filter((lens) => {
+          const declaration = run.evidence_declarations?.[lens]?.[bundle?.evidence_class]
+          if (declaration?.state !== 'consumed') return false
+          if (bundle?.evidence_class !== 'built-artifact') return true
+          return (declaration.artifact_kinds ?? []).includes(bundle?.artifact_kind)
+        })
+        .sort(compareCanonicalStrings)
+      if (!isDeepStrictEqual(record?.consumer_lenses, expectedConsumers)) {
+        addError(
+          errors,
+          'EVIDENCE_BUNDLE_CONSUMER_MISMATCH',
+          `/evidence_coverage/bundle_coverage/${recordIndex}/consumer_lenses`,
+          `bundle coverage consumers must match dispatched jobs for ${bundle?.evidence_id}`,
+        )
+      }
+      if (!isDeepStrictEqual(expectedConsumers, requiredConsumers)) {
+        const missing = requiredConsumers.filter(
+          (lens) => !expectedConsumers.includes(lens),
+        )
+        const unexpected = expectedConsumers.filter(
+          (lens) => !requiredConsumers.includes(lens),
+        )
+        addError(
+          errors,
+          'EVIDENCE_BUNDLE_DELIVERY_INCOMPLETE',
+          `/evidence_coverage/bundle_coverage/${recordIndex}/consumer_lenses`,
+          `bundle ${bundle?.evidence_id} delivery must equal its active declared consumers`
+            + (missing.length > 0 ? `; missing ${missing.join(', ')}` : '')
+            + (unexpected.length > 0 ? `; unexpected ${unexpected.join(', ')}` : ''),
+        )
+      }
+      if (
+        expectedConsumers.length === 0
+        && record?.state === 'COVERED'
+      ) {
+        addError(
+          errors,
+          'UNDELIVERED_EVIDENCE_MARKED_COVERED',
+          `/evidence_coverage/bundle_coverage/${recordIndex}/state`,
+          `undelivered evidence ${bundle?.evidence_id} cannot be marked covered`,
+        )
+      }
+      if (
+        bundle?.coverage_state === 'NOT_APPLICABLE'
+        && !['PARTIAL', 'INVENTORY_ONLY', 'NOT_ASSESSED'].includes(record?.state)
+      ) {
+        addError(
+          errors,
+          'ACQUIRED_EVIDENCE_NOT_APPLICABLE',
+          `/evidence_coverage/bundle_coverage/${recordIndex}/state`,
+          `acquired evidence ${bundle?.evidence_id} cannot establish NOT_APPLICABLE coverage`,
+        )
+      }
+      if (
+        run.schema_version === '7.0.0'
+        && record?.state === 'COVERED'
+      ) {
+        addError(
+          errors,
+          'EVIDENCE_BUNDLE_EXHAUSTIVE_AUTHORITY_REQUIRED',
+          `/evidence_coverage/bundle_coverage/${recordIndex}/state`,
+          `evidence ${bundle?.evidence_id} has no exhaustive controller analysis authority`,
+        )
+      }
+    }
+  }
+  if (run.schema_version === '7.0.0') {
+    const acquiredNonSourceClasses = new Set(evidenceBundles
+      .map(({ evidence_class: evidenceClass }) => evidenceClass)
+      .filter((evidenceClass) => evidenceClass !== 'source'))
+    for (const [cellIndex, cell] of (run.evidence_coverage?.cells ?? []).entries()) {
+      if (
+        cell?.state === 'COVERED'
+        && acquiredNonSourceClasses.has(cell?.evidence_class)
+      ) {
+        addError(
+          errors,
+          'ACQUIRED_EVIDENCE_CELL_FALSE_CLEARANCE',
+          `/evidence_coverage/cells/${cellIndex}/state`,
+          `${cell.evidence_class} analysis is positive-only and cannot clear a lens/topic cell`,
+        )
+      }
+    }
+  }
+  for (const [jobIndex, job] of (run.jobs ?? []).entries()) {
+    if (job?.kind !== 'LENS') continue
+    if (run.schema_version === '7.0.0') {
+      for (const field of [
+        'lens_digest',
+        'owned_topics',
+        'topic_obligations',
+        'topic_assessments',
+      ]) {
+        if (job[field] === undefined) {
+          addError(
+            errors,
+            'LENS_SEMANTIC_CONTRACT_MISSING',
+            `/jobs/${jobIndex}/${field}`,
+            `run schema 7 LENS job requires ${field}`,
+          )
+        }
+      }
+    }
+    const obligations = Array.isArray(job.topic_obligations)
+      ? job.topic_obligations
+      : null
+    const ownedTopics = Array.isArray(job.owned_topics)
+      ? job.owned_topics
+      : null
+    const assessments = Array.isArray(job.topic_assessments)
+      ? job.topic_assessments
+      : []
+    if (
+      obligations !== null
+      && ownedTopics !== null
+      && !isDeepStrictEqual(obligations, ownedTopics)
+    ) {
+      addError(
+        errors,
+        'TOPIC_OBLIGATIONS_OWNERSHIP_MISMATCH',
+        `/jobs/${jobIndex}/topic_obligations`,
+        'topic obligations must exactly equal the sealed owned-topic contract',
+      )
+    }
+    if (obligations === null && assessments.length > 0) {
+      addError(
+        errors,
+        'UNSEALED_TOPIC_ASSESSMENTS',
+        `/jobs/${jobIndex}/topic_assessments`,
+        'topic assessments require a sealed job topic_obligations denominator',
+      )
+      continue
+    }
+    const assessedTopics = new Set()
+    for (const [assessmentIndex, assessment] of assessments.entries()) {
+      if (assessedTopics.has(assessment?.topic)) {
+        addError(
+          errors,
+          'DUPLICATE_TOPIC_ASSESSMENT',
+          `/jobs/${jobIndex}/topic_assessments/${assessmentIndex}/topic`,
+          `topic ${assessment?.topic} must be assessed once per job`,
+        )
+      }
+      assessedTopics.add(assessment?.topic)
+      if (
+        obligations !== null
+        && !obligations.includes(assessment?.topic)
+      ) {
+        addError(
+          errors,
+          'UNOWNED_TOPIC_ASSESSMENT',
+          `/jobs/${jobIndex}/topic_assessments/${assessmentIndex}/topic`,
+          `topic ${assessment?.topic} is outside the sealed job obligations`,
+        )
+      }
+    }
+    if (job.state === 'SUCCEEDED' && obligations !== null) {
+      for (const topic of obligations) {
+        if (!assessedTopics.has(topic)) {
+          addError(
+            errors,
+            'MISSING_TOPIC_ASSESSMENT',
+            `/jobs/${jobIndex}/topic_assessments`,
+            `successful lens job is missing its sealed ${topic} assessment`,
+          )
+        }
+      }
+    } else if (job.state !== 'SUCCEEDED' && assessments.length > 0) {
+      addError(
+        errors,
+        'TOPIC_ASSESSMENT_BEFORE_SUCCESS',
+        `/jobs/${jobIndex}/topic_assessments`,
+        'topic assessments are persisted only by a successful lens result',
+      )
+    }
+  }
   const proofJobs = (run.jobs ?? []).filter(({ kind }) => kind === 'PROOF')
   const proofWaveKey = (job) => job.closure_round === undefined
     ? 'base'
@@ -3236,10 +3661,12 @@ function runInvariantErrors(run, { final = false } = {}) {
     ...(run.coverage?.unexamined ?? []),
     ...openCoverageGaps(run.coverage),
     ...uncoveredLensFilePairs(run.coverage ?? {}),
-    ...(run.coverage?.lenses ?? []).filter((entry) => ['NOT_ASSESSED', 'FAILED'].includes(entry.status)),
+    ...(run.coverage?.lenses ?? []).filter((entry) =>
+      ['PARTIAL', 'NOT_ASSESSED', 'FAILED'].includes(entry.status)),
     ...(run.jobs ?? []).filter((job) => job.state === 'FAILED'),
     ...(run.errors ?? []),
     ...storeProfiles.filter(({ coverage_state: state }) => state !== 'ASSESSED'),
+    ...acquiredEvidenceCoverageGaps(run),
     ...(
       run.coverage?.closure && run.coverage.closure.status !== 'CONVERGED'
         ? [run.coverage.closure]
@@ -3572,6 +3999,7 @@ function runTransitionErrors(previous, next) {
     'repository',
     'policy_digest',
     'lens_pack_digest',
+    'lens_shared_contract_digest',
     'plan_digest',
     'scope',
     'activated_lenses',
@@ -3579,6 +4007,9 @@ function runTransitionErrors(previous, next) {
     'control_snapshot',
     'database_discovery',
     'database_conformance',
+    'evidence_declarations',
+    'evidence_bundles',
+    'evidence_coverage',
   ]
   for (const field of immutableFields) {
     if (hasOwn(previous, field) && !isDeepStrictEqual(previous[field], next[field])) {
@@ -3872,6 +4303,8 @@ function runTransitionErrors(previous, next) {
     if (
       priorJob.kind !== nextJob.kind
       || priorJob.lens !== nextJob.lens
+      || priorJob.lens_digest !== nextJob.lens_digest
+      || !isDeepStrictEqual(priorJob.owned_topics, nextJob.owned_topics)
       || !isDeepStrictEqual(priorJob.shard, nextJob.shard)
       || priorJob.closure_round !== nextJob.closure_round
       || priorJob.parent_job_id !== nextJob.parent_job_id
@@ -3883,12 +4316,32 @@ function runTransitionErrors(previous, next) {
         priorJob.profile_authority_store_ids,
         nextJob.profile_authority_store_ids,
       )
+      || !isDeepStrictEqual(
+        priorJob.topic_obligations,
+        nextJob.topic_obligations,
+      )
     ) {
       addError(
         errors,
         'JOB_IDENTITY_CHANGED',
         `/jobs/${jobId}`,
-        'job kind, lens, shard, closure round, parent, and database authority are immutable',
+        'job kind, lens contract, shard, closure round, parent, database authority, and topic obligations are immutable',
+      )
+    }
+    if (
+      !isDeepStrictEqual(priorJob.topic_assessments, nextJob.topic_assessments)
+      && !(
+        priorJob.kind === 'LENS'
+        && priorJob.state === 'RUNNING'
+        && ['SUCCEEDED', 'FAILED'].includes(nextJob.state)
+        && (priorJob.topic_assessments?.length ?? 0) === 0
+      )
+    ) {
+      addError(
+        errors,
+        'JOB_TOPIC_ASSESSMENTS_CHANGED',
+        `/jobs/${jobId}/topic_assessments`,
+        'topic assessments are write-once provider result state',
       )
     }
     if (
@@ -4238,12 +4691,12 @@ function runTransitionErrors(previous, next) {
           priorRow.status === 'NOT_ASSESSED'
           || (
             modeledDatabaseRun(next)
-            && ['FAILED', 'RAN'].includes(priorRow.status)
+            && ['FAILED', 'PARTIAL', 'RAN'].includes(priorRow.status)
           )
         )
         && (
           (
-            nextRow.status === 'RAN'
+            ['RAN', 'PARTIAL'].includes(nextRow.status)
             && jobTransitionForLens(lens, undefined, 'SUCCEEDED')
           )
           || (

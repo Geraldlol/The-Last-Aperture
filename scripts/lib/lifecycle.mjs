@@ -189,6 +189,108 @@ export function comparisonCompatibility(baseline, current) {
   return { comparable: reasons.length === 0, reasons }
 }
 
+function normalizedLensContract(run, lens) {
+  const jobs = (run.jobs ?? []).filter(
+    ({ kind, lens: jobLens }) => kind === 'LENS' && jobLens === lens,
+  )
+  if (
+    jobs.length === 0
+    || jobs.some(({ lens_digest: digest, owned_topics: topics }) => (
+      typeof digest !== 'string'
+      || digest.length === 0
+      || !Array.isArray(topics)
+    ))
+  ) {
+    return null
+  }
+  const digests = [...new Set(jobs
+    .map(({ lens_digest: digest }) => digest))]
+  const topicContracts = [...new Set(jobs
+    .map(({ owned_topics: topics }) => JSON.stringify([...topics].sort(compareCanonicalStrings))))]
+  if (digests.length !== 1 || topicContracts.length !== 1) return null
+  return {
+    digest: digests[0],
+    topics: JSON.parse(topicContracts[0]),
+  }
+}
+
+function compareLensContracts(baseline, current, lens, compatibility) {
+  const nonPackReasons = compatibility.reasons.filter((reason) => reason !== 'lens packs differ')
+  if (nonPackReasons.length > 0) {
+    return { lens, comparable: false, reason: nonPackReasons.join('; ') }
+  }
+  if (baseline.lens_pack_digest === current.lens_pack_digest) {
+    return { lens, comparable: true, reason: 'lens pack unchanged' }
+  }
+
+  if (
+    typeof baseline.lens_shared_contract_digest !== 'string'
+    || typeof current.lens_shared_contract_digest !== 'string'
+  ) {
+    return { lens, comparable: false, reason: 'shared lens contract digest is unavailable' }
+  }
+  if (baseline.lens_shared_contract_digest !== current.lens_shared_contract_digest) {
+    return { lens, comparable: false, reason: 'shared lens contract differs' }
+  }
+
+  const before = normalizedLensContract(baseline, lens)
+  const after = normalizedLensContract(current, lens)
+  if (!before || !after) {
+    return { lens, comparable: false, reason: 'semantic lens contract is unavailable' }
+  }
+  if (before.digest !== after.digest) {
+    return { lens, comparable: false, reason: 'lens implementation differs' }
+  }
+  if (JSON.stringify(before.topics) !== JSON.stringify(after.topics)) {
+    return { lens, comparable: false, reason: 'owner topic contract differs' }
+  }
+  return { lens, comparable: true, reason: 'semantic lens contract unchanged' }
+}
+
+function normalizedTopicOwners(run, topic) {
+  const lensJobs = (run.jobs ?? []).filter(({ kind }) => kind === 'LENS')
+  if (
+    lensJobs.length === 0
+    || lensJobs.some(({ lens }) => typeof lens !== 'string' || lens.length === 0)
+  ) {
+    return null
+  }
+
+  const owners = []
+  const lenses = [...new Set(lensJobs.map(({ lens }) => lens))]
+    .sort(compareCanonicalStrings)
+  for (const lens of lenses) {
+    const contract = normalizedLensContract(run, lens)
+    if (!contract) return null
+    if (contract.topics.includes(topic)) owners.push(lens)
+  }
+  return owners
+}
+
+function topicContractSupportsResolution(baseline, current, finding, compatibility) {
+  if (baseline.lens_pack_digest === current.lens_pack_digest) return true
+
+  // Zero-owner lenses may raise a finding under a topic owned elsewhere in the
+  // registry. Their own empty owned_topics contract cannot prove that reused
+  // topic survived a pack change, so reconstruct both sealed registries from
+  // every LENS job. The owner set must be identical, and each owner lens must
+  // retain the same semantic contract. Any legacy/malformed omission makes a
+  // registry incomplete and therefore unable to authorize an absence claim.
+  const baselineOwners = normalizedTopicOwners(baseline, finding.topic)
+  const currentOwners = normalizedTopicOwners(current, finding.topic)
+  if (
+    !baselineOwners
+    || baselineOwners.length === 0
+    || !currentOwners
+    || JSON.stringify(baselineOwners) !== JSON.stringify(currentOwners)
+  ) {
+    return false
+  }
+  return baselineOwners.every(
+    (owner) => compareLensContracts(baseline, current, owner, compatibility).comparable,
+  )
+}
+
 // A lens fans out into many LENS jobs (one per shard, plus closure retries), so
 // a lens-wide claim is only supported when every shard that carried a coverage
 // obligation succeeded. DORMANT and SKIPPED jobs never carried one.
@@ -207,30 +309,89 @@ function lensCoverageIsComplete(jobs) {
   return jobs.length > 0 && jobs.every(({ state }) => state === 'SUCCEEDED')
 }
 
-export function coverageSupportsResolution(run, finding) {
+function uniqueMatchingEvidenceBundle(run, context) {
+  const matches = (run.evidence_bundles ?? []).filter(
+    ({ evidence_id: evidenceId }) => evidenceId === context.evidence_id,
+  )
+  if (matches.length !== 1) return null
+  const [bundle] = matches
+  return bundle.evidence_class === context.evidence_class
+    && bundle.adapter_id === context.adapter_id
+    ? bundle
+    : null
+}
+
+function evidenceCoverageSupportsResolution(run, finding, baselineRun) {
+  const context = finding.evidence_context
+  // Repository-source findings predate the evidence matrix and remain governed
+  // by lens/file coverage below. A source-class evidence_context is invalid,
+  // so malformed historical input must not authorize an absence claim.
+  if (context === undefined) return true
+  if (context?.evidence_class === 'source') return false
+
+  const cells = (run.evidence_coverage?.cells ?? []).filter((cell) => (
+    cell.lens === finding.lens
+    && cell.topic === finding.topic
+    && cell.evidence_class === context?.evidence_class
+  ))
+  if (cells.length !== 1 || cells[0].state !== 'COVERED') return false
+
+  const currentBundle = uniqueMatchingEvidenceBundle(run, context ?? {})
+  if (!currentBundle || currentBundle.coverage_state !== 'COVERED') return false
+
+  if (context.evidence_class !== 'built-artifact') return true
+  if (typeof currentBundle.artifact_kind !== 'string') return false
+
+  // evidence_id is the stable acquisition name, while the bundle root is
+  // expected to change when a rebuilt artifact removes a finding. Artifact
+  // kind therefore comes from the baseline bundle and must remain the same;
+  // otherwise a covered firmware image could falsely clear an OCI finding.
+  if (baselineRun === undefined) return false
+  const baselineBundle = uniqueMatchingEvidenceBundle(baselineRun, context)
+  if (
+    !baselineBundle
+    || typeof baselineBundle.artifact_kind !== 'string'
+    || baselineBundle.artifact_kind !== currentBundle.artifact_kind
+  ) {
+    return false
+  }
+  return true
+}
+
+export function coverageSupportsResolution(run, finding, baselineRun) {
   if (!['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)) return false
   if (!lensCoverageIsComplete(obligatedLensJobs(run, finding.lens))) return false
 
   const coverage = run.coverage ?? {}
-  const examined = new Set(coverage.examined ?? [])
-  const unexamined = new Set((coverage.unexamined ?? []).map(({ path }) => path))
   const lens = (coverage.lenses ?? []).find((entry) => entry.lens === finding.lens)
   if (!lens || lens.status !== 'RAN') return false
-  const examinedByLens = new Set(lens.examined_paths ?? [])
-  const locationsCovered = (finding.location ?? []).every((location) => {
-    const path = locationPath(location)
-    return examined.has(path) && examinedByLens.has(path) && !unexamined.has(path)
-  })
-  if (!locationsCovered) return false
+  const evidenceQualified = finding.evidence_context !== undefined
+  if (!evidenceQualified) {
+    const examined = new Set(coverage.examined ?? [])
+    const unexamined = new Set((coverage.unexamined ?? []).map(({ path }) => path))
+    const examinedByLens = new Set(lens.examined_paths ?? [])
+    const locationsCovered = (finding.location ?? []).every((location) => {
+      const path = locationPath(location)
+      return examined.has(path) && examinedByLens.has(path) && !unexamined.has(path)
+    })
+    if (!locationsCovered) return false
+  }
   if (gapAffectsFinding(run, finding, [...new Set(
     (finding.location ?? []).map(locationPath).map(normalizedCoverageArea),
   )])) {
+    return false
+  }
+  if (evidenceQualified && !evidenceCoverageSupportsResolution(run, finding, baselineRun)) {
     return false
   }
 
   const databaseFinding = finding.lens === 'database-and-data-stores'
     || /^(?:database(?:-|$)|db\.)/.test(finding.topic ?? '')
   if (!databaseFinding) return true
+
+  const examined = new Set(coverage.examined ?? [])
+  const unexamined = new Set((coverage.unexamined ?? []).map(({ path }) => path))
+  const examinedByLens = new Set(lens.examined_paths ?? [])
 
   const storeId = finding.store_context?.store_id
   if (!storeId) return false
@@ -309,6 +470,15 @@ export function compareRuns(baseline, current) {
   const compatibility = comparisonCompatibility(baseline, current)
   const baselineByFingerprint = groupedFindings(baseline)
   const currentByFingerprint = groupedFindings(current)
+  const comparedLenses = [...new Set([
+    ...activeFindings(baseline).map(({ lens }) => lens),
+    ...activeFindings(current).map(({ lens }) => lens),
+  ])].sort(compareCanonicalStrings)
+  const lensComparability = comparedLenses.map((lens) =>
+    compareLensContracts(baseline, current, lens, compatibility))
+  const lensComparabilityByName = new Map(
+    lensComparability.map((entry) => [entry.lens, entry]),
+  )
   const results = []
 
   const fingerprints = new Set([
@@ -322,29 +492,35 @@ export function compareRuns(baseline, current) {
         finding,
         matched: false,
       }))
-    const present = currentByFingerprint.get(fingerprint) ?? []
+    const present = (currentByFingerprint.get(fingerprint) ?? [])
+      .map((finding) => ({
+        digest: findingDigest(finding),
+        finding,
+        match: null,
+      }))
     const previousByDigest = new Map()
     for (const entry of previous) {
       const bucket = previousByDigest.get(entry.digest) ?? { entries: [], cursor: 0 }
       bucket.entries.push(entry)
       previousByDigest.set(entry.digest, bucket)
     }
-    let fallbackCursor = 0
-    for (const finding of present) {
-      const digest = findingDigest(finding)
-      const bucket = previousByDigest.get(digest)
-      while (
-        bucket
-        && bucket.cursor < bucket.entries.length
-        && bucket.entries[bucket.cursor].matched
-      ) {
-        bucket.cursor += 1
-      }
-      let match = bucket?.entries[bucket.cursor] ?? null
+    // Reserve every exact match before pairing changed collision members. A
+    // fallback in this pass could consume the only baseline record matching a
+    // later current finding, making unchanged counts depend on candidate IDs.
+    for (const entry of present) {
+      const bucket = previousByDigest.get(entry.digest)
+      const match = bucket?.entries[bucket.cursor] ?? null
       if (match) {
         match.matched = true
         bucket.cursor += 1
-      } else {
+        entry.match = match
+      }
+    }
+
+    let fallbackCursor = 0
+    for (const { finding, digest, match: exactMatch } of present) {
+      let match = exactMatch
+      if (!match) {
         while (fallbackCursor < previous.length && previous[fallbackCursor].matched) {
           fallbackCursor += 1
         }
@@ -360,7 +536,7 @@ export function compareRuns(baseline, current) {
         candidate_id: finding.candidate_id,
         state: baselineFinding === null
           ? 'new'
-          : findingDigest(baselineFinding) === digest
+          : match.digest === digest
             ? 'unchanged'
             : 'updated',
         finding,
@@ -371,8 +547,9 @@ export function compareRuns(baseline, current) {
     for (const { finding, matched } of previous) {
       if (matched) continue
       const comparableCoverage = (
-        compatibility.comparable
-        && coverageSupportsResolution(current, finding)
+        (compatibility.comparable || lensComparabilityByName.get(finding.lens)?.comparable === true)
+        && topicContractSupportsResolution(baseline, current, finding, compatibility)
+        && coverageSupportsResolution(current, finding, baseline)
       )
       results.push({
         fingerprint,
@@ -430,7 +607,10 @@ export function compareRuns(baseline, current) {
     baseline_run_id: baseline.run_id,
     current_run_id: current.run_id,
     comparable: compatibility.comparable,
+    partially_comparable: !compatibility.comparable
+      && lensComparability.some(({ comparable }) => comparable),
     comparability_reasons: compatibility.reasons,
+    lens_comparability: lensComparability,
     resolution_authority: resolutionAuthority,
     counts: Object.fromEntries(
       ['new', 'updated', 'unchanged', 'claimed-fixed', 'fixed', 'not-observed']

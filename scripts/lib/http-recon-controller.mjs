@@ -966,7 +966,6 @@ export async function goOperatorAttestedHttpRecon({
     actionId: planned.run.actions[0].action_id,
     operatorId: declaration.operator_id,
     rationale: effectiveRationale,
-    authorizationConfirmed: true,
     now,
   })
   const finalized = await finalizeImpl({
@@ -1487,7 +1486,6 @@ export async function runHttpReconAction({
   actionId,
   operatorId,
   rationale,
-  authorizationConfirmed = false,
   now = () => new Date(),
   probeImpl = probeHttps,
   clientDependencies,
@@ -1513,12 +1511,6 @@ export async function runHttpReconAction({
       throw controllerError(
         'HTTP_RECON_ATTESTING_OPERATOR_MISMATCH',
         'operator-attested execution must use the operator identity that created the sealed attestation',
-      )
-    }
-    if (authorizationConfirmed !== true) {
-      throw controllerError(
-        'HTTP_RECON_CURRENT_AUTHORIZATION_CONFIRMATION_REQUIRED',
-        'operator-attested execution requires confirmation that authorization is still current',
       )
     }
     const marker = await loadStopMarker(loaded.directory)
@@ -1563,6 +1555,8 @@ export async function runHttpReconAction({
       rationale: normalizedRationale,
       authorization_mode: trust.mode,
       tls_policy: tlsPolicyForRun(loaded.run),
+      // This is derived from the controller's successful window, receipt,
+      // event-chain, and identity checks above. It is not caller consent.
       current_authorization_confirmed: true,
       budget_before: structuredClone(loaded.run.budget),
     }, now)

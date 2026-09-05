@@ -19,6 +19,9 @@ const ajv = new Ajv2020({
   strictRequired: false,
 })
 const validateInputSchema = ajv.compile(benchmarkInputSchema)
+const validateCaseOutcomes = ajv.compile({
+  $ref: `${benchmarkInputSchema.$id}#/$defs/caseOutcomes`,
+})
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue)
@@ -83,5 +86,52 @@ export function bindBenchmarkPrimaryRun(primaryRunId, observedFindings, repeated
     normalized_finding_count: observed.count,
     normalized_finding_set_sha256: observed.sha256,
     bound_to_repeated_run: true,
+  }
+}
+
+function normalizedCaseOutcomes(outcomes) {
+  if (!validateCaseOutcomes(outcomes)) {
+    throw new TypeError(
+      'benchmark case outcome validation failed:\n- ' +
+      validateCaseOutcomes.errors.map(schemaIssue).join('\n- '),
+    )
+  }
+  const seen = new Set()
+  return outcomes.map(({ case_id: caseId, verdict }) => {
+    const normalizedId = caseId.trim()
+    if (seen.has(normalizedId)) {
+      throw new TypeError(`benchmark case outcomes duplicate ${JSON.stringify(normalizedId)}`)
+    }
+    seen.add(normalizedId)
+    return { case_id: normalizedId, verdict }
+  }).sort((left, right) => compareCanonicalStrings(left.case_id, right.case_id))
+}
+
+/** Bind optional legacy top-level outcomes to the primary run only. A repeat
+ * with no declared outcomes stays unspecified, even if the primary was clear.
+ */
+export function bindBenchmarkPrimaryOutcomes(primaryRunId, topLevelCaseOutcomes, repeatedRuns) {
+  const normalizedId = primaryRunId.trim()
+  const primaryRuns = repeatedRuns.filter(({ run_id: runId }) => runId === normalizedId)
+  if (primaryRuns.length !== 1) {
+    throw new TypeError(
+      `primary_run_id ${JSON.stringify(normalizedId)} must identify exactly one repeated run`,
+    )
+  }
+  const primaryOutcomes = primaryRuns[0].caseOutcomes
+  const top = topLevelCaseOutcomes === undefined ? undefined : normalizedCaseOutcomes(topLevelCaseOutcomes)
+  const primary = primaryOutcomes === undefined ? undefined : normalizedCaseOutcomes(primaryOutcomes)
+  if (top !== undefined && primary !== undefined && JSON.stringify(top) !== JSON.stringify(primary)) {
+    throw new TypeError(
+      `caseOutcomes must exactly match repeated run ${JSON.stringify(normalizedId)} ` +
+      'after canonical outcome normalization',
+    )
+  }
+  const caseOutcomes = primary ?? top ?? []
+  return {
+    caseOutcomes,
+    repeatedRuns: repeatedRuns.map((run) => run.run_id === normalizedId
+      ? { ...run, caseOutcomes }
+      : run),
   }
 }

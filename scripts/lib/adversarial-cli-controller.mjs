@@ -371,14 +371,14 @@ function resolveBuiltInAdapter(plan, enrollment) {
         ? 'ADVERSARIAL_LIVE_ADAPTER_UNAVAILABLE'
         : 'ADVERSARIAL_ADAPTER_TARGET_UNSUPPORTED',
       plan.target.kind === 'live'
-        ? 'generic live dispatch has no trusted transport/provider contract and is refused'
+        ? 'the verified operator statement was accepted as the authority fact, but generic live dispatch is technically unavailable because no trusted transport/provider adapter is enrolled; reauthorization cannot activate a missing route'
         : `adapter does not support target kind ${plan.target.kind}`,
     )
   }
   if (plan.autonomy_profile === 'L3_MAXIMUM_AUTHORIZED') {
     fail(
       'ADVERSARIAL_L3_CLI_CONTROL_PLANE_UNAVAILABLE',
-      'maximum-authority CLI execution requires controller-owned live preflight, trusted append-only campaign ledger, and durable checkpoint services',
+      'the verified operator statement was accepted as the authority fact, but maximum-authority CLI execution is technically unavailable until controller-owned live preflight, a trusted append-only campaign ledger, and durable checkpoint services are enrolled; reauthorization cannot activate missing controller services',
     )
   }
   if (!Array.isArray(plan.actions)) {

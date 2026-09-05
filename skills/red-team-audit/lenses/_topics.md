@@ -87,6 +87,33 @@
 - database-replication-cdc-history-and-sharing
 - database-resource-governance-and-availability
 
+## desktop-and-thick-client-security
+
+- desktop-debug-diagnostic-and-developer-surface
+- desktop-installation-and-package-trust
+- desktop-local-data-and-secret-storage
+- desktop-local-ipc-and-process-boundaries
+- desktop-os-integration-and-shell-invocation
+- desktop-plugin-extension-and-scripting-trust
+- desktop-privilege-elevation-and-broker-boundaries
+- desktop-update-authenticity-and-rollback
+- desktop-uri-file-association-and-launch-handling
+- desktop-webview-and-native-bridge-trust
+
+## embedded-iot-ot-security
+
+- cyberphysical-safety-interlocks-and-fail-safe-control
+- device-identity-and-secure-onboarding
+- device-lifecycle-reset-and-decommissioning
+- device-service-and-local-protocol-hardening
+- embedded-debug-test-and-recovery-interface-exposure
+- firmware-boot-integrity-and-hardware-root-of-trust
+- firmware-update-authenticity-and-rollback-protection
+- iot-command-and-telemetry-boundary
+- ot-network-segmentation-and-remote-maintenance
+- physical-access-tamper-and-secret-extraction
+- wireless-pairing-and-provisioning
+
 ## failure-semantics-and-resilience
 
 - cleanup-and-resource-release
@@ -203,6 +230,24 @@
 - detection-alerting-and-escalation
 - security-event-coverage
 - security-telemetry-pipeline-resilience
+
+## smart-contract-and-web3-security
+
+- block-context-randomness-and-time-dependence
+- contract-access-control-and-privileged-roles
+- contract-initialization-and-deployment-state
+- contract-upgradeability-and-storage-layout
+- cross-chain-bridge-and-message-integrity
+- delegatecall-proxy-and-target-trust
+- emergency-governance-pause-and-recovery
+- flash-loan-and-economic-invariant-abuse
+- gas-griefing-and-unbounded-onchain-execution
+- onchain-arithmetic-precision-and-share-accounting
+- onchain-signature-replay-and-domain-separation
+- oracle-data-and-price-manipulation
+- reentrancy-and-external-call-ordering
+- token-accounting-and-standard-conformance
+- transaction-ordering-front-running-and-mev
 
 ## threat-modeling
 

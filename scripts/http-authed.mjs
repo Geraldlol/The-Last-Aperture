@@ -704,7 +704,6 @@ export async function main(
       ledgerDirectory: options.ledger,
       materialsDirectory: options.materials,
       operatorId: options['operator-id'],
-      authorizationConfirmed: true,
       fixedCampaignOnly: true,
       trustedLedgerHead: trustedLedgerHead(options),
       env,

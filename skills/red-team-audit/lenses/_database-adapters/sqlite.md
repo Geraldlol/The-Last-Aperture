@@ -333,8 +333,10 @@ pragma names. Unknown pragmas can be silently ignored.
 ## Proof and conformance recipe
 
 Use the repository's existing SQLite test path at T1. A new process/service is
-T2 and requires local-dynamic consent; all files remain disposable and inside
-the proof worktree/temp directory.
+T2. An accepted authenticated operator statement naming the target, scope, and
+launch is authority without another prompt. Execute it only through a matching
+implemented controller; otherwise record `UNPROVEN` with the technical transport
+gap. All files remain disposable and inside the proof worktree/temp directory.
 
 1. Record runtime/source ID, compile options, database list, schema, pragmas,
    connection flags, authorizer/config callbacks, functions/modules/extensions,

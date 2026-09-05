@@ -19,6 +19,7 @@ Where a later stage disagrees with an earlier one it says so **beside** the orig
 | `claimed_impact_severity` | Critical / High / Medium / Low / Info | What the impact would be if the finding is real and reachable. **Never overwritten** |
 | `location` | `file:line`, one or more | Multiple sites allowed after semantic dedup |
 | `cwe` | string | CWE identifier where one applies |
+| `framework_refs` | versioned reference[] | Optional machine-readable mappings with framework, version, requirement or technique ID, relationship, applicability, and canonical HTTPS source |
 | `evidence` | quoted code | The actual vulnerable text, not a paraphrase |
 | `attack` | string | A concrete payload, request, or sequence |
 | `impact` | string | What the attacker gets |
@@ -84,8 +85,10 @@ database uncertainty field.
 
 ### Evidence context
 
-A repository audit has exactly one evidence source: files in the repository.
-Every lens therefore reasons about the *recipe* and reports on the *result* —
+Files in the repository are the default evidence source. Acquired artifacts,
+deployed state, and live-runtime observations are separate evidence sources
+with explicit provenance. A lens can therefore reason about the *recipe* and
+report separately on the *result* —
 and `COPY secret.txt` followed by `RUN rm /secret.txt` reads as a removal in
 the Dockerfile while the bytes stay fully readable in the layer below the
 whiteout marker. A finding derived from anything other than the repository
@@ -106,9 +109,12 @@ detection_evidence:
 confidence: high
 ```
 
-All eight fields are required. It is the small immutable routing projection of
-the bundle's `evidence_profile`, exactly as `store_context` is the projection
-of `store_profile`; adapters must not substitute a private shape.
+All eight fields are required. The acquisition adapter authors this context;
+the planner verifies the bundle and preserves the adapter-authored value
+exactly rather than reconstructing or accepting a caller-authored substitute.
+It is the small immutable routing projection of the bundle's
+`evidence_profile`, exactly as `store_context` is the projection of
+`store_profile`; adapters must not substitute a private shape.
 
 `evidence_id` is operator-assigned, unique within a run, and stable across
 re-acquisitions of the same target. It is the handle `location` resolves
@@ -125,6 +131,24 @@ repository is the default evidence source and needs no context to name it.
 One record concerns one evidence source. A finding that would cite both the
 Dockerfile and the image is the precedence case, and the precedence case is
 two records with a recorded conflict — never one record with two premises.
+
+### Acquired-bundle coverage
+
+Every acquired bundle has one controller-owned `bundle_coverage` record,
+independent of the lens/topic/class matrix. It binds the bundle ID, class,
+artifact kind and root digest, names the lenses to which the controller
+delivered it, and records whether its sealed bytes were actually analyzed.
+This makes an acquired bundle visible even when no lens declares that artifact
+kind, no lens activates, or the repository contains no useful source files.
+
+An acquired bundle is never `NOT_APPLICABLE`. With no declared consumer it is
+`INVENTORY_ONLY`; with no delivery or supported analysis it is
+`NOT_ASSESSED`; bounded or incomplete analysis is `PARTIAL`. Each is a final
+coverage gap and forces `COMPLETE_WITH_GAPS`. The shipped OCI rules are finite
+positive-match detectors, not an exhaustive analyzer, so even a complete OCI
+rule pass is `PARTIAL`. `COVERED` is reserved for a future exhaustive analyzer
+with explicit provenance; no current acquired bundle or non-source coverage
+cell may use it. Acquisition alone is not analysis or clearance.
 
 ### Evidence-qualified `location`
 
@@ -144,19 +168,49 @@ The two forms are disjoint by construction: a repository path carries `/` or
 cannot be a locator. `<evidence_id>` must resolve to an `evidence_context`
 present in the run.
 
+A job may introduce one of these locations only from the exact evidence-bundle
+identity and controller analysis sealed into its immutable packet. The prefix,
+`evidence_context`, run bundle, adapter, artifact kind and root digest must
+agree. A new locator must be a retained member of its bounded entry index. A
+missing or unreadable index authorizes no new locator. A truncated index keeps
+retained controller matches as exact positive authority while the omitted
+denominator remains a non-clear `PARTIAL` gap; an omitted or invented locator
+is unauthorized. Triage and proof may preserve a previously accepted evidence
+location without receiving its locator projection again, but appending a
+location requires fresh packet authority.
+
+For the currently supported OCI built-artifact path, the controller verifies
+the evidence manifest and every payload read, evaluates all five declared OCI
+rules over those sealed bytes, and records the matching rule IDs on bounded
+locator observations. The provider receives those observations, not the raw
+evidence bytes. Ingest accepts a new OCI location only when its
+`adapter_rule_id`, locator, and `evidence_claim` exactly match that controller
+analysis and its owning lens/topic. Each retained controller match is sealed in
+`required_matches` and a successful owning-lens result reports it exactly once.
+These finite rules are positive-match coverage, so they keep supported topics
+`PARTIAL` rather than asserting a clean denominator; lens/topics without an
+owned rule remain `NOT_ASSESSED`. A truncated index still permits and requires
+its retained exact matches while keeping the denominator `PARTIAL`; omitted
+locators are unauthorized. The `deployed` and `runtime` acquisition adapters
+exist, but their evidence cannot yet originate provider findings: without a
+supported sealed-byte or controller-analysis delivery path, their semantic
+coverage is `NOT_ASSESSED`.
+
 **The three `existence_check` outcomes carry over exactly**, because the
 ordering rule they encode has nothing to do with where the artifact lives:
 
-- **The bundle is absent from the run, or the locator does not resolve within
-  it** — `NOT_REPRODUCED`. Consistent with the existing rule that failing to
-  locate an artifact is a statement about the claim, not about the harness.
-- **The locator resolves and the quoted `evidence` is not there** —
-  `DISPROVED`, quoting what was actually found.
-- **Both check out** — proceed to tier assignment.
+- **The bundle is absent from the run, or its previously accepted locator/rule
+  binding cannot be established** — `NOT_REPRODUCED`. Consistent with the
+  existing rule that failing to locate an artifact is a statement about the
+  claim, not about the harness.
+- **The accepted controller analysis contradicts the quoted `evidence`** —
+  `DISPROVED`, quoting what was actually established.
+- **The immutable bundle, locator, rule and claim binding checks out** —
+  proceed to tier assignment.
 
-Because bundles are content-addressed and hashed, re-verification months later
-is exact rather than approximate — a stronger guarantee than the repository
-case, where a checkout may have moved.
+Because the accepted binding is content-addressed and hashed, it identifies the
+exact acquisition rather than a later approximation — a stronger guarantee
+than the repository case, where a checkout may have moved.
 
 ### `candidate_id` — stable across dedup, merge and re-runs
 
@@ -172,7 +226,14 @@ The slug must be one the lens named in `lens` actually owns, per `_topics.md` �
 
 #### Exemption — a lens whose `owns` is empty
 
-Two shapes in this registry own no slugs, and both must be able to write a Stage 1 record. `ai-generated-code` is always-on and reports against whatever domain the *consequence* belongs to. The triage lenses — `business-logic`, `completeness` — read the merged set and may originate a finding nobody filed. Read as an unconditional rule, the sentence above rejects every record either shape can produce, so **it does not apply to a lens whose `owns` is empty.**
+Two finding-producing shapes in this registry own no slugs.
+`ai-generated-code` is always-on and reports against whatever domain the
+*consequence* belongs to; `business-logic` may originate a workflow finding
+during triage. `completeness` also owns no slugs, but emits coverage gaps only
+and never creates a finding. Read as an unconditional rule, the sentence above
+rejects every record the two finding-producing shapes can create, so **it does
+not apply to a lens whose `owns` is empty and whose contract permits
+findings.**
 
 **A lens with `owns: []` sets `topic` to the slug of the lens that owns the topic, and `lens` to itself.** `raised_by` repeats its own name. The pair is what makes the record legal, and each half carries one of the two things that would otherwise be lost:
 
@@ -202,7 +263,7 @@ Naming the path from untrusted input to the vulnerable line, at the moment the f
 
 #### `contingent:<entry point>` — the path is traced and one named runtime fact decides whether it is live
 
-**`unknown` and a fully traced path are not the only two states, and collapsing them is expensive.** A permission grant to a guest or anonymous principal can be traced end to end in committed metadata — the profile, the permission set, the object and field permissions it confers, the classes it can reach — with exactly one thing left open: whether that permission set is assigned to anybody. One query answers it, and that query runs against a live system — a host `_harness.md`'s first hard rail forbids the auditor to reach, which is exactly why the fact is still open. Written as `unknown`, the record is priced identically to one where no path was found at all, and it queues behind findings nobody can close.
+**`unknown` and a fully traced path are not the only two states, and collapsing them is expensive.** A permission grant to a guest or anonymous principal can be traced end to end in committed metadata — the profile, the permission set, the object and field permissions it confers, the classes it can reach — with exactly one thing left open: whether that permission set is assigned to anybody. One live-system query answers it, but that result is external evidence rather than repository proof. When an accepted authenticated operator statement names the system, scope, query, and credential use, execute without another prompt only through a matching credential-aware, destination-bound controller; otherwise preserve the partial trace and record the technical route/material gap. Never infer the live destination from repository configuration. Written as `unknown`, the record is priced identically to one where no path was found at all, and it queues behind findings nobody can close.
 
 The third form says what is actually true. Everything after the first `:` is the entry point, written exactly as it would have been written had the path been unconditional, and two companion fields carry the rest:
 
@@ -236,6 +297,8 @@ What the form buys is queue position and a report line. Within a `claimed_impact
 | `drop_reason` | string | **Required when dropped** |
 | `raised_by` | lens name | Set when a triage lens elevated the finding, or when one lens raised it against another lens's topic |
 | `component_finding_ids` | `candidate_id[]` | For a chain finding: the components that compose into it |
+| `chain` | structured object | **Required for attack-chain elevation.** Ordered steps exactly match `component_finding_ids` and record prerequisites, produces/consumes joints, evidence, blast radius, and optional versioned framework references |
+| `merged_into_candidate_id` | `candidate_id` | **Required when merged.** Direct pointer to the surviving record in the same topic |
 
 ### `effective_severity` — derived, and sitting beside the claim rather than replacing it
 
@@ -250,11 +313,9 @@ Two rules keep it honest. It may **exceed** `claimed_impact_severity` only when 
 ### `triage_disposition`
 
 - **`queued`** — survives to the proof phase.
-- **`merged`** — collapsed into another record for the same topic. The merged record keeps its own `candidate_id`, which is what "stable across merge" means: a chain or a report line that already referenced it still resolves. The survivor's `location` carries the union of the sites.
+- **`merged`** — collapsed into another record for the same topic. The merged record keeps its own `candidate_id`, and `merged_into_candidate_id` identifies the survivor. The survivor's `location` carries the union of the sites.
 - **`dropped`** — removed, with `drop_reason`.
-- **`elevated`** — severity raised, with `raised_by` naming who raised it and `component_finding_ids` listing the components where the elevation is a composition.
-
-**One known thinness, stated rather than papered over:** a `merged` record carries no pointer to the record it merged into. The survivor is identifiable by shared `topic` plus the accumulated `location`, which is enough for a human reading the run but not enough for a mechanical walk from a merged id to its survivor. Adding a pointer field is a Phase B decision, not something to improvise per run.
+- **`elevated`** — severity raised, with `raised_by` naming who raised it. Attack-chain elevation also requires `component_finding_ids` and the structured `chain`; their ordered candidate IDs must be identical.
 
 ### `drop_reason` — required when dropped
 
@@ -366,7 +427,7 @@ Five states separate the four distinct things a run can mean from the two things
 
 **`NOT_REPRODUCED` and `DISPROVED` are different claims, and the difference is worth keeping.** `NOT_REPRODUCED` says *my attack did not work*, or *the thing I attacked was not there* — the oracle was sound, the test ran, the predicted behaviour did not occur, and the attack may simply have been wrong; or the existence check never found the artifact to attack. `DISPROVED` says *the vulnerability is not there*. The first leaves the door open and is recorded in `Coverage` so a later run can try a different attack; the second closes the finding and states what was falsified. Collapsing them loses the ability to distinguish a bad exploit from a safe codebase.
 
-**`UNPROVEN` is not a soft `NOT_REPRODUCED`.** Nothing ran. It is the honest label for a T3 proof-of-concept, for a T2 boot the user declined, and for an assertion that needs an engine this repository stubs. It always carries the blocking reason, and it is never reported as a pass.
+**`UNPROVEN` is not a soft `NOT_REPRODUCED`.** Nothing ran. It is the honest label for a T3 proof-of-concept, for an authorized T2 boot with no matching implemented controller or other technical transport gap, and for an assertion that needs an engine this repository stubs. It always carries the blocking reason, and it is never reported as a pass. Missing target or scope is an authority-envelope gap instead; ask once for that missing information, never to recertify authority already stated.
 
 ---
 
@@ -375,7 +436,7 @@ Five states separate the four distinct things a run can mean from the two things
 A validator for this contract enforces exactly these. Each one corresponds to a way a real audit has gone wrong.
 
 1. `candidate_id`, `lens`, `topic`, `title`, `claimed_impact_severity`, `location`, `reachable_from` are present at Stage 1. `topic` and `reachable_from` have no default.
-2. `topic` is owned by `lens` per `_topics.md`, **unless `lens` owns no slugs** — in which case `topic` is a slug owned by some lens, or, for a triage-originated record, `lens`'s own `name`; and `raised_by` equals `lens`. A validator must read this exemption as part of the invariant: applied unconditionally, invariant 2 rejects every record `ai-generated-code`, `business-logic` and `completeness` can write.
+2. `topic` is owned by `lens` per `_topics.md`, **unless `lens` owns no slugs and is permitted to emit findings** — in which case `topic` is a slug owned by some lens, or, for a business-logic triage-originated record, `lens`'s own `name`; and `raised_by` equals `lens`. A validator must read this exemption as part of the invariant: applied unconditionally, invariant 2 rejects every record `ai-generated-code` and `business-logic` can write. `completeness` emits gaps, not findings.
 3. `claimed_impact_severity` is byte-identical across every appearance of the same `candidate_id` in a run, and across runs where the finding has not changed.
 4. `effective_severity` exceeds `claimed_impact_severity` only when `triage_disposition` is `elevated` and `raised_by` is set.
 5. `triage_disposition: dropped` implies `drop_reason` is present and non-empty.

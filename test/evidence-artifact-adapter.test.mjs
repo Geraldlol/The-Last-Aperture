@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
 import { readEvidencePayloadFile, verifyEvidenceBundle } from '../scripts/lib/evidence-bundle.mjs'
+import { readEvidenceIndex } from '../scripts/lib/evidence-packet.mjs'
 import { runEvidenceAdapterConformance } from './helpers/evidence-adapter-conformance.mjs'
 
 const FIXTURE = 'test/fixtures/evidence/vulnerable-image.tar'
@@ -148,6 +149,14 @@ test('an entry above the content cap is listed but not captured, and the omissio
   const written = await capped.run(planned, { out })
   assert.equal(written.profile.coverage_state, 'PARTIAL')
   assert.ok(written.profile.coverage_gaps.some(({ reason }) => /content cap/i.test(reason)))
+  const index = await readEvidenceIndex(written.directory)
+  const omitted = index.entries.filter(
+    ({ kind, size }) => kind === 'layer-entry' && size > 8,
+  )
+  assert.ok(omitted.length > 0)
+  assert.ok(omitted.every(({ content_captured: captured }) => captured === false))
+  assert.ok(omitted.every(({ matched_rule_ids: ruleIds }) =>
+    !ruleIds.includes('ev.built-artifact.oci.recursive-encoded-payload')))
 })
 
 test('an archive that is neither format is NOT_ASSESSED with a named gap', async () => {

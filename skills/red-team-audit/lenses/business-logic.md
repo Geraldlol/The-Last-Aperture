@@ -23,7 +23,9 @@ severity_floor: info
 
 ## Scope
 
-This lens reads the merged candidate-finding set — after structural dedup, semantic dedup, the reachability gate and the false-positive sweep — together with the recon map, and asks the one question no other lens can ask: **does this system permit a sequence of legal operations that reaches a state the business would not accept?**
+This lens is the first triage stage. It receives the raw merged fan-out candidate set, the recon map, and a controller-sealed, bounded union of active domain-lens source scope. Cross-cutting lenses that own no topics do not expand that union. It first owns the shared normalization pass: structural dedup, semantic dedup, reachability adjudication, and the false-positive sweep, with every merge, drop, and surviving uncertainty represented by the lifecycle fields rather than silently discarded. It then asks the one question no other lens can ask: **does this system permit a sequence of legal operations that reaches a state the business would not accept?**
+
+The source union is deliberate. This lens may originate a code-backed defect, so a finding-set-only packet cannot support its own contract. Dependency and dependent expansion and the final triage union remain bounded by the controller; any truncation is a coverage gap, never evidence that the omitted path is clean.
 
 Its bug classes are the ones with no bad input and no bad call. A negative quantity that credits the buyer, coupons that compose below the floor the code itself states, an integer overflow that wraps a total, a multi-step approval that can be re-entered or skipped, a charge endpoint with no idempotency, two concurrent requests that spend one balance twice. Every one of those is well-formed traffic that a validator has no reason to reject.
 

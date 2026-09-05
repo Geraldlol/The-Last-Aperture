@@ -191,6 +191,13 @@ function providerResult(
     examined_files: [evidencePath],
     findings: [],
     coverage_gaps: [],
+    topic_assessments: (sidecar?.topic_obligations ?? []).map((topic) => ({
+      topic,
+      disposition: 'examined-clean',
+      reason: 'The database fixture assessed this topic in the bounded shard.',
+      evidence: ['The fixture provider completed its bounded database topic check.'],
+      evidence_paths: [evidencePath],
+    })),
     store_contributions: contribution ? [contribution] : [],
   }
 }
@@ -538,6 +545,15 @@ test('an authority shard reports a finding against the store it profiles', () =>
   const profile = postgresProfile(storeId, evidencePath, 'ASSESSED')
   const result = providerResult(run, home.job_id, evidencePath, profile)
   result.findings = [databaseFinding(profile, evidencePath)]
+  result.topic_assessments = result.topic_assessments.map((assessment) =>
+    assessment.topic === result.findings[0].topic
+      ? {
+          topic: assessment.topic,
+          disposition: 'finding',
+          reason: 'The database fixture reported a finding for this topic.',
+          finding_ids: [result.findings[0].candidate_id],
+        }
+      : assessment)
 
   run = applyJobResult(run, result, {
     sidecar: home,
@@ -563,6 +579,15 @@ test('a finding citing a store no shard profiles is still refused', () => {
   }
   const result = providerResult(run, home.job_id, evidencePath, profile)
   result.findings = [stray]
+  result.topic_assessments = result.topic_assessments.map((assessment) =>
+    assessment.topic === stray.topic
+      ? {
+          topic: assessment.topic,
+          disposition: 'finding',
+          reason: 'The database fixture reported a finding for this topic.',
+          finding_ids: [stray.candidate_id],
+        }
+      : assessment)
 
   assert.throws(
     () => applyJobResult(run, result, {

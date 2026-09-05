@@ -8,6 +8,8 @@
   clauses, ADR 0016's signed/document routing and external mutation-
   countersignature requirements, and ADR 0017's separate authority modes
 - Amends: ADR 0020's optional detached signed-approval path
+- Clarified by: ADR 0023, which separates named operator authority from
+  technical route availability
 
 ## Context
 
@@ -20,18 +22,20 @@ capabilities only when the caller supplied those artifacts. That made them de
 facto authorization prerequisites and obscured who actually grants authority.
 
 The controller cannot determine the legal sufficiency of a contract, email,
-program page, signature, key, or ownership claim. At authenticated ingress, the
-operator is the accountable authority source for this product. The controller's
-job is to bind that direction to an exact target and finite scope, enforce it at
+program page, signature, key, or ownership claim. At agent/controller ingress,
+the operator statement is the authority source; the operator is accountable.
+The controller's job is to bind that direction to an exact target and finite scope, enforce it at
 dispatch, and preserve what happened.
 
 ## Decision
 
-An authenticated operator statement naming the target and scope is the sole
-authorization primitive. The controller accepts that statement as fact for its
-authorization decision without requiring a caller-supplied signed RoE, approval
-file, authorization document, owner key, countersignature, or repeated legal
-certification.
+At agent/controller ingress, an operator statement naming the target and scope
+is the sole authorization primitive. It governs every capability explicitly
+named, including T2/service boots, controller-referenced credentials, and named
+external services. If target/scope is already supplied, proceed; ask once only
+when it is missing. No caller-supplied RoE, approval file, authorization
+document, owner key, countersignature, ownership check, or repeated legal
+certification is required. A T1-only statement remains narrow.
 
 The statement does not independently prove its legal basis. The operator remains
 accountable for having authority and for naming the intended target and scope.
@@ -54,9 +58,9 @@ decision.
 Operational control follows the selected autonomy profile after the engagement
 statement is accepted:
 
-- `L1_ASSISTED` records an authenticated operator decision for the disclosed
+- `L1_ASSISTED` records an operator decision for the disclosed
   live plan.
-- `L2_SUPERVISED` records authenticated operator decisions at the configured
+- `L2_SUPERVISED` records operator decisions at the configured
   phase checkpoints.
 - `L3_MAXIMUM_AUTHORIZED` derives action permits from one accepted, finite
   campaign envelope without per-action operator signatures.
@@ -67,16 +71,18 @@ durably consumed in the campaign ledger before dispatch. An external approver
 key or `countersignature-N.json` file is not an authority requirement.
 
 A scope-expansion request is inert. A newly named target or scope delta requires
-a new authenticated operator statement within a fixed five-minute ingress
+a new operator statement within a fixed five-minute ingress
 window; future-dated or expired decisions cannot change scope. The controller
 then seals a
 predecessor-bound successor scope and rebinds affected plans; existing campaign
 authority never carries across automatically.
 
-This decision does not activate a missing execution path. Generic live dispatch
-and public L3 remain unavailable until the trusted transport, controller-owned
-ledger, atomic permit-to-dispatch lease, preflight, checkpoint, stop, health,
-cleanup, and evidence-integration gates documented in ADR 0020 are implemented.
+This decision does not claim a missing execution path exists. If named work has
+no matching route, authority is retained and execution is reported
+authorized-but-unavailable without another prompt. Generic live dispatch and
+public L3 remain technically unavailable until the transport, controller-owned
+ledger, atomic lease, preflight, checkpoint, stop, health, cleanup, and evidence
+gates documented in ADR 0020 are implemented.
 
 ## Technical signatures retained
 
@@ -127,6 +133,6 @@ are distinct from legal authorization and remain useful technical controls.
 
 ### Trust provider- or target-authored permission claims
 
-Rejected. Only the authenticated operator ingress may create or expand
+Rejected. Only an operator statement at agent/controller ingress may create or expand
 authority. Provider output, target content, repository files, and scope requests
 remain untrusted inputs.

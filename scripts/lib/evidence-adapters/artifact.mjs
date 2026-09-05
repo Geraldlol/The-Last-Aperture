@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { compareCanonicalStrings } from '../canonical-order.mjs'
 import { writeEvidenceBundle } from '../evidence-bundle.mjs'
 import {
@@ -288,7 +288,7 @@ export function createArtifactAdapter({
           adapter_id: 'artifact',
           target_identity: `sha256:${digest}`,
           acquisition_mode: 'offline-export',
-          detection_evidence: [`${source.path} sha256:${digest.slice(0, 8)}`],
+          detection_evidence: [`${basename(source.path)} sha256:${digest.slice(0, 8)}`],
           confidence: 'high',
         },
         target_class: request.target_class ?? 'LAB',

@@ -8,6 +8,7 @@ import {
   filterResolvedCoverageGaps,
   projectCoverageGaps,
 } from './coverage-gaps.mjs'
+import { topicAssessmentStatsForJob } from './topic-assessments.mjs'
 
 function modeledCoverage(coverage) {
   return (
@@ -49,16 +50,47 @@ export function finalizedFanoutLensRows(run) {
     ) {
       return row
     }
+    const obligatedJobs = lensJobs.filter(
+      ({ state }) => !['SKIPPED', 'DORMANT'].includes(state),
+    )
+    // Reconciliation runs after each accepted shard. It may finalize the lens
+    // that just completed, but must not rewrite another lens (or another shard
+    // of the same lens) whose semantic assessment is still in flight.
+    if (obligatedJobs.some(({ state }) => ['PENDING', 'RUNNING'].includes(state))) {
+      return row
+    }
     const examined = new Set(row.examined_paths ?? [])
     const missing = (row.applicable_paths ?? [])
       .filter((path) => !examined.has(path))
-    if (missing.length === 0) {
+    const topicStats = obligatedJobs
+      .map(topicAssessmentStatsForJob)
+      .reduce((total, stats) => ({
+        obligations: total.obligations + stats.obligations,
+        open: total.open + stats.open,
+      }), { obligations: 0, open: 0 })
+    const failed = lensJobs.some(({ state }) => state === 'FAILED')
+    if (failed) {
+      if (row.status === 'FAILED') return row
+      return {
+        ...row,
+        status: 'FAILED',
+        reason: 'one or more lens jobs failed',
+      }
+    }
+    if (missing.length === 0 && topicStats.open === 0) {
       if (row.status === 'RAN') return row
       const { reason: _reason, ...withoutReason } = row
       return { ...withoutReason, status: 'RAN' }
     }
-    const failed = lensJobs.some(({ state }) => state === 'FAILED')
-    const nextStatus = failed ? 'FAILED' : 'NOT_ASSESSED'
+    if (missing.length === 0 && topicStats.open > 0) {
+      const nextReason = (
+        `${topicStats.open} topic assessment obligation${topicStats.open === 1 ? '' : 's'} `
+        + `${topicStats.open === 1 ? 'remains' : 'remain'} open`
+      )
+      if (row.status === 'PARTIAL' && row.reason === nextReason) return row
+      return { ...row, status: 'PARTIAL', reason: nextReason }
+    }
+    const nextStatus = 'NOT_ASSESSED'
     if (row.status === nextStatus) return row
     const rounds = 1 + Math.max(
       0,

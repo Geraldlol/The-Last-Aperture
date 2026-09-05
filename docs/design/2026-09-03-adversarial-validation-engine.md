@@ -1,10 +1,13 @@
 # Adversarial validation engine
 
-- Status: Accepted; core contracts and local execution implemented, live/L3 product activation gated
+- Status: Accepted; core, sealed T1, and narrow loopback T2 implemented; generic live/L3 gated
 - Date: 2026-09-03
 - Owners: Red Team Audit platform
 - Supersedes the proof-status semantics in `2026-08-02-test-execution-capability.md`
   and the approval-free active-request decision in ADR 0019.
+- Clarified by ADR 0023: named operator authority and route availability are
+  separate facts.
+- Extended by ADR 0024: narrow sealed Node/npm loopback T2 is public.
 
 ## Objective
 
@@ -13,15 +16,14 @@ reportable security finding. Codex, Claude, or another provider may discover a
 candidate and author any vulnerability-specific validation strategy. The
 controller, not the provider, decides whether proposed actions fit the accepted
 operator statement, campaign envelope, and current technical permits. At
-authenticated controller ingress, an explicit operator statement authorizing a
-named target and scope is accepted as the authorization fact. No external RoE,
-ownership, or legal-proof artifact and no repeated certification of unchanged
-authority is required. The statement is not independent proof of underlying
-legal authority; the operator remains accountable.
+agent/controller ingress, the authenticated operator statement naming target
+and scope is the sole authorization fact for every capability it names. If target/scope is
+supplied, proceed; ask once only when it is missing. No repeated consent, RoE,
+ownership, or legal check is required. The operator remains accountable.
 
 The product workflow is:
 
-1. accept the operator's authenticated target/scope statement, then inventory
+1. accept the operator's target/scope statement at agent/controller ingress, then inventory
    and scan through an available controller route;
 2. turn a candidate into a bounded, immutable adversarial plan;
 3. execute repository and disposable-local proofs under the sealed execution
@@ -37,24 +39,25 @@ Success is not a universal exploit payload list. Success is a safe, extensible
 control plane through which vulnerability-specific strategy adapters can prove
 findings across the existing lenses.
 
-## Implementation status (2026-09-03)
+## Implementation status (updated 2026-09-04)
 
 The current tree implements the safety and evidence kernel, not an unrestricted
 production attack bot. This distinction is intentional and release-relevant.
 
 | Capability | Current state |
 |---|---|
-| Repository proof and remediation truth | Implemented at the library/test layer: attack/control proof can confirm an unfixed defect; remediation is independent. Proof subprocesses have wall-time, output, and receipt bounds. Public `audit run-proof` is disabled because the disposable mirror is not yet a network-denied, credential-scrubbed sandbox with reliable descendant termination. |
+| Repository proof and remediation truth | Public `audit run-proof` is active through the sealed, network-denied Docker worker. Attack/control proof can confirm an unfixed defect; remediation remains independent. Proof subprocesses have wall-time, output, receipt, and verified-cleanup bounds. |
+| Narrow local-service proof | Public `audit run-service-proof` is active for a sealed `LOCAL_DYNAMIC` run and strict v3 proof. Exact foreground Node/npm services and proof commands run in fresh attack/control containers with `--network=none`; a fixed literal-loopback TCP probe, init-backed supervisor TTL, immutable worker/source bindings, hash-only evidence, and verified teardown establish the narrow T2 lifecycle. Because no controller-authenticated semantic oracle is enrolled, completed runs remain `T2/UNPROVEN`; execution still occurs. Other T2 shapes remain unavailable. See ADR 0024. |
 | Plan, authorization, and scope contracts | Implemented as a local prototype: strict schemas, canonical hashing, a one-use controller-sealed operator-authorization receipt bound to the exact statement, target, plan, scope, and time, inert formal scope requests, and sealed predecessor-bound scope revisions. The CLI accepts no caller-signed approval artifact. The local enrollment manifest fixes controller scope and adapter selection rather than establishing authority. Protected cross-process controller state remains open. |
 | Graduated runtime | Implemented as a controller kernel: L2 live phases require acknowledged checkpoints; L3 evaluates adaptive actions inside a controller-sealed finite envelope and pauses blocked branches. |
 | Campaign durability | Implemented as a local sequencing journal for non-live test campaigns: hash-chained records, fsynced send-intent records, checkpoints, observations, requests, compact terminal summaries, and fail-closed ambiguous-dispatch recovery. Receipt-bound execution rejects every caller-supplied ledger because that journal cannot attest nonce consumption, a unique lease, or authoritative writes. It is not rollback-resistant without an external anchor. |
 | Break-glass | Implemented as a controller-sealed, one-use, plan/scope/failure-bound technical receipt valid for at most 15 minutes. It cannot waive scope, the campaign receipt, finite limits, revocation, kill, ledger qualification, or control-plane loss. |
 | Structured fuzzing | Implemented with exact-pinned `fast-check@4.9.0`, deterministic seed/path/minimized value, and non-clearance semantics. The public CLI runs only fixed built-in property oracles under repository/loopback classifications; it does not yet invoke named target code or a service harness. |
-| Existing bounty scanner gate | Plan/receipt/scope/nonce controller primitives are implemented and tested. Public `bounty scan run` is disabled pending migration to authenticated operator ingress and a trusted controller-receipt boundary. |
+| Existing bounty scanner gate | Plan/receipt/scope/nonce controller primitives are implemented and tested. Public `bounty scan run` is disabled pending migration to operator-statement ingress and a trusted controller-receipt boundary. |
 | T4 evidence | A bounded standalone unauthenticated caller-claim normalizer and redacted renderer are implemented. They emit only `CLAIMED_*` verification/authorization labels, do not authenticate supplied receipts, prove replay independence, or establish evidence custody, and cannot promote a finding. The legacy finding/report path now applies the same conservative rule to provider triage, proof, remediation, and severity assertions: they remain open `CLAIMED_*` records and stay in proof scheduling. Adaptive-ledger observations still lack authenticated report integration. |
-| Generic live execution | **Unavailable from the public adversarial CLI.** It refuses before nonce consumption or target I/O until a trusted transport/provider contract is enrolled. |
-| Break Their Bones CLI | **Unavailable from the public adversarial CLI.** It refuses until controller-owned preflight, checkpointing, adaptive proposal, durable ledger, and trusted transport services are wired together. |
-| Legacy process/network egress | **Route-specific.** One exact bounded operator-directed HTTP-recon action and fixed sealed authenticated HTTP campaigns are active through their protocol controllers. Public repository proof, provider-runner, remote-gateway, transparency publication, every evidence-acquisition command, evidence-bundle import and source sealing in audit planning, database-conformance execution, bounty recon/scan/authz execution, generic live/L3 execution, and every OOB session command remain disabled. The loadable mitmproxy addon is removed. Static repository discovery, offline adversarial/audit planning and validation without imported evidence or source sealing, historical inspection, and non-OOB cleanup are separate surfaces. |
+| Generic live execution | **Technically unavailable from the public adversarial CLI.** Named authority is retained, but dispatch refuses before nonce consumption or target I/O until a trusted transport/provider contract is enrolled. |
+| Break Their Bones CLI | **Technically unavailable from the public adversarial CLI.** Named authority is retained, but dispatch refuses until controller-owned preflight, checkpointing, adaptive proposal, durable ledger, and trusted transport services are wired together. |
+| Legacy process/network egress | **Route-specific.** Sealed repository T1, narrow sealed loopback T2, one exact bounded operator-directed HTTP-recon action, and fixed sealed authenticated HTTP campaigns are active through their controllers. Provider-runner, remote-gateway, transparency publication, every evidence-acquisition command, evidence-bundle import, database-conformance execution, bounty recon/scan/authz execution, generic live/L3 execution, and every OOB session command remain disabled. The loadable mitmproxy addon is removed. Static repository discovery, source sealing, offline planning/validation, historical inspection, and non-OOB cleanup are separate surfaces. |
 | Additional fuzz providers | Coverage-guided Jazzer.js and schema-driven Schemathesis are researched future adapters, not shipped providers. Plan `generator` contracts exist, but the current CLI does not execute generator or adaptive plans. |
 
 Known durability limits are fail-closed: the current prototype can consume a
@@ -90,9 +93,16 @@ of sequential callback checks cannot eliminate their mutual TOCTOU window.
 ## Validated product requirements
 
 - Targets may be a repository snapshot, a service booted from a disposable
-  snapshot, staging, or production when an authenticated operator explicitly
-  states authorization for the named target/scope. The controller accepts that
-  statement as fact without independently judging its legal sufficiency.
+  snapshot, staging, or production when the operator statement names that target
+  and scope. The statement is the sole authorization fact; technical execution
+  still requires a matching route.
+- Named T2/service boots, controller-referenced credentials, and external
+  services require no repeated authorization. A missing controller, credential
+  material, or platform capability yields an authorized-but-unavailable gap.
+- The implemented T2 route covers only one foreground Node/npm service and a
+  controller-owned TCP probe on literal loopback inside each network-none
+  container. It creates no authority or transport for another dependency,
+  emulator, credential, external destination, or production system.
 - Passive discovery and ordinary scoped scanning need no per-action decision.
   Crafted live exploitation follows the selected profile's operational-control
   cadence after the engagement statement has been accepted.
@@ -147,6 +157,8 @@ of sequential callback checks cannot eliminate their mutual TOCTOU window.
 - Contracts: JSON Schema Draft 2020-12 through exact-pinned `ajv@8.20.0`.
 - Core tests: `npm.cmd test -- --test-reporter=dot`.
 - Focused tests: `node --test <test-files>`.
+- Real narrow-T2 conformance: `npm.cmd run test:service-proof:docker` from a
+  trusted checkout; ordinary tests do not auto-discover it.
 - Lens lint: `npm.cmd run lint`.
 - Generated topic registry check: `npm.cmd run gen` followed by a clean diff of
   generated files.
@@ -212,14 +224,14 @@ SCOPE_EXPANSION_REQUEST -> AWAITING_OPERATOR_STATEMENT -> NEW_SCOPE_REVISION
 ```
 
 The provider may create `DRAFT` content. The controller canonicalizes and hashes
-it into `PLANNED`. Only an explicit statement received through authenticated
-operator ingress may create engagement authority; the controller seals that
+it into `PLANNED`. Only an operator statement received at agent/controller
+ingress may create engagement authority; the controller seals that
 statement and any profile-specific operational decision into `AUTHORIZED`. A
 caller-supplied ledger can never stand in for authoritative receipt/nonce state,
 and receipt-bound journaling/resume remains refused until activation is atomic.
 A model-authored `--yes` or generic permission bit is not an operator statement.
 
-The current CLI accepts the authenticated operator target/scope statement and
+The current CLI accepts the operator target/scope statement and
 creates the technical receipt inside the controller. Caller-supplied signed
 approval files and signing-authority keys are not accepted. The receipt's
 canonical digest, nonce, controller identity, exact bindings, and durable
@@ -384,7 +396,9 @@ validates the harness, an authenticated controller may mark the finding
 `CONFIRMED`, whether or not a patch exists. In the current release, no semantic
 oracle authority is enrolled; provider-returned definitive decisions render as
 `CLAIMED_*`, cannot suppress or reprioritize a finding, and remain scheduled for
-proof.
+proof. The public T1/T2 proof configurations likewise cannot authenticate their
+provider-authored exit semantics. A complete narrow service lifecycle therefore
+records `T2/UNPROVEN` until a hard-enrolled controller-owned oracle is available.
 
 Remediation has a separate state:
 
@@ -448,8 +462,8 @@ provider-level rules.
 ## Testing strategy
 
 - Contract tests for malformed, duplicate, oversized, expired, and unknown data.
-- Escape tests proving no network call occurs without an authenticated operator
-  statement, current controller receipt, and action permit.
+- Escape tests proving no network call occurs without an operator statement
+  naming target/scope, current controller receipt, and action permit.
 - Tests proving the statement creates a receipt without an external RoE/legal
   artifact or repeated authority prompt.
 - Digest-drift tests for every receipt-bound field, including target, payload,
@@ -468,15 +482,15 @@ provider-level rules.
 
 These are activation requirements, not claims that every current schema and
 legacy command already enforces them. The generic adversarial plan does not yet
-bind a durable authenticated operator-statement/controller-receipt digest, and
+bind a durable operator-statement/controller-receipt digest, and
 all legacy network-capable paths must be migrated or disabled before live
 release. An RoE or other governance document may be attached as optional
 evidence, but is not an authorization prerequisite.
 
 ### Required in production
 
-- Accept an explicit operator authorization statement at authenticated ingress,
-  record its exact target/scope/identity/time, and seal a controller receipt.
+- Accept the operator statement at agent/controller ingress, record its exact
+  target/scope/identity/time, and seal a controller receipt.
 - Scope-check each live destination and redirect immediately before I/O.
 - Require only the selected profile's operational permit; do not ask the
   operator to recertify unchanged legal authority.
@@ -495,10 +509,9 @@ evidence, but is not an authorization prerequisite.
 - use of discovered credentials or secrets;
 - actions outside previously declared test categories.
 
-If an effect is already inside the accepted finite envelope, it does not require
-another legal certification. A newly named target, scope expansion, or exception
-outside that envelope requires a new explicit operator decision, which the
-controller seals as a technical receipt.
+If an effect is already inside the accepted finite envelope, do not ask again.
+Only a missing or newly named target, scope expansion, or exception outside that
+envelope requires one operator decision, which the controller seals technically.
 
 ### Never infer
 
@@ -508,15 +521,18 @@ controller seals as a technical receipt.
 - that a generic `active_testing` bit is authority for a concrete exploit;
 - that a report may contain raw credentials or unnecessary sensitive records.
 
-An authenticated explicit operator statement is the controller's authorization
-fact; this rule does not independently prove the statement's legal basis.
+The operator statement at agent/controller ingress is the sole authorization
+fact; route and platform approvals remain technical capability gates.
 
 ## Delivery status
 
-1. **Kernel implemented:** correct repository proof semantics and bounded command
-   resources. Public `audit run-proof` remains disabled until it runs inside a
-   controller-attested network-denied, credential-scrubbed sandbox with reliable
-   descendant termination.
+1. **Public routes implemented:** `audit run-proof` provides sealed T1;
+   `audit run-service-proof` provides narrow sealed T2 for a foreground Node/npm
+   loopback service under v3/`LOCAL_DYNAMIC`. Both use network-none,
+   credential-scrubbed Docker workers, bounded resources, and verified cleanup;
+   T2 additionally uses fresh attack/control services, fixed readiness, init,
+   and a supervisor TTL. It records lifecycle-backed `T2/UNPROVEN`; no semantic
+   oracle is enrolled, so provider-authored exit classes are not definitive.
 2. **Implemented:** strategy metadata plus attack/control proof evidence.
 3. **Implemented prototype:** immutable plan and controller-sealed
    operator-authorization/technical-permit contracts.
@@ -542,7 +558,8 @@ fact; this rule does not independently prove the statement's legal basis.
    remain open.
 8. **Partial:** a fixed structured-property provider is implemented; target-aware,
    coverage-guided, and schema-driven providers remain open.
-9. **Open:** expand reviewed local-service and live transports incrementally.
+9. **Open:** expand beyond the narrow Node/npm loopback service and add reviewed
+   live transports incrementally.
 
 ## Acceptance status
 
@@ -552,7 +569,10 @@ Demonstrated by tests:
   until a semantic oracle receipt is authenticated, provider confirmation is
   rendered `CLAIMED_CONFIRMED` while remediation remains independently stated;
 - hanging/noisy proof processes stop within sealed bounds;
-- a crafted live scan without an authenticated operator statement, current
+- narrow T2 proves the port closed before boot, verifies pre/post-proof
+  readiness, keeps attack/control in distinct fresh containers, omits raw
+  output, and requires exact cleanup before reporting T2;
+- a crafted live scan without an operator statement naming target/scope, current
   receipt, and permit performs zero target I/O;
 - plan-byte drift invalidates the receipt;
 - blocked actions produce inert formal scope requests, and only a controller-
@@ -590,10 +610,13 @@ Still required for the complete product outcome:
 - store raw evidence in protected storage and join authenticated adaptive-ledger
   observations to T4 normalization and the legacy report;
 - add target-aware, coverage-guided, and schema-driven fuzz providers;
+- add separate lifecycle controllers for browsers, emulators, databases,
+  registries, LocalStack, nested/multi-container stacks, credentials, and other
+  service shapes not covered by narrow loopback T2;
 - anchor campaign-ledger heads outside the ledger directory when hostile local
   rollback is in the threat model;
 - enumerate every network-capable legacy command and either migrate it to the
-  authenticated operator-ingress/controller-receipt boundary or keep it disabled.
+  operator-statement/controller-receipt boundary or keep it disabled.
 
 ## Standards basis and nonclaim
 
@@ -609,8 +632,10 @@ CREST conformance.
 
 ## Open release gates
 
-The live/L3 product path and disabled legacy active-testing paths are blocked on
-the trusted services and migration work listed under "Still required" above.
+The live/L3 product path, broader T2 shapes, and disabled legacy active-testing
+paths are blocked on the trusted services and migration work listed under
+"Still required" above. Narrow v3 Node/npm loopback T2 is the implemented
+exception; it does not relax those gates.
 Passkey UI, multi-approver delegation, optional governance-document attachments,
 a real-time dashboard, and non-HTTP transports remain future enhancements, not
 legal-proof prerequisites.

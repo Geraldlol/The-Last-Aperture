@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/proof-worker.schema.json",
+  "title": "Red Team Audit Docker proof worker",
+  "description": "External controller configuration for a digest-pinned, network-denied local Docker proof worker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol",
+    "runtime_path",
+    "image",
+    "dependency_manifest_sha256",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "protocol": { "const": "docker-proof-v1" },
+    "runtime_path": { "$ref": "#/$defs/absolutePath" },
+    "image": {
+      "description": "Exact local OCI image ID; tags and mutable repository references are forbidden.",
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "dependency_manifest_sha256": {
+      "description": "SHA-256 of the v1 length-framed package.json and package-lock.json byte sequence. The controller verifies this digest independently in the sealed source, the immutable worker image, and the copied execution tree.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_time_ms",
+        "docker_command_timeout_ms",
+        "max_source_bytes",
+        "max_output_bytes",
+        "memory_bytes",
+        "cpus",
+        "pids",
+        "nofile",
+        "tmpfs_bytes"
+      ],
+      "properties": {
+        "wall_time_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 },
+        "docker_command_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+        "max_source_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "max_output_bytes": { "type": "integer", "minimum": 1024, "maximum": 134217728 },
+        "memory_bytes": { "type": "integer", "minimum": 67108864, "maximum": 17179869184 },
+        "cpus": { "type": "number", "minimum": 0.1, "maximum": 16 },
+        "pids": { "type": "integer", "minimum": 8, "maximum": 1024 },
+        "nofile": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "tmpfs_bytes": { "type": "integer", "minimum": 1048576, "maximum": 1073741824 }
+      }
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^(?:/|[A-Za-z]:[\\\\/])[^\\u0000]*$"
+    }
+  }
+}

@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import {
   createMirror,
   materializeFiles,
+  materializeSealedFiles,
   assertTargetUnchanged,
   destroyMirror,
   MirrorMutationError,
@@ -61,6 +62,62 @@ test('materializeFiles writes into the mirror and returns sorted paths', async (
   assert.deepEqual(written, ['test/security/a.test.mjs', 'test/security/b.test.mjs'])
   assert.equal(readFileSync(join(mirror, 'test', 'security', 'a.test.mjs'), 'utf8'), 'a\n')
   assert.equal(existsSync(join(target, 'test')), false)
+})
+
+test('create-only proof materialization preflights the whole batch before writing', async () => {
+  const target = makeTarget()
+  const mirror = mirrorPath()
+  await createMirror(target, mirror)
+
+  await assert.rejects(
+    () => materializeFiles(mirror, [
+      { path: 'test/security/new.test.mjs', contents: 'new\n' },
+      { path: 'src/app.js', contents: 'replacement\n' },
+    ], { requireAbsent: true }),
+    (error) => error?.code === 'PROOF_FILE_PATH_COLLISION',
+  )
+
+  assert.equal(existsSync(join(mirror, 'test', 'security', 'new.test.mjs')), false)
+  assert.equal(readFileSync(join(mirror, 'src', 'app.js'), 'utf8'), 'export const x = 1\n')
+})
+
+test('create-only proof materialization rejects internal file-directory collisions', async () => {
+  const mirror = mirrorPath()
+  mkdirSync(mirror, { recursive: true })
+
+  await assert.rejects(
+    () => materializeFiles(mirror, [
+      { path: 'test/security/collision', contents: 'file\n' },
+      { path: 'test/security/collision/child.mjs', contents: 'child\n' },
+    ], { requireAbsent: true }),
+    /internal file\/directory collision/i,
+  )
+
+  assert.equal(existsSync(join(mirror, 'test')), false)
+})
+
+test('materializeSealedFiles preserves exact verified bytes in a fresh staging root', async () => {
+  const root = mirrorPath()
+  mkdirSync(root, { recursive: true })
+  const bytes = Buffer.from([0, 1, 2, 255])
+  const written = await materializeSealedFiles(root, [
+    { path: 'src/binary.fixture', bytes },
+    { path: 'package.json', bytes: Buffer.from('{"name":"sealed"}\n') },
+  ])
+  assert.deepEqual(written, ['package.json', 'src/binary.fixture'])
+  assert.deepEqual(readFileSync(join(root, 'src', 'binary.fixture')), bytes)
+})
+
+test('materializeSealedFiles refuses non-buffer content before any write', async () => {
+  const root = mirrorPath()
+  mkdirSync(root, { recursive: true })
+  await assert.rejects(
+    () => materializeSealedFiles(root, [
+      { path: 'src/not-sealed.js', bytes: 'text' },
+    ]),
+    /verified Buffer/i,
+  )
+  assert.equal(existsSync(join(root, 'src')), false)
 })
 
 test('materializeFiles refuses a path escaping the mirror', async () => {

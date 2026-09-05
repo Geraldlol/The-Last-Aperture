@@ -475,6 +475,126 @@ test('unrelated or differently governed runs cannot claim a finding was fixed', 
   ])
 })
 
+test('an unchanged per-lens contract remains comparable when another lens changes the pack', () => {
+  const lensDigest = '1'.repeat(64)
+  const baseline = run({
+    lens_pack_digest: '2'.repeat(64),
+    lens_shared_contract_digest: '5'.repeat(64),
+    jobs: [{
+      job_id: 'lens:web-and-api',
+      kind: 'LENS',
+      lens: 'web-and-api',
+      lens_digest: lensDigest,
+      owned_topics: ['authz-object-level'],
+      state: 'SUCCEEDED',
+      coverage_authority: 'PROVIDER_DECLARED',
+    }],
+  })
+  const current = run({
+    run_id: 'run:test:added-lens',
+    lens_pack_digest: '3'.repeat(64),
+    lens_shared_contract_digest: '5'.repeat(64),
+    findings: [],
+    jobs: [
+      {
+        job_id: 'lens:web-and-api',
+        kind: 'LENS',
+        lens: 'web-and-api',
+        lens_digest: lensDigest,
+        owned_topics: ['authz-object-level'],
+        state: 'SUCCEEDED',
+        coverage_authority: 'PROVIDER_DECLARED',
+      },
+      {
+        job_id: 'lens:embedded-iot-ot-security',
+        kind: 'LENS',
+        lens: 'embedded-iot-ot-security',
+        lens_digest: '4'.repeat(64),
+        owned_topics: ['iot-secure-boot'],
+        state: 'SUCCEEDED',
+        coverage_authority: 'PROVIDER_DECLARED',
+      },
+    ],
+  })
+
+  const comparison = compareRuns(baseline, current)
+  assert.equal(comparison.comparable, false)
+  assert.equal(comparison.partially_comparable, true)
+  assert.deepEqual(comparison.lens_comparability, [{
+    lens: 'web-and-api',
+    comparable: true,
+    reason: 'semantic lens contract unchanged',
+  }])
+  assert.equal(comparison.counts['claimed-fixed'], 1)
+})
+
+test('a shared lens contract change prevents per-lens resolution claims', () => {
+  const lensDigest = '1'.repeat(64)
+  const job = {
+    job_id: 'lens:web-and-api',
+    kind: 'LENS',
+    lens: 'web-and-api',
+    lens_digest: lensDigest,
+    owned_topics: ['authz-object-level'],
+    state: 'SUCCEEDED',
+    coverage_authority: 'PROVIDER_DECLARED',
+  }
+  const baseline = run({
+    lens_pack_digest: '2'.repeat(64),
+    lens_shared_contract_digest: '5'.repeat(64),
+    jobs: [job],
+  })
+  const current = run({
+    run_id: 'run:test:shared-contract-changed',
+    lens_pack_digest: '3'.repeat(64),
+    lens_shared_contract_digest: '6'.repeat(64),
+    findings: [],
+    jobs: [job],
+  })
+
+  const comparison = compareRuns(baseline, current)
+  assert.equal(comparison.partially_comparable, false)
+  assert.equal(comparison.counts['not-observed'], 1)
+  assert.match(comparison.lens_comparability[0].reason, /shared lens contract differs/)
+})
+
+test('a changed owner-topic contract remains non-comparable even when lens prose is unchanged', () => {
+  const lensDigest = '1'.repeat(64)
+  const baseline = run({
+    lens_pack_digest: '2'.repeat(64),
+    lens_shared_contract_digest: '5'.repeat(64),
+    jobs: [{
+      job_id: 'lens:web-and-api',
+      kind: 'LENS',
+      lens: 'web-and-api',
+      lens_digest: lensDigest,
+      owned_topics: ['authz-object-level'],
+      state: 'SUCCEEDED',
+      coverage_authority: 'PROVIDER_DECLARED',
+    }],
+  })
+  const current = run({
+    run_id: 'run:test:changed-topic-contract',
+    lens_pack_digest: '3'.repeat(64),
+    lens_shared_contract_digest: '5'.repeat(64),
+    findings: [],
+    jobs: [{
+      job_id: 'lens:web-and-api',
+      kind: 'LENS',
+      lens: 'web-and-api',
+      lens_digest: lensDigest,
+      owned_topics: ['different-topic'],
+      state: 'SUCCEEDED',
+      coverage_authority: 'PROVIDER_DECLARED',
+    }],
+  })
+
+  const comparison = compareRuns(baseline, current)
+  assert.equal(comparison.counts['not-observed'], 1)
+  assert.equal(comparison.lens_comparability[0].comparable, false)
+  assert.match(comparison.lens_comparability[0].reason, /topic contract differs/)
+})
+
 test('lifecycle comparison preserves colliding findings instead of overwriting them', () => {
   const left = finding({
     candidate_id: 'cand:web:left',
@@ -1317,6 +1437,192 @@ test('SARIF carries stable rule IDs, locations, fingerprints and run honesty', (
   assert.equal(sarif.runs[0].originalUriBaseIds, undefined)
   assert.doesNotMatch(JSON.stringify(sarif), /C:\\\\repo/)
   assert.equal(sarif.runs[0].invocations[0].executionSuccessful, true)
+})
+
+test('SARIF encodes source paths as relative URIs without changing file identity', () => {
+  const locations = [
+    'src/my file#part?.js:42:7',
+    'src/literal%20name.js:3',
+    'src/naïve/订单.js:5',
+    'module:variant.js:8',
+    'src\\windows name.js:9',
+  ]
+  const result = renderSarif(run({ findings: [finding({ location: locations })] }))
+    .runs[0].results[0]
+  assert.deepEqual(result.locations.map(({ physicalLocation }) =>
+    physicalLocation.artifactLocation.uri), [
+    'src/my%20file%23part%3F.js',
+    'src/literal%2520name.js',
+    'src/na%C3%AFve/%E8%AE%A2%E5%8D%95.js',
+    'module%3Avariant.js',
+    'src/windows%20name.js',
+  ])
+  assert.deepEqual(result.locations[0].physicalLocation.region, {
+    startLine: 42,
+    startColumn: 7,
+  })
+  assert.equal(result.partialFingerprints['redTeamAudit/semantic/v1'],
+    findingFingerprint(finding({ location: locations })))
+})
+
+test('SARIF binds candidate provenance only to successful jobs naming that candidate', () => {
+  const producer = { name: 'fixture-provider', version: '1.0.0', instance_id: 'local:fixture' }
+  const current = run({ jobs: [
+    {
+      job_id: 'lens:web:origin', kind: 'LENS', lens: 'web-and-api', state: 'SUCCEEDED',
+      candidate_ids: ['cand:web:001'], producer, input_sha256: '1'.repeat(64),
+      coverage_authority: 'PROVIDER_DECLARED',
+    },
+    {
+      job_id: 'lens:web:unrelated', kind: 'LENS', lens: 'web-and-api', state: 'SUCCEEDED',
+      candidate_ids: ['cand:web:other'], producer,
+      coverage_authority: 'REMOTE_REQUEST_ACCEPTED',
+    },
+    {
+      job_id: 'proof:failed', kind: 'PROOF', lens: 'web-and-api', state: 'FAILED',
+      candidate_ids: ['cand:web:001'], producer,
+      coverage_authority: 'REMOTE_REQUEST_ACCEPTED',
+    },
+    {
+      job_id: 'proof:success', kind: 'PROOF', state: 'SUCCEEDED',
+      candidate_ids: ['cand:web:001'], producer, input_sha256: '2'.repeat(64),
+      coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      attempt_id: 'attempt:proof:1', receipt_sha256: '3'.repeat(64),
+    },
+  ] })
+  const properties = renderSarif(current).runs[0].results[0].properties
+  assert.deepEqual(properties.coverage_authority, [
+    'CONTROLLER_OBSERVED_CONSUMPTION', 'PROVIDER_DECLARED',
+  ])
+  assert.equal(properties.candidate_job_provenance_status, 'RECORDED')
+  assert.deepEqual(properties.candidate_job_provenance, [
+    {
+      job_id: 'lens:web:origin', kind: 'LENS', producer,
+      producer_identity_authority: 'PROVIDER_DECLARED',
+      input_sha256: '1'.repeat(64), coverage_authority: 'PROVIDER_DECLARED',
+      attempt_id: null, receipt_sha256: null,
+    },
+    {
+      job_id: 'proof:success', kind: 'PROOF', producer,
+      producer_identity_authority: 'PROVIDER_DECLARED',
+      input_sha256: '2'.repeat(64), coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+      attempt_id: 'attempt:proof:1', receipt_sha256: '3'.repeat(64),
+    },
+  ])
+})
+
+test('SARIF does not invent candidate provenance for historical same-lens jobs', () => {
+  const current = run({ jobs: [{
+    job_id: 'lens:web:legacy', kind: 'LENS', lens: 'web-and-api', state: 'SUCCEEDED',
+    producer: { name: 'legacy', version: '1.0.0', instance_id: 'local:legacy' },
+    coverage_authority: 'CONTROLLER_OBSERVED_CONSUMPTION',
+  }] })
+  const properties = renderSarif(current).runs[0].results[0].properties
+  assert.deepEqual(properties.coverage_authority, [])
+  assert.deepEqual(properties.candidate_job_provenance, [])
+  assert.equal(properties.candidate_job_provenance_status, 'NOT_RECORDED')
+})
+
+test('SARIF preserves run error provenance without turning audit failures into findings', () => {
+  const current = run({ state: 'INCOMPLETE', findings: [], errors: [{
+    error_id: 'fanout:1', phase: 'FANOUT', code: 'PROVIDER_FAILED',
+    message: 'The provider timed out before returning a result.',
+    recoverable: true, job_id: 'lens:web:1',
+  }] })
+  const sarifRun = renderSarif(current).runs[0]
+  const invocation = sarifRun.invocations[0]
+  const notifications = invocation.toolExecutionNotifications
+  assert.equal(invocation.executionSuccessful, false)
+  assert.equal(invocation.exitCode, 2)
+  assert.equal(invocation.properties.run_error_count, 1)
+  const error = notifications.find(({ descriptor }) => descriptor.id === 'run-error/PROVIDER_FAILED')
+  assert.equal(error.level, 'error')
+  assert.match(error.message.text, /FANOUT.*PROVIDER_FAILED.*timed out/)
+  assert.deepEqual(error.properties, {
+    source: 'run.errors', error_id: 'fanout:1', phase: 'FANOUT',
+    code: 'PROVIDER_FAILED', recoverable: true, job_id: 'lens:web:1',
+  })
+  const status = notifications.find(({ descriptor }) => descriptor.id === 'audit-run-incomplete')
+  assert.equal(status.level, 'error')
+  assert.match(status.message.text, /INCOMPLETE.*not a complete audit/i)
+  assert.equal(status.properties.source, 'run.state')
+  assert.deepEqual(sarifRun.results, [])
+})
+
+test('SARIF announces incomplete and gap-bearing runs even without error records', () => {
+  for (const [state, id, level, successful] of [
+    ['INCOMPLETE', 'audit-run-incomplete', 'error', false],
+    ['FAILED', 'audit-run-incomplete', 'error', false],
+    ['COMPLETE_WITH_GAPS', 'audit-run-coverage-gaps', 'warning', true],
+  ]) {
+    const sarifRun = renderSarif(run({ state, findings: [] })).runs[0]
+    const invocation = sarifRun.invocations[0]
+    assert.equal(invocation.executionSuccessful, successful)
+    assert.equal(invocation.properties.run_error_count, 0)
+    assert.ok(invocation.toolExecutionNotifications.some((notification) =>
+      notification.descriptor.id === id && notification.level === level))
+    assert.deepEqual(sarifRun.results, [])
+  }
+})
+
+test('SARIF keeps historical run errors visible without overriding completed run state', () => {
+  const invocation = renderSarif(run({ errors: [{
+    phase: 'FANOUT', code: 'RETRY_RECORDED', message: 'First attempt failed.', recoverable: true,
+  }] })).runs[0].invocations[0]
+  assert.equal(invocation.executionSuccessful, true)
+  assert.equal(invocation.exitCode, 0)
+  assert.equal(invocation.toolExecutionNotifications[0].level, 'warning')
+  assert.match(invocation.toolExecutionNotifications[0].message.text, /Recorded run error/)
+  assert.equal(invocation.toolExecutionNotifications[0].properties.error_id, null)
+  assert.equal(invocation.toolExecutionNotifications[0].properties.job_id, null)
+})
+
+test('Markdown and SARIF preserve versioned framework mappings and structured chains', () => {
+  const frameworkRef = {
+    framework_id: 'mitre-attack',
+    version: '17.1',
+    requirement_id: 'T1552.001',
+    relationship: 'technique',
+    applicability: 'applicable',
+    source_url: 'https://attack.mitre.org/techniques/T1552/001/',
+  }
+  const chained = finding({
+    triage_disposition: 'elevated',
+    raised_by: 'attack-chaining',
+    component_finding_ids: ['cand:web:source', 'cand:web:001'],
+    framework_refs: [frameworkRef],
+    chain: {
+      prerequisites: ['An authenticated low-privilege tenant account.'],
+      blast_radius: 'Arbitrary tenant order records.',
+      steps: [
+        {
+          candidate_id: 'cand:web:source',
+          produces: 'An order identifier from another tenant.',
+          consumes: 'A low-privilege tenant session.',
+          joint_evidence: 'The list response exposes the identifier.',
+          framework_refs: [frameworkRef],
+        },
+        {
+          candidate_id: 'cand:web:001',
+          produces: 'The other tenant order record.',
+          consumes: 'The exposed order identifier.',
+          joint_evidence: 'The detail route accepts that same identifier.',
+        },
+      ],
+    },
+  })
+
+  const report = renderMarkdownReport(run({ findings: [chained] }))
+  const result = renderSarif(run({ findings: [chained] })).runs[0].results[0]
+
+  assert.match(report, /\*\*Framework references\*\*/)
+  assert.match(report, /mitre-attack/)
+  assert.match(report, /T1552\.001/)
+  assert.match(report, /\*\*Attack chain\*\*/)
+  assert.match(report, /Arbitrary tenant order records/)
+  assert.match(report, /The detail route accepts that same identifier/)
+  assert.deepEqual(result.properties.framework_refs, [frameworkRef])
+  assert.deepEqual(result.properties.attack_chain, chained.chain)
 })
 
 test('reports expose controller-owned database discovery before provider profiles exist', () => {

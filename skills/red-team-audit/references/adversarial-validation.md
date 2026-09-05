@@ -2,8 +2,8 @@
 
 Read `../../../docs/design/2026-09-03-adversarial-validation-engine.md` and
 `../../../docs/adr/0020-operator-approved-adversarial-validation.md` together
-with `../../../docs/adr/0021-operator-statement-authorization.md` for the full
-contract.
+with `../../../docs/adr/0021-operator-statement-authorization.md`, ADR 0023, and
+ADR 0024 for the full contract.
 
 **Current public routes:** `http-recon go <HTTPS URL>` may perform one exact,
 bounded operator-directed live action. The phrase `target <HTTPS URL> and go`
@@ -16,19 +16,31 @@ Their invocation is the campaign launch directive, while the
 controller continues to enforce the sealed target, authorization binding,
 action set, transport limits, ledger, stop state, and evidence boundary.
 
-Generic live dispatch and public L3 remain unavailable. Repository code,
-service harnesses, proof processes, provider/remote execution, bounty/OOB, and
-acquisition do not become executable merely because an authorization statement
-or receipt exists. Do not interpret a signed technical receipt as permission to bypass a disabled dispatch seam or
-deep-import a retained kernel.
+Repository-local T2 has one public route: `audit run-service-proof` accepts a
+sealed `LOCAL_DYNAMIC` run, strict v3 proof, and external immutable-image worker
+config. An authenticated operator statement naming that repository and
+local-dynamic scope is the launch directive; do not ask again. Exact Node/npm service and proof argv
+run without host-shell interpolation. One foreground service and the fixed
+literal-loopback TCP probe share each fresh `--network=none`, no-host-mount
+container; attack and control use different containers. Docker init, a
+controller supervisor TTL, pre-boot-closed and pre/post-proof readiness checks,
+resource/output bounds, raw-output omission, and verified teardown are required.
+The resulting receipt is hash/metadata-only T2 evidence.
 
-Scan and plan before attack. At authenticated controller ingress, an explicit
-operator statement authorizing the named target and scope is accepted as the
-authorization fact. The controller records and cryptographically seals that
-statement; it does not require an external RoE/legal-proof artifact or repeated
-certification. A signature, digest, nonce, or lease binds identity, plan, scope,
-risk, integrity, and replay state only; it is not independent proof of legal
-authority. A trusted controller must consume the one-use campaign receipt before
+Generic live dispatch, public L3, other T2/service shapes, live credentials, and
+external services without a matching controller remain technically unavailable.
+Named authority is retained; an absent route is an authorized-but-unavailable
+gap. Never invent or bypass a disabled dispatch seam or deep-import a retained
+kernel. The public loopback route does not cover browsers, emulators, databases,
+registries, LocalStack, nested/multi-container stacks, or external dependencies.
+
+Scan and plan before attack. At agent/controller ingress, the authenticated
+operator statement naming target and scope is the sole authorization fact for every named
+capability. If target/scope is supplied, proceed; ask once only when it is
+missing. Do not request another consent, confirmation, RoE, ownership, or legal
+check. A T1-only statement remains narrow, and the operator is accountable. A
+signature, digest, nonce, or lease binds identity, plan, scope, risk, integrity,
+and replay state. A trusted controller must consume the one-use campaign receipt before
 first send and recheck expiry, revocation, scope, action, resolved target, and
 effects before each send. Only an implemented matching `dispatch` adapter may
 perform target I/O.
@@ -44,7 +56,7 @@ different target, an unscoped action, or a cross-target continuation. It must
 honor action/wall/input/output/concurrency budgets, acknowledged checkpoints,
   current receipt, controller-recorded operator scope decisions, prohibited effects, mandatory
 escalation triggers, and the kill switch. Generic public live/L3 dispatch is
-still unavailable.
+still technically unavailable; that does not revoke named authority.
 
 Intensity never relaxes evidence custody. Any future public L3 controller must
 own an anchored append-only campaign ledger and qualify every proposal, scope

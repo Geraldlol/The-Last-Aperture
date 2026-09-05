@@ -3,24 +3,44 @@
 ## What it does
 
 Red Team Audit is an evidence-first security assessment system for codebases and
-separately authorized runtime targets. It inventories a target, selects the
+operator-authorized runtime targets. It inventories a target, selects the
 security lenses that actually apply, traces suspected weaknesses to reachable
 security impact, challenges false positives, combines proven weaknesses into
 attack chains, and records both findings and coverage gaps. A keyword or scanner
 alert is only a lead; confirmation requires a reproducible attack, a valid
 control/oracle, and evidence bound to the target and test plan.
 
-At authenticated controller ingress, the operator's explicit statement
-authorizing the named target and scope is accepted as the controller's
-authorization fact. No external RoE, ownership, or legal-proof artifact and no
-repeated certification of unchanged authority is required. The statement is not
-independent proof of its legal basis; the operator remains accountable.
+At agent/controller ingress, the operator statement naming target and scope is
+the sole authorization fact for every capability it names, including T2/service
+boots, controller-referenced credentials, and named external services. If
+target/scope is supplied, proceed; ask once only when it is missing. No repeated
+consent, RoE, ownership, or legal check is required. A T1-only statement remains
+narrow, and the operator is accountable. See ADR 0023.
 
 The new adversarial controller contracts and runtime kernel extend that workflow
-from source review toward adversarial validation. The repository proof engine is
-implemented and bounded at the library layer, but its public `run-proof` command
-is disabled because a copied worktree is not a network-denied, credential-scrubbed
-execution sandbox. The public adversarial CLI now supports `go`: an exact HTTPS
+from source review toward adversarial validation. The repository proof engine
+ships public `run-proof` for sealed T1 execution and `run-service-proof` for
+narrow loopback T2 execution. Both use an external worker configuration binding
+an immutable local Docker image and dependency manifests. Attack and control
+receive separate fresh non-root containers from the same sealed source, with
+no network or host mounts, minimal environment, resource/output limits, and
+verified teardown. T1 does not boot services. T2 permits one foreground Node/npm
+service and its fixed loopback probe inside each network-none container; it
+does not provide live credentials, external dependencies, or arbitrary service
+stacks. See the [repository proof routes](../README.md#authorized-repository-t1-proof).
+
+T2 has one cumulative monotonic deadline per attack or control session across setup,
+execution, transfer, and teardown, with supervisor TTL/init bounding descendants.
+A durable v7 attempt lease records both exact container names before Docker is
+contacted. Interrupted work can recover expired leases after verified cleanup
+or commit an already captured receipt without replay; a process-owned lock
+prevents takeover while the original controller remains alive. These receipts
+record execution and cleanup facts, hashes, and counts, without raw target
+output. T2 remains `UNPROVEN` until a controller-authenticated semantic oracle is
+enrolled; successful service execution alone cannot establish `CONFIRMED` or
+`FIX_VERIFIED`. See [ADR 0024](adr/0024-public-sealed-t2-loopback-service-proof.md).
+
+The public adversarial CLI also supports `go`: an exact HTTPS
 target runs one bounded reconnaissance action, while a local directory enters
 the static repository-audit controller. Separately, the authenticated-HTTP CLI
 runs only fixed sealed campaigns and records every attempted action and outcome
@@ -50,14 +70,18 @@ rendered as `CLAIMED_*`, cannot suppress a finding or lower report/SARIF
 priority, and do not remove it from the proof queue. The unqualified lifecycle
 state `fixed` is reserved for a future authenticated semantic-negative oracle;
 this release emits `claimed-fixed` for comparable-coverage absence. Those
-authentication guarantees remain a release gate for live findings.
+authentication guarantees remain a release gate for live findings. Pack
+evolution no longer erases every comparison: when repository root and Rules of
+Engagement match, an unchanged lens digest and owned-topic contract can remain
+individually comparable while the whole run is marked only partially comparable,
+but only when the shared schema/harness/adapter contract digest also matches.
 
 ## Adversarial runtime-kernel modes
 
 | Mode | Agent freedom | Human control |
 |---|---|---|
-| `L1_ASSISTED` | Executes an exact sealed plan. | Operational plan confirmation after the engagement statement. |
-| `L2_SUPERVISED` | Executes a confirmed live sequence. | Acknowledged phase checkpoints plus mandatory escalations; no renewed legal certification. |
+| `L1_ASSISTED` | Executes an exact sealed plan. | Technical plan acknowledgement selected by the profile; not another authorization. |
+| `L2_SUPERVISED` | Executes an acknowledged live sequence. | Technical phase checkpoints and mandatory escalations; no renewed authority check. |
 | `L3_MAXIMUM_AUTHORIZED` / **Break Their Bones** | The implemented kernel can validate and orchestrate tactical subtargets, payloads, retries, pivots, and chains supplied by a future enrolled proposer inside one controller-sealed finite campaign envelope; it can continue independent branches and queue inert scope requests. It does not itself invent tactics today. | One campaign directive, repeated technical scope/safety checks, periodic checkpoints, kill switch, finite budgets, and exception-based escalation. Public live activation is still blocked on the trusted controller services listed below. |
 
 The L3 contract is deliberately broad inside the controller-sealed envelope and denies
@@ -89,7 +113,7 @@ revocation, effect classification, finite budgets, append-only evidence,
 credential isolation, the operator kill switch, or the control-plane-loss
 failsafe.
 
-## The 19 security lenses
+## The 22 security lenses
 
 Cross-cutting controls:
 
@@ -105,26 +129,59 @@ Domain lenses:
 7. `cloud-and-iac`
 8. `crypto-and-key-management`
 9. `database-and-data-stores`
-10. `failure-semantics-and-resilience`
-11. `hipaa-and-phi`
-12. `llm-and-ai`
-13. `mobile-app-security`
-14. `native-and-memory-safety`
-15. `privacy-and-data-protection`
-16. `salesforce-platform`
-17. `security-observability-and-response`
-18. `threat-modeling`
-19. `web-and-api`
+10. `desktop-and-thick-client-security`
+11. `embedded-iot-ot-security`
+12. `failure-semantics-and-resilience`
+13. `hipaa-and-phi`
+14. `llm-and-ai`
+15. `mobile-app-security`
+16. `native-and-memory-safety`
+17. `privacy-and-data-protection`
+18. `salesforce-platform`
+19. `security-observability-and-response`
+20. `smart-contract-and-web3-security`
+21. `threat-modeling`
+22. `web-and-api`
 
-The 15 domain lenses currently partition 207 uniquely owned security topics with
-1,315 typed activation selectors. The four cross-cutting lenses intentionally
+The 18 domain lenses currently partition 243 uniquely owned security topics with
+1,471 typed activation selectors. The four cross-cutting lenses intentionally
 own zero topics and operate through explicit attribution/triage rules. The
 latest modernization added dedicated ownership
 for adversarial model/MLOps security, native memory safety, security
 observability/response, and secure failure semantics, while deepening web/API,
 crypto, mobile, LLM/agent, CI/CD, business-logic, and completeness coverage.
+The target-driven expansion adds dedicated desktop/thick-client,
+embedded/IoT/OT, and smart-contract/Web3 ownership with bounded package,
+firmware, native-binary, and contract-build artifact vocabularies. Deployed and
+live-runtime acquisition adapters exist, but their provider-side semantic
+analysis remains explicitly `NOT_ASSESSED` until supported sealed-byte or
+controller-analysis delivery is available.
 
-Fuzzing is not a twentieth lens. It is one validation strategy that can exercise
+For OCI built artifacts, the controller now preserves the exact
+adapter-authored evidence context, verifies the manifest and each payload read,
+and evaluates all five shipped OCI rules over the sealed bytes. Providers see
+only bounded locator observations and controller rule matches, not raw evidence
+bytes. Missing, unreadable, or truncated indexes remain non-clear gaps and
+cannot create clearance. Each retained match is bound to one owning lens/topic
+and must be reported exactly once; these positive detectors keep supported
+topics `PARTIAL`, while unsupported topics stay `NOT_ASSESSED`. Truncation does
+not discard a retained positive match, but omitted locators remain unauthorized.
+
+The same release strengthens the control plane around every lens. Activation
+uses bounded literal selectors with an explicit `any_of` form and expands source
+scope over local dependency/dependent edges for no more than two hops and 256
+additional files. Every lens shard must disposition its full owned-topic set,
+so reading all assigned bytes is no longer treated as semantic completion.
+Business-logic triage receives a bounded union of active domain-lens source
+scope; cross-cutting, zero-topic lenses cannot widen it, and truncation is an
+explicit gap. It then hands a normalized candidate set to attack chaining.
+Findings can carry versioned,
+requirement-level framework references and attack chains now have structured
+prerequisites, ordered evidence-flow steps, and blast radius. Benchmark gates
+measure both per-topic and per-lens recall and require vulnerable representation
+for all 18 domain lenses.
+
+Fuzzing is not a separate lens. It is one validation strategy that can exercise
 many lens-owned claims. The first shipped provider is exact-pinned structured
 property fuzzing with deterministic seed, shrink path, and minimized replay
 value. Its public CLI registry currently exercises built-in controller/property
@@ -137,10 +194,12 @@ providers remain planned.
 Implemented and tested: strict plan/receipt/scope schemas; a one-use Ed25519
 technical receipt under a key pinned in the local enrollment manifest;
 enrollment-local prototype nonce consumption; formal scope expansion; signed break-glass; L2/L3
-runtime gates; a local hash-chained campaign ledger; bounded proof execution;
-the fixed built-in structured-property provider; crafted-scanner controller
+runtime gates; a local hash-chained campaign ledger; the public isolated T1
+worker and narrow T2 service-proof route with cumulative deadlines and durable
+attempt recovery; the fixed built-in structured-property provider; crafted-scanner controller
 gates; and a standalone redacted evidence-claim normalizer. These are kernel and
-test-harness capabilities, not an enabled public attack transport.
+test-harness capabilities plus the explicitly shipped local proof routes; they
+do not enable generic live dispatch.
 
 Manual result ingestion and finalization now serialize their manifest commit
 and immutable artifacts under the run lock. Results use content-addressed
@@ -150,24 +209,25 @@ content-addressed file that has no manifest authority and is not counted by the
 bundle budget, so an enrolled controller still needs orphan reclamation and a
 physical disk quota.
 
-Before live activation, nonce/lease state must be controller-global and
+Before generic live activation, nonce/lease state must be controller-global and
 rollback-resistant rather than local to a cloneable enrollment root. Receipt
 expiry and revocation must also be enforced during execution by the transport,
 not only checked before a local strategy starts.
 
-Current public target-I/O is limited to an exact bounded HTTPS reconnaissance
-action through `adversarial go`/`http-recon-v1` and fixed sealed
-`http-authed-v1` campaign actions. Standalone authenticated probes and
-discovery-derived action dispatch remain unavailable. Other containment is
-explicit: `audit run-proof`, `bounty scan run`, `bounty authz run`, `bounty
+Current public target-I/O includes sealed repository T1 proof, narrow isolated
+loopback T2 service proof, an exact bounded HTTPS reconnaissance action through
+`adversarial go`/`http-recon-v1`, and fixed sealed `http-authed-v1` campaign actions.
+Standalone authenticated probes and discovery-derived action dispatch remain
+unavailable. Other containment is
+explicit: `bounty scan run`, `bounty authz run`, `bounty
 recon run`, `audit run-provider`, `audit run-remote`, transparency publication,
 every evidence-acquisition plan/run route,
-`audit plan --evidence-bundle`, public source sealing, database-conformance
+`audit plan --evidence-bundle`, database-conformance
 execution, and every OOB session route fail closed before
 target/process traffic (or, where applicable, before reading caller paths,
 credentials, bundles, sessions, or receipt/authorization state). Static repository discovery,
-offline adversarial/audit planning and validation without imported evidence or
-source sealing, historical inspection, and non-OOB cleanup remain separate
+offline adversarial/audit planning and validation without imported evidence,
+historical inspection, and non-OOB cleanup remain separate
 surfaces. The Chrome companion is inert and requests no host authority. The
 formerly loadable mitmproxy addon has been removed; only pure offline
 scope/User-Agent conformance helpers and an internal historical-JSONL library
@@ -175,12 +235,11 @@ remain, while all public proxy capture/import/query commands refuse execution.
 A hosted OOB allowlist is transport
 validation, not authority to disclose target callback data through a third party.
 
-Not yet production-ready: public repository proof, provider-runner,
+Not yet production-ready: public provider-runner,
 remote-gateway, transparency-publication, live evidence-acquisition, or database
 lab execution; generic crafted live transport; public L3 CLI; controller
 enrollment provisioning; independently enrolled executable, gateway, log,
-target, and outbound-data policy; an isolated
-proof worker with network denial and descendant-process termination, a canonical
+target, and outbound-data policy; a canonical
 prepared-request adapter that binds the resolved destination to scope, one
 atomic controller lease over scope,
 revocation and preflight state, bounded/cancellable provider callbacks, hard
@@ -211,6 +270,8 @@ owner/ACL and reparse verification, handle-relative I/O, reclamation, and a
 physical disk quota.
 The public adversarial CLI refuses generic live and L3 execution before
 consuming a receipt nonce or performing target I/O until those services exist.
+When the statement named that work, this is an authorized-but-unavailable
+technical result, not an authorization denial or reason to ask again.
 That release claim applies to supported CLI/package entrypoints, not privileged
 same-process deep imports: several legacy audit command functions remain
 exported for dependency-injected conformance tests. They are not a supported API

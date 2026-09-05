@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   advanceRun,
   applyJobResult,
@@ -26,7 +26,9 @@ import {
 import {
   pendingJobsForCurrentPhase,
   runProofCommand,
+  spawnProofCommand,
 } from '../scripts/audit.mjs'
+import { CONTROLLER_DOCKER_RUNTIME } from '../scripts/lib/proof-docker-runner.mjs'
 
 const WORKSPACE = process.cwd()
 const RESULT_INPUT_SHA256 = 'a'.repeat(64)
@@ -38,11 +40,54 @@ function sha256(value) {
 async function runProofInternally(bundle, configPath) {
   let rendered = null
   await runProofCommand([bundle, configPath], {}, {
+    spawn: spawnProofCommand,
     output(value) {
       rendered = value
     },
   })
   return JSON.parse(rendered)
+}
+
+function writeWorkerConfig(directory, overrides = {}) {
+  const path = join(directory, 'proof-worker.json')
+  writeFileSync(path, JSON.stringify({
+    schema_version: '1.0.0',
+    protocol: 'docker-proof-v1',
+    runtime_path: CONTROLLER_DOCKER_RUNTIME,
+    image: `sha256:${'b'.repeat(64)}`,
+    dependency_manifest_sha256: 'c'.repeat(64),
+    limits: {
+      wall_time_ms: 120_000,
+      docker_command_timeout_ms: 30_000,
+      max_source_bytes: 64 * 1024 * 1024,
+      max_output_bytes: 1024 * 1024,
+      memory_bytes: 512 * 1024 * 1024,
+      cpus: 1,
+      pids: 128,
+      nofile: 256,
+      tmpfs_bytes: 128 * 1024 * 1024,
+    },
+    ...overrides,
+  }))
+  return path
+}
+
+function promoteToV2(configPath) {
+  const config = JSON.parse(readFileSync(configPath, 'utf8'))
+  const next = {
+    ...config,
+    schema_version: '2.0.0',
+    strategy: { id: 'exact.reproducer', version: '1.0.0' },
+    oracle: {
+      id: 'security-test-exit-differential',
+      attack_exit_codes: [1],
+      control_exit_codes: [0],
+    },
+    limits: { timeout_ms: 2_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    reproducer: { path: config.proof_files[0].path, format: 'test-harness' },
+  }
+  writeFileSync(configPath, JSON.stringify(next))
+  return next
 }
 
 async function planStatic() {
@@ -99,6 +144,27 @@ function succeededResult(run, job, overrides = {}) {
     coverage_gaps: [],
     ...overrides,
   }
+}
+
+function assessedTopics(sidecar, findings) {
+  return (sidecar.topic_obligations ?? []).map((topic) => {
+    const topicFindings = findings.filter((finding) => finding.topic === topic)
+    if (topicFindings.length > 0) {
+      return {
+        topic,
+        disposition: 'finding',
+        reason: 'The proof fixture reports a finding for this owned topic.',
+        finding_ids: topicFindings.map((finding) => finding.candidate_id),
+      }
+    }
+    return {
+      topic,
+      disposition: 'examined-clean',
+      reason: 'The proof fixture examined the complete sealed file scope for this topic.',
+      evidence: ['All files assigned to the job were examined without identifying a finding.'],
+      evidence_paths: sidecar.scoped_files,
+    }
+  })
 }
 
 function readJobSidecar(bundle, jobId) {
@@ -176,6 +242,7 @@ async function proofReadyBundle() {
       run = applyJobResult(run, succeededResult(run, job, {
         examined_files: sidecar.scoped_files,
         findings,
+        topic_assessments: assessedTopics(sidecar, findings),
       }), {
         expectedPacketSha256: RESULT_INPUT_SHA256,
         sidecar,
@@ -253,8 +320,12 @@ test('run-proof is registered and documented', () => {
   const help = execFileSync(process.execPath, ['scripts/audit.mjs', '--help'], {
     encoding: 'utf8',
   })
-  assert.match(help, /run-proof <run\.json\|bundle-directory> <proof-config\.json>/)
-  assert.match(help, /mirror alone is not a security sandbox/i)
+  assert.match(
+    help,
+    /run-proof <run\.json\|bundle-directory> <proof-config\.json> --worker <proof-worker\.json>/,
+  )
+  assert.doesNotMatch(help, /run-proof[^\n]*\[DISABLED\]/)
+  assert.match(help, /network-denied Docker proof worker/i)
 })
 
 test('run-proof rejects an unknown option', () => {
@@ -273,20 +344,92 @@ test('run-proof refuses a STATIC run', async () => {
     () => execFileSync(process.execPath, [
       'scripts/audit.mjs', 'run-proof', bundle, configPath,
     ], { stdio: 'pipe' }),
-    /disabled.*network-denied proof sandboxing/i,
+    /requires a TEST_EXECUTION run/i,
   )
 })
 
 test('run-proof refuses a malformed proof configuration', async () => {
-  const bundle = await planStatic()
+  const { bundle } = await proofReadyBundle()
   const directory = mkdtempSync(join(tmpdir(), 'rta-rpc-'))
   const configPath = writeConfig(directory, proofConfig({ proof_files: [] }))
   assert.throws(
     () => execFileSync(process.execPath, [
       'scripts/audit.mjs', 'run-proof', bundle, configPath,
     ], { stdio: 'pipe' }),
-    /disabled.*network-denied proof sandboxing/i,
+    /proof configuration is invalid/i,
   )
+})
+
+test('public run-proof requires a v2 proof and an external worker configuration', async () => {
+  const { bundle, configPath } = await proofReadyBundle()
+  await assert.rejects(
+    () => runProofCommand([bundle, configPath]),
+    /public run-proof requires a v2 proof configuration/i,
+  )
+  promoteToV2(configPath)
+  await assert.rejects(
+    () => runProofCommand([bundle, configPath]),
+    /--worker <proof-worker\.json>/i,
+  )
+})
+
+test('public run-proof executes sealed bytes through the Docker worker and binds its receipt', async () => {
+  const { bundle, configPath, jobId, target } = await proofReadyBundle()
+  const config = promoteToV2(configPath)
+  const workerPath = writeWorkerConfig(dirname(configPath))
+  const calls = []
+  let rendered
+  await runProofCommand([bundle, configPath], { worker: workerPath }, {
+    dockerProof: async (input) => {
+      calls.push(input)
+      assert.equal(existsSync(join(input.sourceRoot, 'src', 'routes', 'invoices.ts')), true)
+      assert.equal(input.sourceRoot.startsWith(target), false)
+      const control = input.args.at(-1) === 'control.mjs'
+      return {
+        code: control ? 0 : 1,
+        signal: null,
+        timed_out: false,
+        spawn_error: false,
+        duration_ms: 5,
+        stdout: '',
+        stderr: '',
+        stdout_bytes: 7,
+        stdout_sha256: 'd'.repeat(64),
+        stdout_truncated: false,
+        stderr_bytes: 0,
+        stderr_sha256: sha256(''),
+        stderr_truncated: false,
+        output_omitted: true,
+        sandbox: {
+          backend: 'OCI_DOCKER',
+          worker_config_sha256: 'e'.repeat(64),
+          image: `sha256:${'b'.repeat(64)}`,
+          network_mode: 'none',
+          mounts: [],
+          environment: 'controller-minimal',
+          cleanup_verified: true,
+        },
+      }
+    },
+    output(value) {
+      rendered = JSON.parse(value)
+    },
+  })
+
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls.map(({ args }) => args), [
+    config.command.args,
+    config.control_command.args,
+  ])
+  assert.equal(rendered.job_id, jobId)
+  const receipt = JSON.parse(readFileSync(
+    join(bundle, ...rendered.receipt.path.split('/')),
+    'utf8',
+  ))
+  assert.equal(receipt.proof_worker.protocol, 'docker-proof-v1')
+  assert.match(receipt.proof_worker.config_sha256, /^[a-f0-9]{64}$/)
+  assert.equal(receipt.outcome.demonstration.output_omitted, true)
+  assert.equal(JSON.stringify(receipt).includes('attack reproduced'), false)
 })
 
 test('internal proof controller persists and hashes a canonical receipt before committing the proof result', async () => {

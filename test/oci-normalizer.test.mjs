@@ -2,6 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gzipSync } from 'node:zlib'
 import { createHash } from 'node:crypto'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
+import { readEvidenceIndex } from '../scripts/lib/evidence-packet.mjs'
 import {
   DEFAULT_NORMALIZER_LIMITS,
   normalizeOciLayout,
@@ -47,6 +52,11 @@ function tar(entries) {
   return Buffer.concat(blocks)
 }
 
+function appendTarEntryBeforeTerminator(archive, entry) {
+  const encodedEntry = tar([entry]).subarray(0, -1024)
+  return Buffer.concat([archive.subarray(0, -1024), encodedEntry, Buffer.alloc(1024)])
+}
+
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
 test('a tar archive round-trips through the entry reader', () => {
@@ -70,6 +80,40 @@ test('a tar archive round-trips through the entry reader', () => {
 test('the entry reader refuses a path that escapes the archive root', () => {
   const archive = tar([{ name: '../../etc/shadow', content: 'x' }])
   assert.throws(() => readTarEntries(archive, DEFAULT_NORMALIZER_LIMITS), /escape/i)
+})
+
+test('the entry reader rejects a header whose integrity checksum is invalid', () => {
+  const archive = tar([{ name: 'app.bin', content: 'x' }])
+  archive[0] ^= 0x01
+  assert.throws(
+    () => readTarEntries(archive, DEFAULT_NORMALIZER_LIMITS),
+    /checksum mismatch/i,
+  )
+})
+
+test('the entry reader accepts zero record padding but rejects data or partial bytes after its terminator', () => {
+  const archive = tar([{ name: 'app.bin', content: 'x' }])
+  assert.equal(
+    readTarEntries(Buffer.concat([archive, Buffer.alloc(1024)]), DEFAULT_NORMALIZER_LIMITS).length,
+    1,
+  )
+
+  const nonzeroBlock = Buffer.alloc(512)
+  nonzeroBlock[17] = 1
+  assert.throws(
+    () => readTarEntries(Buffer.concat([archive, nonzeroBlock]), DEFAULT_NORMALIZER_LIMITS),
+    /nonzero data after the tar terminator/i,
+  )
+  assert.throws(
+    () => readTarEntries(Buffer.concat([archive, Buffer.alloc(1)]), DEFAULT_NORMALIZER_LIMITS),
+    /partial trailing block after the tar terminator/i,
+  )
+
+  const withoutTerminator = archive.subarray(0, archive.length - 1024)
+  assert.throws(
+    () => readTarEntries(Buffer.concat([withoutTerminator, Buffer.from([1])]), DEFAULT_NORMALIZER_LIMITS),
+    /partial trailing block without a complete tar header/i,
+  )
 })
 
 test('the entry reader halts at its bounded limits rather than exhausting memory', () => {
@@ -99,7 +143,7 @@ function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null,
     // deterministically undecompressable, which is what the gap case needs.
     const compressed = corruptLayer
       ? Buffer.concat([Buffer.from([0x1f, 0x8b, 0x08, 0x00]), Buffer.alloc(64, 0xab)])
-      : gzipSync(tar(entries))
+      : gzipSync(Buffer.isBuffer(entries) ? entries : tar(entries))
     return {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest: put(compressed),
@@ -139,6 +183,141 @@ function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null,
   }
   return tar(files)
 }
+
+function multiPlatformOciLayout({ nested = false, digestlessLayer = false } = {}) {
+  const blobs = new Map()
+  const put = (bytes) => {
+    const digest = `sha256:${sha256(bytes)}`
+    blobs.set(digest, bytes)
+    return digest
+  }
+  const platforms = ['amd64', 'arm64']
+  const manifests = platforms.map((architecture, platformIndex) => {
+    const layer = gzipSync(tar([{
+      name: `app/${architecture}.txt`,
+      content: `${architecture}-payload`,
+    }]))
+    const layerDescriptor = {
+      mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+      digest: put(layer),
+      size: layer.length,
+    }
+    const config = Buffer.from(JSON.stringify({
+      architecture,
+      os: 'linux',
+      history: [{ created_by: `BUILD ${architecture}` }],
+      rootfs: { type: 'layers', diff_ids: [layerDescriptor.digest] },
+    }))
+    const configDigest = put(config)
+    const imageManifest = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      config: {
+        mediaType: 'application/vnd.oci.image.config.v1+json',
+        digest: configDigest,
+        size: config.length,
+      },
+      layers: [
+        layerDescriptor,
+        ...(digestlessLayer && platformIndex === 0
+          ? [{ mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', size: 12 }]
+          : []),
+      ],
+    }))
+    return {
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      digest: put(imageManifest),
+      size: imageManifest.length,
+      platform: { architecture, os: 'linux' },
+    }
+  })
+  let topManifests = manifests
+  if (nested) {
+    const nestedIndex = Buffer.from(JSON.stringify({
+      schemaVersion: 2,
+      mediaType: 'application/vnd.oci.image.index.v1+json',
+      manifests,
+    }))
+    topManifests = [{
+      mediaType: 'application/vnd.oci.image.index.v1+json',
+      digest: put(nestedIndex),
+      size: nestedIndex.length,
+    }]
+  }
+  const files = [
+    { name: 'oci-layout', content: JSON.stringify({ imageLayoutVersion: '1.0.0' }) },
+    { name: 'index.json', content: JSON.stringify({ schemaVersion: 2, manifests: topManifests }) },
+  ]
+  for (const [digest, bytes] of blobs) {
+    files.push({ name: `blobs/sha256/${digest.slice(7)}`, content: bytes })
+  }
+  return tar(files)
+}
+
+async function assertArtifactNormalizationFailsClosed(archive, label, expectedError) {
+  assert.throws(
+    () => normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS),
+    expectedError,
+  )
+
+  const directory = await mkdtemp(join(tmpdir(), `rta-oci-${label}-`))
+  const source = join(directory, 'image.tar')
+  const output = join(directory, 'evidence')
+  await writeFile(source, archive)
+  const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+  const planned = await adapter.plan({
+    evidence_id: label,
+    source_path: source,
+    target_class: 'LAB',
+    phi_scope: 'none',
+  })
+  await assert.rejects(adapter.run(planned, { out: output }), expectedError)
+
+  const index = await readEvidenceIndex(output)
+  assert.equal(index.unreadable, true)
+  assert.deepEqual(index.entries, [])
+}
+
+test('a duplicate authoritative index.json fails closed before last-wins lookup', async () => {
+  const layout = ociLayout({
+    layers: [[{ name: '.wh.looks-deleted', content: 'still present' }]],
+  })
+  const poisoned = appendTarEntryBeforeTerminator(layout, {
+    name: 'index.json',
+    content: JSON.stringify({ schemaVersion: 2, manifests: [] }),
+  })
+
+  await assertArtifactNormalizationFailsClosed(
+    poisoned,
+    'duplicate-index',
+    /duplicate normalized path: index\.json/i,
+  )
+})
+
+test('nonzero and partial outer OCI trailers fail closed without mandatory matches', async () => {
+  const layout = ociLayout({
+    layers: [[{ name: '.wh.looks-deleted', content: 'still present' }]],
+  })
+  const nonzeroBlock = Buffer.alloc(512)
+  nonzeroBlock[17] = 1
+  await assertArtifactNormalizationFailsClosed(
+    Buffer.concat([layout, nonzeroBlock]),
+    'nonzero-trailer',
+    /nonzero data after the tar terminator/i,
+  )
+  await assertArtifactNormalizationFailsClosed(
+    Buffer.concat([layout, Buffer.alloc(1)]),
+    'partial-trailer',
+    /partial trailing block after the tar terminator/i,
+  )
+
+  const withoutTerminator = layout.subarray(0, layout.length - 1024)
+  await assertArtifactNormalizationFailsClosed(
+    Buffer.concat([withoutTerminator, Buffer.from([1])]),
+    'unterminated-partial-trailer',
+    /partial trailing block without a complete tar header/i,
+  )
+})
 
 test('layers are normalized in manifest order, which is what makes "below" mean anything', () => {
   const layout = ociLayout({
@@ -190,6 +369,20 @@ test('a blob no manifest references is reported, not dropped', () => {
   assert.ok(normalized.orphan_blobs[0].size > 0)
 })
 
+test('a corrupt OCI index cannot manufacture orphan-blob findings', () => {
+  const layout = Buffer.from(ociLayout({
+    layers: [[{ name: 'a', content: 'a' }]],
+    orphan: 'unreferenced payload',
+  }))
+  const indexEntry = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS)
+    .find(({ path }) => path === 'index.json')
+  layout[indexEntry.offset] = 0xff
+
+  const normalized = normalizeOciLayout(layout, DEFAULT_NORMALIZER_LIMITS)
+  assert.ok(normalized.gaps.some(({ area }) => area === 'index.json'))
+  assert.deepEqual(normalized.orphan_blobs, [])
+})
+
 test('every entry carries mode, size, mtime and a content hash', () => {
   const layout = ociLayout({ layers: [[{ name: 'app.js', content: 'console.log(1)', mode: 0o755 }]] })
   const [entry] = normalizeOciLayout(layout, DEFAULT_NORMALIZER_LIMITS).layers[0].entries
@@ -207,6 +400,34 @@ test('an unreadable layer is a named gap, never a silent drop', () => {
   assert.match(normalized.gaps[0].reason, /decompress|pars|read/i)
 })
 
+test('a layer entry whose declared bytes are truncated cannot become a mandatory match', async () => {
+  const truncatedLayer = tarHeader({ name: 'app/outlier', size: 200 })
+  assert.throws(
+    () => readTarEntries(truncatedLayer, DEFAULT_NORMALIZER_LIMITS),
+    /beyond the available archive payload/i,
+  )
+  const archive = ociLayout({ layers: [truncatedLayer] })
+  const normalized = normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS)
+  assert.equal(normalized.layers.length, 0)
+  assert.ok(normalized.gaps.some(({ reason }) => /beyond the available archive payload/i.test(reason)))
+
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-truncated-layer-'))
+  const source = join(directory, 'image.tar')
+  await writeFile(source, archive)
+  const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+  const planned = await adapter.plan({
+    evidence_id: 'truncated-layer',
+    source_path: source,
+    target_class: 'LAB',
+    phi_scope: 'none',
+  })
+  const acquired = await adapter.run(planned, { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'NOT_ASSESSED')
+  const index = await readEvidenceIndex(acquired.directory)
+  assert.equal(index.entries.some(({ kind }) => kind === 'layer-entry'), false)
+  assert.ok(index.entries.every(({ matched_rule_ids: ruleIds }) => ruleIds.length === 0))
+})
+
 test('a docker save tarball is recognised as its own format', () => {
   const archive = tar([
     { name: 'manifest.json', content: JSON.stringify([{ Config: 'c.json', Layers: ['l/layer.tar'] }]) },
@@ -216,4 +437,117 @@ test('a docker save tarball is recognised as its own format', () => {
   const normalized = normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS)
   assert.equal(normalized.format, 'docker-archive')
   assert.equal(normalized.layers.length, 1)
+})
+
+test('every platform manifest and nested index is traversed without false orphan blobs', () => {
+  for (const nested of [false, true]) {
+    const normalized = normalizeOciLayout(
+      multiPlatformOciLayout({ nested }),
+      DEFAULT_NORMALIZER_LIMITS,
+    )
+    assert.equal(normalized.layers.length, 2)
+    assert.deepEqual(
+      normalized.config.history.map(({ created_by: command }) => command),
+      ['BUILD amd64', 'BUILD arm64'],
+    )
+    assert.deepEqual(normalized.orphan_blobs, [])
+    assert.deepEqual(normalized.gaps, [])
+  }
+})
+
+test('OCI blob paths do not substitute for content-address verification', () => {
+  const layout = Buffer.from(multiPlatformOciLayout())
+  const blob = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS)
+    .find(({ path }) => path.startsWith('blobs/sha256/'))
+  layout[blob.offset] ^= 0xff
+
+  const normalized = normalizeOciLayout(layout, DEFAULT_NORMALIZER_LIMITS)
+  assert.ok(normalized.gaps.some(({ reason }) => /does not match.*sha256 digest/i.test(reason)))
+  assert.ok(normalized.layers.length < 2)
+  assert.deepEqual(normalized.orphan_blobs, [])
+})
+
+test('the manifest traversal cap is explicit and suppresses incomplete orphan classification', () => {
+  const normalized = normalizeOciLayout(multiPlatformOciLayout(), {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxManifests: 1,
+  })
+  assert.equal(normalized.layers.length, 1)
+  assert.deepEqual(normalized.orphan_blobs, [])
+  assert.ok(normalized.gaps.some(({ area, reason }) =>
+    area === 'manifests' && /bounded limit/i.test(reason)))
+})
+
+test('a mixed valid and digestless OCI layer is a named PARTIAL acquisition gap', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-malformed-'))
+  const source = join(directory, 'image.tar')
+  await writeFile(source, multiPlatformOciLayout({ digestlessLayer: true }))
+  const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+  const planned = await adapter.plan({
+    evidence_id: 'malformed-multi-platform',
+    source_path: source,
+    target_class: 'LAB',
+    phi_scope: 'none',
+  })
+  const acquired = await adapter.run(planned, { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'PARTIAL')
+  assert.ok(acquired.profile.coverage_gaps.some(({ reason }) => /no digest/i.test(reason)))
+})
+
+test('every image in a docker-save archive contributes config history and layers', () => {
+  const archive = tar([
+    {
+      name: 'manifest.json',
+      content: JSON.stringify([
+        { Config: 'amd64.json', Layers: ['amd64/layer.tar'] },
+        { Config: 'arm64.json', Layers: ['arm64/layer.tar'] },
+      ]),
+    },
+    {
+      name: 'amd64.json',
+      content: JSON.stringify({
+        history: [{ created_by: 'BUILD amd64' }],
+        rootfs: { diff_ids: ['sha256:amd64'] },
+      }),
+    },
+    {
+      name: 'arm64.json',
+      content: JSON.stringify({
+        history: [{ created_by: 'BUILD arm64' }],
+        rootfs: { diff_ids: ['sha256:arm64'] },
+      }),
+    },
+    { name: 'amd64/layer.tar', content: tar([{ name: 'amd64', content: 'a' }]) },
+    { name: 'arm64/layer.tar', content: tar([{ name: 'arm64', content: 'b' }]) },
+  ])
+  const normalized = normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS)
+  assert.equal(normalized.layers.length, 2)
+  assert.deepEqual(
+    normalized.config.history.map(({ created_by: command }) => command),
+    ['BUILD amd64', 'BUILD arm64'],
+  )
+  assert.deepEqual(normalized.gaps, [])
+})
+
+test('the docker-save image cap is explicit rather than silently selecting image zero', () => {
+  const archive = tar([
+    {
+      name: 'manifest.json',
+      content: JSON.stringify([
+        { Config: 'one.json', Layers: ['one.tar'] },
+        { Config: 'two.json', Layers: ['two.tar'] },
+      ]),
+    },
+    { name: 'one.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+    { name: 'two.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+    { name: 'one.tar', content: tar([{ name: 'one', content: '1' }]) },
+    { name: 'two.tar', content: tar([{ name: 'two', content: '2' }]) },
+  ])
+  const normalized = normalizeOciLayout(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxManifests: 1,
+  })
+  assert.equal(normalized.layers.length, 1)
+  assert.ok(normalized.gaps.some(({ area, reason }) =>
+    area === 'manifests' && /bounded limit/i.test(reason)))
 })

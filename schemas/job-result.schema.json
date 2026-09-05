@@ -90,6 +90,13 @@
         }
       }
     },
+    "topic_assessments": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/topicAssessment"
+      }
+    },
     "store_profiles": {
       "type": "array",
       "maxItems": 4096,
@@ -151,6 +158,9 @@
           },
           "store_contributions": {
             "maxItems": 0
+          },
+          "topic_assessments": {
+            "maxItems": 0
           }
         }
       },
@@ -175,6 +185,141 @@
       "minLength": 3,
       "maxLength": 160,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "topicAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topic",
+        "disposition",
+        "reason"
+      ],
+      "properties": {
+        "topic": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "disposition": {
+          "enum": [
+            "finding",
+            "examined-clean",
+            "partial",
+            "not-applicable",
+            "not-assessed"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "evidence_paths": {
+          "type": "array",
+          "maxItems": 65536,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "finding_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/id"
+          }
+        },
+        "coverage_gap_areas": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "finding"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "finding_ids"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "enum": [
+                  "examined-clean",
+                  "not-applicable"
+                ]
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "evidence",
+              "coverage_gap_areas"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "not-assessed"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "coverage_gap_areas"
+            ]
+          }
+        }
+      ]
     }
   }
 }

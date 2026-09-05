@@ -29,7 +29,21 @@
       "enum": ["COVERED", "PARTIAL", "INVENTORY_ONLY", "NOT_ASSESSED", "NOT_APPLICABLE"]
     },
     "artifact_kind": {
-      "enum": ["apk", "dist-bundle", "ipa", "jar", "oci-image"]
+      "enum": [
+        "apk",
+        "desktop-package",
+        "dist-bundle",
+        "firmware-image",
+        "ipa",
+        "jar",
+        "model-bundle",
+        "native-executable",
+        "oci-image",
+        "sbom",
+        "shared-library",
+        "smart-contract-build",
+        "vex"
+      ]
     },
     "files": {
       "type": "array",

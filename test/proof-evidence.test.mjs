@@ -39,7 +39,7 @@ test('demonstration plus a passing remediation confirms at T1', () => {
   assert.ok(e.pre_result.path_reached)
   assert.ok(e.pre_result.control)
   assert.match(e.artifact.sha256, /^[a-f0-9]{64}$/)
-  assert.equal(e.command, 'npm test')
+  assert.equal(e.command, 'controller-sealed T1 proof command')
 })
 
 test('a reproduced attack with a passing explicit control confirms without a patch', () => {

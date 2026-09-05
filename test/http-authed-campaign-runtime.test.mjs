@@ -77,7 +77,7 @@ test('public CLI rejects retired written-authority routes and flags before any s
   assert.equal(stopRequests, 0)
 })
 
-test('operator-attested campaign runtime binds protected transport, discovery, and durable ledger', async (t) => {
+test('operator-attested campaign runtime binds protected transport, discovery, and durable ledger without repeat authorization', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-runtime-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const scope = attestedScope({ actionCount: 1 })
@@ -118,7 +118,6 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
     clock: () => NOW,
     protectedTransport: async (request) => {
@@ -160,7 +159,6 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     trustedLedgerHead: {
       recordCount: result.ledger.record_count,
       headSha256: result.ledger.head_sha256,
@@ -197,7 +195,6 @@ test('public CLI forwards a retained ledger head and rejects valid-prefix deleti
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     fixedCampaignOnly: true,
     credentialInput: Symbol('initial redirected credential input'),
     credentialStdinReader: async () => CREDENTIAL,
@@ -274,7 +271,6 @@ test('trusted ledger mismatch rejects a browser campaign before companion creati
       expectedCampaignGrantSha256: verified.campaignGrantSha256,
       ledgerDirectory,
       operatorId: scope.authorization.operator_id,
-      authorizationConfirmed: true,
       fixedCampaignOnly: true,
       browserSessionRequested: true,
       trustedLedgerHead: { recordCount: 1, headSha256: 'f'.repeat(64) },
@@ -356,7 +352,6 @@ test('operator-attested campaign runtime dispatches a browser-held scope without
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory: join(root, 'ledger'),
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     browserSessionRequested: true,
     clock: () => NOW,
     protectedTransport: async (request) => {
@@ -396,7 +391,6 @@ test('operator-attested campaign runtime requires an explicit matching browser e
       expectedCampaignGrantSha256: verified.campaignGrantSha256,
       ledgerDirectory: join(root, 'ledger'),
       operatorId: scope.authorization.operator_id,
-      authorizationConfirmed: true,
       clock: () => NOW,
       protectedTransport: async () => { sends += 1 },
     }),
@@ -441,7 +435,6 @@ test('browser campaign opens its stop ledger before attach and closes its bridge
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     browserSessionRequested: true,
     clock: () => NOW,
     browserTransportFactory: async (configuration) => {
@@ -520,7 +513,6 @@ test('operator stop interrupts browser transport creation and closes a session r
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     browserSessionRequested: true,
     clock: () => NOW,
     browserTransportFactory: async () => {
@@ -592,7 +584,6 @@ test('operator stop interrupts browser pairing and closes the created session ex
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     browserSessionRequested: true,
     clock: () => NOW,
     browserTransportFactory: async () => ({
@@ -659,7 +650,6 @@ test('operator stop interrupts a browser attach that never resolves', async (t) 
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     browserSessionRequested: true,
     clock: () => NOW,
     browserTransportFactory: async () => ({
@@ -715,7 +705,6 @@ test('operator stop interrupts a credential read that never resolves', async (t)
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     clock: () => NOW,
     credentialInput: Symbol('synthetic blocked credential input'),
     credentialStdinReader: async () => {
@@ -918,7 +907,6 @@ test('fixed campaigns ledger terminal response stops and send no later sealed ac
         expectedCampaignGrantSha256: verified.campaignGrantSha256,
         ledgerDirectory,
         operatorId: scope.authorization.operator_id,
-        authorizationConfirmed: true,
         fixedCampaignOnly: true,
         env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
         clock: () => NOW,
@@ -998,7 +986,6 @@ test('fixed campaign consumes an out-of-band stop request into its ledger before
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     fixedCampaignOnly: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
     clock: () => NOW,
@@ -1048,7 +1035,6 @@ test('fixed campaign observes an out-of-band stop during its final request', asy
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     ledgerDirectory,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     fixedCampaignOnly: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
     clock: () => NOW,
@@ -1186,7 +1172,6 @@ test('operator-attested campaign runtime executes a controller-authorized revers
     ledgerDirectory,
     materialsDirectory: materials,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
     clock: () => NOW,
     protectedTransport: async (request) => {
@@ -1316,7 +1301,6 @@ test('operator-attested runtime restarts an interrupted mutation after action ex
     ledgerDirectory,
     materialsDirectory: materials,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
     clock: () => new Date('2026-08-16T12:05:00.000Z'),
     protectedTransport: async (request) => {
@@ -1475,7 +1459,6 @@ test('attested runtime reopens only an existing ledger after expiry and dispatch
     ledgerDirectory,
     materialsDirectory: materials,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     credentialInput: Symbol('sealed attested cleanup credential'),
     credentialStdinReader: async () => {
       credentialReads += 1

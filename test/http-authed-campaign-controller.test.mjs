@@ -54,7 +54,7 @@ function campaignScope() {
   return scope
 }
 
-test('campaign durably drains discovered probes beyond the old 64-action gate and replays none', async (t) => {
+test('campaign uses sealed authority without repeat authorization and replays no completed probes', async (t) => {
   const scope = campaignScope()
   const verified = verifyHttpAuthedAuthorization({
     scope,
@@ -94,7 +94,6 @@ test('campaign durably drains discovered probes beyond the old 64-action gate an
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => verifyHttpAuthedAuthorization({
@@ -123,7 +122,6 @@ test('campaign durably drains discovered probes beyond the old 64-action gate an
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger: reopened,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -163,7 +161,6 @@ test('an ambiguous probe delivery stops the campaign before the next action', as
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -222,7 +219,6 @@ test('a stop committed with probe pre-dispatch is settled before the transport s
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -294,7 +290,6 @@ test('settled JSON-shape observation failure still honors its response stop stat
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -341,7 +336,6 @@ test('settled JSON-shape observation failure still honors its response stop stat
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger: reopened,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -379,7 +373,6 @@ test('campaign executes a declared mutation through its existing durable lease',
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -458,7 +451,6 @@ test('a failed mutation cleanup durably stops the campaign before the next actio
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -511,7 +503,6 @@ test('a post-write executor failure enters cleanup recovery without replaying th
     scope,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -646,7 +637,6 @@ for (const [status, expectedStopReason] of [
       scope,
       expectedCampaignGrantSha256: verified.campaignGrantSha256,
       operatorId: scope.authorization.operator_id,
-      authorizationConfirmed: true,
       ledger,
       now: () => NOW,
       reauthorize: async ({ action }) => action,

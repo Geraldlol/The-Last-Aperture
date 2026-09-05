@@ -1590,9 +1590,9 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **registry-driven enumerator**, the **two-subject fixture**, and the **canary fixture set**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule, and the honest headline for this lens.** T1 is a proof the repository's own test command executes. T2 requires the auditor to stand up infrastructure the repository does not already stand up, and the user is asked every time.
+**Tier rule, and the honest headline for this lens.** T1 is a proof the repository's own test command executes. T2 starts infrastructure the repository does not already start. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap.
 
-**Apex tests execute only inside an org, and an org is a remote host.** Under this skill's hard rails the auditor writes the Apex test and does not run it, so **every Apex recipe's behavioural half lands at T3 UNPROVEN, capped at Medium**, unless the user explicitly runs `sf apex run test` themselves and pastes the result. That is not a defect in the recipes; it is the rail, and it must be stated in the report's coverage block every run rather than left for the reader to infer.
+**Apex tests execute only inside an org, and an org is a remote host.** They are never repository proof, so **every Apex recipe's behavioural half remains T3 UNPROVEN, capped at Medium**. An accepted authenticated operator statement naming the org, scope, requested test, and any credential use authorizes a separate external-evidence run without another prompt, but execute only through a matching credential-aware, destination-bound controller using explicitly supplied or controller-referenced material. If that route, platform capability, or material is absent, record the technical gap; authority does not conjure it. Never infer the org from repository configuration, and attribute any external result without promoting it into a repository proof tier. State this split in the report's coverage block every run rather than leaving it for the reader to infer.
 
 **Do not read that as "Apex is unauditable here."** It is a statement about *behavioural* proof, not about the class of finding. Declarations in the checkout decide most authorization questions on their own: sharing keywords, query modes, `viewAllRecords`/`modifyAllRecords` grants, and object sharing models are all in the repository and all computable. R1's static half and the guest variant both reach **T1** offline, as does R3. Where a recipe has a computable half, run it and report at its tier — a capped behavioural half is not a reason to skip the class, and treating it as one has measurably cost this lens its largest finding category.
 
@@ -1620,7 +1620,7 @@ Escalate the grade where a permission set or profile in the checkout grants `vie
 
 **What the static half cannot decide, and must not claim.** Whether a filter in the method body correctly scopes to the running user. A `with sharing` class can still leak by building a predicate from a caller-supplied Id, and a `without sharing` class can be correct because it filters explicitly. The static rule reports *unenforced declaration plus unguarded query*, which is a defect in its own right; it does not report *proven cross-tenant read*. That claim needs the dynamic half.
 
-**The dynamic half (Apex; T3 UNPROVEN unless the user runs it).**
+**The dynamic half (Apex; repository proof remains T3 UNPROVEN; any controller-run result is attributed external evidence).**
 
 Build two subjects once — an owning user with a record, and a second user with no share to it — using the **two-subject fixture**, and seed the record with a distinctive marker from the **canary fixture set**. Then call each entry point as the second subject and assert **both** that the record is absent from the result **and** that the marker appears nowhere in the returned payload.
 
@@ -1643,9 +1643,9 @@ Two sharpenings worth keeping verbatim:
 
 That assertion runs offline against the repository and is **T1**. It is also the only guest proof this skill performs.
 
-**Do not probe a deployed site from this lens.** A live Experience Cloud endpoint is a remote host, and that remains forbidden for every repository proof recipe regardless of scratch-org, sandbox, or ownership claims. Where live evidence is needed, keep it outside this lens and proof tiers and use only the canonical skill's separately authorized external controller. The T2 consent prompt is not authorization for a hosted endpoint.
+**Do not probe a deployed site as repository proof.** A live Experience Cloud endpoint is a remote host, so its observations stay outside this lens's proof tiers. An accepted authenticated operator statement naming the endpoint, scope, effect, and any credential use authorizes a separate external-evidence route without another prompt; execute only through a matching credential-aware, destination-bound controller using explicitly supplied or controller-referenced material. If that route or material is absent, record `UNPROVEN` with the technical gap. Authority does not conjure either, repository configuration cannot add the endpoint, and external results do not become repository proof.
 
-### R2 — Injection into the secondary interpreter (Apex; T3 UNPROVEN unless the user runs it)
+### R2 — Injection into the secondary interpreter (Apex; repository proof T3 UNPROVEN)
 
 Insert two distinguishable records. Call the query path with an exact match and assert the result size is 1. Then call it with a tautology — `Alpha' OR Name != '` — and assert the size is **still 1**. Size 2 is the proof, and it is the whole recipe: an assertion that the call merely succeeded proves nothing.
 
@@ -1671,7 +1671,7 @@ Enumerate the components with the **registry-driven enumerator** over the LWC bu
 
 Name these in the coverage block rather than letting silence imply safety.
 
-- **Apex runtime behavior** — whether a filter in a method body correctly scopes to the running user — unless the user runs the tests. This does *not* cover the declaration-level authorization questions R1's static half decides offline; those are reportable at T1 and must not be parked here.
+- **Apex runtime behavior** — whether a filter in a method body correctly scopes to the running user — is outside repository proof. Where the accepted operator statement names the org, scope, test, and credential use, a matching external controller may collect attributed evidence without another prompt; otherwise record the technical route/material gap. This does *not* cover the declaration-level authorization questions R1's static half decides offline; those are reportable at T1 and must not be parked here.
 - **Org-wide defaults for standard objects only.** These decide whether a sharing finding is real at all, and for a **custom** object they are in the checkout — `<sharingModel>` and `<externalSharingModel>` in `objects/X__c/X__c.object-meta.xml` — so a custom-object OWD must never appear in this block. Report only the standard objects, and only where Sharing Settings were not retrieved.
 - **Permission set and profile assignment**, which decides who a grant actually reaches.
 - **The live guest-user posture** — assigned permission sets and org guest-hardening settings.

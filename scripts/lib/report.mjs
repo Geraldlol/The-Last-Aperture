@@ -13,6 +13,7 @@ import {
   filterResolvedCoverageGaps,
   projectCoverageGaps,
 } from './coverage-gaps.mjs'
+import { topicAssessmentSummary } from './topic-assessments.mjs'
 
 const SEVERITY_RANK = new Map([
   ['Critical', 0],
@@ -134,6 +135,90 @@ function codeBlock(value) {
     .split(/\r?\n/)
     .map((line) => `    ${line}`)
     .join('\n')
+}
+
+const MAX_FINDING_LOCATIONS = 128
+const EVIDENCE_LOCATION_PATTERN = /^([a-z0-9][a-z0-9-]{0,63}):(?!\d+$)(.+)$/
+
+function evidenceQualifiedLocations(finding) {
+  if (!finding.evidence_context) return []
+  return (finding.location ?? [])
+    .slice(0, MAX_FINDING_LOCATIONS)
+    .map((value) => EVIDENCE_LOCATION_PATTERN.exec(String(value)))
+    .filter(Boolean)
+    .map((match) => ({ evidence_id: match[1], locator: match[2] }))
+}
+
+function findingLocationMarkdown(finding) {
+  const locations = (finding.location ?? []).map((location) => inlineCode(location))
+  const label = finding.evidence_context
+    ? `Evidence locator${locations.length === 1 ? '' : 's'}`
+    : 'Location'
+  return `${label}: ${locations.join(', ')}  `
+}
+
+function evidenceContextMarkdown(finding) {
+  const context = finding.evidence_context
+  if (!context) return []
+  const detectionEvidence = (context.detection_evidence ?? [])
+    .map((entry) => inlineCode(entry))
+    .join(', ')
+  return [
+    `Evidence claim: ${inlineCode(finding.evidence_claim ?? 'not recorded')}  `,
+    `Evidence source: ${inlineCode(context.evidence_id)} / ${inlineCode(context.evidence_class)}  `,
+    `Evidence adapter: ${inlineCode(context.adapter_id)}  `,
+    `Evidence target: ${inlineCode(context.target_identity)}  `,
+    `Acquisition mode: ${inlineCode(context.acquisition_mode)}  `,
+    `Acquired on: ${inlineCode(context.acquired_on)}  `,
+    `Evidence confidence: ${inlineCode(context.confidence)}  `,
+    `Detection evidence: ${detectionEvidence || inlineCode('not recorded')}  `,
+  ]
+}
+
+function frameworkReferenceLabel(reference) {
+  return `${singleLine(reference.framework_id)}@${singleLine(reference.version)}:`
+    + `${singleLine(reference.requirement_id)} `
+    + `(${singleLine(reference.relationship)}/${singleLine(reference.applicability)})`
+}
+
+function structuredFindingMarkdown(finding) {
+  const lines = []
+  if ((finding.framework_refs ?? []).length > 0) {
+    lines.push(
+      '**Framework references**',
+      '',
+      '| Framework | Version | Requirement | Relationship | Applicability | Source |',
+      '|---|---|---|---|---|---|',
+    )
+    for (const reference of finding.framework_refs) {
+      lines.push(
+        `| ${tableCell(reference.framework_id)} | ${tableCell(reference.version)} | `
+        + `${tableCell(reference.requirement_id)} | ${tableCell(reference.relationship)} | `
+        + `${tableCell(reference.applicability)} | ${tableCell(reference.source_url)} |`,
+      )
+    }
+    lines.push('')
+  }
+  if (finding.chain) {
+    lines.push(
+      '**Attack chain**',
+      '',
+      `Prerequisites: ${markdownText((finding.chain.prerequisites ?? []).join('; '))}  `,
+      `Blast radius: ${markdownText(finding.chain.blast_radius)}`,
+      '',
+      '| Step | Candidate | Consumes | Produces | Joint evidence | Framework references |',
+      '|---:|---|---|---|---|---|',
+    )
+    for (const [index, step] of (finding.chain.steps ?? []).entries()) {
+      lines.push(
+        `| ${index + 1} | ${tableCell(step.candidate_id)} | ${tableCell(step.consumes)} | `
+        + `${tableCell(step.produces)} | ${tableCell(step.joint_evidence)} | `
+        + `${tableCell((step.framework_refs ?? []).map(frameworkReferenceLabel).join('; '))} |`,
+      )
+    }
+    lines.push('')
+  }
+  return lines
 }
 
 function proofStatusDetail(finding) {
@@ -529,6 +614,7 @@ export function renderMarkdownReport(run) {
     gaps: [],
   }
   const coverageSummary = coverageProjection(coverage)
+  const assessmentSummary = topicAssessmentSummary(run)
   const producedJobs = (run.jobs ?? []).filter((job) => job.producer)
   const authorityCounts = {
     PROVIDER_DECLARED: producedJobs.filter(
@@ -646,7 +732,8 @@ export function renderMarkdownReport(run) {
       '',
       `Candidate: ${inlineCode(finding.candidate_id)}  `,
       `Lens/topic: ${inlineCode(finding.lens)} / ${inlineCode(finding.topic)}  `,
-      `Location: ${(finding.location ?? []).map((location) => inlineCode(location)).join(', ')}  `,
+      findingLocationMarkdown(finding),
+      ...evidenceContextMarkdown(finding),
       `Reachability: ${inlineCode(finding.reachable_from)}  `,
       `Claimed severity: ${inlineCode(finding.claimed_impact_severity)}  `,
       `Report priority (authenticated gates only): ${inlineCode(severityOf(finding))}  `,
@@ -676,6 +763,7 @@ export function renderMarkdownReport(run) {
       '',
       markdownText(finding.proof_plan),
       '',
+      ...structuredFindingMarkdown(finding),
     )
   }
 
@@ -774,6 +862,28 @@ export function renderMarkdownReport(run) {
     )
   }
   lines.push('')
+
+  if (assessmentSummary.obligations > 0) {
+    lines.push(
+      '### Topic assessment obligations',
+      '',
+      '| Lens | Obligations | Closed | Partial | Not assessed | Status |',
+      '|---|---:|---:|---:|---:|---|',
+    )
+    const coverageByLens = new Map(
+      coverageSummary.lensRows.map((row) => [row.lens, row]),
+    )
+    for (const row of assessmentSummary.rows.filter(
+      ({ obligations }) => obligations > 0,
+    )) {
+      lines.push(
+        `| ${tableCell(row.lens)} | ${row.obligations} | ${row.closed} | `
+        + `${row.partial} | ${row.not_assessed} | `
+        + `${tableCell(coverageByLens.get(row.lens)?.status)} |`,
+      )
+    }
+    lines.push('')
+  }
 
   const databaseDiscovery = run.database_discovery
   if (
@@ -895,8 +1005,26 @@ export function renderMarkdownReport(run) {
     const reportable = (evidenceCoverage.cells ?? [])
       .filter((cell) => cell.state !== 'NOT_APPLICABLE')
     const notApplicable = (evidenceCoverage.cells ?? []).length - reportable.length
+    const bundleCoverage = evidenceCoverage.bundle_coverage ?? []
 
     lines.push('### Evidence-class coverage', '')
+    if (bundleCoverage.length > 0) {
+      lines.push(
+        '#### Acquired bundle coverage',
+        '',
+        '| Evidence | Class | Kind | Coverage | Delivered to | Basis |',
+        '|---|---|---|---|---|---|',
+      )
+      for (const record of bundleCoverage) {
+        lines.push(
+          `| ${tableCell(record.evidence_id)} | ${tableCell(record.evidence_class)} | `
+          + `${tableCell(record.artifact_kind ?? 'n/a')} | ${tableCell(record.state)} | `
+          + `${tableCell(record.consumer_lenses.join(', ') || 'none')} | `
+          + `${tableCell(record.reason)} |`,
+        )
+      }
+      lines.push('')
+    }
     if (reportable.length > 0) {
       lines.push(
         '| Lens | Topic | Evidence class | Coverage | Basis |',
@@ -1093,7 +1221,11 @@ export function renderMarkdownReport(run) {
     '',
     `Plan digest: ${inlineCode(run.plan_digest ?? 'not recorded')}  `,
     `Policy digest: ${inlineCode(run.policy_digest ?? 'not recorded')}  `,
-    `Lens pack digest: ${inlineCode(run.lens_pack_digest ?? 'not recorded')}`,
+    `Lens pack digest: ${inlineCode(run.lens_pack_digest ?? 'not recorded')}`
+      + (run.lens_shared_contract_digest ? '  ' : ''),
+    ...(run.lens_shared_contract_digest
+      ? [`Shared lens contract digest: ${inlineCode(run.lens_shared_contract_digest)}`]
+      : []),
     '',
   )
   return `${lines.join('\n').trimEnd()}\n`
@@ -1133,6 +1265,72 @@ function sarifRank(severity) {
   return SARIF_RANK.get(severity) ?? 0
 }
 
+function sarifRunNotifications(run, executionSuccessful) {
+  const notifications = (run.errors ?? []).map((error) => ({
+    // Errors are append-only history. A completed retry does not become a
+    // failed run merely because the earlier error remains in that history.
+    level: executionSuccessful ? 'warning' : 'error',
+    descriptor: { id: `run-error/${error.code}` },
+    message: {
+      text: `Recorded run error [${error.phase}] ${error.code}: ${error.message}`,
+    },
+    properties: {
+      source: 'run.errors',
+      error_id: error.error_id ?? null,
+      phase: error.phase,
+      code: error.code,
+      recoverable: error.recoverable ?? null,
+      job_id: error.job_id ?? null,
+    },
+  }))
+  if (!executionSuccessful) {
+    notifications.push({
+      level: 'error',
+      descriptor: { id: 'audit-run-incomplete' },
+      message: {
+        text: `Run status ${run.state}: this is not a complete audit. `
+          + 'An empty findings list does not establish that the target is clear.',
+      },
+      properties: { source: 'run.state', run_state: run.state },
+    })
+  } else if (run.state === 'COMPLETE_WITH_GAPS') {
+    notifications.push({
+      level: 'warning',
+      descriptor: { id: 'audit-run-coverage-gaps' },
+      message: {
+        text: 'The audit completed with declared coverage gaps. '
+          + 'An empty findings list does not clear unexamined scope.',
+      },
+      properties: { source: 'run.state', run_state: run.state },
+    })
+  }
+  return notifications
+}
+
+function candidateJobProvenance(jobs) {
+  const byCandidate = new Map()
+  for (const job of jobs) {
+    if (job.state !== 'SUCCEEDED') continue
+    for (const candidateId of new Set(job.candidate_ids ?? [])) {
+      if (!byCandidate.has(candidateId)) byCandidate.set(candidateId, [])
+      byCandidate.get(candidateId).push({
+        job_id: job.job_id,
+        kind: job.kind,
+        producer: structuredClone(job.producer),
+        producer_identity_authority: 'PROVIDER_DECLARED',
+        input_sha256: job.input_sha256 ?? null,
+        coverage_authority: job.coverage_authority ?? 'PROVIDER_DECLARED',
+        attempt_id: job.attempt_id ?? null,
+        receipt_sha256: job.receipt_sha256 ?? null,
+      })
+    }
+  }
+  for (const entries of byCandidate.values()) {
+    entries.sort((left, right) => left.job_id.localeCompare(right.job_id, 'en'))
+  }
+  return byCandidate
+}
+
 export function renderSarif(run, options = {}) {
   const lifecycleByFinding = new Map(
     (options.lifecycle?.results ?? [])
@@ -1145,6 +1343,8 @@ export function renderSarif(run, options = {}) {
     (finding) => !isSurvivingFinding(finding),
   ))
   const unverifiedHighImpact = allFindings.filter(isUnverifiedHighImpactClaim)
+  const executionSuccessful = ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state)
+  const runNotifications = sarifRunNotifications(run, executionSuccessful)
   const evidenceNotifications = (run.evidence_coverage?.summary?.unreached_classes ?? [])
     .map((evidenceClass) => ({
       level: 'warning',
@@ -1155,7 +1355,30 @@ export function renderSarif(run, options = {}) {
           + 'not a clearance.',
       },
     }))
+  const evidenceBundleCoverage = run.evidence_coverage?.bundle_coverage ?? []
+  const evidenceBundleGaps = evidenceBundleCoverage.filter(({ state }) =>
+    ['PARTIAL', 'INVENTORY_ONLY', 'NOT_ASSESSED'].includes(state))
+  const evidenceBundleNotifications = evidenceBundleGaps.map((record) => ({
+    level: 'warning',
+    descriptor: { id: `evidence-bundle-not-assessed/${record.evidence_id}` },
+    message: {
+      text: `Acquired evidence ${record.evidence_id} is ${record.state}: ${record.reason}. `
+        + 'Acquisition without completed analysis is a coverage gap, not a clearance.',
+    },
+  }))
+  const assessmentSummary = topicAssessmentSummary(run)
+  const topicAssessmentNotifications = assessmentSummary.open > 0
+    ? [{
+        level: 'warning',
+        descriptor: { id: 'topic-assessments-open' },
+        message: {
+          text: `${assessmentSummary.open} of ${assessmentSummary.obligations} `
+            + 'sealed topic assessment obligations remain partial or not assessed.',
+        },
+      }]
+    : []
   const producedJobs = (run.jobs ?? []).filter((job) => job.producer)
+  const provenanceByCandidate = candidateJobProvenance(producedJobs)
   const coverageSummary = coverageProjection(run.coverage ?? {})
   const rulesByTopic = new Map()
   for (const finding of [...findings, ...withdrawn]) {
@@ -1175,14 +1398,26 @@ export function renderSarif(run, options = {}) {
     const fingerprint = findingFingerprint(finding)
     const lifecycle = lifecycleByFinding.get(`${fingerprint}\0${finding.candidate_id}`)
     const remediation = remediationDetail(finding)
-    const locations = (finding.location ?? [])
+    // Same-lens shards need not have examined this candidate. Only successful
+    // jobs explicitly bound to it can supply per-result provenance; legacy
+    // records without that binding remain NOT_RECORDED.
+    const candidateProvenance = provenanceByCandidate.get(finding.candidate_id) ?? []
+    // Acquired-evidence locators address an evidence bundle, not the repository.
+    // Keep them in typed result properties; presenting a locator that happens to
+    // end in `:line` as a SARIF physical URI would point consumers at the wrong
+    // namespace. The finding schema bounds both location forms at 128 entries.
+    const locations = (finding.evidence_context ? [] : (finding.location ?? []))
+      .slice(0, MAX_FINDING_LOCATIONS)
       .map(parseLocation)
       .filter(Boolean)
       .map(({ path, line, column }) => ({
         physicalLocation: {
           // Keep SARIF portable and avoid disclosing a developer's absolute
           // checkout path. Finding locations are repository-relative.
-          artifactLocation: { uri: path },
+          // Each segment is a literal filesystem name, not pre-encoded URI
+          // text. In particular, preserve literal percent signs and prevent
+          // '#' / '?' from becoming a fragment / query in SARIF consumers.
+          artifactLocation: { uri: path.split('/').map(encodeURIComponent).join('/') },
           region: {
             startLine: line,
             ...(column === undefined ? {} : { startColumn: column }),
@@ -1220,6 +1455,21 @@ export function renderSarif(run, options = {}) {
         provider_claimed_verification_status: finding.verification_status ?? null,
         verification_authority: verificationAuthorityOf(finding),
         proof_tier: finding.proof_tier ?? null,
+        ...(finding.evidence_context
+          ? {
+              evidence_locations: evidenceQualifiedLocations(finding),
+              evidence_context: structuredClone(finding.evidence_context),
+            }
+          : {}),
+        ...(finding.evidence_claim
+          ? { evidence_claim: finding.evidence_claim }
+          : {}),
+        ...((finding.framework_refs ?? []).length > 0
+          ? { framework_refs: structuredClone(finding.framework_refs) }
+          : {}),
+        ...(finding.chain
+          ? { attack_chain: structuredClone(finding.chain) }
+          : {}),
         ...(remediation
           ? {
               remediation_status: remediation.status,
@@ -1227,13 +1477,12 @@ export function renderSarif(run, options = {}) {
             }
           : {}),
         reachability: finding.reachable_from,
+        candidate_job_provenance_status: candidateProvenance.length > 0
+          ? 'RECORDED'
+          : 'NOT_RECORDED',
+        candidate_job_provenance: candidateProvenance,
         coverage_authority: [...new Set(
-          producedJobs
-            .filter((job) =>
-              job.lens === finding.lens
-              || (job.candidate_ids ?? []).includes(finding.candidate_id))
-            .map(({ coverage_authority: authority }) =>
-              authority ?? 'PROVIDER_DECLARED'),
+          candidateProvenance.map(({ coverage_authority: authority }) => authority),
         )].sort((left, right) => left.localeCompare(right, 'en')),
       },
     }
@@ -1278,17 +1527,30 @@ export function renderSarif(run, options = {}) {
         },
       },
       invocations: [{
-        executionSuccessful: ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(run.state),
+        executionSuccessful,
         exitCode: run.state === 'COMPLETED' ? 0 : 2,
         // A coverage cell is not a finding, so an unreached evidence class must
         // not become a result — that would inflate the finding count with
         // things nobody found. SARIF's notification channel is where "the tool
         // could not examine X" belongs.
-        ...(evidenceNotifications.length > 0
-          ? { toolExecutionNotifications: evidenceNotifications }
+        ...(
+          runNotifications.length
+          + evidenceNotifications.length
+          + evidenceBundleNotifications.length
+          + topicAssessmentNotifications.length
+          > 0
+          ? {
+              toolExecutionNotifications: [
+                ...runNotifications,
+                ...evidenceNotifications,
+                ...evidenceBundleNotifications,
+                ...topicAssessmentNotifications,
+              ],
+            }
           : {}),
         properties: {
           run_state: run.state,
+          run_error_count: (run.errors ?? []).length,
           capability_mode: run.capability_mode,
           coverage_inventory: run.coverage?.inventory?.length ?? 0,
           coverage_examined: run.coverage?.examined?.length ?? 0,
@@ -1311,6 +1573,20 @@ export function renderSarif(run, options = {}) {
             coverageSummary.raw_open_gap_records,
           coverage_resolved_gap_records:
             coverageSummary.resolved_gap_records,
+          topic_assessment_obligations: assessmentSummary.obligations,
+          topic_assessment_closed: assessmentSummary.closed,
+          topic_assessment_partial: assessmentSummary.partial,
+          topic_assessment_not_assessed: assessmentSummary.not_assessed,
+          topic_assessment_open: assessmentSummary.open,
+          evidence_bundle_count: evidenceBundleCoverage.length,
+          evidence_bundle_gap_count: evidenceBundleGaps.length,
+          ...(assessmentSummary.rows.length > 0
+            ? {
+                topic_assessment_by_lens: assessmentSummary.rows.map(
+                  (row) => ({ ...row }),
+                ),
+              }
+            : {}),
           ...(coverageSummary.denominators.length > 0
             ? {
                 coverage_denominators: coverageSummary.denominators.map(

@@ -19,19 +19,35 @@ function workflowJobBlock(workflow, name) {
   return next === -1 ? remainder : remainder.slice(0, next)
 }
 
-test('shared proof recipes remain sealed behind the current-release controller gate', () => {
+test('shared proof recipes expose sealed public T1 and narrow loopback T2 controller routes', () => {
   const harness = readFileSync('skills/red-team-audit/lenses/_harness.md', 'utf8')
-  const historicalDesign = readFileSync(
-    'docs/design/2026-08-02-test-execution-capability.md',
+  const publicT1Decision = readFileSync(
+    'docs/adr/0022-public-sealed-t1-proof.md',
+    'utf8',
+  )
+  const publicT2Decision = readFileSync(
+    'docs/adr/0024-public-sealed-t2-loopback-service-proof.md',
     'utf8',
   )
   const prose = harness.replace(/^>\s?/gm, '')
-  assert.match(harness, /CURRENT RELEASE EXECUTION GATE/)
-  assert.match(harness, /Public T1\/T2 execution is unavailable/)
-  assert.match(prose, /Do not\s+execute target code/)
-  assert.match(prose, /enrolled controller and an exact, current operator authorization/)
-  assert.match(historicalDesign, /Current 0\.12\.0 execution status: disabled/i)
-  assert.match(historicalDesign, /run-proof.*run-provider[\s\S]*refuse before bundle/i)
+  assert.match(harness, /CURRENT RELEASE EXECUTION ROUTES/)
+  assert.match(prose, /Public T1 uses `audit run-proof`; narrow\s+loopback T2 uses `audit run-service-proof`/)
+  assert.match(
+    prose,
+    /sealed source\s+snapshot and external digest-pinned, dependency-manifest-bound Docker worker/,
+  )
+  assert.match(
+    prose,
+    /operator statement is the sole authorization fact for every named\s+capability[\s\S]*ask once only when it is\s+missing, and never re-ask/i,
+  )
+  assert.match(
+    prose,
+    /Other T2 shapes, live credentials, and\s+external services need separate controllers; otherwise retain authority and\s+emit an authorized-but-unavailable gap/i,
+  )
+  assert.match(publicT1Decision, /Replaces as current capability statement:[\s\S]*disabled release status/i)
+  assert.match(publicT1Decision, /Public repository T1 proof is active under these rules/i)
+  assert.match(publicT2Decision, /Add public `audit run-service-proof` for one constrained local-service shape/i)
+  assert.match(publicT2Decision, /other supporting infrastructure[\s\S]*authorized-but-unavailable/i)
 })
 
 test('internal audit command exports are documented as privileged non-API kernels', () => {
@@ -105,6 +121,54 @@ test('the dedicated Docker gate refuses to skip when runtime inputs are absent',
   assert.match(
     result.stderr,
     /real-Docker conformance requires RTA_DOCKER_RUNTIME and RTA_PROVIDER_IMAGE/,
+  )
+})
+
+test('CI runs the protected service-proof Docker gate with immutable image input', () => {
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+  const serviceProofJob = workflowJobBlock(workflow, 'service-proof-docker-conformance')
+
+  assert.match(workflow, /^\s{2}service-proof-docker-conformance:$/m)
+  assert.match(serviceProofJob, /--file containers\/node-proof-worker\.Dockerfile/)
+  assert.match(
+    readFileSync('containers/node-proof-worker.Dockerfile', 'utf8'),
+    /^FROM node@sha256:[a-f0-9]{64}$/m,
+  )
+  assert.match(
+    serviceProofJob,
+    /RTA_DOCKER_RUNTIME: \$\{\{ steps\.service-proof-docker\.outputs\.runtime \}\}/,
+  )
+  assert.match(
+    serviceProofJob,
+    /RTA_PROOF_WORKER_IMAGE: \$\{\{ steps\.service-proof-docker\.outputs\.image \}\}/,
+  )
+  assert.match(serviceProofJob, /docker image inspect --format '\{\{\.Id\}\}'/)
+  assert.match(serviceProofJob, /run: npm ci --ignore-scripts/)
+  assert.match(serviceProofJob, /run: npm run test:service-proof:docker/)
+  assert.match(serviceProofJob, /github\.event_name == 'workflow_dispatch'.*refs\/heads\/main/)
+  assert.match(serviceProofJob, /environment: release-conformance/)
+  assert.doesNotMatch(serviceProofJob, /continue-on-error:\s*true/)
+})
+
+test('the service-proof Docker gate refuses to skip when runtime inputs are absent', () => {
+  const env = { ...process.env }
+  delete env.RTA_DOCKER_RUNTIME
+  delete env.RTA_PROOF_WORKER_IMAGE
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/run-service-proof-docker-conformance.mjs'],
+    {
+      encoding: 'utf8',
+      env,
+      shell: false,
+      windowsHide: true,
+    },
+  )
+
+  assert.equal(result.status, 1)
+  assert.match(
+    result.stderr,
+    /real service-proof conformance requires RTA_DOCKER_RUNTIME and RTA_PROOF_WORKER_IMAGE/,
   )
 })
 
@@ -197,6 +261,10 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
     packageDocument.scripts['test:transparency:https'],
     'node scripts/run-transparency-log-conformance.mjs',
   )
+  assert.equal(
+    packageDocument.scripts['test:service-proof:docker'],
+    'node scripts/run-service-proof-docker-conformance.mjs',
+  )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
     /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
@@ -217,10 +285,13 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
     readFileSync('scripts/audit.mjs', 'utf8'),
     /EVIDENCE_BUNDLE_TRUST_ENROLLMENT_REQUIRED/,
   )
-  assert.match(
-    readFileSync('scripts/audit.mjs', 'utf8'),
-    /SOURCE_SNAPSHOT_ENROLLMENT_REQUIRED/,
-  )
+  const auditSource = readFileSync('scripts/audit.mjs', 'utf8')
+  assert.doesNotMatch(auditSource, /SOURCE_SNAPSHOT_ENROLLMENT_REQUIRED/)
+  assert.doesNotMatch(auditSource, /RUN_PROOF_SANDBOX_REQUIRED/)
+  assert.match(auditSource, /run-proof[^\n]+--worker <proof-worker\.json>/)
+  assert.match(auditSource, /runDockerProofCommand/)
+  assert.equal(existsSync('schemas/proof-worker.schema.json'), true)
+  assert.equal(existsSync('scripts/lib/proof-docker-runner.mjs'), true)
   const refusedEvidenceImport = spawnSync(
     process.execPath,
     [
@@ -248,8 +319,8 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
     { encoding: 'utf8', shell: false, windowsHide: true },
   )
   assert.equal(refusedSourceSeal.status, 1)
-  assert.match(refusedSourceSeal.stderr, /disabled before repository or output access/i)
-  assert.doesNotMatch(refusedSourceSeal.stderr, /ENOENT|not found/i)
+  assert.doesNotMatch(refusedSourceSeal.stderr, /disabled before repository or output access/i)
+  assert.match(refusedSourceSeal.stderr, /ENOENT|not found/i)
   const databaseCli = readFileSync('scripts/database-conformance.mjs', 'utf8')
   assert.match(databaseCli, /database-conformance run[^\r\n]*\[DISABLED\]/)
   assert.match(databaseCli, /DATABASE_RUNTIME_ENROLLMENT_REQUIRED/)
@@ -533,21 +604,24 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.doesNotMatch(schema.description, /draft/i)
 
   const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
-  assert.match(skill, /Two target-I\/O paths are public/i)
+  assert.match(skill, /Four target-I\/O paths are public/i)
   assert.match(
     skill,
-    /Fixed sealed authenticated HTTP work[\s\S]*campaign-attested[\s\S]*route is active/i,
+    /Fixed sealed authenticated HTTP work[\s\S]*campaign-attested[\s\S]*route executes its sealed requests without reconfirmation/i,
   )
   assert.match(
     skill,
-    /standalone\s+probes(?:\s+and\s+response-derived\s+discovery)?\s+are\s+not\s+public/i,
+    /standalone\s+probes(?:(?:\s+and\s+response-derived\s+discovery)|\/discovery)?\s+are\s+not\s+public/i,
   )
   assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
-  assert.match(skill, /Generic live\/L3[\s\S]*remain fail\s+closed/i)
-  assert.match(skill, /valid scope or operator statement[\s\S]*cannot activate/i)
+  assert.match(skill, /Other T2\/service shapes[\s\S]*generic live\/L3[\s\S]*remain\s+technically unavailable/i)
+  assert.match(skill, /not an authorization denial[\s\S]*authorized-but-unavailable/i)
   assert.match(skill, /Offline validation/)
-  assert.match(skill, /Permission declarations\s+are claims/)
-  assert.match(skill, /T1\/T2 execution is currently unavailable/)
+  assert.match(skill, /(?:authenticated )?operator statement is the sole\s+authorization fact for every named capability/i)
+  assert.match(
+    skill,
+    /sealed Docker implements T1 and narrow[\s\S]*loopback T2[\s\S]*Unsupported T2 stays `UNPROVEN`/i,
+  )
   assert.match(skill, /Never improvise a network\/process path/)
   assert.doesNotMatch(skill, /Copy value/)
 
@@ -579,7 +653,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(security, /authorization_binding_sha256/)
   assert.match(
     security,
-    /authenticated operator's exact target\/scope statement is its sole\s+authorization primitive/i,
+    /operator's target\/scope statement at agent\/controller ingress is its sole\s+authorization primitive/i,
   )
   assert.match(
     security,
@@ -591,7 +665,10 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const rootSkill = readFileSync('SKILL.md', 'utf8')
   assert.match(rootSkill, /one exact, bounded live HTTP-recon action/i)
   assert.match(rootSkill, /single action uses a campaign ledger/i)
-  assert.match(rootSkill, /Generic live\/L3 adversarial execution[\s\S]*remain unavailable/i)
+  assert.match(
+    rootSkill,
+    /Generic live\/L3, provider\/remote, bounty\/OOB, and acquisition transports remain\s+unavailable where not implemented/i,
+  )
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {

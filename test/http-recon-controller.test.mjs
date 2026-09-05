@@ -173,7 +173,7 @@ test('go plans, executes, and finalizes one operator-attested target in one comm
   assert.equal(calls[1][0], 'run')
   assert.equal(calls[1][1].bundle, 'operator-attested-go-bundle')
   assert.equal(calls[1][1].actionId, plannedAction.action_id)
-  assert.equal(calls[1][1].authorizationConfirmed, true)
+  assert.equal('authorizationConfirmed' in calls[1][1], false)
   assert.equal(
     calls[1][1].operatorId,
     calls[0][1].operatorAuthorization.operator_id,
@@ -551,7 +551,7 @@ function attestedTransports(
   }
 }
 
-test('operator-attested mode needs no authority files and performs zero proof requests', async (t) => {
+test('operator-attested mode needs no repeat authorization, authority files, or proof requests', async (t) => {
   const value = await attestedFixture(t)
   assert.equal(value.planned.run.authorization.mode, 'OPERATOR_ATTESTED')
   assert.equal(Object.hasOwn(value.planned.run.target, 'proof'), false)
@@ -567,22 +567,8 @@ test('operator-attested mode needs no authority files and performs zero proof re
     runHttpReconAction({
       bundle: value.out,
       actionId: next.action_id,
-      operatorId: 'operator-001',
-      rationale: 'authorized bounded response metadata observation',
-      now: value.clock.now,
-      probeImpl: transport.probeImpl,
-    }),
-    /authorization is still current/,
-  )
-  assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
-
-  await assert.rejects(
-    runHttpReconAction({
-      bundle: value.out,
-      actionId: next.action_id,
       operatorId: 'operator-002',
       rationale: 'authorized bounded response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       probeImpl: transport.probeImpl,
     }),
@@ -595,7 +581,6 @@ test('operator-attested mode needs no authority files and performs zero proof re
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -671,7 +656,6 @@ test('operator-attested diagnostic header profile is sealed, dispatched, and val
     actionId: action.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized sealed proxy-routing differential',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl,
   })
@@ -708,7 +692,6 @@ test('operator-attested mode may explicitly seal and enforce an advance SPKI pin
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized pinned response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -738,7 +721,6 @@ test('controller rejects transport TLS evidence that contradicts a sealed pin', 
       actionId: next.action_id,
       operatorId: 'operator-001',
       rationale: 'authorized pinned response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       probeImpl: transport.probeImpl,
     }),
@@ -788,7 +770,6 @@ test('returned transport identity cannot differ from durable pre-dispatch eviden
       actionId: next.action_id,
       operatorId: 'operator-001',
       rationale: 'authorized bounded response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       probeImpl,
     }),
@@ -832,7 +813,6 @@ test('pre-dispatch authorization requires the active phase exact method and URL'
             actionId,
             operatorId: 'operator-001',
             rationale: 'authorized bounded response metadata observation',
-            authorizationConfirmed: true,
             now: value.clock.now,
             probeImpl: wrongPhaseTransport,
           }),
@@ -899,7 +879,6 @@ test('stop-condition results cannot contradict durable pre-dispatch identity', a
       actionId: next.action_id,
       operatorId: 'operator-001',
       rationale: 'authorized bounded response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       probeImpl,
     }),
@@ -976,7 +955,6 @@ test('validation rejects a locally rehashed lease that drops current authorizati
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1018,7 +996,6 @@ test('validation re-correlates locally rehashed observations with action and TLS
       actionId: next.action_id,
       operatorId: 'operator-001',
       rationale: 'authorized bounded response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       probeImpl: transport.probeImpl,
     })
@@ -1047,7 +1024,6 @@ test('validation rejects a rehashed pre-dispatch peer identity substitution', as
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1080,7 +1056,6 @@ test('validation recomputes public DNS evidence instead of trusting correlated h
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1147,7 +1122,6 @@ test('finalize preserves a response stop recovered from an ACTION_COMMITTED cras
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1216,7 +1190,6 @@ test('finalize adopts an exact fsynced finalization past an active run root', as
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1266,7 +1239,6 @@ test('forged finalization tail is rejected before its stale run root is adopted'
     actionId: next.action_id,
     operatorId: 'operator-001',
     rationale: 'authorized bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1446,7 +1418,6 @@ test('out-of-band stop is idempotent and prevents target dispatch', async (t) =>
     actionId: value.planned.run.actions[0].action_id,
     operatorId: 'operator-001',
     rationale: 'would have been authorized without stop',
-    authorizationConfirmed: true,
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
@@ -1482,7 +1453,6 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
     actionId: value.planned.run.actions[0].action_id,
     operatorId: 'operator-001',
     rationale: 'approved bounded response metadata observation',
-    authorizationConfirmed: true,
     now: value.clock.now,
     delayImpl: async (milliseconds) => value.clock.advance(milliseconds),
     stopPollIntervalMs: 5,
@@ -1527,7 +1497,6 @@ test('delivery after pre-dispatch without a response is terminal and never repla
       actionId: value.planned.run.actions[0].action_id,
       operatorId: 'operator-001',
       rationale: 'approved bounded response metadata observation',
-      authorizationConfirmed: true,
       now: value.clock.now,
       delayImpl: async (milliseconds) => value.clock.advance(milliseconds),
       probeImpl: transport.probeImpl,

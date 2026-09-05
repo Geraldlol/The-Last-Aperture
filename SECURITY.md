@@ -15,19 +15,22 @@ details of an unfixed vulnerability in a public issue.
 
 ## Supported security boundary
 
-**Current release status:** bounded HTTP-recon and fixed authenticated-campaign
-commands are active. A `go <exact-https-url>` invocation is the operator's launch
+**Current release status:** sealed repository T1 proof, narrow Node/npm
+loopback T2 proof, bounded HTTP-recon, and fixed authenticated-campaign commands
+are active. A `go <exact-https-url>` invocation is the operator's launch
 directive for one sealed recon action. Fixed authenticated campaigns execute
 only their sealed request list and use the durable campaign ledger. Generic live
-adversarial/L3, bounty/OOB, provider/remote, proof, acquisition, and database
-execution routes remain gated as described below.
+adversarial/L3, other T2/service shapes, bounty/OOB, provider/remote,
+acquisition, and database execution routes remain technically unavailable as
+described below.
 
-At authenticated controller ingress, an explicit operator statement authorizing
-the named target and scope is accepted as the controller's authorization fact.
-The controller records and cryptographically seals it without requiring an
-external RoE, ownership, or legal-proof artifact or repeated certification of
-unchanged authority. It is not independent proof of the statement's legal basis;
-the operator remains accountable. No statement can activate a gated transport.
+At agent/controller ingress, the authenticated operator statement naming target
+and scope is the sole authorization fact for every named capability, including T2/service
+boots, controller-referenced credentials, and named external services. If
+target/scope is supplied, proceed; ask once only when it is missing. Do not
+require another consent, RoE, ownership, or legal check. The operator remains
+accountable. A missing transport is a technical unavailable result, not an
+authorization denial; never invent one. See ADR 0023.
 Former active-controller `--attest-authorized` and
 `--confirm-authorization-current` spellings are rejected rather than treated as
 authority. The release-disabled acquisition prototype still documents its own
@@ -37,16 +40,61 @@ This is a command/package-interface boundary, not an in-process JavaScript
 sandbox. `scripts/audit.mjs` still exports selected proof, provider, remote, and
 publication kernels so trusted conformance tests can inject controlled
 dependencies. Directly importing those exports is privileged maintainer code,
-not a supported public API, and can bypass the CLI's early release gate. Agents
+not a supported public API, and can bypass the CLI's early release refusal. Agents
 and integrations must not import or call them. A production distribution must
-split them behind an enrolled controller boundary or enforce the same gate
+split them behind an enrolled controller boundary or enforce the same checks
 inside a separately isolated service before it can execute untrusted work.
 
 Every public evidence-acquisition and bounty OOB session command is likewise
 disabled before caller-path, bundle, session, secret, process, or network I/O.
-Public source sealing and audit evidence-bundle import are disabled before
-repository/output or bundle access. Filesystem paths are possible I/O and
-disclosure endpoints, not proof of offline custody.
+Public source sealing is available for sealed T1 and narrow T2 proof only, with
+an explicit outside-target output; audit evidence-bundle import remains disabled
+before bundle access. Filesystem paths are possible I/O and disclosure
+endpoints, not proof of offline custody.
+
+Public `run-service-proof` accepts only a sealed `LOCAL_DYNAMIC` run, strict v3
+proof config, and external immutable-image worker config. It launches exact
+foreground `node`/`npm` service and proof argv without a host shell. Each attack
+or control gets a fresh, non-root, resource-bounded container with a read-only
+root, no host mounts, no published ports, `--network=none`, empty proxy
+environment, dropped capabilities, no-new-privileges/seccomp, disabled Docker
+healthcheck/logging, and verified removal. Docker init and the controller
+supervisor TTL own descendants. A fixed probe uses only literal
+`127.0.0.1:<sealed-port>` and requires the port closed before boot and ready
+before and after proof execution. Staging and runtime use different unprivileged
+UIDs; the copied source is sealed read-only, target writes are confined to a
+runtime scratch directory, and full-tree digests are checked before boot,
+before the proof command, and afterward.
+
+The T2 receipt retains hashes, byte counts, exit classes, immutable bindings,
+lifecycle facts, cumulative controller budgets, attempt identity, and cleanup
+status, never raw target output. The route rejects
+patches and does not read live credentials or contact external systems. It
+executes both service sessions, but completed lifecycle evidence remains
+`T2/UNPROVEN`: provider-authored exit classes are not an authenticated semantic
+oracle and cannot yield `CONFIRMED`, `NOT_REPRODUCED`, or `FIX_VERIFIED` in this
+release. Definitive status requires a future hard-enrolled controller-owned
+oracle bound to the same receipt facts. The route does not implement browsers,
+emulators, databases, registries, LocalStack,
+multi-container stacks, nested containers, or arbitrary service programs.
+Those remain explicit authorized-but-unavailable gaps, not reasons to weaken
+the loopback worker or ask the operator to authorize the same scope again.
+The Docker daemon, immutable worker image, and shared kernel remain trusted;
+this route is not containment from a hostile Docker administrator or a
+kernel/runtime escape.
+See ADR 0024 for the sealed T2 decision and evidence semantics.
+
+Every T2 service session has one monotonic setup-to-cleanup deadline with a
+reserved teardown budget; each Docker call, transfer, target process, and poll
+is capped to its remainder. A hash-chained `SERVICE_PROOF_CONTAINER` journal
+binds both exact container names before Docker dispatch. After a hard stop, an
+unexpired attempt cannot be stolen. A process-owned command lock also fences a
+live controller after expiry and is reclaimed only after its PID is dead. An
+expired `STARTED` attempt retries only
+after the local context and both identities are authenticated and both names
+are proven absent. Cleanup ambiguity terminalizes the attempt, while a captured
+receipt resumes without re-execution. None of these technical recovery checks
+asks for renewed authorization.
 
 The CLI lexically rejects direct UNC/WebDAV and Windows namespace-prefixed
 device/pipe arguments, plus a stored UNC repository root. Other offline paths
@@ -67,8 +115,14 @@ conformance. CI does not execute pull-request head code; main-ref stateful and
 Docker conformance requires manual approval through the protected
 `release-conformance` environment.
 
+`npm.cmd run test:service-proof:docker` is the explicit real-Docker validation
+for the narrow T2 lifecycle. Run it only from that trusted-checkout boundary;
+ordinary `npm test` must not discover or launch it. CI exposes the same check
+only as the main-ref, manually approved `service-proof-docker-conformance` job
+under the protected `release-conformance` environment.
+
 Version 0.12.0 adds the separate `http-authed-v1` controller for authenticated
-campaigns. The authenticated operator's exact target/scope statement is its sole
+campaigns. The operator's target/scope statement at agent/controller ingress is its sole
 authorization primitive. Planning binds the declared authorizer/reference,
 validity, classification, permissions, origin, paths, methods, categories, and
 actions. The controller does not fetch program terms or independently verify
@@ -137,13 +191,13 @@ names, and rejected discovery values are excluded from durable results. This is
 a controlled non-persistence boundary, not a universal PHI classifier: use only
 synthetic non-PHI identifiers and bodies.
 
-Version 0.11.0 adds a separate authorized external HTTP-reconnaissance
-controller for engagements where the asset owner supplies permission but no
-repository. It does not weaken or reuse the repository audit's coverage or T2
+Version 0.11.0 adds a route-specific external HTTP-reconnaissance controller
+under the same operator-statement authorization for targets with no repository.
+It does not weaken or reuse the repository audit's coverage or T2
 boundaries. Planning is offline. The default `OPERATOR_ATTESTED` path accepts
 one exact target action, records the operator, declared authorizer, and
-authorization reference. The `go` invocation is the explicit operator statement
-and confirmation. The controller accepts the declaration as its authorization
+authorization reference. The `go` invocation is the operator statement and
+launch directive. The controller accepts the declaration as its authorization
 fact for the exact target and action, but it does not independently verify owner
 permission,
 ownership, legal authority, or revocation.
@@ -164,9 +218,10 @@ and is never replayed automatically.
 This recon mode records controller-observed transport metadata only. It does not
 provide repository inventory, source closure, code coverage, authentication,
 mutation, browser execution, fuzzing, brute force, bulk access, or load testing.
-Its authority cannot be reused to enable `http-authed-v1`; authenticated work
-requires a new explicit operator statement for that route, which the controller
-seals into its scope and campaign grant. Written evidence is optional. Mutation
+Its proof and execution route cannot be reused as `http-authed-v1`. The existing
+operator statement is sufficient if it already names the authenticated target
+and work; only a scope addition needs a successor statement. The controller
+seals that scope into its campaign grant. Written evidence is optional. Mutation
 still requires technical permit, ledger, observation, and rollback gates.
 
 Version 0.10.0's protocol supports static, read-only planning, externally
@@ -317,7 +372,9 @@ when the repository may be modified by a hostile local process.
 - Keep bundles within the documented 128 MiB per-artifact, 16,384-artifact, and
   512 MiB aggregate verification limits; the controller reserves capacity
   before append/finalize operations.
-- Never place production credentials in the target process environment.
+- Use only controller-referenced credentials named by the operator statement;
+  authority does not supply credential bytes. Never place production credentials
+  in the target process environment.
 - Treat `OPERATOR_ATTESTED` and `OPERATOR_ATTESTED_AUTHED` as controller-accepted
   operator statements whose bindings preserve exact scope, identity, and replay
   state. They do not independently verify the named vendor/program, ownership,

@@ -28,7 +28,7 @@ activates_on:
     - 'panic('
     - 'try {'
     - 'finally'
-    - 'defer '
+    - 'defer'
     - 'retry'
     - 'backoff'
     - 'dead-letter'

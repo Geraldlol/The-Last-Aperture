@@ -296,8 +296,11 @@ store.
 
 ## Proof and conformance recipe
 
-Use a repository-started ephemeral MariaDB at T1 or a user-approved loopback
-instance at T2. Do not substitute MySQL.
+Use a repository-started ephemeral MariaDB at T1. An accepted authenticated
+operator statement naming the target, scope, and T2 loopback launch is authority
+without another prompt. Execute it only through a matching implemented
+controller; otherwise record `UNPROVEN` with the technical transport gap. Do not
+substitute MySQL.
 
 1. Record product/version, provider, engines, topology/Galera, `sql_mode`,
    accounts/plugins, effective grants/roles/`PUBLIC`, definers, views/routines,

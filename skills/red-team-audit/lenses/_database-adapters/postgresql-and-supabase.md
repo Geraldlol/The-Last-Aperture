@@ -344,8 +344,11 @@ conditional SQL, extensions, and provider-side state remain named gaps.
 
 ## Proof and conformance recipe
 
-Use the contract matrix with a repository-started ephemeral PostgreSQL at T1,
-or a user-approved loopback instance at T2.
+Use the contract matrix with a repository-started ephemeral PostgreSQL at T1.
+An accepted authenticated operator statement naming the target, scope, and T2
+loopback launch is authority without another prompt. Execute it only through a
+matching implemented controller; otherwise record `UNPROVEN` with the technical
+transport gap.
 
 1. Record `server_version_num`, deployment variant, role attributes,
    memberships, relation owners/ACLs, RLS flags, policies, routines,

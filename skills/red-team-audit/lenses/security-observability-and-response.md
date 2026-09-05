@@ -438,7 +438,7 @@ First grade the direct consequence of the observability defect, not the severity
 
 ## Proof recipes
 
-Use the repository's own test runner only in a disposable local mirror and within the consent boundary in `_harness.md`. These recipes consume source and controlled local execution; they do not query remote destinations, use production credentials, or infer deployed/live state. Preserve exact commands, exit codes, enumerator counts, relevant output, and changed paths in the evidence ledger.
+Use the repository's own test runner only through the sealed, network-denied T1 route in `_harness.md`. An accepted authenticated operator statement naming the repository and dynamic tests is launch authority without another prompt; the operator is accountable for it, and the auditor does not independently adjudicate legal authority. These repository-proof recipes consume source and controlled local execution; they do not query remote destinations, use live credentials, or infer deployed/live state. A named external observation requires a matching destination-bound controller and explicitly supplied or controller-referenced credential material, remains external evidence, and is `UNPROVEN` with a technical gap when that route or material is absent. Never infer a destination from repository configuration. Preserve exact commands, exit codes, enumerator counts, relevant output, and changed paths in the evidence ledger.
 
 ### O1 — Security-event obligation matrix (T1)
 

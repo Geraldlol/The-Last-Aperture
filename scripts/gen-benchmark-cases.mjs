@@ -115,9 +115,9 @@ export function extractBenchmarkCases(manifest, ownership) {
   if (new Set(ids).size !== ids.length) throw new Error('benchmark manifest contains duplicate case IDs')
   const vulnerable = cases.filter(({ expectation }) => expectation === 'vulnerable')
   const clean = cases.filter(({ expectation }) => expectation === 'clean')
-  if (vulnerable.length !== 22 || clean.length !== 42) {
+  if (vulnerable.length !== 32 || clean.length !== 52) {
     throw new Error(
-      `benchmark manifest must contain 22 vulnerable and 42 clean cases; got ${vulnerable.length}/${clean.length}`,
+      `benchmark manifest must contain 32 vulnerable and 52 clean cases; got ${vulnerable.length}/${clean.length}`,
     )
   }
   return cases
@@ -175,7 +175,7 @@ if (isDirectRun) {
       console.error(`DRIFT: ${OUTPUT} does not match ${MANIFEST}`)
       process.exit(1)
     }
-    console.log('PASS: benchmark cases match the fixture manifest (22 vulnerable, 42 clean).')
+    console.log('PASS: benchmark cases match the fixture manifest (32 vulnerable, 52 clean).')
   } else {
     writeFileSync(OUTPUT, expected)
     console.log(`wrote ${OUTPUT}`)

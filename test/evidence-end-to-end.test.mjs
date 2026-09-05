@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
 import { createRunPlan } from '../scripts/lib/run-engine.mjs'
-import { renderMarkdownReport } from '../scripts/lib/report.mjs'
+import { renderMarkdownReport, renderSarif } from '../scripts/lib/report.mjs'
 import { assertValidFinding, validateFinding } from '../scripts/lib/contracts.mjs'
 
 const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+let acquiredEvidenceContext
 
 async function acquiredImage() {
   const out = join(await mkdtemp(join(tmpdir(), 'rta-e2e-')), 'ev')
@@ -19,6 +20,7 @@ async function acquiredImage() {
     phi_scope: 'none',
   })
   const written = await adapter.run(planned, { out })
+  acquiredEvidenceContext = structuredClone(written.profile.evidence_context)
   return {
     evidence_id: 'peerstar-api-image',
     evidence_class: 'built-artifact',
@@ -28,6 +30,7 @@ async function acquiredImage() {
     phi_bearing: false,
     root_sha256: written.root_sha256,
     directory: written.directory,
+    evidence_context: acquiredEvidenceContext,
   }
 }
 
@@ -45,9 +48,9 @@ async function repository() {
 // impostor, cited by its locator, asserting a claim cloud-and-iac declares.
 function whiteoutFinding(overrides = {}) {
   return {
-    candidate_id: 'container-image-content:5c1a7f30',
+    candidate_id: 'dockerfile-and-image-content:5c1a7f30',
     lens: 'cloud-and-iac',
-    topic: 'container-image-content',
+    topic: 'dockerfile-and-image-content',
     title: 'A file named as a whiteout carries content in the upper layer',
     claimed_impact_severity: 'High',
     location: ['peerstar-api-image:layer/01/.wh.audit-log.txt'],
@@ -58,16 +61,8 @@ function whiteoutFinding(overrides = {}) {
     confidence: 'High',
     proof_plan: 'Read the entry from the sealed bundle at the cited locator',
     evidence_claim: 'unexpected-artifact-content',
-    evidence_context: {
-      evidence_id: 'peerstar-api-image',
-      evidence_class: 'built-artifact',
-      adapter_id: 'artifact',
-      target_identity: 'sha256:9f2c',
-      acquisition_mode: 'offline-export',
-      acquired_on: '2026-08-08T14:22:10Z',
-      detection_evidence: ['vulnerable-image.tar sha256:bcea0007'],
-      confidence: 'high',
-    },
+    adapter_rule_id: 'ev.built-artifact.oci.whiteout-named-file-with-content',
+    evidence_context: structuredClone(acquiredEvidenceContext),
     ...overrides,
   }
 }
@@ -139,7 +134,7 @@ test('a claim resting on unacquired coverage is capped, not reported at High', a
     declarations: new Map(Object.entries(run.evidence_declarations)),
     // The same finding, in a run where that class was never acquired.
     coverage: new Map([
-      ['cloud-and-iac\0container-image-content\0built-artifact', 'NOT_ASSESSED'],
+      ['cloud-and-iac\0dockerfile-and-image-content\0built-artifact', 'NOT_ASSESSED'],
     ]),
   }
   const errors = validateFinding(
@@ -171,10 +166,18 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   assert.ok(job, 'cloud-and-iac must receive the image')
   assert.deepEqual(job.evidence_ids, ['peerstar-api-image'])
 
-  // Coverage lifted for the class supplied, and honest about the one that was not.
+  // The controller's detectors support this one topic without pretending a
+  // finite positive-match rule set proves the whole artifact clean.
   const artifactCells = run.evidence_coverage.cells.filter((cell) =>
     cell.lens === 'cloud-and-iac' && cell.evidence_class === 'built-artifact')
-  assert.ok(artifactCells.every(({ state }) => state === 'COVERED'))
+  const imageContent = artifactCells.find(
+    ({ topic }) => topic === 'dockerfile-and-image-content',
+  )
+  assert.equal(imageContent.state, 'PARTIAL')
+  assert.match(imageContent.reason, /positive-match coverage.*cannot clear/i)
+  assert.ok(artifactCells
+    .filter(({ topic }) => topic !== 'dockerfile-and-image-content')
+    .every(({ state }) => state === 'NOT_ASSESSED'))
   assert.ok(run.evidence_coverage.summary.unreached_classes.includes('deployed-state'))
 
   // A finding citing that evidence validates under the enforced contract.
@@ -188,10 +191,34 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   assert.deepEqual(validateFinding(whiteoutFinding(), { evidence }).errors, [])
 
   // And the report shows the acquired evidence rather than a blind spot.
-  const report = renderMarkdownReport({ ...run, findings: [whiteoutFinding()] })
+  const finding = whiteoutFinding()
+  const reportRun = { ...run, findings: [finding] }
+  const report = renderMarkdownReport(reportRun)
   const section = report.slice(report.indexOf('### Evidence-class coverage'))
   assert.match(section, /peerstar-api-image/)
   assert.match(section, /deployed-state.*NOT_ASSESSED|NOT_ASSESSED.*deployed-state/s)
+
+  // The finding itself must remain traceable to acquired evidence in both
+  // human and machine reports. An evidence locator is not a repository path.
+  const findingSection = report.slice(
+    report.indexOf('### High'),
+    report.indexOf('## Coverage'),
+  )
+  assert.match(findingSection, /Evidence locator: `peerstar-api-image:layer\/01\/\.wh\.audit-log\.txt`/)
+  assert.match(findingSection, /Evidence claim: `unexpected-artifact-content`/)
+  assert.match(findingSection, /Evidence source: `peerstar-api-image` \/ `built-artifact`/)
+  assert.match(findingSection, /Evidence adapter: `artifact`/)
+  assert.match(findingSection, /Acquisition mode: `offline-export`/)
+  assert.match(findingSection, /Detection evidence: `vulnerable-image\.tar sha256:bcea0007`/)
+
+  const sarifResult = renderSarif(reportRun).runs[0].results[0]
+  assert.deepEqual(sarifResult.locations, [])
+  assert.deepEqual(sarifResult.properties.evidence_locations, [{
+    evidence_id: 'peerstar-api-image',
+    locator: 'layer/01/.wh.audit-log.txt',
+  }])
+  assert.equal(sarifResult.properties.evidence_claim, 'unexpected-artifact-content')
+  assert.deepEqual(sarifResult.properties.evidence_context, finding.evidence_context)
 })
 
 test('the sealed packet a provider receives carries the evidence, not just the run', async () => {
@@ -210,10 +237,16 @@ test('the sealed packet a provider receives carries the evidence, not just the r
   assert.ok(Array.isArray(sidecar.evidence), 'the sealed packet must carry the evidence')
   const [evidence] = sidecar.evidence
   assert.equal(evidence.evidence_context.evidence_id, 'peerstar-api-image')
+  assert.equal(evidence.entry_index_unreadable, false)
+  assert.equal(evidence.truncated_entry_count, 0)
   assert.deepEqual(evidence.may_conclude, [
     'secret-present-in-artifact',
     'unexpected-artifact-content',
   ])
+  assert.equal(evidence.required_matches.length, 4)
+  assert.ok(evidence.required_matches.every(
+    ({ topic }) => topic === 'dockerfile-and-image-content',
+  ))
 
   // The discriminator the motivating incident turned on, in the packet: an
   // entry named as a whiteout that carries content.

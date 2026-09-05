@@ -471,10 +471,22 @@ test('operator declaration plan, scope, and target drift fail before controller 
   }
 })
 
-test('operator declaration cannot activate unavailable generic live or L3 transport', async (t) => {
+test('verified operator declaration is accepted as authority before unavailable live or L3 routes fail closed', async (t) => {
   for (const options of [
-    { targetKind: 'live', autonomyProfile: 'L2_SUPERVISED', code: 'ADVERSARIAL_LIVE_ADAPTER_UNAVAILABLE' },
-    { targetKind: 'repository', autonomyProfile: 'L3_MAXIMUM_AUTHORIZED', code: 'ADVERSARIAL_L3_CLI_CONTROL_PLANE_UNAVAILABLE' },
+    {
+      targetKind: 'live',
+      autonomyProfile: 'L2_SUPERVISED',
+      code: 'ADVERSARIAL_LIVE_ADAPTER_UNAVAILABLE',
+      technicalGap: /no trusted transport\/provider adapter is enrolled/i,
+      noRepeat: /reauthorization cannot activate a missing route/i,
+    },
+    {
+      targetKind: 'repository',
+      autonomyProfile: 'L3_MAXIMUM_AUTHORIZED',
+      code: 'ADVERSARIAL_L3_CLI_CONTROL_PLANE_UNAVAILABLE',
+      technicalGap: /controller-owned live preflight.*trusted append-only campaign ledger.*durable checkpoint services/i,
+      noRepeat: /reauthorization cannot activate missing controller services/i,
+    },
   ]) {
     await t.test(`${options.targetKind}-${options.autonomyProfile}`, async () => {
       const fixture = provisionEnrollment(options)
@@ -487,8 +499,15 @@ test('operator declaration cannot activate unavailable generic live or L3 transp
           now: NOW,
           clock: () => Date.parse(NOW),
         }),
-        (error) => error instanceof AdversarialCliControllerError
-          && error.code === options.code,
+        (error) => {
+          assert.ok(error instanceof AdversarialCliControllerError)
+          assert.equal(error.code, options.code)
+          assert.match(error.message, /verified operator statement was accepted as the authority fact/i)
+          assert.match(error.message, /technically unavailable/i)
+          assert.match(error.message, options.technicalGap)
+          assert.match(error.message, options.noRepeat)
+          return true
+        },
       )
       assertNoNonceStore(fixture)
     })
@@ -798,7 +817,7 @@ test('direct http-recon planner omission still refuses before creating a bundle'
   )
 })
 
-test('public http-recon run invocation passes the current-authorization gate without a repeat flag', async () => {
+test('public http-recon run invocation does not inject repeat authorization', async () => {
   const sentinel = new Error('stop after public run authorization ingress')
   let received
   await assert.rejects(
@@ -816,14 +835,14 @@ test('public http-recon run invocation passes the current-authorization gate wit
     }),
     (error) => error === sentinel,
   )
-  assert.equal(received.authorizationConfirmed, true)
+  assert.equal('authorizationConfirmed' in received, false)
   assert.equal(received.operatorId, 'operator:recon-owner')
   assert.equal(received.actionId, 'action:synthetic-not-sent')
   assert.equal('authorizationDocumentPath' in received, false)
   assert.equal('ownerPublicKeyPath' in received, false)
 })
 
-test('direct http-recon run omission still refuses before target I/O', async (t) => {
+test('direct http-recon run reaches the transport boundary without repeat authorization', async (t) => {
   const parent = await mkdtemp(join(tmpdir(), 'rta-recon-direct-run-ingress-'))
   t.after(() => rm(parent, { recursive: true, force: true }))
   const targetUrl = 'https://target.example/exact'
@@ -837,6 +856,7 @@ test('direct http-recon run omission still refuses before target I/O', async (t)
     now,
     randomBytesImpl: (size) => Buffer.alloc(size, 8),
   })
+  const sentinel = new Error('stop at the synthetic transport boundary')
   let probes = 0
   await assert.rejects(
     runHttpReconAction({
@@ -845,12 +865,15 @@ test('direct http-recon run omission still refuses before target I/O', async (t)
       operatorId: 'operator:local-security-owner',
       rationale: 'execute the already sealed authorized action',
       now,
-      probeImpl: async () => { probes += 1 },
+      probeImpl: async () => {
+        probes += 1
+        throw sentinel
+      },
       fetchProofImpl: async () => { throw new Error('must not fetch authority proof') },
     }),
-    (error) => error.code === 'HTTP_RECON_CURRENT_AUTHORIZATION_CONFIRMATION_REQUIRED',
+    (error) => error === sentinel,
   )
-  assert.equal(probes, 0)
+  assert.equal(probes, 1)
 })
 
 function httpAuthedPlanArguments(scopePath) {

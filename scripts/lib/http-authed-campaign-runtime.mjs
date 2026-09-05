@@ -362,7 +362,6 @@ async function runHttpAuthedCampaignRuntime({
   ledgerDirectory,
   materialsDirectory,
   operatorId,
-  authorizationConfirmed,
   trustedLedgerHead,
   env = process.env,
   transientCredential,
@@ -430,12 +429,6 @@ async function runHttpAuthedCampaignRuntime({
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_GRANT_MISMATCH',
       'scope does not match the controller-held campaign grant',
-    )
-  }
-  if (authorizationConfirmed !== true) {
-    throw runtimeError(
-      'HTTP_AUTHED_CURRENT_AUTHORIZATION_REQUIRED',
-      `${commandName} requires explicit controller launch confirmation`,
     )
   }
   if (typeof operatorId !== 'string' || operatorId !== scope.authorization.operator_id) {
@@ -737,7 +730,6 @@ async function runHttpAuthedCampaignRuntime({
       scope,
       expectedCampaignGrantSha256,
       operatorId,
-      authorizationConfirmed,
       ledger,
       now: clock,
       reauthorize,

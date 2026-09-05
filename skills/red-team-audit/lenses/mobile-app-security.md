@@ -1325,7 +1325,7 @@ Candidates considered for the list above and deliberately excluded. Each would h
 
 Shared harness components are referenced by name and not restated here: the **canary fixture set** and the **socket-layer destination recorder**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes (`npm test`, `jest`, `detox test` only if the repo already runs it in that command). T2 requires the auditor to stand up infrastructure the repository does not already stand up — an Android emulator, an iOS simulator, mitmproxy — and the user is asked every time. **The iOS half of every T2 recipe below additionally requires macOS and Xcode and is simply unavailable on a Windows or Linux audit host.** Say that in the coverage block; do not imply parity between the platforms.
+**Tier rule.** T1 is a proof the repository's own test command executes (`npm test`, `jest`, `detox test` only if the repo already runs it in that command). T2 starts infrastructure the repository does not already start — an Android emulator, an iOS simulator, mitmproxy. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap. **The iOS half of every T2 recipe below additionally requires macOS and Xcode and is simply unavailable on a Windows or Linux audit host.** Say that in the coverage block; do not imply parity between the platforms.
 
 ### R1 — Deep-link resolution table (T1)
 

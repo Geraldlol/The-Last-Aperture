@@ -77,7 +77,7 @@ activates_on:
     - 'django'
     - 'rest_framework'
     - 'werkzeug'
-    - 'pyjwt / `import jwt`'
+    - any_of: ['pyjwt', 'import jwt']
     - 'requests'
     - 'httpx'
     - 'aiohttp'
@@ -92,7 +92,7 @@ activates_on:
     - '[ApiController]'
     - '[Authorize]'
     - 'ValidateAntiForgeryToken'
-    - 'rails / actionpack'
+    - any_of: ['rails', 'actionpack']
     - 'protect_from_forgery'
     - 'skip_before_action :verify_authenticity_token'
     - 'laravel/framework'
@@ -101,15 +101,15 @@ activates_on:
     - 'gorilla/mux'
     - 'go-chi/chi'
     - 'labstack/echo'
-    - 'net/http + http.HandleFunc'
+    - any_of: ['net/http', 'http.HandleFunc']
     - 'httputil.NewSingleHostReverseProxy'
-    - 'grpc / @grpc/grpc-js / grpcio'
-    - 'grpc reflection.Register'
+    - any_of: ['grpc', '@grpc/grpc-js', 'grpcio']
+    - any_of: ['grpc', 'reflection.Register']
     - 'ws'
     - 'socket.io'
     - 'websockets'
     - 'gorilla/websocket'
-    - 'EventSource / text/event-stream'
+    - any_of: ['EventSource', 'text/event-stream']
     - 'axios'
     - 'node-fetch'
     - 'undici'
@@ -121,10 +121,10 @@ activates_on:
     - 'Access-Control-Allow-Origin'
     - 'Content-Security-Policy'
     - 'Strict-Transport-Security'
-    - 'Set-Cookie / SameSite'
-    - 'res.redirect / HttpResponseRedirect'
+    - any_of: ['Set-Cookie', 'SameSite']
+    - any_of: ['res.redirect', 'HttpResponseRedirect']
     - 'dangerouslySetInnerHTML'
-    - '__schema / introspectionQuery'
+    - any_of: ['__schema', 'introspectionQuery']
     - 'postMessage('
     - 'MessageEvent'
     - 'Sec-Fetch-Site'
@@ -2757,9 +2757,9 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **registry-driven enumerator**, the **two-subject fixture**, the **canary fixture set**, the **socket-layer destination recorder** and the **counting fake client**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository already boots. T2 requires the auditor to stand up infrastructure the repository does not, and the user is asked every time. **This lens is unusually well served by T1** — almost every recipe below runs under `pytest` or `npm test` against the application's own test client, with no network. Say so in the coverage block, because the contrast with the platform lenses is the reason a web finding can carry a higher tier than a Salesforce one for the same class of defect.
+**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository already boots. T2 starts infrastructure the repository does not. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap. **This lens is unusually well served by T1** — almost every recipe below runs under `pytest` or `npm test` against the application's own test client, with no network. Say so in the coverage block, because the contrast with the platform lenses is the reason a web finding can carry a higher tier than a Salesforce one for the same class of defect.
 
-**One hard rail, not a tier:** no recipe here sends a request to a host the repository does not start. No probing of a deployed environment, no scanning, no "just curl the staging URL". Where live evidence is needed, keep it outside this lens and repository-proof workflow and use only the canonical skill's separately authorized external controller.
+**One hard rail, not a tier:** no repository-proof recipe here sends a request to a host the repository does not start. A deployed-environment probe or scan is separate external evidence. An accepted authenticated operator statement naming its exact destination, scope, effect, and any credential use authorizes that route without another prompt, but execute only through a matching credential-aware, destination-bound controller using explicitly supplied or controller-referenced material. If the route or material is absent, record `UNPROVEN` with the technical gap; authority does not conjure either. Never infer a destination from repository configuration, and never promote the external result into a repository proof tier.
 
 ### R1 — Two-subject authorization sweep (T1)
 

@@ -49,14 +49,41 @@ function sidecarFor(plan, jobId) {
 function completeJob(run, plan, jobId, examinedFiles = [], resultOverrides = {}) {
   const started = beginJob(run, jobId)
   const job = started.jobs.find((candidate) => candidate.job_id === jobId)
+  const sidecar = job.kind === 'LENS' ? sidecarFor(plan, jobId) : undefined
+  const findings = resultOverrides.findings ?? []
+  const topicAssessments = (
+    job.kind === 'LENS'
+    && !Object.hasOwn(resultOverrides, 'topic_assessments')
+  )
+    ? (sidecar.topic_obligations ?? []).map((topic) => {
+        const topicFindings = findings.filter((finding) => finding.topic === topic)
+        return topicFindings.length > 0
+          ? {
+              topic,
+              disposition: 'finding',
+              reason: 'The closure fixture reported a finding for this topic.',
+              finding_ids: topicFindings.map(({ candidate_id: candidateId }) => candidateId),
+            }
+          : {
+              topic,
+              disposition: 'examined-clean',
+              reason: 'The closure fixture assessed this topic in the bounded shard.',
+              evidence: ['The fixture provider completed its bounded topic check.'],
+              ...(examinedFiles.length > 0 ? { evidence_paths: examinedFiles } : {}),
+            }
+      })
+    : resultOverrides.topic_assessments
   return applyJobResult(started, providerResult(
     started,
     jobId,
     examinedFiles,
-    resultOverrides,
+    {
+      ...resultOverrides,
+      ...(topicAssessments === undefined ? {} : { topic_assessments: topicAssessments }),
+    },
   ), {
     expectedPacketSha256: INPUT_SHA256,
-    ...(job.kind === 'LENS' ? { sidecar: sidecarFor(plan, jobId) } : {}),
+    ...(sidecar ? { sidecar } : {}),
   })
 }
 
@@ -203,6 +230,66 @@ Measure coverage closure.
   ])
   return { repository, lenses }
 }
+
+async function writeTruncatedScopeFixture(root) {
+  const repository = join(root, 'repository')
+  const lenses = join(root, 'lenses')
+  await mkdir(join(repository, 'src'), { recursive: true })
+  await mkdir(lenses, { recursive: true })
+  const dependencyPaths = Array.from(
+    { length: 257 },
+    (_, index) => `dependency-${String(index + 1).padStart(3, '0')}.js`,
+  )
+  await Promise.all([
+    writeFile(
+      join(repository, 'src', 'entry.js'),
+      dependencyPaths.map((path) => `import './${path}'`).join('\n'),
+    ),
+    ...dependencyPaths.map((path) =>
+      writeFile(join(repository, 'src', path), 'export const dependency = true\n')),
+    writeFile(join(lenses, 'bounded-domain.md'), `---
+name: bounded-domain
+title: Bounded dependency domain
+runs_in: fanout
+activates_on:
+  paths: ["src/entry.js"]
+  signals: []
+owns: [bounded-dependency-scope]
+defers: {}
+---
+
+## Scope
+
+Exercise bounded dependency expansion.
+`),
+  ])
+  return { repository, lenses }
+}
+
+test('a truncated dependency expansion creates one explicit coverage gap per lens', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'red-team-truncated-scope-'))
+  try {
+    const { repository, lenses } = await writeTruncatedScopeFixture(fixtureRoot)
+    const plan = await createRunPlan({
+      targetRoot: repository,
+      lensDirectory: lenses,
+      createdAt: CREATED_AT,
+      maxClosureRounds: 0,
+    })
+    const lensJobs = plan.activation.jobs.filter(({ lens }) => lens === 'bounded-domain')
+    assert.ok(lensJobs.length > 1, 'fixture should produce multiple bounded shards')
+    assert.ok(lensJobs.every((job) => job.scope_expansion?.truncated === true))
+    assert.deepEqual(
+      plan.run.coverage.gaps.filter(({ area }) => area === 'lens:bounded-domain'),
+      [{
+        area: 'lens:bounded-domain',
+        reason: 'bounded dependency scope expansion truncated at depth 2 or 257 files',
+      }],
+    )
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true })
+  }
+})
 
 test('v3 preplanned closure retries one omitted obligation and converges strictly', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'red-team-coverage-closure-'))
@@ -712,6 +799,12 @@ test('closure LENS retry records an exact Stage-1 replay without rewriting accum
           started,
           providerResult(started, retryJob.job_id, replayFiles, {
             findings: [changedReplay],
+            topic_assessments: [{
+              topic: 'coverage-closure',
+              disposition: 'finding',
+              reason: 'The retry observed the existing closure finding.',
+              finding_ids: [changedReplay.candidate_id],
+            }],
           }),
           {
             expectedPacketSha256: INPUT_SHA256,
@@ -726,6 +819,12 @@ test('closure LENS retry records an exact Stage-1 replay without rewriting accum
       started,
       providerResult(started, retryJob.job_id, replayFiles, {
         findings: [closureFinding()],
+        topic_assessments: [{
+          topic: 'coverage-closure',
+          disposition: 'finding',
+          reason: 'The retry observed the existing closure finding.',
+          finding_ids: [closureFinding().candidate_id],
+        }],
       }),
       {
         expectedPacketSha256: INPUT_SHA256,
@@ -936,4 +1035,54 @@ test('terminal lens rows are reconciled from their own obligations, not the cove
   const rows = finalizedFanoutLensRows(run)
   assert.equal(rows[0].status, 'NOT_ASSESSED')
   assert.equal(rows[1].status, 'RAN')
+})
+
+test('finalizing one lens leaves other pending semantic obligations untouched', () => {
+  const run = {
+    coverage: {
+      lenses: [
+        {
+          lens: 'cloud-and-iac',
+          status: 'RAN',
+          applicable_paths: [],
+          examined_paths: [],
+        },
+        {
+          lens: 'cicd-and-supply-chain',
+          status: 'NOT_ASSESSED',
+          applicable_paths: [],
+          examined_paths: [],
+          reason: 'audit job has not run',
+        },
+      ],
+    },
+    jobs: [
+      {
+        job_id: 'lens:cloud-and-iac',
+        kind: 'LENS',
+        lens: 'cloud-and-iac',
+        state: 'SUCCEEDED',
+        topic_obligations: ['container-image-content'],
+        topic_assessments: [{
+          topic: 'container-image-content',
+          disposition: 'examined-clean',
+          reason: 'The acquired image was assessed.',
+          evidence: ['No unexpected content was present.'],
+        }],
+      },
+      {
+        job_id: 'lens:cicd-and-supply-chain',
+        kind: 'LENS',
+        lens: 'cicd-and-supply-chain',
+        state: 'PENDING',
+        topic_obligations: ['artifact-signing-and-provenance-emission'],
+        topic_assessments: [],
+      },
+    ],
+  }
+
+  const rows = finalizedFanoutLensRows(run)
+  assert.equal(rows[0].status, 'RAN')
+  assert.equal(rows[1].status, 'NOT_ASSESSED')
+  assert.equal(rows[1].reason, 'audit job has not run')
 })
