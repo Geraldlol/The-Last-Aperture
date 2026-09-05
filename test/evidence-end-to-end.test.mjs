@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
@@ -209,7 +210,12 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   assert.match(findingSection, /Evidence source: `peerstar-api-image` \/ `built-artifact`/)
   assert.match(findingSection, /Evidence adapter: `artifact`/)
   assert.match(findingSection, /Acquisition mode: `offline-export`/)
-  assert.match(findingSection, /Detection evidence: `vulnerable-image\.tar sha256:bcea0007`/)
+  const fixtureDigest = createHash('sha256')
+    .update(await readFile('test/fixtures/evidence/vulnerable-image.tar'))
+    .digest('hex')
+  assert.ok(findingSection.includes(
+    `Detection evidence: \`vulnerable-image.tar sha256:${fixtureDigest.slice(0, 8)}\``,
+  ))
 
   const sarifResult = renderSarif(reportRun).runs[0].results[0]
   assert.deepEqual(sarifResult.locations, [])

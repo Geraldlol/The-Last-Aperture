@@ -58,8 +58,11 @@ function ociLayout({ layerEntrySets, history, orphan }) {
     return digest
   }
   const layerDescriptors = layerEntrySets.map((entries) => {
-    // mtime 0 keeps the gzip member header constant across rebuilds.
+    // Fix both variable gzip header fields: mtime and the compressor's host OS.
+    // RFC 1952 reserves 255 for an unspecified OS; this metadata byte is outside
+    // the compressed data and its CRC, so payload and decompression are unchanged.
     const compressed = gzipSync(tar(entries), { level: 9, mtime: 0 })
+    compressed[9] = 255
     return {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
       digest: put(compressed),

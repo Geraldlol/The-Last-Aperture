@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import zlib from 'node:zlib'
 import { buildEvidenceFixtures } from '../scripts/gen-evidence-fixtures.mjs'
-import { DEFAULT_NORMALIZER_LIMITS, normalizeOciLayout } from '../scripts/lib/oci-normalizer.mjs'
+import { DEFAULT_NORMALIZER_LIMITS, normalizeOciLayout, readTarEntries, readTarEntryBytes } from '../scripts/lib/oci-normalizer.mjs'
 
 const FIXTURE_DIR = 'test/fixtures/evidence'
 
@@ -22,6 +24,39 @@ test('the committed fixtures are byte-identical to a fresh build', async () => {
     const fresh = await readFile(path)
     const committed = await readFile(join(FIXTURE_DIR, `${name}-image.tar`))
     assert.ok(fresh.equals(committed), `${name} fixture has drifted from its builder`)
+  }
+})
+
+test('fixture bytes do not depend on the gzip host operating system', async (t) => {
+  const out = await mkdtemp(join(tmpdir(), 'rta-fixture-platforms-'))
+  t.after(() => rm(out, { recursive: true, force: true }))
+  const hostGzipSync = zlib.gzipSync
+  let hostOs = 3 // RFC 1952: Unix; Windows uses 10 (NTFS).
+  const gzipMock = t.mock.method(zlib, 'gzipSync', (...args) => {
+    const bytes = hostGzipSync(...args)
+    bytes[9] = hostOs
+    return bytes
+  })
+  syncBuiltinESMExports()
+  const builds = []
+  try {
+    for (const os of [3, 10]) {
+      hostOs = os
+      builds.push(await buildEvidenceFixtures(join(out, String(os))))
+    }
+  } finally {
+    gzipMock.mock.restore()
+    syncBuiltinESMExports()
+  }
+  for (const name of ['vulnerable', 'clean']) {
+    const unix = await readFile(builds[0][name])
+    const windows = await readFile(builds[1][name])
+    assert.ok(unix.equals(windows), `${name} fixture depends on gzip host metadata`)
+    const layers = readTarEntries(unix)
+      .map((entry) => readTarEntryBytes(unix, entry))
+      .filter((bytes) => bytes[0] === 0x1f && bytes[1] === 0x8b)
+    assert.ok(layers.length > 0)
+    for (const layer of layers) assert.equal(layer[9], 255, 'gzip OS is unspecified')
   }
 })
 
