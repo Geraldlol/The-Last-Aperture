@@ -24,9 +24,11 @@ severity_floor: info
 
 This is the only lens whose subject is **the audit** rather than the code. It measures what the run did not examine and names it, so that the report's coverage claim is a measurement instead of an impression.
 
-Its input is the run itself: the recon map, the active lens set with the reason each lens did or did not activate, the assigned file lists, the merged candidate-finding set after triage, the drop list with reasons, the coverage block as drafted, and — from the second round onward — its own previous output.
+Its input is the run itself: the recon map, the active lens set with the reason each lens did or did not activate, the assigned file lists, the merged candidate-finding set after triage, the drop list with reasons, the coverage block as drafted, and — from the second round onward — its own previous output. Two additional denominators arrive only through the controller-owned `coverage.completeness_inputs` contract: `high_value_flows` and `selected_framework_requirements`. The observed completeness job deliberately reads zero repository source paths, so repository text can neither invent nor expand either denominator.
 
-Seven gap classes. Each is a **measurement over a stated denominator** — the file list, the entry-point list, the store list, the lens list, the drop list, the coverage block, the record set — and never an impression:
+For each additional denominator, `null` means **not supplied**: emit an explicit coverage gap and report that class `UNVERIFIED`; it is not a zero and cannot support a closure claim. `[]` means the trusted operator explicitly supplied an empty denominator: report the count as zero and its operator-supplied provenance, without claiming repository discovery. A non-empty array is the immutable planned denominator measured below. The controller schema rejects malformed entries and duplicate identities before dispatch; this lens must not repair or infer them.
+
+Nine gap classes. Each is a **measurement over a stated denominator** — the file list, the entry-point list, the store list, the lens list, the drop list, the coverage block, the record set, the high-value-flow list, or the selected-requirement list — and never an impression:
 
 1. **A lens that should have activated and did not.** Re-match every lens's `activates_on.paths` and `activates_on.signals` against the recon map's file list and dependency manifests, then difference against the set that actually ran.
 2. **An entry point with no findings and no explanation.** Every entry point in the recon map should appear either as some record's `reachable_from` or in the coverage block as examined-and-clean, naming the lens that examined it. Neither → a gap.
@@ -35,6 +37,8 @@ Seven gap classes. Each is a **measurement over a stated denominator** — the f
 5. **A drop whose reason is not a discriminator.** "Not a finding" and "false positive" are verdicts, not reasons. A drop reason that names no artifact is a gap, because a drop with no reason is indistinguishable from a loss.
 6. **A coverage claim the record set contradicts.** The one class this lens rates above Info — see `## Severity calibration`.
 7. **A record whose `topic` its `lens` does not own, with no `raised_by`.** Resolve every record's `topic` to its owner in `_topics.md`. Three outcomes: the filing lens owns it, which is normal; another lens owns it and `raised_by` names the pusher, which is the raise mechanism working; another lens owns it and `raised_by` is absent, which is a lens quietly reporting territory it neither owns nor defers. **Nothing else in the pipeline detects the third case** — the frontmatter rules read `owns` and `defers`, never findings, and a substantial share of the registry's slugs have no inbound `defers` reference at all, so no rule constrains them. The spec names this lens as the only thing that would notice, which is why it is a class here rather than an aspiration there.
+8. **A supplied high-value business flow with no invariant or abuse disposition.** Every flow in the trusted planned denominator must name its authoritative invariant and carry or resolve to a finding, an executed proof, an examined-and-clean note, or an explicit unresolved question. A route-by-route audit can otherwise cover every handler while missing the sequence between them. When the denominator is `null`, report the unavailable input instead of manufacturing this set from routes or keywords.
+9. **A supplied selected-framework requirement with no disposition.** Every requirement in the version-pinned, profile-scoped trusted ledger must be `mapped-and-tested`, `mapped-not-tested`, `not-applicable` with evidence, `not-repository-provable` with the required external evidence, or `not-assessed` with a reason. A lens citing representative requirement IDs is not whole-standard coverage, and absence from a *supplied* ledger can never mean pass. When the ledger is `null`, its coverage is `UNVERIFIED`, not vacuously complete.
 
 ### Does not own
 
@@ -48,7 +52,12 @@ Seven gap classes. Each is a **measurement over a stated denominator** — the f
 
 ### The record it writes
 
-Same mechanism as `business-logic`'s originated findings: `lens: completeness`, `topic: completeness`, `raised_by: completeness`. The lens's own name, exactly, with no invented sub-slug, and it must never appear in any lens's `owns` — the registry is the fan-out deduplication namespace and this label sits deliberately outside it. **It is the same stated exception to the schema's rule that `topic` is owned by `lens`**, reported to the contract's owner rather than resolved here, and one exception covers both lenses rather than two.
+Same mechanism as `business-logic`'s originated findings:
+`lens: completeness`, `topic: completeness`, `raised_by: completeness`. The
+lens's own name is used exactly, with no invented sub-slug, and it must never
+appear in any lens's `owns` — the registry is the fan-out deduplication namespace
+and this label sits deliberately outside it. `_schema.md` implements this exact
+zero-owner exemption for validators.
 
 The required fields have honest values for a record that claims no exploit:
 
@@ -61,6 +70,8 @@ The required fields have honest values for a record that claims no exploit:
 | Drop reason that is not a discriminator | the dropped record's own `location` | copied from the dropped record | Info |
 | Coverage claim the record set contradicts | the artifact the claim is about; the claim's own text quoted in `evidence` | `unknown` | Info, **and blocking** |
 | Record filed under a topic its lens does not own | the offending record's own `location`; its `lens`, `topic` and the registered owner quoted in `evidence` | copied from that record | Info |
+| High-value flow with no invariant or abuse disposition | the route, command, consumer, or workflow definition that begins the flow | the first externally reachable step, or `unknown` | Info |
+| Selected framework requirement with no disposition | the engagement's framework applicability ledger and the missing requirement identifier | `unknown` | Info |
 
 `reachable_from` is required and `unknown` is a legitimate value for it. **Do not manufacture an attack path to fill the field** — there is no attack, the record is Info, and the reachability cap it triggers is irrelevant to an Info record. `attack` states the measurement rather than a payload: `entry point POST /api/exports appears in no record's reachable_from and in no coverage note`.
 
@@ -101,7 +112,7 @@ would-be lens, never as silence.
 
 `severity_floor: info` is presentational everywhere in this registry, but here it also matches the content: **an unexamined area is an absence of evidence, not a defect.** Grading a process observation above a proven finding would put it ahead of real findings in the ranked list, which is the opposite of what this lens is for.
 
-- **Classes 1 through 5, and class 7, are Info.** No impact claim, no `cwe`, no severity negotiation. Their value is entirely in being specific: a named entry point with a named lens is a gap somebody can close in ten minutes, and "coverage may be incomplete" is not. Class 7's remedy is a `defers` entry or a corrected `topic`, reported to the registry owner; it never changes the finding's own severity, because a mis-filed finding is still a finding.
+- **Classes 1 through 5, and classes 7 through 9, are Info.** No impact claim, no `cwe`, no severity negotiation. Their value is entirely in being specific: a named entry point, business flow, or requirement with a named lens or disposition is a gap somebody can close, and "coverage may be incomplete" is not. Class 7's remedy is a `defers` entry or a corrected `topic`, reported to the registry owner; it never changes the finding's own severity, because a mis-filed finding is still a finding.
 - **A code finding produced by a scoped fan-out is graded by the lens that filed it**, on that lens's calibration. This lens never elevates a code finding and never adds an aggravator to one. Its contribution ends at "nobody looked here".
 - **A gap is not closed by an assertion.** "Reviewed and clean" from a fan-out that filed no record and left no negative-result note closes nothing — that is class 6 one round early. The note costs one line and is what separates examined-and-clean from unexamined.
 
@@ -151,7 +162,7 @@ Every entry is an area a naive coverage measurement flags and should not. None i
 
 ### Rejected candidates
 
-- **"Report a single coverage percentage."** Rejected as this lens's primary output. A percentage with no denominator stated is exactly the claim class 6 exists to catch, and a hidden denominator is worse than the five typed denominators and seven named gap classes.
+- **"Report a single coverage percentage."** Rejected as this lens's primary output. A percentage with no denominator stated is exactly the claim class 6 exists to catch, and a hidden denominator is worse than the typed denominators and nine named gap classes.
 - **"Silently stop after three rounds for cost."** Rejected. The controller may commit a finite retry budget at planning time, but reaching it with open obligations is `BUDGET_EXHAUSTED`, never convergence or clearance.
 - **"Treat every uncovered file as a finding."** Rejected: it produces a report where the real gaps are indistinguishable from `node_modules`, and the first reviewer to skim it stops reading this lens's output permanently.
 
@@ -175,12 +186,14 @@ Plant an area you know is unexamined — a fixture route registered in the test 
 
 This is the coverage analogue of the harness's planted canary and it exists for the identical reason: a sweep that found nothing and a sweep that ran against nothing look identical. **Build it first.** Without it, a measurement pointed at an empty record set reports perfect coverage, and that is the exact output this lens exists to prevent.
 
-### K3 — The four coverage differences (T1 where the denominators were enumerated, T0 where the map was read by hand — record which)
+### K3 — The six coverage differences (T1 where the denominators were enumerated, T0 where the map was read by hand — record which)
 
 - **Lens activation.** Re-match each lens's `activates_on` over the file list and dependency manifests; difference against the lenses that produced records or notes. The glob caution under `## Known false positives` applies to this re-match specifically, because it is the one place a broken pattern silently shrinks the denominator.
 - **Entry points.** Enumerated entry points, minus the union of every record's `reachable_from`, minus the coverage block's examined list.
 - **Stores.** Recon-map stores, minus stores named in any record's `location` or `evidence`, minus the coverage block's list.
 - **Files.** In-scope files, minus the union of the active lenses' assigned file lists.
+- **High-value flows.** When `coverage.completeness_inputs.high_value_flows` is an array, that immutable operator-supplied inventory, minus flows with both an `authoritative_invariant` and one of the four permitted dispositions: `finding`, `executed-proof`, `examined-and-clean`, or `unresolved-invariant`. `finding` and `executed-proof` resolve to a record in the run, which is their evidence; `examined-and-clean` and `unresolved-invariant` resolve to nothing else, so the input schema requires `evidence` on both and this measurement quotes it. A disposition is not a substitute for saying what was examined or what is still open. Keep sequence coverage separate from entry-point coverage: five individually reviewed routes do not prove the five-step workflow was reviewed. When it is `null`, emit `area: completeness-input:high-value-flows` with a reason that the trusted denominator was not supplied; do not run a guessed difference.
+- **Selected verification requirements.** When `coverage.completeness_inputs.selected_framework_requirements` is an array, the immutable version-pinned, profile-filtered ledger, minus requirements with one of the five permitted dispositions: `mapped-and-tested`, `mapped-not-tested`, `not-applicable`, `not-repository-provable`, or `not-assessed`. The input schema already requires applicability evidence for `not-applicable`, the named external artifact for `not-repository-provable`, and a reason for `not-assessed`; quote those fields in the measurement. When it is `null`, emit `area: completeness-input:selected-framework-requirements` with a reason that the trusted ledger was not supplied; do not interpret lens frontmatter or representative citations as the denominator.
 
 Report the count **and** the list, with the denominator beside it. A percentage alone is the thing this lens exists to prevent, whichever direction it errs in.
 

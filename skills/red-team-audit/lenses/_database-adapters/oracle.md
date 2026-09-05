@@ -335,10 +335,13 @@ scope, roles and direct grants. Static text never proves an enabled policy.
 
 ## Proof and conformance recipe
 
-Use a repository-started disposable Oracle fixture at T1 or a user-approved
-loopback database at T2. Do not connect to an Autonomous/managed database found
-in configuration. If the required edition/option is unavailable locally, keep
-that behavior `NOT_ASSESSED`.
+Use a repository-started disposable Oracle fixture at T1. An accepted
+authenticated operator statement naming the target, scope, and T2 loopback
+launch is authority without another prompt. Execute it only through a matching
+implemented controller; otherwise record `UNPROVEN` with the technical transport
+gap. Never infer an Autonomous/managed database destination from configuration.
+If the required edition/option is unavailable locally, keep that behavior
+`NOT_ASSESSED`.
 
 1. Record exact version/edition/options, CDB/PDB/service, users/roles/grants,
    administrative/bypass privileges, VPD/contexts, program units, constraints,

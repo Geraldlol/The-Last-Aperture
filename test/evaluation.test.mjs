@@ -8,6 +8,7 @@ import {
   jaccardSimilarity,
   scoreEvaluation,
   scoreFingerprintStability,
+  scoreRepeatedEvaluations,
 } from '../scripts/lib/evaluation.mjs'
 
 const EXPECTED = [
@@ -24,12 +25,14 @@ const EXPECTED = [
   {
     case_id: 'V-001',
     expectation: 'vulnerable',
+    lens: 'web-and-api',
     topic: 'authz-object-level',
     expected_severity: 'High',
   },
   {
     case_id: 'V-002',
     expectation: 'vulnerable',
+    lens: 'web-and-api',
     topic: 'injection-sql-nosql-orm',
     expected_severity: 'Critical',
     also_acceptable_topics: ['input-validation'],
@@ -134,7 +137,7 @@ test('unlisted and duplicate findings are precision debt even on a true-positive
   ])
 })
 
-test('Info, dropped, merged, disproved, and not-reproduced records do not become findings', () => {
+test('Info is non-reportable but unauthenticated removal claims remain findings', () => {
   const expected = [EXPECTED[0]]
   const variants = [
     finding('C-001', 'info', expected[0].topic, 'Info'),
@@ -144,8 +147,14 @@ test('Info, dropped, merged, disproved, and not-reproduced records do not become
     finding('C-001', 'absent', expected[0].topic, 'High', { verification_status: 'NOT_REPRODUCED' }),
   ]
   const score = scoreEvaluation({ expectedCases: expected, observedFindings: variants })
-  assert.equal(score.counts.tn, 1)
-  assert.equal(score.counts.reportable_findings, 0)
+  assert.equal(score.counts.fp, 1)
+  assert.equal(score.counts.reportable_findings, 4)
+  assert.deepEqual(score.cases[0].unexpected_candidate_ids, [
+    'absent',
+    'disproved',
+    'drop',
+    'merge',
+  ])
 })
 
 test('severity accuracy distinguishes exact, overclassified, and underclassified cases', () => {
@@ -188,6 +197,102 @@ test('per-topic output is sorted and carries its own confusion metrics', () => {
   const jwt = score.per_topic.find((entry) => entry.topic === 'jwt-jws-and-jwks-verification')
   assert.equal(jwt.counts.fp, 1)
   assert.equal(jwt.rates.fpr, 1)
+})
+
+test('per-lens output exposes the minimum recall and represented lens denominator', () => {
+  const score = scoreEvaluation({
+    expectedCases: [
+      {
+        case_id: 'V-WEB',
+        expectation: 'vulnerable',
+        lens: 'web-and-api',
+        topic: 'authz-object-level',
+        expected_severity: 'High',
+      },
+      {
+        case_id: 'V-NATIVE',
+        expectation: 'vulnerable',
+        lens: 'native-and-memory-safety',
+        topic: 'native-memory-bounds',
+        expected_severity: 'Critical',
+      },
+    ],
+    observedFindings: [
+      finding('V-WEB', 'authz:1', 'authz-object-level', 'High', {
+        lens: 'web-and-api',
+      }),
+    ],
+  })
+
+  assert.equal(score.counts.vulnerable_lenses, 2)
+  assert.equal(score.rates.minimum_vulnerable_lens_recall, 0)
+  assert.deepEqual(
+    score.per_lens.map(({ lens, counts, rates }) => ({
+      lens,
+      vulnerable_cases: counts.vulnerable_cases,
+      recall: rates.recall,
+    })),
+    [
+      { lens: 'native-and-memory-safety', vulnerable_cases: 1, recall: 0 },
+      { lens: 'web-and-api', vulnerable_cases: 1, recall: 1 },
+    ],
+  )
+})
+
+test('a cross-cutting detector cannot credit the expected domain authoring lens', () => {
+  const score = scoreEvaluation({
+    expectedCases: [{
+      case_id: 'V-WEB',
+      expectation: 'vulnerable',
+      lens: 'web-and-api',
+      topic: 'authz-object-level',
+      expected_severity: 'High',
+    }],
+    observedFindings: [finding(
+      'V-WEB',
+      'ai-review:authz',
+      'authz-object-level',
+      'High',
+      { lens: 'ai-generated-code', raised_by: 'ai-generated-code' },
+    )],
+  })
+
+  assert.equal(score.counts.tp, 1, 'system/topic recall still sees the defect')
+  assert.equal(score.per_lens[0].lens, 'web-and-api')
+  assert.equal(score.per_lens[0].counts.tp, 0)
+  assert.equal(score.per_lens[0].counts.fn, 1)
+  assert.equal(score.rates.minimum_vulnerable_lens_recall, 0)
+  assert.equal(score.cases[0].matched_lens_candidate_id, null)
+  assert.equal(score.per_lens[0].counts.severity_assessed, 0)
+})
+
+test('per-lens severity is graded from the expected lens finding, not a cross-lens match', () => {
+  const score = scoreEvaluation({
+    expectedCases: [{
+      case_id: 'V-WEB',
+      expectation: 'vulnerable',
+      lens: 'web-and-api',
+      topic: 'authz-object-level',
+      expected_severity: 'High',
+    }],
+    observedFindings: [
+      finding('V-WEB', 'ai-review:authz', 'authz-object-level', 'Critical', {
+        lens: 'ai-generated-code',
+        raised_by: 'ai-generated-code',
+      }),
+      finding('V-WEB', 'web-review:authz', 'authz-object-level', 'Low', {
+        lens: 'web-and-api',
+      }),
+    ],
+  })
+
+  assert.equal(score.cases[0].severity_result, 'over')
+  assert.equal(score.cases[0].matched_lens_candidate_id, 'web-review:authz')
+  assert.equal(score.cases[0].matched_lens_observed_severity, 'Low')
+  assert.equal(score.cases[0].matched_lens_severity_result, 'under')
+  assert.equal(score.per_lens[0].counts.severity_assessed, 1)
+  assert.equal(score.per_lens[0].counts.severity_over, 0)
+  assert.equal(score.per_lens[0].counts.severity_under, 1)
 })
 
 test('scoring is independent of expected-case and finding input order', () => {
@@ -451,6 +556,7 @@ test('the initial release threshold profile is valid and executable', () => {
     counts: {
       cases: 64,
       vulnerable_cases: 22,
+      vulnerable_lenses: 18,
       clean_cases: 42,
       false_clears: 0,
       schema_invalid: 0,
@@ -461,6 +567,7 @@ test('the initial release threshold profile is valid and executable', () => {
       precision: 1,
       recall: 0.9,
       minimum_vulnerable_topic_recall: 0.9,
+      minimum_vulnerable_lens_recall: 0.9,
       fpr: 0,
       finding_precision: 1,
       severity_accuracy: 0.9,
@@ -475,4 +582,124 @@ test('the initial release threshold profile is valid and executable', () => {
   const result = evaluateThresholds(metrics, thresholds)
   assert.equal(result.passed, true, result.errors.join('\n'))
   assert.ok(result.checks.length >= 10)
+})
+
+test('assessment states partition the corpus without changing the case confusion matrix', () => {
+  const score = scoreEvaluation({
+    expectedCases: EXPECTED,
+    observedFindings: [],
+    caseOutcomes: [
+      { case_id: 'C-001', verdict: 'clear' },
+      { case_id: 'C-002', verdict: 'incomplete' },
+      { case_id: 'V-001', verdict: 'not_assessed' },
+    ],
+  })
+  assert.equal(score.counts.tn, 2, 'the existing matrix is still a finding-presence metric')
+  assert.equal(score.counts.fn, 2)
+  assert.equal(score.counts.assessed_cases, 1)
+  assert.equal(score.counts.incomplete_cases, 1)
+  assert.equal(score.counts.not_assessed_cases, 1)
+  assert.equal(score.counts.unspecified_cases, 1)
+  assert.equal(score.counts.abstentions, 2)
+  assert.equal(score.rates.accuracy, 0.5)
+  assert.equal(score.rates.assessed_accuracy, 1)
+  assert.equal(score.rates.assessment_rate, 0.25)
+  assert.equal(score.rates.abstention_rate, 0.5)
+  assert.equal(score.rates.unspecified_rate, 0.25)
+  assert.deepEqual(score.cases.map(({ assessment_status: status }) => status), [
+    'assessed', 'incomplete', 'not_assessed', 'unspecified',
+  ])
+})
+
+test('missing final outcomes remain unspecified even when a finding was observed', () => {
+  const score = scoreEvaluation({
+    expectedCases: EXPECTED,
+    observedFindings: [finding('V-001', 'authz:1', 'authz-object-level', 'High')],
+  })
+  assert.equal(score.counts.tp, 1)
+  assert.equal(score.counts.unspecified_cases, EXPECTED.length)
+  assert.equal(score.counts.assessed_cases, 0)
+  assert.equal(score.rates.assessed_accuracy, null)
+  assert.equal(score.rates.abstention_rate, 0)
+  assert.equal(score.rates.unspecified_rate, 1)
+})
+
+test('repeated accuracy includes each run severity, false clears, and abstentions independently', () => {
+  const good = [
+    finding('V-001', 'authz:1', 'authz-object-level', 'High'),
+    finding('V-002', 'sql:1', 'injection-sql-nosql-orm', 'Critical'),
+  ]
+  const repeats = scoreRepeatedEvaluations([
+    { run_id: 'silent', findings: [] },
+    {
+      run_id: 'good', findings: good,
+      caseOutcomes: EXPECTED.map(({ case_id, expectation }) => ({
+        case_id, verdict: expectation === 'clean' ? 'clear' : 'finding',
+      })),
+    },
+    {
+      run_id: 'mixed',
+      findings: [finding('V-001', 'authz:2', 'authz-object-level', 'Low')],
+      caseOutcomes: [
+        { case_id: 'V-001', verdict: 'finding' },
+        { case_id: 'V-002', verdict: 'clear' },
+        { case_id: 'C-001', verdict: 'incomplete' },
+        { case_id: 'C-002', verdict: 'not_assessed' },
+      ],
+      schemaInvalidCount: 2,
+    },
+  ], EXPECTED)
+  assert.deepEqual(repeats.runs.map(({ run_id }) => run_id), ['good', 'mixed', 'silent'])
+  const mixed = repeats.runs[1]
+  assert.equal(mixed.counts.false_clears, 1)
+  assert.equal(mixed.counts.abstentions, 2)
+  assert.equal(mixed.counts.schema_invalid, 2)
+  assert.equal(mixed.rates.severity_accuracy, 0)
+  assert.equal(repeats.runs[2].counts.unspecified_cases, 4)
+  assert.deepEqual(repeats.aggregate.rates.accuracy, {
+    minimum: 0.5, maximum: 1, mean: 0.75, assessed_runs: 3, unassessed_runs: 0,
+  })
+  assert.deepEqual(repeats.aggregate.rates.severity_accuracy, {
+    minimum: 0, maximum: 1, mean: 0.5, assessed_runs: 2, unassessed_runs: 1,
+  })
+  assert.deepEqual(repeats.aggregate.rates.assessed_accuracy, {
+    minimum: 0.5, maximum: 1, mean: 0.75, assessed_runs: 2, unassessed_runs: 1,
+  })
+})
+
+test('unmeasured repeated accuracy never becomes an aggregate perfect score', () => {
+  const repeats = scoreRepeatedEvaluations([
+    { run_id: 'a', findings: [] },
+    { run_id: 'b', findings: [] },
+  ], EXPECTED)
+  assert.deepEqual(repeats.aggregate.rates.assessed_accuracy, {
+    minimum: null, maximum: null, mean: null, assessed_runs: 0, unassessed_runs: 2,
+  })
+  assert.equal(repeats.aggregate.counts.unspecified_cases.minimum, 4)
+})
+
+test('repeat scoring rejects contradictory outcomes, duplicate runs, and invalid-record counts', () => {
+  for (const runs of [
+    [],
+    [{ run_id: 'a', findings: [] }, { run_id: ' a ', findings: [] }],
+    [{ run_id: 'a', findings: [], caseOutcomes: [{ case_id: 'C-001', verdict: 'finding' }] }],
+    [{ run_id: 'a', findings: [], schemaInvalidCount: -1 }],
+    [{ run_id: 'a', findings: [finding('unknown', 'x', 'topic', 'High')] }],
+    Array.from({ length: 65 }, (_, index) => ({ run_id: `${index}`, findings: [] })),
+  ]) {
+    assert.throws(() => scoreRepeatedEvaluations(runs, EXPECTED), EvaluationInputError)
+  }
+})
+
+test('repeat aggregates are deterministic across run, case, and finding ordering', () => {
+  const observations = [
+    finding('V-001', 'authz:1', 'authz-object-level', 'High'),
+    finding('V-002', 'sql:1', 'injection-sql-nosql-orm', 'Critical'),
+  ]
+  const first = [{ run_id: 'b', findings: observations }, { run_id: 'a', findings: [] }]
+  const second = [...first].reverse().map((run) => ({ ...run, findings: [...run.findings].reverse() }))
+  assert.deepEqual(
+    scoreRepeatedEvaluations(first, EXPECTED),
+    scoreRepeatedEvaluations(second, [...EXPECTED].reverse()),
+  )
 })

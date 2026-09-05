@@ -1,5 +1,10 @@
 # `artifact` Adapter and OCI Normalizer Implementation Plan (Plan 3 of 5)
 
+> **Historical implementation plan.** Public artifact acquisition plan/run is
+> disabled before caller-path access. The retained kernel does not yet confine
+> sources to enrolled local roots or safely bound links, special files,
+> compressed expansion, and plan/run identity across a trusted controller.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn a supplied image tarball into a sealed, content-addressed evidence bundle a lens can actually read — layer index in manifest order, per-entry mode/size/mtime/link target, entry contents addressable by path — behind a new `audit:acquire` control plane, entirely offline and with no new authorization surface.

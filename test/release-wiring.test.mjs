@@ -1,13 +1,64 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 
 const WORKFLOW_PATH = '.github/workflows/lint-lenses.yml'
 const CHECKOUT_SHA = '08eba0b27e820071cde6df949e0beb9ba4906955'
 const SETUP_NODE_SHA = '49933ea5288caeca8642d1e84afbd3f7d6820020'
 const RELEASE_VERSION = '0.12.0'
+
+function workflowJobBlock(workflow, name) {
+  const marker = `  ${name}:\n`
+  const start = workflow.indexOf(marker)
+  assert.notEqual(start, -1, `workflow must contain job ${name}`)
+  const bodyStart = start + marker.length
+  const remainder = workflow.slice(bodyStart)
+  const next = remainder.search(/^  [a-z0-9-]+:\s*$/m)
+  return next === -1 ? remainder : remainder.slice(0, next)
+}
+
+test('shared proof recipes expose sealed public T1 and narrow loopback T2 controller routes', () => {
+  const harness = readFileSync('skills/red-team-audit/lenses/_harness.md', 'utf8')
+  const publicT1Decision = readFileSync(
+    'docs/adr/0022-public-sealed-t1-proof.md',
+    'utf8',
+  )
+  const publicT2Decision = readFileSync(
+    'docs/adr/0024-public-sealed-t2-loopback-service-proof.md',
+    'utf8',
+  )
+  const prose = harness.replace(/^>\s?/gm, '')
+  assert.match(harness, /CURRENT RELEASE EXECUTION ROUTES/)
+  assert.match(prose, /Public T1 uses `audit run-proof`; narrow\s+loopback T2 uses `audit run-service-proof`/)
+  assert.match(
+    prose,
+    /sealed source\s+snapshot and external digest-pinned, dependency-manifest-bound Docker worker/,
+  )
+  assert.match(
+    prose,
+    /operator statement is the sole authorization fact for every named\s+capability[\s\S]*ask once only when it is\s+missing, and never re-ask/i,
+  )
+  assert.match(
+    prose,
+    /Other T2 shapes, live credentials, and\s+external services need separate controllers; otherwise retain authority and\s+emit an authorized-but-unavailable gap/i,
+  )
+  assert.match(publicT1Decision, /Replaces as current capability statement:[\s\S]*disabled release status/i)
+  assert.match(publicT1Decision, /Public repository T1 proof is active under these rules/i)
+  assert.match(publicT2Decision, /Add public `audit run-service-proof` for one constrained local-service shape/i)
+  assert.match(publicT2Decision, /other supporting infrastructure[\s\S]*authorized-but-unavailable/i)
+})
+
+test('internal audit command exports are documented as privileged non-API kernels', () => {
+  const security = readFileSync('SECURITY.md', 'utf8')
+  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
+  const design = readFileSync('docs/design/2026-09-03-adversarial-validation-engine.md', 'utf8')
+  assert.match(security, /command\/package-interface boundary, not an in-process JavaScript[\s\S]*sandbox/i)
+  assert.match(security, /Directly importing those exports is privileged maintainer code/i)
+  assert.match(skill, /Never deep-import or call retained internal audit command exports/i)
+  assert.match(design, /same-process deep import is privileged[\s\S]*not a sandboxed or supported product API/i)
+})
 
 test('CI pins third-party actions and exercises the advertised Node floor', () => {
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
@@ -17,30 +68,38 @@ test('CI pins third-party actions and exercises the advertised Node floor', () =
   assert.doesNotMatch(workflow, /actions\/(?:checkout|setup-node)@v\d+/)
   assert.match(workflow, /node:\s*\['20', '24'\]/)
   assert.match(workflow, /node-version:\s*\$\{\{\s*matrix\.node\s*\}\}/)
+  assert.doesNotMatch(workflow, /^\s{2}pull_request:/m)
+  assert.match(workflow, /^\s{2}workflow_dispatch:/m)
+  assert.match(workflow, /^\s{4}if: github\.ref == 'refs\/heads\/main'$/m)
+  assert.match(workflow, /- run: npm ci --ignore-scripts/)
   assert.match(workflow, /- run: npm test/)
-  const ripgrepInstall = workflow.indexOf('sudo apt-get install --yes ripgrep')
-  const testRun = workflow.indexOf('- run: npm test')
-  assert.notEqual(ripgrepInstall, -1, 'CI must install ripgrep for executable shell fixtures')
-  assert.ok(ripgrepInstall < testRun, 'CI must install ripgrep before running the test suite')
-  assert.match(workflow, /^\s+rg --version$/m)
+  assert.doesNotMatch(workflow, /sudo apt-get install --yes ripgrep/)
+  assert.match(
+    readFileSync('package.json', 'utf8'),
+    /test:cloud-iac:conformance.*conformance\/cloud-iac-fixtures\.conformance\.mjs/,
+  )
 })
 
 test('CI runs the hostile real-Docker gate with immutable image input', () => {
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+  const providerJob = workflowJobBlock(workflow, 'provider-docker-conformance')
 
   assert.match(workflow, /^\s{2}provider-docker-conformance:$/m)
   assert.match(
-    workflow,
+    providerJob,
     /--file providers\/reference-byte-consumer\/Dockerfile\.conformance/,
   )
   assert.match(
-    workflow,
+    providerJob,
     /NODE_IMAGE=node:22-bookworm@sha256:[a-f0-9]{64}/,
   )
-  assert.match(workflow, /RTA_DOCKER_RUNTIME: \$\{\{ steps\.docker\.outputs\.runtime \}\}/)
-  assert.match(workflow, /RTA_PROVIDER_IMAGE: \$\{\{ steps\.docker\.outputs\.image \}\}/)
-  assert.match(workflow, /run: npm run test:provider:docker/)
-  assert.doesNotMatch(workflow, /continue-on-error:\s*true/)
+  assert.match(providerJob, /RTA_DOCKER_RUNTIME: \$\{\{ steps\.docker\.outputs\.runtime \}\}/)
+  assert.match(providerJob, /RTA_PROVIDER_IMAGE: \$\{\{ steps\.docker\.outputs\.image \}\}/)
+  assert.match(providerJob, /run: npm ci --ignore-scripts/)
+  assert.match(providerJob, /run: npm run test:provider:docker/)
+  assert.match(providerJob, /github\.event_name == 'workflow_dispatch'.*refs\/heads\/main/)
+  assert.match(providerJob, /environment: release-conformance/)
+  assert.doesNotMatch(providerJob, /continue-on-error:\s*true/)
 })
 
 test('the dedicated Docker gate refuses to skip when runtime inputs are absent', () => {
@@ -65,23 +124,84 @@ test('the dedicated Docker gate refuses to skip when runtime inputs are absent',
   )
 })
 
+test('CI runs the protected service-proof Docker gate with immutable image input', () => {
+  const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+  const serviceProofJob = workflowJobBlock(workflow, 'service-proof-docker-conformance')
+
+  assert.match(workflow, /^\s{2}service-proof-docker-conformance:$/m)
+  assert.match(serviceProofJob, /--file containers\/node-proof-worker\.Dockerfile/)
+  assert.match(
+    readFileSync('containers/node-proof-worker.Dockerfile', 'utf8'),
+    /^FROM node@sha256:[a-f0-9]{64}$/m,
+  )
+  assert.match(
+    serviceProofJob,
+    /RTA_DOCKER_RUNTIME: \$\{\{ steps\.service-proof-docker\.outputs\.runtime \}\}/,
+  )
+  assert.match(
+    serviceProofJob,
+    /RTA_PROOF_WORKER_IMAGE: \$\{\{ steps\.service-proof-docker\.outputs\.image \}\}/,
+  )
+  assert.match(serviceProofJob, /docker image inspect --format '\{\{\.Id\}\}'/)
+  assert.match(serviceProofJob, /run: npm ci --ignore-scripts/)
+  assert.match(serviceProofJob, /run: npm run test:service-proof:docker/)
+  assert.match(serviceProofJob, /github\.event_name == 'workflow_dispatch'.*refs\/heads\/main/)
+  assert.match(serviceProofJob, /environment: release-conformance/)
+  assert.doesNotMatch(serviceProofJob, /continue-on-error:\s*true/)
+})
+
+test('the service-proof Docker gate refuses to skip when runtime inputs are absent', () => {
+  const env = { ...process.env }
+  delete env.RTA_DOCKER_RUNTIME
+  delete env.RTA_PROOF_WORKER_IMAGE
+  const result = spawnSync(
+    process.execPath,
+    ['scripts/run-service-proof-docker-conformance.mjs'],
+    {
+      encoding: 'utf8',
+      env,
+      shell: false,
+      windowsHide: true,
+    },
+  )
+
+  assert.equal(result.status, 1)
+  assert.match(
+    result.stderr,
+    /real service-proof conformance requires RTA_DOCKER_RUNTIME and RTA_PROOF_WORKER_IMAGE/,
+  )
+})
+
 test('CI runs the digest-pinned multi-engine database conformance gate', () => {
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+  const databaseJob = workflowJobBlock(workflow, 'database-docker-conformance')
 
   assert.match(workflow, /^\s{2}database-docker-conformance:$/m)
   assert.match(
-    workflow,
+    databaseJob,
     /docker pull postgres@sha256:[a-f0-9]{64}/,
   )
   assert.match(
-    workflow,
+    databaseJob,
     /docker pull mysql@sha256:[a-f0-9]{64}/,
   )
   assert.match(
-    workflow,
+    databaseJob,
     /RTA_DOCKER_RUNTIME: \$\{\{ steps\.database-docker\.outputs\.runtime \}\}/,
   )
-  assert.match(workflow, /run: npm run test:database:docker/)
+  assert.match(databaseJob, /run: npm ci --ignore-scripts/)
+  assert.match(databaseJob, /run: npm run test:database:docker/)
+  assert.match(databaseJob, /github\.event_name == 'workflow_dispatch'.*refs\/heads\/main/)
+  assert.match(databaseJob, /environment: release-conformance/)
+  assert.doesNotMatch(databaseJob, /continue-on-error:\s*true/)
+})
+
+test('the disabled Chrome companion has an explicit revocation version and no host authority', () => {
+  const manifest = JSON.parse(readFileSync('browser/http-authed-chrome/manifest.json', 'utf8'))
+  assert.equal(manifest.version, '0.12.1')
+  assert.deepEqual(manifest.permissions, [])
+  assert.deepEqual(manifest.host_permissions, [])
+  assert.equal(Object.hasOwn(manifest, 'background'), false)
 })
 
 test('the database Docker gate refuses to skip without its trusted runtime', () => {
@@ -141,10 +261,107 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
     packageDocument.scripts['test:transparency:https'],
     'node scripts/run-transparency-log-conformance.mjs',
   )
+  assert.equal(
+    packageDocument.scripts['test:service-proof:docker'],
+    'node scripts/run-service-proof-docker-conformance.mjs',
+  )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
-    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>/,
+    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
   )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /REMOTE_GATEWAY_ENROLLMENT_REQUIRED/,
+  )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /PROVIDER_RUNTIME_ENROLLMENT_REQUIRED/,
+  )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /TRANSPARENCY_LOG_ENROLLMENT_REQUIRED/,
+  )
+  assert.match(
+    readFileSync('scripts/audit.mjs', 'utf8'),
+    /EVIDENCE_BUNDLE_TRUST_ENROLLMENT_REQUIRED/,
+  )
+  const auditSource = readFileSync('scripts/audit.mjs', 'utf8')
+  assert.doesNotMatch(auditSource, /SOURCE_SNAPSHOT_ENROLLMENT_REQUIRED/)
+  assert.doesNotMatch(auditSource, /RUN_PROOF_SANDBOX_REQUIRED/)
+  assert.match(auditSource, /run-proof[^\n]+--worker <proof-worker\.json>/)
+  assert.match(auditSource, /runDockerProofCommand/)
+  assert.equal(existsSync('schemas/proof-worker.schema.json'), true)
+  assert.equal(existsSync('scripts/lib/proof-docker-runner.mjs'), true)
+  const refusedEvidenceImport = spawnSync(
+    process.execPath,
+    [
+      'scripts/audit.mjs',
+      'plan',
+      'C:\\definitely-missing\\repository',
+      '--evidence-bundle',
+      'C:\\definitely-missing\\caller-bundle',
+    ],
+    { encoding: 'utf8', shell: false, windowsHide: true },
+  )
+  assert.equal(refusedEvidenceImport.status, 1)
+  assert.match(refusedEvidenceImport.stderr, /disabled before repository or bundle access/i)
+  assert.doesNotMatch(refusedEvidenceImport.stderr, /ENOENT|not found/i)
+  const refusedSourceSeal = spawnSync(
+    process.execPath,
+    [
+      'scripts/audit.mjs',
+      'plan',
+      'C:\\definitely-missing\\repository',
+      '--seal-source',
+      '--out',
+      'C:\\definitely-missing\\source-export',
+    ],
+    { encoding: 'utf8', shell: false, windowsHide: true },
+  )
+  assert.equal(refusedSourceSeal.status, 1)
+  assert.doesNotMatch(refusedSourceSeal.stderr, /disabled before repository or output access/i)
+  assert.match(refusedSourceSeal.stderr, /ENOENT|not found/i)
+  const databaseCli = readFileSync('scripts/database-conformance.mjs', 'utf8')
+  assert.match(databaseCli, /database-conformance run[^\r\n]*\[DISABLED\]/)
+  assert.match(databaseCli, /DATABASE_RUNTIME_ENROLLMENT_REQUIRED/)
+  const refusedDatabaseRun = spawnSync(
+    process.execPath,
+    ['scripts/database-conformance.mjs', 'run'],
+    { encoding: 'utf8', shell: false, windowsHide: true },
+  )
+  assert.equal(refusedDatabaseRun.status, 1)
+  assert.match(refusedDatabaseRun.stderr, /disabled before argument, bundle, or configuration access/i)
+  assert.doesNotMatch(refusedDatabaseRun.stderr, /expects 2 positional|ENOENT/i)
+})
+
+test('release wiring keeps the entire public acquisition CLI fail closed', () => {
+  const source = readFileSync('scripts/acquire.mjs', 'utf8')
+  const regression = readFileSync('test/evidence-live-acquisition.test.mjs', 'utf8')
+  const help = spawnSync(process.execPath, ['scripts/acquire.mjs', '--help'], {
+    encoding: 'utf8',
+    shell: false,
+    windowsHide: true,
+  })
+
+  assert.equal(help.status, 0)
+  assert.match(help.stdout, /<artifact\|registry\|deployed\|runtime> run[^\r\n]*\[DISABLED\]/i)
+  for (const command of ['plan', 'run', 'finalize', 'validate', 'stop']) {
+    assert.match(help.stdout, new RegExp(`${command}[^\\r\\n]*\\[DISABLED\\]`, 'i'), command)
+    assert.match(regression, new RegExp(`['"]${command}['"]`), command)
+  }
+  assert.match(help.stdout, /entire public acquisition CLI is disabled[\s\S]*signed plan/i)
+  assert.match(source, /ACQUIRE_LIVE_IO_DISABLED/)
+  const mainSource = source.slice(source.indexOf('export async function main'))
+  const mainGate = mainSource.indexOf('refuseDisabledPublicAcquisition(adapter, command)')
+  const firstControllerUse = mainSource.indexOf('await controllerFunction(')
+  assert.ok(mainGate >= 0 && firstControllerUse > mainGate)
+  for (const adapter of ['artifact', 'registry', 'deployed', 'runtime']) {
+    assert.match(regression, new RegExp(`['"]${adapter}['"]`), adapter)
+  }
+  assert.match(regression, /spoofed-live-adapter/)
+  assert.match(regression, /controllers are touched/i)
+  assert.match(regression, /forged/)
+  assert.match(regression, /confirm-authorization-current/)
 })
 
 test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
@@ -154,8 +371,6 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     'docs/adr/0015-url-first-pkix-http-recon.md',
     'docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md',
     'docs/http-recon-protocol.md',
-    'schemas/http-recon-roe.schema.json',
-    'schemas/http-recon-target-proof.schema.json',
     'schemas/http-recon-attested-scope.schema.json',
     'schemas/http-recon-run.schema.json',
     'schemas/http-recon-observation.schema.json',
@@ -174,6 +389,12 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
       `${path} must ship with the authorized HTTP-recon slice`,
     )
   }
+  for (const retiredPath of [
+    'schemas/http-recon-roe.schema.json',
+    'schemas/http-recon-target-proof.schema.json',
+  ]) {
+    assert.equal(existsSync(retiredPath), false, `${retiredPath} must remain retired`)
+  }
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(
     packageDocument.scripts['audit:http-recon'],
@@ -188,14 +409,35 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     assert.match(packageDocument.scripts['test:platform'], new RegExp(testPath.replace('.', '\\.')))
   }
   const cli = readFileSync('scripts/http-recon.mjs', 'utf8')
-  assert.match(cli, /Planning performs no network activity/)
+  const protocol = readFileSync('docs/http-recon-protocol.md', 'utf8')
+  for (const adrPath of [
+    'docs/adr/0013-authorized-external-http-recon.md',
+    'docs/adr/0014-operator-attested-http-recon.md',
+    'docs/adr/0015-url-first-pkix-http-recon.md',
+    'docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md',
+  ]) {
+    const adr = readFileSync(adrPath, 'utf8')
+    assert.match(adr, /Current 0\.12\.0 execution status: active/i, adrPath)
+    assert.doesNotMatch(adr, /HTTP_RECON_LIVE_IO_DISABLED/, adrPath)
+  }
+  assert.match(cli, /Planning by itself performs no network activity/i)
+  assert.match(cli, /http-recon go <exact-https-url>/)
   assert.match(cli, /http-recon plan --target-url/)
-  assert.match(cli, /http-recon plan-signed --roe/)
+  assert.doesNotMatch(
+    cli,
+    /plan-signed|--roe|--authorization-document|--owner-public-key/,
+  )
+  assert.doesNotMatch(cli, /HTTP_RECON_LIVE_IO_DISABLED/)
+  assert.match(protocol, /Current 0\.12\.0 execution status: active/i)
+  assert.doesNotMatch(protocol, /HTTP_RECON_LIVE_IO_DISABLED/)
+  assert.match(protocol, /go <exact-https-url>/i)
+  assert.match(protocol, /plans one exact action, executes it, finalizes the bundle/i)
+  assert.doesNotMatch(protocol, /Current platform release: 0\.12\.0/)
   assert.match(cli, /Operator-attested authorization is a/)
   assert.match(cli, /runtime-configured CA trust and hostname validation/)
   const attestedPlanShape = cli.slice(
     cli.indexOf('  plan: {'),
-    cli.indexOf("  'plan-signed': {"),
+    cli.indexOf('  next: {'),
   )
   assert.doesNotMatch(
     attestedPlanShape.match(/required:\s*\[[\s\S]*?\]/)?.[0] ?? '',
@@ -216,7 +458,6 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     'scripts/lib/http-authed-planner.mjs',
     'scripts/lib/http-authed-credential.mjs',
     'scripts/lib/http-authed-client.mjs',
-    'scripts/lib/http-authed-controller.mjs',
     'scripts/lib/http-authed-response-metadata.mjs',
     'scripts/lib/http-authed-campaign-ledger.mjs',
     'scripts/lib/http-authed-discovery.mjs',
@@ -264,11 +505,12 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const cli = readFileSync('scripts/http-authed.mjs', 'utf8')
   assert.match(cli, /plan-attested/)
   assert.match(cli, /campaign-attested/)
-  assert.match(cli, /plan-written/)
-  assert.match(cli, /campaign-written/)
+  assert.doesNotMatch(
+    cli,
+    /plan-written|validate-written|campaign-written|--authorization-document|--approver-public-key|countersignature/i,
+  )
   assert.match(cli, /authorization_binding_sha256/)
-  assert.match(cli, /immutable campaign ledger/)
-  assert.match(cli, /countersignature-N\.json/)
+  assert.match(cli, /locally append-only,[\s\S]*hash-chained campaign ledger/)
   const help = spawnSync(process.execPath, ['scripts/http-authed.mjs', '--help'], {
     encoding: 'utf8',
     shell: false,
@@ -276,18 +518,39 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   })
   assert.equal(help.status, 0)
   assert.match(help.stdout, /red-team-audit authenticated HTTP campaigns 0\.12\.0/)
+  assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
+  assert.doesNotMatch(
+    help.stdout,
+    /plan-written|validate-written|campaign-written|probe-written|authorization-document|approver-public-key|countersignature/i,
+  )
+  assert.match(help.stdout, /standalone probes are not public/i)
+  assert.match(help.stdout, /fixed sealed request list/i)
+  assert.match(help.stdout, /http-authed campaign-stop/i)
+  assert.match(
+    help.stdout,
+    /Across restarts,[\s\S]*requires the separately retained trusted record count and head digest/i,
+  )
+  assert.doesNotMatch(
+    readFileSync('scripts/http-authed.mjs', 'utf8'),
+    /HTTP_AUTHED_LIVE_IO_DISABLED/,
+  )
+  assert.ok(
+    readFileSync('test/http-authed-live-cli-disabled.test.mjs').length > 0,
+    'the live-I/O controller regression test must ship',
+  )
   assert.match(help.stdout, /plan-attested --scope <absolute-new-scope\.json>/)
   assert.match(help.stdout, /validate-attested --scope <scope\.json>/)
   assert.match(help.stdout, /campaign-attested --scope <scope\.json>/)
-  assert.match(help.stdout, /--attest-authorized/)
-  assert.match(help.stdout, /plan-written --scope <absolute-new-scope\.json>/)
   assert.match(help.stdout, /Both planners and validators perform no network activity/)
-  assert.match(help.stdout, /operator declaration only/i)
-  assert.match(help.stdout, /does not independently verify vendor\/program/i)
+  assert.match(help.stdout, /explicit operator statement/i)
+  assert.match(help.stdout, /accepts it as the authorization\s+fact/i)
+  assert.match(help.stdout, /does not independently prove.*legal authority/is)
   assert.match(help.stdout, /--credential-stdin/)
   assert.match(help.stdout, /--credential-browser/)
   assert.match(help.stdout, /--browser-extension-id/)
-  assert.match(help.stdout, /one explicit attach gesture per campaign/i)
+  assert.match(help.stdout, /packaged browser companion is release-disabled/i)
+  assert.match(help.stdout, /separately supplied.*protocol-compatible companion/is)
+  assert.match(help.stdout, /browser-managed DNS/i)
   assert.match(help.stdout, /--requests/)
   assert.match(help.stdout, /--cleanup-not-after defaults to --not-after/i)
   assert.match(help.stdout, /ledger-proven rollback\/verification, never new work/i)
@@ -298,7 +561,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     assert.notEqual(line, '', `${command} must have a usage line`)
     assert.doesNotMatch(line, /authorization-document|document-issuer|document-issued-at/)
   }
-  assert.match(
+  assert.doesNotMatch(
     helpLines.find((value) => value.includes('http-authed plan-attested')) ?? '',
     /--attest-authorized/,
   )
@@ -323,12 +586,13 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     'utf8',
   )
   assert.match(attestedAdr, /Status: Accepted - implemented in v0\.12\.0/)
-  assert.match(attestedAdr, /plan-attested --attest-authorized/)
+  assert.match(attestedAdr, /plan-attested/)
   assert.match(attestedAdr, /validate-attested/)
   assert.match(attestedAdr, /campaign-attested/)
   assert.match(attestedAdr, /authorization_binding_sha256/)
   assert.match(attestedAdr, /independently_verified: false/)
-  assert.match(attestedAdr, /does not prove that the declaration is true/i)
+  assert.match(attestedAdr, /accepts[\s\S]*authorization fact/i)
+  assert.match(attestedAdr, /not independent proof[\s\S]*legal authority/i)
   assert.match(attestedAdr, /does not\s+verify the approver's identity or independence/i)
   assert.match(attestedAdr, /--requests <absolute-requests\.json>/)
   assert.match(attestedAdr, /--cleanup-not-after/)
@@ -340,23 +604,25 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.doesNotMatch(schema.description, /draft/i)
 
   const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
-  assert.match(skill, /plan-written/)
-  assert.match(skill, /plan-attested --attest-authorized/)
-  assert.match(skill, /validate-attested/)
-  assert.match(skill, /campaign-attested/)
-  assert.match(skill, /validate-written/)
-  assert.match(skill, /campaign-written/)
-  assert.match(skill, /OPERATOR_ATTESTED_AUTHED/)
-  assert.match(skill, /WRITTEN_AUTHORIZATION_AUTHED/)
-  assert.match(skill, /http-authed-v1/)
-  assert.match(skill, /--credential-stdin/)
-  assert.match(skill, /--credential-browser/)
-  assert.match(skill, /CHROME_ACTIVE_TAB_SESSION/)
-  assert.match(skill, /one attach per campaign/i)
-  assert.match(skill, /--requests <absolute-json>/)
-  assert.match(skill, /cleanup_not_after/)
-  assert.match(skill, /Native refuses `CONNECT`\/upgrades; browser also refuses `TRACE`\/`TRACK`/)
-  assert.match(skill, /vendor\/program permission[\s\S]*not independently verified/i)
+  assert.match(skill, /Four target-I\/O paths are public/i)
+  assert.match(
+    skill,
+    /Fixed sealed authenticated HTTP work[\s\S]*campaign-attested[\s\S]*route executes its sealed requests without reconfirmation/i,
+  )
+  assert.match(
+    skill,
+    /standalone\s+probes(?:(?:\s+and\s+response-derived\s+discovery)|\/discovery)?\s+are\s+not\s+public/i,
+  )
+  assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
+  assert.match(skill, /Other T2\/service shapes[\s\S]*generic live\/L3[\s\S]*remain\s+technically unavailable/i)
+  assert.match(skill, /not an authorization denial[\s\S]*authorized-but-unavailable/i)
+  assert.match(skill, /Offline validation/)
+  assert.match(skill, /(?:authenticated )?operator statement is the sole\s+authorization fact for every named capability/i)
+  assert.match(
+    skill,
+    /sealed Docker implements T1 and narrow[\s\S]*loopback T2[\s\S]*Unsupported T2 stays `UNPROVEN`/i,
+  )
+  assert.match(skill, /Never improvise a network\/process path/)
   assert.doesNotMatch(skill, /Copy value/)
 
   const readme = readFileSync('README.md', 'utf8')
@@ -367,9 +633,10 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(readme, /authorization_binding_sha256/)
   assert.match(readme, /independently_verified: false/)
   assert.match(readme, /declared authorizer and reference are audit fields, not proof/i)
-  assert.match(readme, /--credential-browser/)
+  assert.match(readme, /manifest is a release-disabled placeholder/i)
+  assert.match(readme, /no host, tab, scripting,\s+or background authority/i)
   assert.match(readme, /--credential-stdin/)
-  assert.match(readme, /automatically prepares and executes/i)
+  assert.doesNotMatch(readme, /automatically prepares and executes/i)
   assert.match(readme, /--requests C:\\trusted\\requests\.json/)
   assert.match(readme, /validity\.cleanup_not_after/)
   assert.match(readme, /CLEANUP_SESSION_CONFIRMED/)
@@ -379,19 +646,29 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const security = readFileSync('SECURITY.md', 'utf8')
   assert.match(security, /--credential-stdin/)
   assert.match(security, /--credential-browser/)
-  assert.match(security, /activeTab/)
-  assert.match(security, /never (?:reads|receives).*cookie/i)
+  assert.match(security, /separately supplied protocol-compatible companion/i)
+  assert.match(security, /browser-managed DNS/i)
+  assert.doesNotMatch(security, /uses only `activeTab`/)
   assert.match(security, /OPERATOR_ATTESTED_AUTHED/)
   assert.match(security, /authorization_binding_sha256/)
-  assert.match(security, /CLI attestation records a\s+claim and does not create permission/i)
+  assert.match(
+    security,
+    /operator's target\/scope statement at agent\/controller ingress is its sole\s+authorization primitive/i,
+  )
+  assert.match(
+    security,
+    /controller does not fetch program terms or independently verify[\s\S]*legal authority/i,
+  )
   assert.match(security, /validity\.cleanup_not_after/)
   assert.match(security, /CLEANUP_SESSION_CONFIRMED/)
-  assert.match(security, /browser\s+transport also refuses `TRACE` and `TRACK`/i)
+  assert.match(security, /exact origin and rejects redirects/i)
   const rootSkill = readFileSync('SKILL.md', 'utf8')
-  assert.match(rootSkill, /audit:http-authed/)
-  assert.match(rootSkill, /OPERATOR_ATTESTED_AUTHED/)
-  assert.match(rootSkill, /WRITTEN_AUTHORIZATION_AUTHED/)
-  assert.match(rootSkill, /does not verify vendor or\s+program permission/i)
+  assert.match(rootSkill, /one exact, bounded live HTTP-recon action/i)
+  assert.match(rootSkill, /single action uses a campaign ledger/i)
+  assert.match(
+    rootSkill,
+    /Generic live\/L3, provider\/remote, bounty\/OOB, and acquisition transports remain\s+unavailable where not implemented/i,
+  )
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {
@@ -456,7 +733,9 @@ test('the v0.9 transparency publication protocol is release-wired', () => {
   assert.notEqual(jobEnd, -1)
   const transparencyJob = workflow.slice(jobStart, jobEnd)
   assert.doesNotMatch(transparencyJob, /continue-on-error:\s*true/)
-  assert.match(transparencyJob, /sudo apt-get install --yes ripgrep/)
+  assert.match(transparencyJob, /github\.event_name == 'workflow_dispatch'.*refs\/heads\/main/)
+  assert.match(transparencyJob, /environment: release-conformance/)
+  assert.doesNotMatch(transparencyJob, /sudo apt-get install --yes ripgrep/)
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.match(
     packageDocument.scripts['test:platform'],
@@ -542,7 +821,7 @@ test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship
     'scripts/lib/bounty-oob-controller.mjs',
     'scripts/lib/bounty-proxy-ingest.mjs',
     'proxy/bounty_scope_kernel.py',
-    'proxy/bounty_addon.py',
+    'proxy/bounty_helpers.py',
     'proxy/conformance.py',
     'test/fixtures/authz-testbed.mjs',
   ]
@@ -592,14 +871,14 @@ test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.scripts['audit:bounty'], 'node scripts/bounty.mjs')
-  assert.equal(packageDocument.scripts['conformance:bounty-kernel'], 'py proxy/conformance.py')
+  assert.equal(packageDocument.scripts['conformance:bounty-kernel'], 'py -I -B proxy/conformance.py')
   const platformTests = new Set(packageDocument.scripts['test:platform'].split(/\s+/))
   for (const path of bountyTests) {
     assert.ok(platformTests.has(path), `${path} must run in test:platform`)
   }
-  // bounty-v1 adds no dependency. If this ever fails, something was installed to
-  // make a phase work and the three-dependency discipline has been lost.
-  assert.deepEqual(Object.keys(packageDocument.dependencies).sort(), ['acorn', 'ajv', 'yaml'])
+  // Structured fuzzing deliberately adds one exact-pinned dependency.
+  assert.deepEqual(Object.keys(packageDocument.dependencies).sort(), ['acorn', 'ajv', 'fast-check', 'yaml'])
+  assert.equal(packageDocument.dependencies['fast-check'], '4.9.0')
 
   const help = spawnSync(process.execPath, ['scripts/bounty.mjs', '--help'], {
     encoding: 'utf8',
@@ -623,11 +902,14 @@ test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship
     /There is no COMPLETE/,
     /is inconclusive and is never proof that a target is sound/i,
     /nothing here asserts a vulnerability/i,
+    /live replay command is disabled/i,
+    /legacy sealed-scope permission is not action authorization/i,
     /enumerating undeclared ids means reading a stranger.s data/i,
     /Severity is a SUGGESTION/,
     /Nothing is submitted automatically/,
-    /installing a root CA is your decision/i,
-    /BLOCKED before forwarding, not observed after/,
+    /Live forwarding is disabled/i,
+    /no loadable mitmproxy addon ships/i,
+    /Every public OOB session command is disabled/i,
   ]) {
     assert.match(help.stdout, required, `--help must carry: ${required}`)
   }
@@ -642,12 +924,14 @@ test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship
     /bounty authz import <bundle>/,
     /bounty authz run <bundle>/,
     /bounty scan run <bundle>/,
+    /literal loopback URL is not proof/i,
     /bounty report draft <bundle>/,
     /bounty oob open <bundle>/,
     /bounty proxy ingest <bundle>/,
   ]) {
     assert.match(help.stdout, usage, `--help must document: ${usage}`)
   }
+  assert.match(readFileSync('scripts/bounty.mjs', 'utf8'), /BOUNTY_RECON_LIVE_IO_DISABLED/)
 
   // The perimeter is enforced by two implementations, so the fixture suite they
   // both answer to must ship, and the Python side must keep its explicit ranges.

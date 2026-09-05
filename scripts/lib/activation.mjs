@@ -4,6 +4,8 @@ import { join, relative, resolve, sep } from 'node:path'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { evidenceForLens } from './evidence-packet.mjs'
 import { parseLens } from './frontmatter.mjs'
+import { signalSelectorLiterals } from './activation-selectors.mjs'
+import { expandDependencyScope } from './scope-expansion.mjs'
 import {
   DEFAULT_WORK_SHARD_LIMITS,
   packWorkShards,
@@ -74,7 +76,7 @@ function hasBoundedNumericSuffix(needle, haystack, end) {
     !IDENTIFIER_CHARACTER.test(haystack[suffixEnd])
 }
 
-export function signalActivatorMatches(signal, content) {
+function signalLiteralMatches(signal, content) {
   const needle = String(signal)
   const haystack = String(content)
   if (!needle) return false
@@ -99,6 +101,11 @@ export function signalActivatorMatches(signal, content) {
   }
 
   return false
+}
+
+export function signalActivatorMatches(selector, content) {
+  return signalSelectorLiterals(selector)
+    .some((signal) => signalLiteralMatches(signal, content))
 }
 
 export async function loadLenses(lensDirectory) {
@@ -159,6 +166,17 @@ export async function digestLensPack(lensDirectory) {
       size,
     ]))),
   }
+}
+
+export function lensSharedContractDigest(lensPack) {
+  const sharedFiles = (lensPack?.files ?? [])
+    .filter(({ path }) => path.startsWith('_') && path !== '_topics.md')
+    .sort((left, right) => compareCanonicalStrings(left.path, right.path))
+  return sha256(JSON.stringify(sharedFiles.map(({ path, sha256: digest, size }) => [
+    path,
+    digest,
+    size,
+  ])))
 }
 
 function matchLens(lens, inventory) {
@@ -251,14 +269,22 @@ function boundedFanoutJobs(job, inventory, shardPolicy) {
     }),
     shardPolicy,
   )
-  return shards.map((packed) => {
+  return shards.map((packed, shardIndex) => {
     const scope = new Set(packed.scoped_files)
     const databaseDiscovery = job.lens === 'database-and-data-stores'
       ? databaseDiscoveryProjection(job.database_discovery, packed.scoped_files)
       : undefined
-    const { database_discovery: _fullDatabaseDiscovery, ...baseJob } = job
+    const {
+      database_discovery: _fullDatabaseDiscovery,
+      evidence,
+      ...baseJob
+    } = job
     return {
       ...baseJob,
+      // Evidence matches are bundle-global obligations. Deliver them once per
+      // lens, not once per source shard, or each shard would be required to
+      // duplicate the same finding.
+      ...(shardIndex === 0 && evidence ? { evidence } : {}),
       scoped_files: [...packed.scoped_files],
       matches: job.matches.filter(({ path }) => scope.has(path)),
       shard: packed.shard,
@@ -329,13 +355,25 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
     }
 
     const rawMatches = matchLens(lens, inventory)
-    const matches = lens.name === 'database-and-data-stores'
+    const directMatches = lens.name === 'database-and-data-stores'
       ? augmentDatabaseMatches(
           rawMatches,
           inventory,
           options.databaseDiscovery,
         )
       : rawMatches
+    const directTextMatches = directMatches.filter(({ kind }) => kind === 'text')
+    const scopeLimit = Math.min(100000, directTextMatches.length + 256)
+    const expandedScope = directTextMatches.length > 0
+      ? expandDependencyScope(directTextMatches, inventory, {
+          maxDepth: 2,
+          maxFiles: scopeLimit,
+        })
+      : { matches: [], truncated: false }
+    const matches = [
+      ...directMatches.filter(({ kind }) => kind !== 'text'),
+      ...expandedScope.matches,
+    ].sort((left, right) => compareCanonicalStrings(left.path, right.path))
     for (const match of matches) {
       if (!domainAssignments.has(match.path)) domainAssignments.set(match.path, [])
       domainAssignments.get(match.path).push(lens.name)
@@ -357,12 +395,43 @@ export function buildActivationPlan(lenses, inventory, options = {}) {
         .filter(({ kind }) => kind === 'text')
         .map(({ path }) => path),
       matches,
+      scope_expansion: {
+        max_depth: 2,
+        max_files: scopeLimit,
+        added_files: Math.max(0, expandedScope.matches.length - directTextMatches.length),
+        truncated: expandedScope.truncated,
+      },
       status: matches.length > 0 || lensEvidence.length > 0 ? 'pending' : 'not-activated',
       ...(lens.name === 'database-and-data-stores'
         ? { database_discovery: options.databaseDiscovery }
         : {}),
       ...topicAuthority,
     }, inventory, shardPolicy))
+  }
+
+  // Business-logic is the one triage pass that may originate code-backed
+  // findings. Give it a bounded union of active domain-lens source scope so it
+  // can inspect product invariants after seeing the merged candidate set.
+  // Cross-cutting lenses deliberately own no topics and can be always-active;
+  // including their repository-wide scope here would silently defeat provider
+  // packet bounds. Other triage passes remain finding-set-only unless their
+  // dispatch derives source directly from component locations.
+  const businessLogic = jobs.find((job) =>
+    job.phase === 'triage' && job.lens === 'business-logic')
+  if (businessLogic) {
+    const domainScope = [...new Set(jobs
+      .filter((job) =>
+        job.phase === 'fanout'
+        && job.activated
+        && (job.owned_topics?.length ?? 0) > 0)
+      .flatMap((job) => job.scoped_files))]
+      .sort(compareCanonicalStrings)
+    businessLogic.scoped_files = domainScope.slice(0, shardPolicy.maxFiles)
+    businessLogic.triage_source_scope = {
+      total_files: domainScope.length,
+      max_files: shardPolicy.maxFiles,
+      truncated: domainScope.length > shardPolicy.maxFiles,
+    }
   }
 
   jobs.sort((left, right) => {

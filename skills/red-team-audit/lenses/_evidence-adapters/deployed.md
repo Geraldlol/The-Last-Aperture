@@ -1,5 +1,9 @@
 # `deployed` acquisition adapter
 
+> **Release gate (2026-09-03):** Public deployed `plan` and `run` are disabled
+> before argument, process, credential, or target access. This document describes
+> the retained adapter kernel, not enabled authority.
+
 Adapter ID: `deployed`
 
 Evidence class: `deployed-state`
@@ -81,16 +85,17 @@ never needed this.
 
 ## Authorization
 
-Attestation, a declared target class, a named operator, impact counters and a
-kill switch are floors for this class. `PRODUCTION` requires an explicit
-acknowledgment. Until the higher-assurance signed-artifact controller is
-available, `THIRD_PARTY` also requires `--acknowledge-third-party`; this is an
-interim operator-attested route and remains limited to controller-built
-read-only operations.
+When this disabled adapter is re-enabled, the authenticated operator statement
+must name the deployed target and allowed read scope. It is the sole
+authorization primitive. Target class, impact counters, kill-switch state, and
+any risk acknowledgment are controller-bound execution parameters, not a
+second authority path. The controller must issue a short-lived permit for the
+exact plan and consume it in the ledger before dispatch.
 
-Attestation is a recorded operator declaration, not independently verified
-owner permission. The interim `THIRD_PARTY` acknowledgment does not change that
-assurance level and does not authorize mutation or exploitation.
+Expanding the target, operation set, or data scope requires a new operator
+statement. No signed-artifact route is required for `THIRD_PARTY` targets. The
+adapter remains limited to controller-built read-only operations and does not
+authorize mutation or exploitation.
 
 ## Impact counters and stop
 

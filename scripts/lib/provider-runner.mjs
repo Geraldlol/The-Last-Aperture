@@ -35,13 +35,20 @@ const COMMON_PACKET_FIELDS = new Set([
   'activation',
   'lens_digest',
   'scoped_files',
+  'shard',
   'matches',
   'owned_topics',
   'known_topics',
+  'topic_obligations',
   'store_profiles',
+  'evidence',
+  'database_discovery',
+  'database_store_ids',
+  'profile_authority_store_ids',
   'database_conformance',
   'findings',
   'coverage',
+  'completeness_inputs',
   'candidate_ids',
 ])
 // Docker's default mask lists grow between daemon versions, so these assert the
@@ -365,10 +372,56 @@ function dockerPrefix() {
   return ['--context', 'default']
 }
 
-export function buildDockerCreateArgs(config, containerName) {
+function normalizeDockerExecutionIdentity(value = {}) {
+  const identity = {
+    user: value.user ?? '65532:65532',
+    workdir: value.workdir ?? '/work',
+    workTmpfsMode: value.workTmpfsMode ?? '0700',
+  }
+  if (Object.keys(value).some((key) => !['user', 'workdir', 'workTmpfsMode'].includes(key))) {
+    throw runnerError(
+      'PROVIDER_CONTAINER_IDENTITY_INVALID',
+      'container execution identity contains an unknown field',
+    )
+  }
+  const userMatch = /^(\d+):(\d+)$/.exec(identity.user)
+  if (
+    !userMatch
+    || Number(userMatch[1]) === 0
+    || Number(userMatch[2]) === 0
+  ) {
+    throw runnerError(
+      'PROVIDER_CONTAINER_IDENTITY_INVALID',
+      'container execution identity must be an exact non-root numeric UID and GID',
+    )
+  }
+  if (!['/', '/work'].includes(identity.workdir)) {
+    throw runnerError(
+      'PROVIDER_CONTAINER_IDENTITY_INVALID',
+      'container execution workdir must be controller-owned',
+    )
+  }
+  if (!/^0[0-7]{3}$/.test(identity.workTmpfsMode)) {
+    throw runnerError(
+      'PROVIDER_CONTAINER_IDENTITY_INVALID',
+      'container tmpfs mode must be an exact octal mode',
+    )
+  }
+  const mode = Number.parseInt(identity.workTmpfsMode, 8)
+  if ((mode & 0o066) !== 0) {
+    throw runnerError(
+      'PROVIDER_CONTAINER_IDENTITY_INVALID',
+      'container tmpfs may not grant group or other read/write access',
+    )
+  }
+  return identity
+}
+
+export function buildDockerCreateArgs(config, containerName, executionIdentity = {}) {
   assertValidProviderConfig(config)
   assertContainerName(containerName)
   const limits = config.limits
+  const identity = normalizeDockerExecutionIdentity(executionIdentity)
   return [
     ...dockerPrefix(),
     'create',
@@ -379,14 +432,14 @@ export function buildDockerCreateArgs(config, containerName) {
     '--cap-drop=ALL',
     '--security-opt=no-new-privileges=true',
     '--security-opt=seccomp=builtin',
-    '--user=65532:65532',
+    `--user=${identity.user}`,
     `--pids-limit=${limits.pids}`,
     `--memory=${limits.memory_bytes}`,
     `--memory-swap=${limits.memory_bytes}`,
     `--cpus=${String(limits.cpus)}`,
     `--ulimit=nofile=${limits.nofile}:${limits.nofile}`,
-    `--tmpfs=/work:rw,noexec,nosuid,nodev,size=${limits.tmpfs_bytes},mode=0700,uid=65532,gid=65532`,
-    '--workdir=/work',
+    `--tmpfs=/work:rw,noexec,nosuid,nodev,size=${limits.tmpfs_bytes},mode=${identity.workTmpfsMode},uid=65532,gid=65532`,
+    `--workdir=${identity.workdir}`,
     '--ipc=none',
     '--log-driver=none',
     '--no-healthcheck',
@@ -481,9 +534,15 @@ function tmpfsOptions(value) {
   return new Set(String(value ?? '').split(',').filter(Boolean))
 }
 
-export function assertHardenedDockerInspection(inspection, config, containerName) {
+export function assertHardenedDockerInspection(
+  inspection,
+  config,
+  containerName,
+  executionIdentity = {},
+) {
   assertValidProviderConfig(config)
   assertContainerName(containerName)
+  const identity = normalizeDockerExecutionIdentity(executionIdentity)
   inspectAssertion(
     inspection !== null && typeof inspection === 'object' && !Array.isArray(inspection),
     'Docker container inspection must be an object',
@@ -616,7 +675,7 @@ export function assertHardenedDockerInspection(inspection, config, containerName
     'nosuid',
     'nodev',
     `size=${config.limits.tmpfs_bytes}`,
-    'mode=0700',
+    `mode=${identity.workTmpfsMode}`,
     'uid=65532',
     'gid=65532',
   ])
@@ -625,9 +684,20 @@ export function assertHardenedDockerInspection(inspection, config, containerName
     [...requiredTmpfs].every((option) => actualTmpfs.has(option)),
     'container /work tmpfs does not match the hardened profile',
   )
+  for (const [prefix, expected] of [
+    ['mode=', `mode=${identity.workTmpfsMode}`],
+    ['uid=', 'uid=65532'],
+    ['gid=', 'gid=65532'],
+  ]) {
+    const values = [...actualTmpfs].filter((option) => option.startsWith(prefix))
+    inspectAssertion(
+      values.length === 1 && values[0] === expected,
+      `container /work tmpfs has an ambiguous ${prefix.slice(0, -1)} setting`,
+    )
+  }
 
-  inspectAssertion(container.User === '65532:65532', 'container user is not non-root')
-  inspectAssertion(container.WorkingDir === '/work', 'container workdir is not /work')
+  inspectAssertion(container.User === identity.user, 'container user is not the fixed non-root identity')
+  inspectAssertion(container.WorkingDir === identity.workdir, 'container workdir drifted')
   inspectAssertion(container.OpenStdin === true, 'container stdin is not attached')
   inspectAssertion(container.Tty === false, 'container unexpectedly allocates a TTY')
   inspectAssertion(container.AttachStdout === true, 'container stdout is not attached')

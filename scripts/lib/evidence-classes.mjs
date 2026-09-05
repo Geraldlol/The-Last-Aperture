@@ -26,10 +26,18 @@ export const EVIDENCE_CLASS_ORDER = Object.freeze([
 
 export const EVIDENCE_ARTIFACT_KINDS = Object.freeze([
   'apk',
+  'desktop-package',
   'dist-bundle',
+  'firmware-image',
   'ipa',
   'jar',
+  'model-bundle',
+  'native-executable',
   'oci-image',
+  'sbom',
+  'shared-library',
+  'smart-contract-build',
+  'vex',
 ])
 
 // The database contract's coverage vocabulary, verbatim. A parallel state set
@@ -50,10 +58,17 @@ const NON_CLEARING_COVERAGE_STATES = new Set(['INVENTORY_ONLY', 'NOT_ASSESSED'])
 // lens bounds itself to a subset of these in activates_on.evidence_classes;
 // an unbounded vocabulary would let every lens claim every class.
 export const EVIDENCE_CLAIM_KINDS = Object.freeze([
+  'artifact-signature-invalid',
+  'binary-hardening-missing',
   'drift-from-source',
+  'firmware-trust-gap',
+  'model-integrity-or-robustness-gap',
+  'resilience-policy-misconfiguration',
   'runtime-misconfiguration',
   'secret-present-in-artifact',
   'sensitive-data-at-rest',
+  'smart-contract-deployment-drift',
+  'telemetry-delivery-failure',
   'unexpected-artifact-content',
   'vulnerable-component-present',
 ])

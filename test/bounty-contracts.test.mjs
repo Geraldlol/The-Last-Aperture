@@ -18,6 +18,7 @@ function validScope() {
       program_handle: 'acme-public',
       policy_url: 'https://yeswehack.com/programs/acme-public',
       policy_snapshot_sha256: 'a'.repeat(64),
+      required_user_agent: 'BugBounty-acme',
     },
     authorization: {
       mode: 'PROGRAM_POLICY_SEALED',

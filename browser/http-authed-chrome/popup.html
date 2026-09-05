@@ -3,69 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Red Team Audit browser bridge</title>
+    <title>Red Team Audit browser bridge disabled</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main>
-      <h1>Browser bridge</h1>
-      <p class="lede">Attach only the currently selected, authorized HTTPS origin.</p>
-
-      <section id="attach-panel" aria-labelledby="attach-heading">
-        <h2 id="attach-heading">Review and start</h2>
-        <form id="attach-form" autocomplete="off">
-          <label for="port">Controller port</label>
-          <input id="port" name="port" type="number" min="1024" max="65535" required inputmode="numeric">
-
-          <label for="capability">One-time pairing capability</label>
-          <input id="capability" name="capability" type="password" minlength="43" maxlength="43" required spellcheck="false" autocomplete="off">
-
-          <button id="review" class="secondary" type="button">Load controller binding</button>
-
-          <label for="preview-origin">Selected origin</label>
-          <output id="preview-origin" class="binding-value">Load the controller binding.</output>
-
-          <label for="preview-grant">Campaign grant SHA-256</label>
-          <output id="preview-grant" class="binding-value">Load the controller binding.</output>
-
-          <button id="attach" type="submit" disabled>Attach and start campaign</button>
-        </form>
-        <p class="hint">This single click consents to the controller-bound campaign. The capability stays only in the background worker's memory.</p>
-      </section>
-
-      <section id="control-panel" class="hidden" aria-labelledby="control-heading">
-        <h2 id="control-heading">Campaign control</h2>
-        <dl>
-          <dt>Origin</dt>
-          <dd id="origin">—</dd>
-          <dt>Campaign grant</dt>
-          <dd id="campaign-grant-display" class="binding-value">—</dd>
-          <dt>Phase</dt>
-          <dd id="phase">—</dd>
-          <dt>Completed</dt>
-          <dd id="completed">0</dd>
-        </dl>
-
-        <div id="prepared-panel" class="prepared hidden" aria-live="polite">
-          <p><strong>Prepared request</strong></p>
-          <dl>
-            <dt>Method</dt>
-            <dd id="prepared-method">—</dd>
-            <dt>Relative URL</dt>
-            <dd id="prepared-url">—</dd>
-            <dt>Action binding</dt>
-            <dd id="prepared-binding">—</dd>
-          </dl>
-          <p class="warning">Each controller COMMIT performs exactly one request. Failed or uncertain dispatches are never repeated.</p>
-        </div>
-
-        <div class="actions">
-          <button id="detach" class="danger" type="button">Emergency stop and detach</button>
-        </div>
-      </section>
-
-      <p id="notice" role="status" aria-live="polite"></p>
+      <h1>Browser bridge disabled</h1>
+      <p class="lede">This release cannot attach to a tab or execute target requests.</p>
+      <p id="notice" role="status">
+        HTTP_AUTHED_BROWSER_BRIDGE_DISABLED: controller enrollment, detached
+        signed plans, freshness enforcement, and campaign-wide caps are required
+        before this transport can be enabled.
+      </p>
     </main>
-    <script type="module" src="popup.js"></script>
   </body>
 </html>

@@ -1,5 +1,10 @@
 # bounty-v1 P1 — Recon Pipeline Implementation Plan
 
+> **Historical implementation plan.** Public `bounty recon run` now fails
+> closed before bundle or target access pending trusted current-scope binding,
+> DNS pinning, and uniform transport limits. This document is not an operator
+> runbook for the current release.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Discover the attack surface inside a sealed program perimeter and persist it as an inventory, so later phases have parameters and endpoints to work with — without any candidate ever reaching the network before the Scope Kernel approves it.

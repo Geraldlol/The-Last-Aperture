@@ -1,40 +1,37 @@
 #!/usr/bin/env node
 
-import {
-  finalizeAcquisition,
-  planAcquisition,
-  requestAcquisitionStop,
-  runAcquisition,
-  validateAcquisition,
-} from './lib/evidence-acquire-controller.mjs'
-import { isMainModule } from './lib/main-module.mjs'
-import { PLATFORM_VERSION, stableJson } from './lib/run-engine.mjs'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { compareCanonicalStrings } from './lib/canonical-order.mjs'
+import { terminalSafeJson, terminalSafeText } from './lib/terminal-text.mjs'
+import { PLATFORM_VERSION } from './lib/version.mjs'
 
 const HELP = `red-team-audit evidence acquisition ${PLATFORM_VERSION}
 
 Usage:
-  audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
-  audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json]
-  audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--acknowledge-third-party] [--capture-contents --acknowledge-phi] [--json]
-  audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --attest-authorized --out <bundle> [--acknowledge-production] [--acknowledge-third-party] [--capture-contents --acknowledge-phi] [--json]
-  audit:acquire <adapter> run <bundle> --operator-id <id> [--confirm-authorization-current] [--json]
-  audit:acquire <adapter> finalize <bundle> [--json]
-  audit:acquire <adapter> validate <bundle> [--json]
-  audit:acquire <adapter> stop <bundle> --operator-id <id> --reason <text> [--json]
+  audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json] [DISABLED]
+  audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json] [DISABLED]
+  audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --out <bundle> [--capture-contents --acknowledge-phi] [--json] [DISABLED]
+  audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --out <bundle> [--capture-contents --acknowledge-phi] [--json] [DISABLED]
+  audit:acquire <artifact|registry|deployed|runtime> run <bundle> --operator-id <id> [--json] [DISABLED]
+  audit:acquire <adapter> finalize <bundle> [--json] [DISABLED]
+  audit:acquire <adapter> validate <bundle> [--json] [DISABLED]
+  audit:acquire <adapter> stop <bundle> --operator-id <id> --reason <text> [--json] [DISABLED]
 
 Boundary:
-  Planning performs no acquisition. The artifact adapter reads only a file it
-  was handed and makes no network request; the registry adapter pulls one
-  digest-pinned image and nothing else. Every deployed and runtime command is
-  built from a controller-side read-only allowlist, so a mutating command is
-  unconstructible. Impact counters halt acquisition at their caps and stop is
-  idempotent. A bundle carries a credential reference,
-  never a credential value. Bundles are written outside their target and are
-  refused by \`audit -- plan\` if a single byte does not verify. This control
-  plane mutates nothing. Active authenticated HTTP testing is handled by the
-  separate audit:http-authed tier and never bypasses this collector's read-only
-  boundary. THIRD_PARTY deployed/runtime access is temporarily operator-
-  attested with --acknowledge-third-party; it is not independently verified.
+  The entire public acquisition CLI is disabled before argument parsing or
+  acquisition-controller loading. This prevents caller-selected adapter names,
+  bundle and source paths (including UNC, device, pipe, and linked paths),
+  credentials, ambient CLI contexts, crafted acquisition plans, or legacy
+  verification reads from causing filesystem, process, or network I/O.
+  Re-enabling a command requires bounded no-follow I/O and an exact detached
+  signed plan enforced by the trusted adversarial controller. That signature
+  protects technical plan integrity; it does not establish engagement authority.
+  Re-enabled ingress must accept the authenticated operator target/scope statement
+  as its sole authorization primitive. Caller-supplied authorization documents,
+  owner keys, approver signatures, countersignatures, and legacy repeat-attestation
+  flags cannot unlock acquisition. Retained internal acquisition kernels are
+  test-only and are not public execution authority.
 
 Exit codes:
   0  command succeeded
@@ -135,6 +132,14 @@ const COMMANDS = {
   stop: { positionals: 1, required: ['operator-id', 'reason'], optional: ['json'] },
 }
 
+function refuseDisabledPublicAcquisition(adapter, command) {
+  const error = new Error(
+    `${adapter} ${command ?? '(missing command)'} is disabled before argument parsing, controller loading, acquisition-plan, filesystem, credential, stop-state, target, process, or network I/O pending exact detached signed-plan migration through the trusted adversarial controller`,
+  )
+  error.code = 'ACQUIRE_LIVE_IO_DISABLED'
+  throw error
+}
+
 function assertShape(adapter, command, positionals, options) {
   const base = COMMANDS[command]
   if (!base) throw new Error(`unknown command ${JSON.stringify(command)}\n\n${HELP}`)
@@ -192,21 +197,51 @@ function parseOperations(value) {
 }
 
 function printJson(value) {
-  process.stdout.write(stableJson(value))
+  process.stdout.write(`${terminalSafeJson(stableValue(value))}\n`)
 }
 
-export async function main(argv = process.argv.slice(2)) {
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue)
+  if (value === null || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort(compareCanonicalStrings)
+      .map((key) => [key, stableValue(value[key])]),
+  )
+}
+
+async function controllerFunction(overrides, overrideName, exportName) {
+  if (typeof overrides[overrideName] === 'function') return overrides[overrideName]
+  const controller = await import('./lib/evidence-acquire-controller.mjs')
+  return controller[exportName]
+}
+
+function isDirectInvocation(moduleUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false
+  return pathToFileURL(resolve(argvPath)).href === moduleUrl
+}
+
+export async function main(
+  argv = process.argv.slice(2),
+  dependencies = {},
+) {
   const adapter = argv[0]
   if (!adapter || ['help', '--help', '-h'].includes(adapter)) {
     process.stdout.write(HELP)
     return
   }
   const command = argv[1]
+  refuseDisabledPublicAcquisition(adapter, command)
   const { positionals, options } = parseArguments(argv.slice(2))
   assertShape(adapter, command, positionals, options)
 
   if (command === 'plan') {
-    const planned = await planAcquisition({
+    const planAcquisitionImpl = await controllerFunction(
+      dependencies,
+      'planAcquisitionImpl',
+      'planAcquisition',
+    )
+    const planned = await planAcquisitionImpl({
       adapterId: adapter,
       out: options.out,
       request: {
@@ -241,18 +276,24 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (options.json) printJson(summary)
     else {
-      console.log(`Planned ${adapter} acquisition ${summary.evidence_id}`)
-      console.log(`Bundle: ${summary.bundle}`)
-      console.log(`Sealed target: ${summary.target_identity}`)
-      console.log(`Target class: ${summary.target_class}   PHI scope: ${summary.phi_scope}`)
+      console.log(terminalSafeText(`Planned ${adapter} acquisition ${summary.evidence_id}`))
+      console.log(terminalSafeText(`Bundle: ${summary.bundle}`))
+      console.log(terminalSafeText(`Sealed target: ${summary.target_identity}`))
+      console.log(terminalSafeText(`Target class: ${summary.target_class}   PHI scope: ${summary.phi_scope}`))
       console.log('No acquisition was performed during planning.')
     }
     return
   }
 
   if (command === 'run') {
-    const written = await runAcquisition({
+    const runAcquisitionImpl = await controllerFunction(
+      dependencies,
+      'runAcquisitionImpl',
+      'runAcquisition',
+    )
+    const written = await runAcquisitionImpl({
       bundle: positionals[0],
+      expectedAdapterId: adapter,
       operatorId: options['operator-id'],
       authorizationConfirmed: options['confirm-authorization-current'] === true,
     })
@@ -264,13 +305,13 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (options.json) printJson(summary)
     else {
-      console.log(`Acquired: ${summary.coverage_state}`)
-      console.log(`Bundle: ${summary.bundle}`)
-      console.log(`Root: ${summary.root_sha256}`)
+      console.log(terminalSafeText(`Acquired: ${summary.coverage_state}`))
+      console.log(terminalSafeText(`Bundle: ${summary.bundle}`))
+      console.log(terminalSafeText(`Root: ${summary.root_sha256}`))
       if (summary.coverage_gaps > 0) {
-        console.log(`Coverage gaps: ${summary.coverage_gaps}`)
+        console.log(terminalSafeText(`Coverage gaps: ${summary.coverage_gaps}`))
         for (const gap of written.profile.coverage_gaps) {
-          console.log(`  - ${gap.area}: ${gap.reason}`)
+          console.log(terminalSafeText(`  - ${gap.area}: ${gap.reason}`))
         }
       }
     }
@@ -279,49 +320,66 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (command === 'finalize') {
-    const finalized = await finalizeAcquisition(positionals[0])
+    const finalizeAcquisitionImpl = await controllerFunction(
+      dependencies,
+      'finalizeAcquisitionImpl',
+      'finalizeAcquisition',
+    )
+    const finalized = await finalizeAcquisitionImpl(positionals[0])
     if (options.json) printJson(finalized)
     else {
-      console.log(`${finalized.evidence_id} (${finalized.evidence_class}): ${finalized.coverage_state}`)
-      console.log(`Bundle: ${finalized.directory}`)
-      console.log(`Root: ${finalized.root_sha256}`)
+      console.log(terminalSafeText(`${finalized.evidence_id} (${finalized.evidence_class}): ${finalized.coverage_state}`))
+      console.log(terminalSafeText(`Bundle: ${finalized.directory}`))
+      console.log(terminalSafeText(`Root: ${finalized.root_sha256}`))
     }
     return
   }
 
   if (command === 'validate') {
-    const validation = await validateAcquisition(positionals[0])
+    const validateAcquisitionImpl = await controllerFunction(
+      dependencies,
+      'validateAcquisitionImpl',
+      'validateAcquisition',
+    )
+    const validation = await validateAcquisitionImpl(positionals[0])
     if (options.json) printJson(validation)
     else if (validation.valid) {
-      console.log(`Valid: ${validation.path}`)
-      console.log(`Root: ${validation.root_sha256}`)
+      console.log(terminalSafeText(`Valid: ${validation.path}`))
+      console.log(terminalSafeText(`Root: ${validation.root_sha256}`))
     } else {
-      console.error(`Invalid: ${validation.path}`)
-      for (const error of validation.errors) console.error(`- ${error.code}: ${error.message}`)
+      console.error(terminalSafeText(`Invalid: ${validation.path}`))
+      for (const error of validation.errors) {
+        console.error(terminalSafeText(`- ${error.code}: ${error.message}`))
+      }
     }
     if (!validation.valid) process.exitCode = 1
     return
   }
 
   if (command === 'stop') {
-    const stopped = await requestAcquisitionStop({
+    const requestAcquisitionStopImpl = await controllerFunction(
+      dependencies,
+      'requestAcquisitionStopImpl',
+      'requestAcquisitionStop',
+    )
+    const stopped = await requestAcquisitionStopImpl({
       bundle: positionals[0],
       operatorId: options['operator-id'],
       reason: options.reason,
     })
     if (options.json) printJson(stopped)
     else {
-      console.log(`Stop recorded for ${positionals[0]}`)
-      console.log(`Reason: ${stopped.stop_reason}`)
+      console.log(terminalSafeText(`Stop recorded for ${positionals[0]}`))
+      console.log(terminalSafeText(`Reason: ${stopped.stop_reason}`))
     }
   }
 }
 
-if (isMainModule(import.meta.url)) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch((error) => {
-    console.error(`ERROR: ${error.message}`)
+    console.error(terminalSafeText(`ERROR: ${error.message}`))
     for (const detail of error.details ?? []) {
-      console.error(`- ${detail.code ?? detail.keyword}: ${detail.message}`)
+      console.error(terminalSafeText(`- ${detail.code ?? detail.keyword}: ${detail.message}`))
     }
     process.exitCode = 1
   })

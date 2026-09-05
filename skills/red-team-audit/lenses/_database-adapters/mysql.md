@@ -336,9 +336,11 @@ storage engines, and version gates. A keyword hit is never the finding.
 
 ## Proof and conformance recipe
 
-Use a repository-started ephemeral Oracle MySQL at T1 or a user-approved
-loopback instance at T2. Do not substitute MariaDB because it accepts similar
-SQL.
+Use a repository-started ephemeral Oracle MySQL at T1. An accepted authenticated
+operator statement naming the target, scope, and T2 loopback launch is authority
+without another prompt. Execute it only through a matching implemented
+controller; otherwise record `UNPROVEN` with the technical transport gap. Do not
+substitute MariaDB because it accepts similar SQL.
 
 1. Record version/comment, edition/provider, storage engines, `sql_mode`,
    accounts/auth plugins, effective grants/roles, definers, views/routines,

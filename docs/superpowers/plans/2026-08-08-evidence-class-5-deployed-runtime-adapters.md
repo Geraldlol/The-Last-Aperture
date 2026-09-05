@@ -1,5 +1,21 @@
 # `deployed` and `runtime` Adapters Implementation Plan (Plan 5 of 5)
 
+> **Superseded security notice (2026-09-03):** Do not execute this historical
+> implementation plan as current guidance. Public deployed/runtime acquisition
+> `plan` and `run` commands are disabled before argument, bundle, credential,
+> stop-state, process, or target access. Review found that planning itself ran a
+> PATH-resolved `kubectl version` probe against the ambient context, a hand-edited plan could inject an arbitrary
+> executable and arguments, the recorded Kubernetes context did not bind the
+> actual cluster, stop-state errors failed open, and metadata-only
+> `runtime.read-file` output could persist secrets. The old allowlist,
+> attestation, PHI-redaction, and “mutates nothing” claims below are therefore not
+> sufficient. Re-enablement requires controller-sealed canonical plans, execution-time
+> reconstruction of allowlisted commands, attested target identity, fail-closed
+> stop state, and protected/redacted evidence custody plus independent review.
+> ADR 0021 separately supersedes every signed-authorization and third-party-
+> artifact requirement below: only an authenticated operator target/scope
+> statement creates authority; controller permits provide technical binding.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Read live systems — cluster and org configuration as it actually stands, and the contents of a running container — read-only, under attestation, with PHI redaction on by default where PHI is possible, bounded by impact counters and stoppable at any moment.

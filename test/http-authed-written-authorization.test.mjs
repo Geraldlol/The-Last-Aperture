@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,31 +6,10 @@ import { test } from 'node:test'
 import * as httpAuthedContracts from '../scripts/lib/http-authed-contracts.mjs'
 import {
   assertValidHttpAuthedScope,
-  sha256Hex,
-  WRITTEN_AUTHORIZATION_AUTHED_STATEMENT,
+  OPERATOR_ATTESTED_AUTHED_STATEMENT,
 } from '../scripts/lib/http-authed-contracts.mjs'
 
-const AUTHORIZATION_DOCUMENT = Buffer.from('synthetic authorization fixture')
-
-function approver() {
-  const { publicKey } = generateKeyPairSync('ed25519')
-  const der = publicKey.export({ type: 'spki', format: 'der' })
-  return {
-    mechanism: 'ed25519_file',
-    key_id: `ed25519:${sha256Hex(der)}`,
-    public_key: {
-      format: 'spki_der_b64',
-      value_base64: der.toString('base64'),
-    },
-    enrollment: {
-      enrolled_by: 'Peerstar security lead',
-      enrolled_at: '2026-04-15T12:00:00.000Z',
-      provenance: 'Peerstar internal approver enrollment for the written vendor authorization',
-    },
-  }
-}
-
-function writtenScope({ actionCount = 128 } = {}) {
+function operatorAttestedScope({ actionCount = 128 } = {}) {
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-authed-scope',
@@ -39,17 +17,14 @@ function writtenScope({ actionCount = 128 } = {}) {
     environment: 'production',
     data_class: 'phi',
     authorization: {
-      mode: 'WRITTEN_AUTHORIZATION_AUTHED',
-      authorization_id: 'credible-april-2026-authorization',
-      statement: WRITTEN_AUTHORIZATION_AUTHED_STATEMENT,
+      mode: 'OPERATOR_ATTESTED_AUTHED',
+      authorization_id: 'operator-attestation-2026-08-16',
+      statement: OPERATOR_ATTESTED_AUTHED_STATEMENT,
       operator_id: 'peerstar-security-operator',
-      authorized_by: 'Credible/Qualifacts security',
-      authorization_reference: 'Credible/Qualifacts written authorization, April 2026',
+      authorized_by: 'engagement operator',
+      authorization_reference: 'Operator-held engagement authorization reference 2026-08-16',
       attested_at: '2026-08-16T12:00:00.000Z',
       independently_verified: false,
-      written_authorization_sha256: sha256Hex(AUTHORIZATION_DOCUMENT),
-      document_issuer: 'Credible/Qualifacts security',
-      document_issued_at: '2026-04-15T12:00:00.000Z',
       permissions: {
         active_testing: true,
         production: true,
@@ -84,7 +59,6 @@ function writtenScope({ actionCount = 128 } = {}) {
       stop_on_sensitive_data: true,
       test_data: 'synthetic_only',
     },
-    approver: approver(),
     liveness: {
       credential_preflight: {
         method: 'GET',
@@ -175,14 +149,13 @@ function writtenScope({ actionCount = 128 } = {}) {
           },
         },
         rollback_policy: 'ALWAYS',
-        requires_countersignature: true,
       }
     }),
   }
 }
 
-test('written probe-only campaigns do not require a mutation approver', () => {
-  const scope = writtenScope({ actionCount: 1 })
+test('operator-attested probe-only campaigns require no approver or countersignature', () => {
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.permissions.mutation = false
   scope.requests = [{
     kind: 'probe',
@@ -192,21 +165,21 @@ test('written probe-only campaigns do not require a mutation approver', () => {
     url: 'https://peerstar-test.example.test/security-start',
     expected_effect: 'none',
   }]
-  delete scope.approver
+  assert.equal('approver' in scope, false)
+  assert.equal('requires_countersignature' in scope.requests[0], false)
   assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
 })
 
-test('written mutation authorization still requires a pinned approver', () => {
-  const scope = writtenScope({ actionCount: 1 })
-  delete scope.approver
-  assert.throws(
-    () => assertValidHttpAuthedScope(scope),
-    (error) => error.code === 'HTTP_AUTHED_SCHEMA_INVALID',
-  )
+test('operator-attested mutation authorization requires no approver or countersignature', () => {
+  const scope = operatorAttestedScope({ actionCount: 1 })
+  assert.equal(scope.authorization.permissions.mutation, true)
+  assert.equal('approver' in scope, false)
+  assert.equal('requires_countersignature' in scope.requests[0], false)
+  assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
 })
 
-test('written scopes reject URL credentials and fragments before runtime transport', () => {
-  const base = writtenScope({ actionCount: 1 })
+test('operator-attested scopes reject URL credentials and fragments before runtime transport', () => {
+  const base = operatorAttestedScope({ actionCount: 1 })
   base.authorization.permissions.mutation = false
   base.requests = [{
     kind: 'probe',
@@ -216,7 +189,6 @@ test('written scopes reject URL credentials and fragments before runtime transpo
     url: 'https://peerstar-test.example.test/security-start',
     expected_effect: 'none',
   }]
-  delete base.approver
 
   const credentialUrl = structuredClone(base)
   credentialUrl.requests[0].url =
@@ -238,44 +210,41 @@ test('written scopes reject URL credentials and fragments before runtime transpo
 const CAMPAIGN_NOW = new Date('2026-08-16T12:00:00.000Z')
 
 function plannedCampaignGrantSha256(scope) {
-  return httpAuthedContracts.verifyHttpAuthedWrittenAuthorization({
+  return httpAuthedContracts.verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: CAMPAIGN_NOW,
   }).campaignGrantSha256
 }
 
 function verifyCandidate(scope, action, {
-  documentBytes = AUTHORIZATION_DOCUMENT,
   expectedCampaignGrantSha256 = plannedCampaignGrantSha256(scope),
   now = CAMPAIGN_NOW,
 } = {}) {
-  return httpAuthedContracts.verifyHttpAuthedWrittenCandidate({
+  return httpAuthedContracts.verifyHttpAuthedCandidate({
     scope,
     action,
-    documentBytes,
     expectedCampaignGrantSha256,
     now,
   })
 }
 
-test('written vendor authorization admits a multi-action third-party production campaign', () => {
-  const scope = writtenScope()
+test('operator statement admits a multi-action third-party production campaign', () => {
+  const scope = operatorAttestedScope()
   assert.equal(scope.requests.length, 128)
   assert.equal('max_mutations' in scope.limits, false)
   assert.equal('max_cumulative_impact' in scope.limits, false)
   assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
 })
 
-test('written authorization has no legacy fixed action-count ceiling', () => {
-  const scope = writtenScope({ actionCount: 1_024 })
+test('operator-attested authorization has no legacy fixed action-count ceiling', () => {
+  const scope = operatorAttestedScope({ actionCount: 1_024 })
   assert.equal(scope.requests.length, 1_024)
   assert.equal(httpAuthedContracts.httpAuthedScopeSchema.properties.requests.maxItems, undefined)
   assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
 })
 
-test('written engagement permits explicitly authorized non-tunneling HTTP methods', () => {
-  const scope = writtenScope({ actionCount: 1 })
+test('operator-attested engagement permits explicitly authorized non-tunneling HTTP methods', () => {
+  const scope = operatorAttestedScope({ actionCount: 1 })
   const methods = [
     'HEAD', 'GET', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE',
     'TRACE', 'PROPFIND', 'COPY', 'MOVE', 'LOCK', 'UNLOCK',
@@ -295,7 +264,7 @@ test('written engagement permits explicitly authorized non-tunneling HTTP method
 })
 
 test('native authenticated scopes refuse CONNECT tunnel actions', () => {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.authorized_scope.methods = ['GET', 'CONNECT']
   scope.requests = [{
     kind: 'probe',
@@ -312,8 +281,8 @@ test('native authenticated scopes refuse CONNECT tunnel actions', () => {
   )
 })
 
-test('written engagement requires canonical uppercase method tokens', () => {
-  const scope = writtenScope({ actionCount: 1 })
+test('operator-attested engagement requires canonical uppercase method tokens', () => {
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.authorized_scope.methods.push('customProbe')
   scope.requests[0] = {
     kind: 'probe',
@@ -333,10 +302,10 @@ test('written engagement requires canonical uppercase method tokens', () => {
 
 test('runtime discoveries are admitted by engagement scope without an action-count gate', () => {
   assert.equal(
-    typeof httpAuthedContracts.verifyHttpAuthedWrittenCandidate,
+    typeof httpAuthedContracts.verifyHttpAuthedCandidate,
     'function',
   )
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.authorized_scope.methods.push('PROPFIND')
   const expectedCampaignGrantSha256 = plannedCampaignGrantSha256(scope)
   const candidate = {
@@ -350,10 +319,9 @@ test('runtime discoveries are admitted by engagement scope without an action-cou
 
   assert.doesNotThrow(() => verifyCandidate(scope, candidate, { expectedCampaignGrantSha256 }))
   assert.throws(
-    () => httpAuthedContracts.verifyHttpAuthedWrittenCandidate({
+    () => httpAuthedContracts.verifyHttpAuthedCandidate({
       scope,
       action: candidate,
-      documentBytes: AUTHORIZATION_DOCUMENT,
       now: CAMPAIGN_NOW,
     }),
     /campaign grant|controller-held/i,
@@ -363,22 +331,14 @@ test('runtime discoveries are admitted by engagement scope without an action-cou
     () => verifyCandidate(scope, { ...candidate, method: 'SEARCH' }, {
       expectedCampaignGrantSha256,
     }),
-    /method|written scope/i,
+    /method|operator-attested scope/i,
   )
   assert.throws(
     () => verifyCandidate(scope, { ...candidate, test_category: 'destructive_stress' }, {
       expectedCampaignGrantSha256,
     }),
-    /category|written scope/i,
+    /category|operator-attested scope/i,
   )
-  assert.throws(
-    () => verifyCandidate(scope, candidate, {
-      documentBytes: Buffer.from('substituted authorization'),
-      expectedCampaignGrantSha256,
-    }),
-    /document|digest/i,
-  )
-
   scope.authorization.authorized_scope.methods.push('SEARCH')
   assert.throws(
     () => verifyCandidate(scope, { ...candidate, method: 'SEARCH' }, {
@@ -389,7 +349,7 @@ test('runtime discoveries are admitted by engagement scope without an action-cou
 })
 
 test('write-capable and body-bearing probes require explicit mutation permission', () => {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.permissions.mutation = false
   scope.requests = [{
     kind: 'probe',
@@ -421,8 +381,8 @@ test('write-capable and body-bearing probes require explicit mutation permission
   }
 })
 
-test('written campaign can span its authorization window without aggregate or wall-time caps', () => {
-  const scope = writtenScope()
+test('operator-attested campaign can span its authorization window without aggregate or wall-time caps', () => {
+  const scope = operatorAttestedScope()
   scope.validity.not_after = '2027-08-16T12:00:00.000Z'
   scope.validity.cleanup_not_after = scope.validity.not_after
   scope.limits.min_interval_ms = 0
@@ -434,7 +394,7 @@ test('written campaign can span its authorization window without aggregate or wa
 })
 
 test('authenticated validity requires an explicit ordered cleanup deadline', () => {
-  const missing = writtenScope({ actionCount: 1 })
+  const missing = operatorAttestedScope({ actionCount: 1 })
   delete missing.validity.cleanup_not_after
   assert.throws(
     () => assertValidHttpAuthedScope(missing),
@@ -442,11 +402,11 @@ test('authenticated validity requires an explicit ordered cleanup deadline', () 
       && error.details.some((detail) => detail.instancePath === '/validity'),
   )
 
-  const equalToActionDeadline = writtenScope({ actionCount: 1 })
+  const equalToActionDeadline = operatorAttestedScope({ actionCount: 1 })
   equalToActionDeadline.validity.cleanup_not_after = equalToActionDeadline.validity.not_after
   assert.doesNotThrow(() => assertValidHttpAuthedScope(equalToActionDeadline))
 
-  const beforeActionDeadline = writtenScope({ actionCount: 1 })
+  const beforeActionDeadline = operatorAttestedScope({ actionCount: 1 })
   beforeActionDeadline.validity.cleanup_not_after = '2026-08-16T12:03:59.999Z'
   assert.throws(
     () => assertValidHttpAuthedScope(beforeActionDeadline),
@@ -456,11 +416,10 @@ test('authenticated validity requires an explicit ordered cleanup deadline', () 
 })
 
 test('cleanup deadline never extends ordinary candidate authorization', () => {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.validity.cleanup_not_after = '2026-08-16T12:10:00.000Z'
-  const verified = httpAuthedContracts.verifyHttpAuthedWrittenAuthorization({
+  const verified = httpAuthedContracts.verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: new Date('2026-08-16T12:00:00.000Z'),
   })
 
@@ -468,7 +427,6 @@ test('cleanup deadline never extends ordinary candidate authorization', () => {
     () => httpAuthedContracts.verifyHttpAuthedCandidate({
       scope,
       action: scope.requests[0],
-      documentBytes: AUTHORIZATION_DOCUMENT,
       expectedCampaignGrantSha256: verified.campaignGrantSha256,
       now: new Date(scope.validity.not_after),
     }),
@@ -476,22 +434,22 @@ test('cleanup deadline never extends ordinary candidate authorization', () => {
   )
 })
 
-test('written campaign cannot widen the document-derived origin, path, or method scope', () => {
-  const methodDrift = writtenScope()
+test('campaign cannot widen the operator-attested origin, path, or method scope', () => {
+  const methodDrift = operatorAttestedScope()
   methodDrift.authorization.authorized_scope.methods = ['GET', 'DELETE']
-  assert.throws(() => assertValidHttpAuthedScope(methodDrift), /method|written scope/i)
+  assert.throws(() => assertValidHttpAuthedScope(methodDrift), /method|operator-attested scope/i)
 
-  const pathDrift = writtenScope()
+  const pathDrift = operatorAttestedScope()
   pathDrift.authorization.authorized_scope.path_prefixes = ['/approved/']
-  assert.throws(() => assertValidHttpAuthedScope(pathDrift), /path|written scope/i)
+  assert.throws(() => assertValidHttpAuthedScope(pathDrift), /path|operator-attested scope/i)
 
-  const originDrift = writtenScope()
+  const originDrift = operatorAttestedScope()
   originDrift.authorization.authorized_scope.origins = ['https://different.example.test']
-  assert.throws(() => assertValidHttpAuthedScope(originDrift), /origin|written scope/i)
+  assert.throws(() => assertValidHttpAuthedScope(originDrift), /origin|operator-attested scope/i)
 })
 
-test('written path prefixes use canonical segment boundaries', () => {
-  const scope = writtenScope({ actionCount: 1 })
+test('operator-attested path prefixes use canonical segment boundaries', () => {
+  const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
   scope.liveness.credential_preflight.url = 'https://peerstar-test.example.test/approved/whoami'
   scope.requests[0].url = 'https://peerstar-test.example.test/approved/seed'
@@ -519,54 +477,56 @@ test('written path prefixes use canonical segment boundaries', () => {
   ]) {
     assert.throws(
       () => verifyCandidate(scope, { ...candidate, url }, { expectedCampaignGrantSha256 }),
-      /path|canonical|encoded|written scope/i,
+      /path|canonical|encoded|operator-attested scope/i,
     )
   }
 })
 
 for (const permission of ['active_testing', 'production', 'third_party', 'phi', 'mutation']) {
-  test(`written authorization must explicitly permit ${permission}`, () => {
-    const scope = writtenScope()
+  test(`operator attestation must explicitly permit ${permission}`, () => {
+    const scope = operatorAttestedScope()
     scope.authorization.permissions[permission] = false
     assert.throws(
       () => assertValidHttpAuthedScope(scope),
-      /written authorization|permission/i,
+      /operator attestation|permission/i,
     )
   })
 }
 
-test('written authorization document bytes are rehashed and checked against the current lease', () => {
-  assert.equal(typeof httpAuthedContracts.verifyHttpAuthedWrittenAuthorization, 'function')
-  const scope = writtenScope()
-  const verified = httpAuthedContracts.verifyHttpAuthedWrittenAuthorization({
+test('operator authorization is content-bound and time-bound', () => {
+  assert.equal(typeof httpAuthedContracts.verifyHttpAuthedAuthorization, 'function')
+  const scope = operatorAttestedScope()
+  const verified = httpAuthedContracts.verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: new Date('2026-08-16T12:00:00.000Z'),
   })
   assert.equal(verified.scope, scope)
-  assert.equal(verified.authorizationDocumentSha256, sha256Hex(AUTHORIZATION_DOCUMENT))
-  assert.doesNotMatch(JSON.stringify(verified), /synthetic authorization fixture/)
-
-  assert.throws(
-    () => httpAuthedContracts.verifyHttpAuthedWrittenAuthorization({
-      scope,
-      documentBytes: Buffer.from('changed authorization document'),
-      now: new Date('2026-08-16T12:00:00.000Z'),
-    }),
-    /document|digest/i,
+  assert.equal(
+    verified.authorizationBindingSha256,
+    httpAuthedContracts.httpAuthedAuthorizationBindingSha256(scope),
   )
+  const changed = structuredClone(scope)
+  changed.authorization.authorized_by = 'different operator authority'
+  const changedVerified = httpAuthedContracts.verifyHttpAuthedAuthorization({
+    scope: changed,
+    now: new Date('2026-08-16T12:00:00.000Z'),
+  })
+  assert.notEqual(
+    changedVerified.authorizationBindingSha256,
+    verified.authorizationBindingSha256,
+  )
+  assert.notEqual(changedVerified.campaignGrantSha256, verified.campaignGrantSha256)
   assert.throws(
-    () => httpAuthedContracts.verifyHttpAuthedWrittenAuthorization({
+    () => httpAuthedContracts.verifyHttpAuthedAuthorization({
       scope,
-      documentBytes: AUTHORIZATION_DOCUMENT,
       now: new Date('2026-08-16T12:04:00.000Z'),
     }),
     /expired|validity/i,
   )
 })
 
-test('written campaign scope disables sensitive persistence and rejects raw body fields', () => {
-  const scope = writtenScope()
+test('operator-attested scope disables sensitive persistence and rejects raw body fields', () => {
+  const scope = operatorAttestedScope()
   assert.deepEqual(scope.evidence_handling, {
     persist_request_bodies: false,
     persist_response_bodies: false,
@@ -576,11 +536,11 @@ test('written campaign scope disables sensitive persistence and rejects raw body
     test_data: 'synthetic_only',
   })
 
-  const rawBody = writtenScope()
+  const rawBody = operatorAttestedScope()
   rawBody.requests[0].request_body.body_bytes = 'never persist this'
   assert.throws(() => assertValidHttpAuthedScope(rawBody), /schema/i)
 
-  const responseBody = writtenScope()
+  const responseBody = operatorAttestedScope()
   responseBody.requests[0].response_body = 'never persist this either'
   assert.throws(() => assertValidHttpAuthedScope(responseBody), /schema/i)
 })
@@ -591,15 +551,15 @@ test('JSON shape observation modes require their exact versioned scope contract'
     max_depth: 3,
     safe_key_names: ['records', 'id'],
   }
-  const legacyWithObservation = writtenScope()
+  const legacyWithObservation = operatorAttestedScope()
   legacyWithObservation.response_observation = observation
   assert.throws(() => assertValidHttpAuthedScope(legacyWithObservation), /schema/i)
 
-  const extensionWithoutObservation = writtenScope()
+  const extensionWithoutObservation = operatorAttestedScope()
   extensionWithoutObservation.schema_version = '1.1.0'
   assert.throws(() => assertValidHttpAuthedScope(extensionWithoutObservation), /schema/i)
 
-  const optedIn = writtenScope()
+  const optedIn = operatorAttestedScope()
   optedIn.schema_version = '1.1.0'
   optedIn.response_observation = observation
   assert.doesNotThrow(() => assertValidHttpAuthedScope(optedIn))
@@ -609,7 +569,7 @@ test('JSON shape observation modes require their exact versioned scope contract'
     max_depth: 3,
     safe_key_names: ['records', 'id'],
   }
-  const aspNetOptedIn = writtenScope()
+  const aspNetOptedIn = operatorAttestedScope()
   aspNetOptedIn.schema_version = '1.2.0'
   aspNetOptedIn.response_observation = aspNetObservation
   assert.doesNotThrow(() => assertValidHttpAuthedScope(aspNetOptedIn))
@@ -618,46 +578,41 @@ test('JSON shape observation modes require their exact versioned scope contract'
     ['1.1.0', aspNetObservation],
     ['1.2.0', observation],
   ]) {
-    const mismatched = writtenScope()
+    const mismatched = operatorAttestedScope()
     mismatched.schema_version = version
     mismatched.response_observation = responseObservation
     assert.throws(() => assertValidHttpAuthedScope(mismatched), /schema/i)
   }
 })
 
-test('bounded file loading verifies the scope and written authorization together', async (t) => {
-  assert.equal(typeof httpAuthedContracts.readAndVerifyHttpAuthedWrittenAuthorization, 'function')
-  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-written-'))
+test('bounded file loading verifies the operator-attested scope and exact mode', async (t) => {
+  assert.equal(typeof httpAuthedContracts.readAndVerifyHttpAuthedAuthorization, 'function')
+  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-attested-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const scopePath = join(directory, 'scope.json')
-  const authorizationDocumentPath = join(directory, 'authorization.txt')
-  await writeFile(scopePath, `${JSON.stringify(writtenScope())}\n`, 'utf8')
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_DOCUMENT)
+  await writeFile(scopePath, `${JSON.stringify(operatorAttestedScope())}\n`, 'utf8')
 
-  const verified = await httpAuthedContracts.readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await httpAuthedContracts.readAndVerifyHttpAuthedAuthorization({
     scopePath,
-    authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: new Date('2026-08-16T12:00:00.000Z'),
   })
   assert.equal(verified.scope.engagement_id, 'peerstar-credible-authorized-assessment')
-  assert.equal(verified.authorizationDocumentSha256, sha256Hex(AUTHORIZATION_DOCUMENT))
+  assert.match(verified.authorizationBindingSha256, /^[a-f0-9]{64}$/)
 })
 
-test('CLI validates a written-authorized campaign without printing sensitive material', async (t) => {
+test('CLI validates an operator-attested campaign without printing sensitive material', async (t) => {
   const { main } = await import('../scripts/http-authed.mjs')
   const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-cli-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const scopePath = join(directory, 'scope.json')
-  const authorizationDocumentPath = join(directory, 'authorization.txt')
-  const scope = writtenScope()
+  const scope = operatorAttestedScope()
   await writeFile(scopePath, `${JSON.stringify(scope)}\n`, 'utf8')
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_DOCUMENT)
   let output = ''
 
   await main([
-    'validate-written',
+    'validate-attested',
     '--scope', scopePath,
-    '--authorization-document', authorizationDocumentPath,
     '--json',
   ], {
     clock: () => new Date('2026-08-16T12:00:00.000Z'),
@@ -665,13 +620,38 @@ test('CLI validates a written-authorized campaign without printing sensitive mat
   })
 
   const summary = JSON.parse(output)
-  assert.equal(summary.authorization_mode, 'WRITTEN_AUTHORIZATION_AUTHED')
+  assert.equal(summary.authorization_mode, 'OPERATOR_ATTESTED_AUTHED')
   assert.equal(summary.request_count, 128)
-  assert.equal(summary.authorization_document_sha256, sha256Hex(AUTHORIZATION_DOCUMENT))
+  assert.match(summary.authorization_binding_sha256, /^[a-f0-9]{64}$/)
   assert.equal(summary.campaign_grant_sha256, plannedCampaignGrantSha256(scope))
-  assert.doesNotMatch(output, /synthetic authorization fixture/)
   assert.doesNotMatch(output, /SYNTHETIC_TEST_CREDENTIAL/)
   assert.doesNotMatch(output, /SYNTHETIC_SECURITY_TEST_PAYLOAD/)
 })
 
-export { writtenScope }
+test('legacy written-authorization commands retire before scope, document, credential, or transport I/O', async () => {
+  const { main } = await import('../scripts/http-authed.mjs')
+  let credentialReads = 0
+  let transportCalls = 0
+
+  await assert.rejects(
+    main([
+      'validate-written',
+      '--scope', 'must-not-read-scope.json',
+      '--authorization-document', 'must-not-read-authorization.txt',
+      '--json',
+    ], {
+      credentialStdinReader: async () => {
+        credentialReads += 1
+        throw new Error('credential input must remain unread')
+      },
+      transport: async () => { transportCalls += 1 },
+      write: () => {},
+    }),
+    /supported http-authed command/i,
+  )
+
+  assert.equal(credentialReads, 0)
+  assert.equal(transportCalls, 0)
+})
+
+export { operatorAttestedScope }

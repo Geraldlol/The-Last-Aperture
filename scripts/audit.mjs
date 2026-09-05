@@ -19,6 +19,7 @@ import {
   open,
   realpath,
   rename,
+  rm,
   unlink,
   writeFile,
 } from 'node:fs/promises'
@@ -34,6 +35,7 @@ import {
   sep,
 } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { TextDecoder } from 'node:util'
 import {
   assertValidRun,
   assertValidRunTransition,
@@ -42,34 +44,70 @@ import {
   validateRun,
 } from './lib/contracts.mjs'
 import { isMainModule } from './lib/main-module.mjs'
+import {
+  terminalSafeDocumentText,
+  terminalSafeSerializedJson,
+  terminalSafeText,
+} from './lib/terminal-text.mjs'
+import {
+  assertLocalFilesystemEndpoint,
+  assertNoRemoteFilesystemArguments,
+} from './lib/filesystem-endpoint.mjs'
 import { compareCanonicalStrings } from './lib/canonical-order.mjs'
+import { sourcePathsForJob } from './lib/job-source-scope.mjs'
 import { assertValidProofConfig, executeProof } from './lib/proof-execution.mjs'
+import { materializeSealedFiles } from './lib/disposable-mirror.mjs'
+import {
+  cleanupDockerServiceProofContainers,
+  normalizeProofWorkerConfig,
+  proofSourceTreeDigest,
+  proofWorkerConfigDigest,
+  runDockerProofCommand,
+  runDockerServiceProofCommand,
+  serviceProofControllerBudget,
+} from './lib/proof-docker-runner.mjs'
 import { proofEvidence } from './lib/proof-evidence.mjs'
 import {
+  buildProofReceipt,
+  findingWithProofEvidence,
+  serviceProofAttemptReceiptBinding,
+} from './lib/proof-receipt.mjs'
+import {
   classifyProviderAttemptRecovery,
+  classifyServiceProofAttemptRecovery,
   commitProviderAttempt,
+  commitServiceProofAttempt,
   failProviderAttempt,
+  failServiceProofAttempt,
   findActiveAttempt,
   findProviderAttempt,
   leaseProviderAttempt,
   leaseRemoteAttempt,
+  leaseServiceProofAttempt,
   markProviderAttemptStarted,
+  markServiceProofAttemptStarted,
   recordProviderResultCaptured,
   recordProviderResultValidated,
+  recordServiceProofResultCaptured,
+  recordServiceProofResultValidated,
+  recoverExpiredServiceProofAttempt,
 } from './lib/attempts.mjs'
 import {
   EVALUATION_LIMITS,
   evaluateThresholds,
   scoreEvaluation,
   scoreFingerprintStability,
+  scoreRepeatedEvaluations,
 } from './lib/evaluation.mjs'
 import {
   assertValidBenchmarkInput,
   bindBenchmarkPrimaryRun,
+  bindBenchmarkPrimaryOutcomes,
 } from './lib/benchmark-contracts.mjs'
 import {
   databaseDiscoveryProjection,
   digestLensPack,
+  lensSharedContractDigest,
   loadLenses,
 } from './lib/activation.mjs'
 import { artifactKeyToken, artifactToken } from './lib/artifact-names.mjs'
@@ -97,6 +135,12 @@ import {
 } from './lib/inventory.mjs'
 import { authorizeAction, normalizePolicy } from './lib/policy.mjs'
 import { renderMarkdownReport, renderSarif } from './lib/report.mjs'
+import { renderRunStatus, summarizeRunStatus } from './lib/run-status.mjs'
+import { buildReviewTemplate } from './lib/review-handoff.mjs'
+import { buildVerdictAssessment, renderVerdictAssessment } from './lib/verdict-assessment.mjs'
+import { buildRepairBrief, renderRepairBriefMarkdown } from './lib/repair-brief.mjs'
+import { capabilityRegistry, renderCapabilities, assessEnvironmentCoverage } from './lib/capabilities.mjs'
+import { inspectReadiness, renderReadiness } from './lib/doctor.mjs'
 import {
   assertBundleArtifactSize,
   assertRunManifestSize,
@@ -185,6 +229,7 @@ const MAX_PROVIDER_CONFIG_BYTES = 1024 * 1024
 const MAX_REMOTE_GATEWAY_CONFIG_BYTES = 1024 * 1024
 const MAX_SIGNING_KEY_BYTES = 64 * 1024
 const MAX_POLICY_BYTES = 1024 * 1024
+const MAX_COMPLETENESS_INPUTS_BYTES = 4 * 1024 * 1024
 const MAX_LOCK_BYTES = 16 * 1024
 const MAX_BENCHMARK_INPUT_BYTES = 16 * 1024 * 1024
 const MAX_BENCHMARK_CASES_BYTES = 8 * 1024 * 1024
@@ -205,18 +250,26 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
 const HELP = `red-team-audit ${PLATFORM_VERSION}
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   red-team-audit next <run.json|bundle-directory>
-  red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>
-  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>
-  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
+  red-team-audit status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
+  red-team-audit capabilities [--json]
+  red-team-audit doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
+  red-team-audit review-template <bundle> --job <job-id>
+  red-team-audit check-result <bundle> <job-result.json> [--json]
+  red-team-audit verdict <bundle> [--candidate <candidate-id>] [--json]
+  red-team-audit repair-brief <bundle> [--candidate <candidate-id>] [--baseline <bundle>] [--json]
+  red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>  [DISABLED]
+  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>  [DISABLED]
+  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json> --worker <proof-worker.json>
+  red-team-audit run-service-proof <run.json|bundle-directory> <service-proof-config.json> --worker <proof-worker.json>
   red-team-audit ingest <run.json|bundle-directory> <job-result.json>
   red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
   red-team-audit finalize <run.json|bundle-directory>
   red-team-audit abort <run.json|bundle-directory> --reason <text>
   red-team-audit unlock <run.json|bundle-directory>
   red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]
+  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]  [DISABLED]
   red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
   red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
   red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
@@ -225,7 +278,21 @@ Usage:
 Safety:
   Static/read-only planning is the default. Repository content is untrusted data.
   Planning never executes repository code, follows symlinks, or makes network calls.
-  --seal-source creates a sensitive runner-ready archive of exact source bytes.
+  --seal-source requires an explicit local output directory outside the target.
+  Public T1 proof execution uses a digest-pinned, network-denied Docker proof worker.
+  It reconstructs verified sealed bytes, copies them into container tmpfs without a
+  host mount, scrubs ambient credentials, bounds output/time/PIDs, and verifies teardown.
+  Public T2 service proof execution uses that same worker with two fresh containers,
+  a controller-owned TTL supervisor, and fixed in-container loopback readiness probes.
+  Public run-remote execution is disabled before bundle/configuration access until
+  gateway identity and outbound-data policy are enrolled outside caller-controlled
+  files. A signed request does not make a caller-selected destination trusted.
+  Public run-provider execution is disabled before bundle/configuration access until
+  the container-runtime executable is controller-enrolled and identity-pinned.
+  Public transparency publication is disabled before input/configuration access until
+  the log endpoint is independently enrolled; a fixed POST is still target I/O.
+  Public evidence-bundle import is disabled before repository or bundle access until
+  one atomic verifier authenticates manifest semantics, payloads, and plan identity.
 
 Exit codes:
   0  command succeeded
@@ -264,6 +331,7 @@ const COMMAND_ARGUMENTS = {
     options: {
       out: 'value',
       roe: 'value',
+      'completeness-inputs': 'value',
       'database-conformance': 'value',
       'evidence-bundle': 'value',
       'max-text-bytes': 'value',
@@ -276,6 +344,13 @@ const COMMAND_ARGUMENTS = {
     },
   },
   next: { positionals: 1, options: {} },
+  status: { positionals: 1, options: { json: 'flag', 'receipt-public-key': 'value' } },
+  capabilities: { positionals: 0, options: { json: 'flag' } },
+  doctor: { positionals: 0, options: { json: 'flag', worker: 'value', bundle: 'value' } },
+  'review-template': { positionals: 1, options: { job: 'value' } },
+  'check-result': { positionals: 2, options: { json: 'flag' } },
+  verdict: { positionals: 1, options: { json: 'flag', candidate: 'value' } },
+  'repair-brief': { positionals: 1, options: { json: 'flag', candidate: 'value', baseline: 'value' } },
   'run-provider': { positionals: 2, options: {} },
   'run-remote': { positionals: 2, options: {} },
   ingest: { positionals: 2, options: {} },
@@ -331,7 +406,11 @@ const COMMAND_ARGUMENTS = {
   },
   'run-proof': {
     positionals: 2,
-    options: {},
+    options: { worker: 'value' },
+  },
+  'run-service-proof': {
+    positionals: 2,
+    options: { worker: 'value' },
   },
   compare: {
     positionals: 2,
@@ -531,18 +610,24 @@ async function loadRun(value) {
       label: 'run manifest',
     },
   )
-  const text = content.toString('utf8')
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(content)
+  } catch {
+    throw new Error(`run manifest is not valid UTF-8: ${path}`)
+  }
   let run
   try {
     run = JSON.parse(text)
   } catch (error) {
     throw new Error(`invalid JSON in ${path}: ${error.message}`)
   }
+  assertLocalFilesystemEndpoint(run?.repository?.root, 'run repository root')
   return {
     path,
     directory: dirname(path),
     run,
-    sourceDigest: sha256(text),
+    sourceDigest: sha256(content),
   }
 }
 
@@ -639,6 +724,9 @@ async function atomicReplace(path, content) {
 
 async function writeOnceBundleArtifact(directory, artifactPath, content) {
   assertBundleArtifactSize(content, `bundle artifact ${artifactPath}`)
+  const expectedBytes = Buffer.isBuffer(content)
+    ? content
+    : Buffer.from(String(content), 'utf8')
   const normalized = String(artifactPath).replaceAll('\\', '/')
   const parentPath = normalized.includes('/')
     ? normalized.slice(0, normalized.lastIndexOf('/'))
@@ -650,11 +738,10 @@ async function writeOnceBundleArtifact(directory, artifactPath, content) {
     await assertSafeExistingBundlePath(directory, normalized, { expectedType: 'file' })
   } catch (error) {
     if (error.code !== 'EEXIST') throw error
-    const { content: existingBytes } = await readSafeBundleFile(directory, normalized)
-    const existing = existingBytes.toString('utf8')
-    if (existing !== content) {
-      throw new Error(`refusing to overwrite conflicting artifact ${absolutePath}`)
-    }
+  }
+  const { content: committedBytes } = await readSafeBundleFile(directory, normalized)
+  if (!committedBytes.equals(expectedBytes)) {
+    throw new Error(`refusing to overwrite conflicting artifact ${absolutePath}`)
   }
 }
 
@@ -831,7 +918,72 @@ async function releaseOwnedLock(path, token) {
   await unlink(path)
 }
 
-async function persistRun(path, run, expectedDigest) {
+async function acquireServiceProofCommandLock(runPath, options = {}) {
+  const processAlive = options.processIsAlive ?? processIsAlive
+  if (typeof processAlive !== 'function') {
+    throw new TypeError('service-proof processIsAlive must be a function')
+  }
+  const directory = dirname(runPath)
+  const lockPath = `${runPath}.service-proof.lock`
+  const recoveryPath = `${lockPath}.recovery`
+  const record = lockRecord()
+  await assertRecoveryNotInProgress(recoveryPath)
+  try {
+    await exclusiveAtomicCreate(lockPath, stableJson(record))
+    return { path: lockPath, token: record.token }
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error
+  }
+
+  const observed = await readLockCandidate(directory, lockPath)
+  if (!observed.record) {
+    throw new Error(`invalid service-proof command lock: ${lockPath}`)
+  }
+  if (processAlive(observed.record.pid)) {
+    const error = new Error(
+      `service-proof controller PID ${observed.record.pid} is active; `
+      + 'refusing concurrent or expired-lease takeover',
+    )
+    error.code = 'SERVICE_PROOF_CONTROLLER_ACTIVE'
+    throw error
+  }
+
+  const recoveryRecord = lockRecord()
+  try {
+    await exclusiveAtomicCreate(recoveryPath, stableJson(recoveryRecord))
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new Error(`service-proof command-lock recovery is already active: ${recoveryPath}`)
+    }
+    throw error
+  }
+  try {
+    const current = await readLockCandidate(directory, lockPath)
+    if (
+      !current.record
+      || current.signature !== observed.signature
+      || processAlive(current.record.pid)
+    ) {
+      throw new Error('service-proof command lock changed or became live during recovery')
+    }
+    await unlink(lockPath)
+  } finally {
+    await releaseOwnedLock(recoveryPath, recoveryRecord.token)
+  }
+
+  await assertRecoveryNotInProgress(recoveryPath)
+  await exclusiveAtomicCreate(lockPath, stableJson(record))
+  return { path: lockPath, token: record.token }
+}
+
+async function persistRun(path, run, expectedDigest, hooks = {}) {
+  const { beforeCommit, afterCommit } = hooks
+  if (beforeCommit !== undefined && typeof beforeCommit !== 'function') {
+    throw new TypeError('beforeCommit must be a function')
+  }
+  if (afterCommit !== undefined && typeof afterCommit !== 'function') {
+    throw new TypeError('afterCommit must be a function')
+  }
   assertValidRun(run)
   const serializedRun = stableJson(run)
   assertRunManifestSize(serializedRun)
@@ -858,11 +1010,12 @@ async function persistRun(path, run, expectedDigest) {
       directory,
       basename(path),
     )
-    const current = currentBytes.toString('utf8')
-    if (expectedDigest && sha256(current) !== expectedDigest) {
+    if (expectedDigest && sha256(currentBytes) !== expectedDigest) {
       throw new Error('run changed concurrently; reload it and retry the operation')
     }
+    if (beforeCommit) await beforeCommit()
     await atomicReplace(path, serializedRun)
+    if (afterCommit) await afterCommit()
   } finally {
     await releaseOwnedLock(lockPath, record.token)
   }
@@ -900,6 +1053,7 @@ function immutableCoveragePlanProjection(coverage, schemaVersion) {
     denominators: Array.isArray(coverage?.denominators)
       ? coverage.denominators.map(immutableDenominatorProjection)
       : coverage?.denominators,
+    completeness_inputs: coverage?.completeness_inputs,
     lenses: Array.isArray(coverage?.lenses)
       ? coverage.lenses.map(({ lens, applicable_paths: applicablePaths }) => ({
           lens,
@@ -989,7 +1143,24 @@ function plannedShardForJob(plannedCoverage, job) {
   )
 }
 
-function expectedV3SidecarScope(plannedCoverage, job) {
+function expectedV3SidecarScope(plannedCoverage, job, run) {
+  if (job.kind === 'TRIAGE' && job.lens === 'business-logic') {
+    const lensJobs = (run?.jobs ?? []).filter(({ kind }) => kind === 'LENS')
+    const hasOwnedTopicProvenance = lensJobs.some((lensJob) =>
+      hasOwn(lensJob, 'owned_topics'))
+    const domainLenses = hasOwnedTopicProvenance
+      ? new Set(lensJobs
+          .filter((lensJob) => (lensJob.owned_topics?.length ?? 0) > 0)
+          .map(({ lens }) => lens))
+      : undefined
+    const sourceFiles = [...new Set((plannedCoverage?.shards ?? [])
+      .filter((shard) => domainLenses === undefined || domainLenses.has(shard.lens))
+      .flatMap((shard) => shard.scoped_files ?? []))]
+      .sort(compareCanonicalStrings)
+    return hasOwnedTopicProvenance
+      ? sourceFiles.slice(0, plannedCoverage?.policy?.max_shard_files)
+      : sourceFiles
+  }
   if (job.kind !== 'LENS') return []
   if (job.shard === undefined) return []
   const plannedShard = plannedShardForJob(plannedCoverage, job)
@@ -1072,11 +1243,43 @@ function assertSidecarJobIdentity(
       throw new Error(`sidecar ${field} mismatch for ${job.job_id}`)
     }
   }
+  for (const field of ['lens_digest', 'owned_topics']) {
+    if (
+      hasOwn(job, field)
+      && stableJson(sidecar[field]) !== stableJson(job[field])
+    ) {
+      throw new Error(`sidecar ${field} mismatch for ${job.job_id}`)
+    }
+  }
+  if (
+    hasOwn(sidecar, 'topic_obligations') !== hasOwn(job, 'topic_obligations')
+    || (
+      hasOwn(job, 'topic_obligations')
+      && stableJson(sidecar.topic_obligations) !== stableJson(job.topic_obligations)
+    )
+  ) {
+    throw new Error(`sidecar topic_obligations mismatch for ${job.job_id}`)
+  }
+  const expectedCompletenessInputs =
+    job.kind === 'COMPLETENESS' && plannedCoverage?.completeness_inputs !== undefined
+      ? plannedCoverage.completeness_inputs
+      : undefined
+  if (
+    hasOwn(sidecar, 'completeness_inputs')
+      !== (expectedCompletenessInputs !== undefined)
+    || (
+      expectedCompletenessInputs !== undefined
+      && stableJson(sidecar.completeness_inputs, 0)
+        !== stableJson(expectedCompletenessInputs, 0)
+    )
+  ) {
+    throw new Error(`sidecar completeness_inputs mismatch for ${job.job_id}`)
+  }
   if (!Array.isArray(sidecar.scoped_files)) {
     throw new Error(`sidecar scoped_files must be an array for ${job.job_id}`)
   }
   if (['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)) {
-    const expectedScope = expectedV3SidecarScope(plannedCoverage, job)
+    const expectedScope = expectedV3SidecarScope(plannedCoverage, job, run)
     if (stableJson(sidecar.scoped_files) !== stableJson(expectedScope)) {
       throw new Error(`sidecar scoped_files mismatch for ${job.job_id}`)
     }
@@ -1110,11 +1313,18 @@ async function readVerifiedArtifact(directory, run, key, expectedPath) {
     throw new Error(`${key} artifact path mismatch`)
   }
   const { absolutePath, content } = await readSafeBundleFile(directory, expectedPath)
-  const text = content.toString('utf8')
   if (sha256(content).toLowerCase() !== artifact.sha256.toLowerCase()) {
     throw new Error(`${key} artifact digest mismatch`)
   }
-  return { absolutePath, content, text }
+  return { absolutePath, content }
+}
+
+function verifiedArtifactUtf8(committed) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(committed.content)
+  } catch (error) {
+    throw new Error(`${committed.absolutePath} is not valid UTF-8: ${error.message}`)
+  }
 }
 
 function resolveBundleArtifactPath(directory, artifactPath) {
@@ -1347,7 +1557,7 @@ async function verifyAllBundleArtifacts(directory, run) {
 
 function parseVerifiedJson(committed) {
   try {
-    return JSON.parse(committed.text)
+    return JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`invalid JSON in ${committed.absolutePath}: ${error.message}`)
   }
@@ -1533,10 +1743,12 @@ export async function verifyControlBundle(
     throw new Error('policy artifact does not match the run provenance')
   }
   if (
-    !['static', 'remote_static', 'test'].includes(policy.mode)
-    || !['STATIC', 'TEST_EXECUTION'].includes(run.capability_mode)
+    !['static', 'remote_static', 'test', 'local_dynamic'].includes(policy.mode)
+    || !['STATIC', 'TEST_EXECUTION', 'LOCAL_DYNAMIC'].includes(run.capability_mode)
   ) {
-    throw new Error(`${PLATFORM_VERSION} can dispatch and ingest only STATIC and TEST_EXECUTION runs`)
+    throw new Error(
+      `${PLATFORM_VERSION} can dispatch and ingest only STATIC, TEST_EXECUTION, and LOCAL_DYNAMIC runs`,
+    )
   }
   const policyRoots = policy.capabilities?.read_file?.enabled
     ? policy.capabilities.read_file.roots
@@ -1657,6 +1869,12 @@ export async function verifyControlBundle(
   ) {
     throw new Error('lens-pack manifest does not match the run provenance')
   }
+  if (
+    run.lens_shared_contract_digest !== undefined
+    && lensSharedContractDigest(lensPack) !== run.lens_shared_contract_digest
+  ) {
+    throw new Error('shared lens contract digest does not match the run provenance')
+  }
   const controlSnapshot = await verifyDeclaredSealedSnapshot(
     directory,
     run,
@@ -1700,6 +1918,9 @@ export async function verifyControlBundle(
     const providerPolicyContent = Buffer.from(stableJson(
       providerPolicyProjection(policy, run.policy_digest),
     ), 'utf8')
+    const completenessInputsContent = run.coverage?.completeness_inputs === undefined
+      ? undefined
+      : Buffer.from(stableJson(run.coverage.completeness_inputs), 'utf8')
     for (const [path, expected] of [
       ['controls/policy.json', run.artifacts.policy],
       ['controls/provider-policy.json', {
@@ -1707,6 +1928,12 @@ export async function verifyControlBundle(
         size: providerPolicyContent.length,
       }],
       ['controls/lens-pack.json', run.artifacts.lens_pack],
+      ...(completenessInputsContent
+        ? [['controls/completeness-inputs.json', {
+            sha256: sha256(completenessInputsContent),
+            size: completenessInputsContent.length,
+          }]]
+        : []),
       ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
         ? [['controls/database-discovery.json', run.artifacts.database_discovery]]
         : []),
@@ -1767,6 +1994,10 @@ export async function verifyControlBundle(
       || !Array.isArray(sidecar.owned_topics)
       || !Array.isArray(sidecar.known_topics)
       || sidecar.owned_topics.some((topic) => !sidecar.known_topics.includes(topic))
+      || (
+        Array.isArray(sidecar.topic_obligations)
+        && stableJson(sidecar.topic_obligations) !== stableJson(sidecar.owned_topics)
+      )
     ) {
       throw new Error(`sidecar authority does not match its bundled lens manifest for ${job.job_id}`)
     }
@@ -1791,6 +2022,7 @@ export async function verifyControlBundle(
   }
   const verifiedExecutionEnvelopes = new Map()
   const verifiedRemoteAcceptances = new Map()
+  const verifiedServiceProofReceipts = new Map()
   let evidenceKeyId = pinnedReceiptKeyId
   const attempts = (run.attempt_events ?? [])
     .filter(({ event }) => event === 'LEASED')
@@ -1803,18 +2035,21 @@ export async function verifyControlBundle(
         `provider attempt ${attempt.attempt_id} references an unknown job`,
       )
     }
+    const serviceProofAttempt = attempt.lease.backend === 'SERVICE_PROOF_CONTAINER'
     const sidecar = sidecars.find(({ job_id: jobId }) => jobId === job.job_id)
-    const expectedArtifacts = observedProviderArtifactDescriptors(
-      run,
-      job,
-      sidecar,
-      {
-        sealedSnapshots: {
-          control: controlSnapshot,
-          source: sourceSnapshot,
-        },
-      },
-    )
+    const expectedArtifacts = serviceProofAttempt
+      ? null
+      : observedProviderArtifactDescriptors(
+          run,
+          job,
+          sidecar,
+          {
+            sealedSnapshots: {
+              control: controlSnapshot,
+              source: sourceSnapshot,
+            },
+          },
+        )
     if (attempt.lease.backend === 'REMOTE_GATEWAY') {
       const request = await readRemoteRequestArtifact(
         { directory, run },
@@ -1850,6 +2085,12 @@ export async function verifyControlBundle(
           attempt,
         )
         verifiedRemoteAcceptances.set(attempt.attempt_id, acceptance)
+      } else if (serviceProofAttempt) {
+        const receipt = await readServiceProofAttemptReceipt(
+          { directory, run },
+          attempt,
+        )
+        verifiedServiceProofReceipts.set(attempt.attempt_id, receipt)
       } else {
         const envelope = await readAttemptEnvelope(
           { directory, run },
@@ -1863,6 +2104,9 @@ export async function verifyControlBundle(
     if (attempt.failure_artifact_key !== undefined) {
       if (attempt.lease.backend === 'REMOTE_GATEWAY') {
         throw new Error('remote gateway attempts cannot use container failure envelopes')
+      }
+      if (serviceProofAttempt) {
+        throw new Error('service-proof attempts cannot use provider failure envelopes')
       }
       const envelope = await readAttemptFailureEnvelope(
         { directory, run },
@@ -1880,6 +2124,7 @@ export async function verifyControlBundle(
       authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
   )) {
     const attempt = findProviderAttempt(run, job.attempt_id)
+    if (attempt.lease.backend === 'SERVICE_PROOF_CONTAINER') continue
     const envelope = verifiedExecutionEnvelopes.get(attempt.attempt_id)
     if (!envelope) {
       throw new Error(
@@ -1921,6 +2166,12 @@ export async function verifyControlBundle(
         ? ['controls/database-discovery.json']
         : []),
       ...(
+        observedSidecar?.kind === 'COMPLETENESS'
+        && observedSidecar?.completeness_inputs !== undefined
+          ? ['controls/completeness-inputs.json']
+          : []
+      ),
+      ...(
         observedSidecar?.lens === 'database-and-data-stores'
         && run.database_conformance
           ? ['controls/database-conformance.json']
@@ -1945,6 +2196,20 @@ export async function verifyControlBundle(
         sourceSnapshot,
       )
     }
+  }
+  for (const job of run.jobs.filter(
+    ({ coverage_authority: authority }) =>
+      authority === 'CONTROLLER_OBSERVED_CONSUMPTION',
+  )) {
+    const attempt = findProviderAttempt(run, job.attempt_id)
+    if (attempt.lease.backend !== 'SERVICE_PROOF_CONTAINER') continue
+    const receipt = verifiedServiceProofReceipts.get(attempt.attempt_id)
+    if (!receipt) {
+      throw new Error(
+        `service-proof job ${job.job_id} has no verified controller receipt`,
+      )
+    }
+    assertServiceProofReceiptMatchesCommittedJob(run, job, attempt, receipt)
   }
   for (const job of run.jobs.filter(
     ({ coverage_authority: authority }) =>
@@ -1993,10 +2258,20 @@ export async function verifyControlBundle(
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
+    ...(run.lens_shared_contract_digest
+      ? { lens_shared_contract_digest: run.lens_shared_contract_digest }
+      : {}),
     ...(['3.0.0', '4.0.0', '5.0.0', '6.0.0', '7.0.0'].includes(run.schema_version)
       ? {
           coverage_policy: run.coverage.policy,
           database_discovery_digest: run.database_discovery.digest,
+          ...(run.coverage?.completeness_inputs
+            ? {
+                completeness_inputs_sha256: sha256(
+                  stableJson(run.coverage.completeness_inputs, 0),
+                ),
+              }
+            : {}),
           // Pinned so the evidence-class matrix cannot be edited after
           // planning. Conditional because a run planned before the matrix
           // existed carries none and must still validate.
@@ -2046,6 +2321,10 @@ export async function verifyControlBundle(
         || sidecar.lens_file !== currentLens.file
         || sidecar.lens_digest !== currentLens.digest
         || stableJson(sidecar.owned_topics) !== stableJson(expectedOwnedTopics)
+        || (
+          Array.isArray(sidecar.topic_obligations)
+          && stableJson(sidecar.topic_obligations) !== stableJson(expectedOwnedTopics)
+        )
         || stableJson(sidecar.known_topics) !== stableJson(currentKnownTopics)
       ) {
         throw new Error(`sidecar topic or lens authority mismatch for ${sidecar.job_id}`)
@@ -2109,7 +2388,7 @@ async function loadJobSidecar(directory, run, job) {
 
   let sidecar
   try {
-    sidecar = JSON.parse(committed.text)
+    sidecar = JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`invalid JSON in ${committed.absolutePath}: ${error.message}`)
   }
@@ -2127,6 +2406,12 @@ async function loadJobSidecar(directory, run, job) {
     if (!Array.isArray(sidecar[field])) {
       throw new Error(`sidecar ${field} must be an array for ${job.job_id}`)
     }
+  }
+  if (
+    hasOwn(job, 'topic_obligations')
+    && !Array.isArray(sidecar.topic_obligations)
+  ) {
+    throw new Error(`sidecar topic_obligations must be an array for ${job.job_id}`)
   }
   const inventory = new Set(run.coverage.inventory)
   for (const path of sidecar.scoped_files) {
@@ -2252,23 +2537,7 @@ function observedDispatchPacket(run, job, sidecar) {
 }
 
 function sourcePathsForObservedJob(run, job, sidecar, sourceIndex) {
-  if (job.kind === 'LENS') return [...sidecar.scoped_files]
-  if (job.kind === 'COMPLETENESS') return []
-  if (job.kind === 'PROOF') {
-    const candidateIds = new Set(job.candidate_ids ?? [])
-    const knownPaths = new Set(sourceIndex.files.map(({ path }) => path))
-    const paths = new Set()
-    for (const finding of run.findings.filter(
-      ({ candidate_id: candidateId }) => candidateIds.has(candidateId),
-    )) {
-      for (const location of finding.location ?? []) {
-        const match = /^(.*):[1-9][0-9]*(?::[1-9][0-9]*)?$/.exec(location)
-        if (match && knownPaths.has(match[1])) paths.add(match[1])
-      }
-    }
-    return [...paths].sort((left, right) => compareCanonicalStrings(left, right))
-  }
-  return []
+  return sourcePathsForJob(run, job, sidecar, sourceIndex)
 }
 
 function observedProviderArtifactDescriptors(run, job, sidecar, control) {
@@ -2293,6 +2562,17 @@ function observedProviderArtifactDescriptors(run, job, sidecar, control) {
     })
   }
   const controlByPath = new Map(controlIndex.files.map((file) => [file.path, file]))
+  const sharedLensControlPaths = controlIndex.files
+    .map(({ path }) => path)
+    .filter((path) => path.startsWith('lenses/_'))
+  const ownerLensControlPaths = (
+    Array.isArray(sidecar?.owned_topics)
+    && sidecar.owned_topics.length === 0
+  )
+    ? controlIndex.files
+        .map(({ path }) => path)
+        .filter((path) => /^lenses\/(?!_)[^/]+\.md$/.test(path))
+    : []
   const selectedControlPaths = new Set([
     'controls/provider-policy.json',
     'controls/lens-pack.json',
@@ -2300,12 +2580,25 @@ function observedProviderArtifactDescriptors(run, job, sidecar, control) {
       ? ['controls/database-discovery.json']
       : []),
     ...(
+      sidecar?.kind === 'COMPLETENESS'
+      && sidecar?.completeness_inputs !== undefined
+        ? ['controls/completeness-inputs.json']
+        : []
+    ),
+    ...(
       sidecar?.lens === 'database-and-data-stores'
       && run.database_conformance
         ? ['controls/database-conformance.json']
         : []
     ),
     ...(sidecar?.lens_file ? [`lenses/${sidecar.lens_file}`] : []),
+    ...sharedLensControlPaths,
+    // A zero-owner cross-cutting lens routes findings through registered domain
+    // topics and must apply the owner's discriminator/severity rules. The
+    // generated topic index names that owner but does not contain its rules,
+    // so deliver the bounded sealed lens corpus rather than asking the provider
+    // to guess or consult mutable external text.
+    ...ownerLensControlPaths,
   ])
   for (const path of [...selectedControlPaths].sort(
     (left, right) => compareCanonicalStrings(left, right),
@@ -3231,15 +3524,41 @@ async function planCommand(positionals, options) {
       workspaceRoot: targetRoot,
       policySource: 'external',
     })
-    if (!['static', 'remote_static', 'test'].includes(policy.mode)) {
-      throw new Error(
-        `local_dynamic Rules of Engagement require the T2 boot broker, which is not available in ${PLATFORM_VERSION}`,
-      )
-    }
     if (policy.mode === 'remote_static' && !sealSource) {
       throw new Error(
         'remote_static Rules of Engagement require --seal-source so the controller can bind exact outbound bytes',
       )
+    }
+    if (policy.mode === 'local_dynamic' && !sealSource) {
+      throw new Error(
+        'local_dynamic Rules of Engagement require --seal-source so T2 executes exact planned bytes',
+      )
+    }
+  }
+  let completenessInputs
+  if (typeof options['completeness-inputs'] === 'string') {
+    const inputsPath = await canonicalUnlinkedFile(
+      options['completeness-inputs'],
+      'completeness inputs path',
+    )
+    if (pathWithin(targetRoot, inputsPath)) {
+      throw new Error(
+        'completeness inputs must be supplied from outside the untrusted target repository',
+      )
+    }
+    completenessInputs = await readJson(inputsPath, {
+      maxBytes: MAX_COMPLETENESS_INPUTS_BYTES,
+      label: 'completeness inputs JSON',
+    })
+    const inputsPathAfterRead = await canonicalUnlinkedFile(
+      options['completeness-inputs'],
+      'completeness inputs path',
+    )
+    if (
+      inputsPathAfterRead !== inputsPath
+      || pathWithin(targetRoot, inputsPathAfterRead)
+    ) {
+      throw new Error('completeness inputs path changed while it was being read')
     }
   }
   let databaseConformanceEvidence
@@ -3283,12 +3602,17 @@ async function planCommand(positionals, options) {
         evidence_id: loaded.evidence_context.evidence_id,
         evidence_class: loaded.evidence_context.evidence_class,
         adapter_id: loaded.evidence_context.adapter_id,
+        evidence_context: loaded.evidence_context,
         ...(loaded.profile.artifact_kind
           ? { artifact_kind: loaded.profile.artifact_kind }
           : {}),
         coverage_state: loaded.profile.coverage_state,
         phi_bearing: loaded.profile.phi_bearing,
         root_sha256: loaded.root_sha256,
+        // Internal planning authority only. createRunPlan verifies it again,
+        // builds the bounded locator index, and strips this host path from
+        // run.json and every portable report artifact.
+        directory: loaded.directory,
       })
     }
     const ids = evidenceBundles.map(({ evidence_id: id }) => id)
@@ -3315,6 +3639,7 @@ async function planCommand(positionals, options) {
     policy,
     databaseConformanceEvidence,
     evidenceBundles,
+    completenessInputs,
     sealSource,
     ...(maxTextBytes === undefined ? {} : { inventoryOptions: { maxTextBytes } }),
     shardOptions: {
@@ -3332,26 +3657,28 @@ async function planCommand(positionals, options) {
   const summary = summarizePlan(plan)
 
   if (options.json) {
-    process.stdout.write(stableJson({ ...summary, bundle: written.directory }))
+    process.stdout.write(terminalSafeSerializedJson(
+      stableJson({ ...summary, bundle: written.directory }),
+    ))
   } else {
-    console.log(`Planned ${summary.run_id}`)
-    console.log(`Bundle: ${written.directory}`)
-    console.log(`Files: ${summary.files}`)
-    console.log(`Active fan-out lenses: ${summary.active_fanout_lenses}`)
-    console.log(`Bounded fan-out shards: ${summary.fanout_shards}`)
-    console.log(
+    console.log(terminalSafeText(`Planned ${summary.run_id}`))
+    console.log(terminalSafeText(`Bundle: ${written.directory}`))
+    console.log(terminalSafeText(`Files: ${summary.files}`))
+    console.log(terminalSafeText(`Active fan-out lenses: ${summary.active_fanout_lenses}`))
+    console.log(terminalSafeText(`Bounded fan-out shards: ${summary.fanout_shards}`))
+    console.log(terminalSafeText(
       `Database discovery: ${summary.database_stores_discovered} stores, ` +
       `${summary.database_paths_in_scope} scoped paths`,
-    )
-    console.log(`Coverage: ${summary.coverage_status}`)
-    console.log(
+    ))
+    console.log(terminalSafeText(`Coverage: ${summary.coverage_status}`))
+    console.log(terminalSafeText(
       `Source snapshot: ${summary.source_sealed ? 'SEALED (sensitive)' : 'not sealed; observed runner unavailable'}`,
-    )
+    ))
     if (summary.unassigned_text_files || summary.unexamined_files || summary.inventory_errors) {
-      console.log(
+      console.log(terminalSafeText(
         `Gaps: ${summary.unassigned_text_files} unassigned text, ` +
         `${summary.unexamined_files} unexamined, ${summary.inventory_errors} inventory errors`,
-      )
+      ))
     }
     console.log('State: PLANNED — no audit provider has run; this is not a clean result.')
   }
@@ -3393,10 +3720,10 @@ async function attestCommand(positionals, options) {
     privateKeyBytes: signingKey.bytes,
   })
   await durableCreate(outputPath, stableJson(attestation))
-  console.log(`Attested ${loaded.run.run_id}`)
-  console.log(`Root SHA-256: ${loaded.sourceDigest}`)
-  console.log(`Signing key: ${attestation.signing.key_id}`)
-  console.log(`Attestation: ${outputPath}`)
+  console.log(terminalSafeText(`Attested ${loaded.run.run_id}`))
+  console.log(terminalSafeText(`Root SHA-256: ${loaded.sourceDigest}`))
+  console.log(terminalSafeText(`Signing key: ${attestation.signing.key_id}`))
+  console.log(terminalSafeText(`Attestation: ${outputPath}`))
 }
 
 function sameTransparencyCheckpointHead(left, right) {
@@ -3716,40 +4043,42 @@ async function validateCommand(positionals, options) {
     }
   }
   if (options.json) {
-    process.stdout.write(stableJson({
+    process.stdout.write(terminalSafeSerializedJson(stableJson({
       path,
       ...result,
       ...(rootAuthenticity ? { root_authenticity: rootAuthenticity } : {}),
       ...(transparencyInclusion
         ? { transparency_inclusion: transparencyInclusion }
         : {}),
-    }))
+    })))
   } else if (result.valid) {
-    console.log(`VALID: ${path}`)
-    if (rootAuthenticity.status === 'VERIFIED') {
-      console.log(
-        `Root authenticity: VERIFIED (${rootAuthenticity.key_id})`,
-      )
+    console.log(terminalSafeText(`VALID: ${path}`))
+    if (rootAuthenticity.status === 'SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY') {
+      console.log(terminalSafeText(
+        `Root signature: VERIFIED WITH SUPPLIED KEY (${rootAuthenticity.key_id})`,
+      ))
     } else {
       console.log('Root authenticity: UNANCHORED')
     }
     if (transparencyInclusion.status === 'VERIFIED') {
-      console.log(
+      console.log(terminalSafeText(
         `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
-      )
+      ))
       if (transparencyInclusion.continuity) {
-        console.log(
+        console.log(terminalSafeText(
           `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
-        )
+        ))
       }
     } else {
       console.log('Transparency inclusion: NOT SUPPLIED')
     }
   }
   else {
-    console.error(`INVALID: ${path}`)
+    console.error(`INVALID: ${terminalSafeText(path)}`)
     for (const error of result.errors) {
-      console.error(`- ${error.code ?? error.keyword}: ${error.instancePath || '/'} ${error.message}`)
+      console.error(terminalSafeText(
+        `- ${error.code ?? error.keyword}: ${error.instancePath || '/'} ${error.message}`,
+      ))
     }
   }
   if (!result.valid) process.exitCode = 1
@@ -3826,18 +4155,167 @@ export function pendingJobsForCurrentPhase(run) {
   return pending
 }
 
+async function loadInspectionBundle(value) {
+  const loaded = await loadRun(value)
+  assertValidRun(loaded.run)
+  await verifyControlBundle(loaded.directory, loaded.run)
+  return loaded
+}
+
+async function assertInspectionUnchanged(loaded) {
+  if ((await loadRun(loaded.path)).sourceDigest !== loaded.sourceDigest) {
+    throw new Error('run changed during inspection; repeat the read for the current snapshot')
+  }
+}
+
+async function capabilitiesCommand(options) {
+  const capabilities = capabilityRegistry()
+  process.stdout.write(options.json
+    ? terminalSafeSerializedJson(stableJson(capabilities))
+    : renderCapabilities(capabilities))
+}
+
+async function doctorCommand(options) {
+  const loaded = options.bundle ? await loadInspectionBundle(options.bundle) : null
+  if (options.worker !== undefined) assertLocalFilesystemEndpoint(options.worker, 'worker configuration')
+  const report = await inspectReadiness({
+    projectRoot: PROJECT_ROOT,
+    workerConfigPath: options.worker === undefined ? undefined : resolve(options.worker),
+  })
+  if (loaded) {
+    report.environment_coverage = assessEnvironmentCoverage(loaded.run.coverage.inventory)
+    report.run_id = loaded.run.run_id
+    report.bundle_integrity = 'VERIFIED'
+    report.root_authenticity = 'UNANCHORED'
+    await assertInspectionUnchanged(loaded)
+  }
+  process.stdout.write(options.json
+    ? terminalSafeSerializedJson(stableJson(report))
+    : renderReadiness(report))
+}
+
+async function reviewTemplateCommand(positionals, options) {
+  if (typeof options.job !== 'string') throw new Error('review-template requires --job <job-id>')
+  const loaded = await loadInspectionBundle(positionals[0])
+  const job = pendingJobsForCurrentPhase(loaded.run).find((entry) => entry.job_id === options.job)
+  if (!job || job.kind !== 'LENS') throw new Error('review-template requires a pending source-review LENS job in the current phase')
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const handoff = buildReviewTemplate(dispatchPacket(loaded.run, job, sidecar))
+  await assertInspectionUnchanged(loaded)
+  const serialized = stableJson(handoff)
+  assertBundleArtifactSize(serialized, 'review handoff')
+  process.stdout.write(terminalSafeSerializedJson(serialized))
+}
+
+async function checkResultCommand(positionals, options) {
+  let runId
+  let stage = 'BUNDLE_VALIDATION'
+  try {
+    const loaded = await loadRun(positionals[0])
+    assertValidRun(loaded.run)
+    runId = loaded.run.run_id
+    stage = 'SNAPSHOT_VALIDATION'
+    const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
+    stage = 'RESULT_VALIDATION'
+    const prepared = await prepareOneResult(
+      loaded, resolve(positionals[1]), control.artifactCapacity, control.inventoryEntries,
+    )
+    stage = 'SNAPSHOT_RECHECK'
+    await assertInspectionUnchanged(loaded)
+    const result = {
+      valid: true,
+      applied: false,
+      run_id: loaded.run.run_id,
+      job_id: prepared.jobId,
+      result_state: prepared.jobState,
+      semantic_authority: 'PROVIDER_DECLARED',
+      note: 'This checks the ingestion contract only. No result was committed and no security conclusion was authenticated.',
+    }
+    process.stdout.write(options.json
+      ? terminalSafeSerializedJson(stableJson(result))
+      : `VALID RESULT (not ingested): ${terminalSafeText(prepared.jobId)}\n${result.note}\n`)
+  } catch {
+    // Parser and scope-validation errors can contain provider-controlled text.
+    // Project only a fixed stage/code, never raw evidence, messages, or Ajv params.
+    const rejected = {
+      valid: false,
+      applied: false,
+      ...(runId === undefined ? {} : { run_id: runId }),
+      error: `${stage}_FAILED`,
+      stage,
+      note: 'The result was not accepted or committed. Inspect the matching bundle and result contract locally; raw rejection details are withheld.',
+    }
+    process.stdout.write(options.json
+      ? terminalSafeSerializedJson(stableJson(rejected))
+      : `INVALID RESULT (not ingested): ${rejected.error}\n${rejected.note}\n`)
+    process.exitCode = 1
+  }
+}
+
+async function verdictCommand(positionals, options) {
+  const loaded = await loadInspectionBundle(positionals[0])
+  const assessment = buildVerdictAssessment(loaded.run, { candidateId: options.candidate })
+  assessment.bundle_integrity = 'VERIFIED'
+  assessment.root_authenticity = 'UNANCHORED'
+  await assertInspectionUnchanged(loaded)
+  process.stdout.write(options.json
+    ? terminalSafeSerializedJson(stableJson(assessment))
+    : renderVerdictAssessment(assessment))
+}
+
+async function repairBriefCommand(positionals, options) {
+  const loaded = await loadInspectionBundle(positionals[0])
+  const baseline = options.baseline ? await loadInspectionBundle(options.baseline) : null
+  const brief = buildRepairBrief(loaded.run, {
+    candidateId: options.candidate,
+    ...(baseline ? { comparison: compareRuns(baseline.run, loaded.run) } : {}),
+  })
+  await assertInspectionUnchanged(loaded)
+  if (baseline) await assertInspectionUnchanged(baseline)
+  process.stdout.write(options.json
+    ? terminalSafeSerializedJson(stableJson(brief))
+    : terminalSafeDocumentText(renderRepairBriefMarkdown(brief)))
+}
+
+async function statusCommand(positionals, options) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  assertValidRun(loaded.run)
+  const pinnedReceiptKeyId = typeof options['receipt-public-key'] === 'string'
+    ? await loadPinnedReceiptPublicKeyId(
+        options['receipt-public-key'], loaded.directory, loaded.run.repository.root,
+      )
+    : undefined
+  await verifyControlBundle(loaded.directory, loaded.run, { pinnedReceiptKeyId })
+  const after = await loadRun(loaded.path)
+  if (after.sourceDigest !== loaded.sourceDigest) {
+    throw new Error('run changed while status was being read; repeat status for the current snapshot')
+  }
+  const status = {
+    ...summarizeRunStatus(loaded.run, {
+      pendingJobs: pendingJobsForCurrentPhase(loaded.run),
+      activeAttempts: findActiveAttempt(loaded.run) ?? [],
+    }),
+    bundle_integrity: 'VERIFIED',
+    root_authenticity: 'UNANCHORED',
+    live_repository: 'NOT_CHECKED',
+  }
+  process.stdout.write(options.json
+    ? terminalSafeSerializedJson(stableJson(status))
+    : renderRunStatus(status))
+}
+
 async function nextCommand(positionals) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
   await verifyRepositorySnapshot(loaded.directory, loaded.run)
   const pending = pendingJobsForCurrentPhase(loaded.run)
   if (pending.length === 0) {
-    process.stdout.write(stableJson({
+    process.stdout.write(terminalSafeSerializedJson(stableJson({
       run_id: loaded.run.run_id,
       state: loaded.run.state,
       phase: loaded.run.phase,
       pending_jobs: [],
-    }))
+    })))
     return
   }
   const packets = []
@@ -3845,12 +4323,12 @@ async function nextCommand(positionals) {
     const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
     packets.push(dispatchPacket(loaded.run, job, sidecar))
   }
-  process.stdout.write(stableJson({
+  process.stdout.write(terminalSafeSerializedJson(stableJson({
     run_id: loaded.run.run_id,
     state: loaded.run.state,
     phase: loaded.run.phase,
     pending_jobs: packets,
-  }))
+  })))
 }
 
 async function loadTrustedProviderConfiguration(pathValue, loaded) {
@@ -4021,8 +4499,93 @@ async function loadTrustedTransparencyLogConfiguration(pathValue, loaded) {
 async function persistLoadedRun(loaded, next) {
   await persistRun(loaded.path, next, loaded.sourceDigest)
   loaded.run = next
-  loaded.sourceDigest = sha256(stableJson(next))
+  loaded.sourceDigest = sha256(Buffer.from(stableJson(next), 'utf8'))
   return next
+}
+
+function assertServiceProofReceiptMatchesLease(run, attempt, receipt) {
+  const lease = attempt.lease
+  if (
+    receipt?.schema_version !== '1.0.0'
+    || receipt?.kind !== 'red-team-audit/proof-receipt'
+    || receipt?.run_id !== run.run_id
+    || receipt?.job_id !== attempt.job_id
+    || receipt?.input_sha256 !== lease.packet_sha256
+    || receipt?.repository_snapshot?.tree_digest !== run.repository.tree_digest
+    || receipt?.repository_snapshot?.source_snapshot_sha256
+      !== run.source_snapshot?.root_sha256
+    || receipt?.repository_snapshot?.plan_digest !== run.plan_digest
+    || receipt?.repository_snapshot?.policy_digest !== run.policy_digest
+    || receipt?.repository_snapshot?.lens_pack_digest !== run.lens_pack_digest
+    || receipt?.proof_configuration?.sha256 !== lease.proof_config_sha256
+    || receipt?.proof_worker?.config_sha256 !== lease.proof_worker_config_sha256
+    || stableJson(receipt?.execution_attempt, 0)
+      !== stableJson(serviceProofAttemptReceiptBinding(attempt), 0)
+  ) {
+    throw new Error('service-proof receipt does not bind its exact attempt lease')
+  }
+  const sessionBudget = lease.service_session_budget
+  if (
+    receipt.proof_worker.controller_session_budget_ms
+      !== sessionBudget.attack_controller_wall_clock_ms
+    || receipt.proof_worker.controller_session_budget_ms
+      !== sessionBudget.control_controller_wall_clock_ms
+  ) {
+    throw new Error('service-proof receipt controller budget differs from its lease')
+  }
+}
+
+async function readServiceProofAttemptReceipt(loaded, attempt) {
+  const artifact = loaded.run.artifacts?.[attempt.execution_artifact_key]
+  if (!artifact) {
+    throw new Error(`service-proof attempt ${attempt.attempt_id} receipt is missing`)
+  }
+  if (
+    artifact.sha256 !== attempt.execution_artifact_sha256
+    || artifact.sha256 !== attempt.receipt_sha256
+  ) {
+    throw new Error('service-proof receipt digest differs from its captured attempt')
+  }
+  const committed = await readVerifiedArtifact(
+    loaded.directory,
+    loaded.run,
+    attempt.execution_artifact_key,
+    artifact.path.replaceAll('\\', '/'),
+  )
+  const receipt = parseVerifiedJson(committed)
+  assertServiceProofReceiptMatchesLease(loaded.run, attempt, receipt)
+  return receipt
+}
+
+function assertServiceProofReceiptMatchesCommittedJob(run, job, attempt, receipt) {
+  if (
+    job.state !== 'SUCCEEDED'
+    || job.input_sha256 !== attempt.lease.packet_sha256
+    || job.receipt_sha256 !== attempt.receipt_sha256
+    || job.execution_artifact_key !== attempt.execution_artifact_key
+    || receipt.job_id !== job.job_id
+    || receipt.candidate_id !== job.candidate_ids?.[0]
+    || job.producer?.name !== 'red-team-audit-service-proof-controller'
+    || job.producer?.version !== PLATFORM_VERSION
+    || job.producer?.instance_id !== 'run-service-proof:controller'
+  ) {
+    throw new Error(`service-proof receipt does not match committed job ${job.job_id}`)
+  }
+  const finding = run.findings.find(
+    ({ candidate_id: candidateId }) => candidateId === receipt.candidate_id,
+  )
+  if (!finding || receipt.evidence === null || typeof receipt.evidence !== 'object') {
+    throw new Error(`service-proof receipt evidence is missing for ${job.job_id}`)
+  }
+  for (const [key, value] of Object.entries(receipt.evidence)) {
+    if (stableJson(finding[key], 0) !== stableJson(value, 0)) {
+      throw new Error(`service-proof receipt evidence differs from job ${job.job_id}`)
+    }
+  }
+  const artifact = run.artifacts?.[attempt.execution_artifact_key]
+  if (stableJson(finding.artifact, 0) !== stableJson(artifact, 0)) {
+    throw new Error(`service-proof finding artifact differs from job ${job.job_id}`)
+  }
 }
 
 async function readAttemptEnvelope(loaded, attempt, pinnedKeyId) {
@@ -4038,7 +4601,7 @@ async function readAttemptEnvelope(loaded, attempt, pinnedKeyId) {
   )
   let envelope
   try {
-    envelope = JSON.parse(committed.text)
+    envelope = JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`execution envelope JSON is invalid: ${error.message}`)
   }
@@ -4085,11 +4648,11 @@ async function readRemoteRequestArtifact(loaded, attempt) {
   }
   let envelope
   try {
-    envelope = JSON.parse(committed.text)
+    envelope = JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`remote request envelope JSON is invalid: ${error.message}`)
   }
-  if (stableJson(envelope, 0) !== committed.text) {
+  if (!committed.content.equals(Buffer.from(stableJson(envelope, 0), 'utf8'))) {
     throw new Error('remote request artifact must retain exact canonical JSON bytes')
   }
   const controllerKey = embeddedRemotePublicKey(
@@ -4146,11 +4709,11 @@ async function readRemoteAcceptanceArtifact(
   }
   let envelope
   try {
-    envelope = JSON.parse(committed.text)
+    envelope = JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`remote acceptance envelope JSON is invalid: ${error.message}`)
   }
-  if (stableJson(envelope, 0) !== committed.text) {
+  if (!committed.content.equals(Buffer.from(stableJson(envelope, 0), 'utf8'))) {
     throw new Error('remote acceptance artifact must retain exact canonical JSON bytes')
   }
   const pinnedGatewayKey = gatewayPublicKeyBytes ?? embeddedRemotePublicKey(
@@ -4196,7 +4759,7 @@ async function readAttemptFailureEnvelope(
   )
   let envelope
   try {
-    envelope = JSON.parse(committed.text)
+    envelope = JSON.parse(verifiedArtifactUtf8(committed))
   } catch (error) {
     throw new Error(`failure envelope JSON is invalid: ${error.message}`)
   }
@@ -4584,6 +5147,12 @@ export async function runRemoteCommand(positionals, _options = {}, dependencies 
   }
   if (activeAttempts.length === 1) {
     const active = activeAttempts[0]
+    if (active.lease.backend === 'SERVICE_PROOF_CONTAINER') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the service-proof backend; `
+        + 'use run-service-proof',
+      )
+    }
     if (active.lease.backend !== 'REMOTE_GATEWAY') {
       throw new Error(
         `active attempt ${active.attempt_id} belongs to the sealed-container backend; use run-provider`,
@@ -4825,23 +5394,292 @@ function assertAttemptUsesTrustedProviderConfiguration(attempt, trusted) {
 
 // shell:false is load-bearing. The RoE allowlist matches program and argv
 // exactly, and a shell would let an argument smuggle `;` or `&&` past it.
-function spawnProofCommand(program, args, cwd) {
+export function spawnProofCommand(program, args, cwd, limits = {}) {
+  const timeoutMs = Number.isInteger(limits.timeout_ms) ? limits.timeout_ms : 120_000
+  const killGraceMs = Number.isInteger(limits.kill_grace_ms) ? limits.kill_grace_ms : 1_000
+  const maxOutputBytes = Number.isInteger(limits.max_output_bytes)
+    ? limits.max_output_bytes
+    : 65_536
   return new Promise((settle) => {
     const child = spawn(program, args, {
       cwd,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => { stdout += chunk })
-    child.stderr.on('data', (chunk) => { stderr += chunk })
-    child.on('close', (code) => settle({ code: code ?? 1, stdout, stderr }))
-    child.on('error', (error) => settle({ code: 127, stdout, stderr: String(error.message) }))
+    const started = Date.now()
+    const output = {
+      stdout: [],
+      stderr: [],
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    }
+    let timedOut = false
+    let settled = false
+    let forceTimer = null
+
+    const capture = (name, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const bytesKey = `${name}Bytes`
+      const truncatedKey = `${name}Truncated`
+      const remaining = Math.max(0, maxOutputBytes - output[bytesKey])
+      if (remaining > 0) output[name].push(buffer.subarray(0, remaining))
+      output[bytesKey] += Math.min(buffer.length, remaining)
+      if (buffer.length > remaining) output[truncatedKey] = true
+    }
+    child.stdout.on('data', (chunk) => capture('stdout', chunk))
+    child.stderr.on('data', (chunk) => capture('stderr', chunk))
+
+    const finish = (code, signal, error = null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      if (forceTimer !== null) clearTimeout(forceTimer)
+      const stdout = Buffer.concat(output.stdout).toString('utf8')
+      let stderr = Buffer.concat(output.stderr).toString('utf8')
+      if (error && stderr.length === 0) stderr = String(error.message)
+      settle({
+        code: timedOut ? 124 : (code ?? (error ? 127 : 1)),
+        signal: signal ?? null,
+        stdout,
+        stderr,
+        stdout_truncated: output.stdoutTruncated,
+        stderr_truncated: output.stderrTruncated,
+        timed_out: timedOut,
+        spawn_error: error !== null,
+        duration_ms: Date.now() - started,
+      })
+    }
+    const timeout = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      forceTimer = setTimeout(() => child.kill('SIGKILL'), killGraceMs)
+    }, timeoutMs)
+    child.on('close', (code, signal) => finish(code, signal))
+    child.on('error', (error) => finish(null, null, error))
   })
 }
 
-export async function runProofCommand(positionals, _options = {}, dependencies = {}) {
+function currentProofVerificationJob(run, jobId) {
+  const job = pendingJobsForCurrentPhase(run).find((candidate) => (
+    candidate.job_id === jobId
+    && candidate.kind === 'PROOF'
+    && candidate.job_id.startsWith('proof-verification:')
+  ))
+  if (!job) {
+    throw new Error(
+      `${jobId} is not a current pending proof-verification job for this run`,
+    )
+  }
+  if (!Array.isArray(job.candidate_ids) || job.candidate_ids.length !== 1) {
+    throw new Error(`proof-verification job ${jobId} must name exactly one candidate`)
+  }
+  const finding = run.findings.find(
+    ({ candidate_id: candidateId }) => candidateId === job.candidate_ids[0],
+  )
+  if (!finding) {
+    throw new Error(
+      `proof-verification job ${jobId} references an unknown candidate`,
+    )
+  }
+  return { finding, job }
+}
+
+function serviceProofVerificationJob(run, jobId) {
+  const candidate = run.jobs.find((job) => job.job_id === jobId)
+  if (candidate?.state === 'PENDING') {
+    return currentProofVerificationJob(run, jobId)
+  }
+  if (
+    candidate?.state !== 'RUNNING'
+    || candidate.kind !== 'PROOF'
+    || !candidate.job_id.startsWith('proof-verification:')
+    || !Array.isArray(candidate.candidate_ids)
+    || candidate.candidate_ids.length !== 1
+  ) {
+    throw new Error(
+      `${jobId} is not a pending or recoverable RUNNING proof-verification job`,
+    )
+  }
+  const finding = run.findings.find(
+    ({ candidate_id: candidateId }) => candidateId === candidate.candidate_ids[0],
+  )
+  if (!finding) {
+    throw new Error(`proof-verification job ${jobId} references an unknown candidate`)
+  }
+  return { finding, job: candidate }
+}
+
+async function readExternalProofDocument(
+  value,
+  label,
+  targetRoot,
+  bundleRoot,
+  maxBytes,
+) {
+  const before = await canonicalUnlinkedFile(value, `${label} path`)
+  if (pathWithin(targetRoot, before) || pathWithin(bundleRoot, before)) {
+    throw new Error(`${label} must be supplied from outside the target and run bundle`)
+  }
+  const document = await readJson(before, { maxBytes, label })
+  const after = await canonicalUnlinkedFile(value, `${label} path`)
+  if (after !== before || pathWithin(targetRoot, after) || pathWithin(bundleRoot, after)) {
+    throw new Error(`${label} path changed while it was being read`)
+  }
+  return document
+}
+
+function assertPublicProofWritesAuthorized(policy, config, route = 'run-proof') {
+  for (const file of config.proof_files) {
+    const decision = authorizeAction(policy, { type: 'write_file', path: file.path })
+    if (!decision.allowed) {
+      const detail = decision.reasons
+        .map(({ code, message }) => `${code}: ${message}`)
+        .join('; ')
+      throw new Error(`proof file ${file.path} is not authorized by the run policy: ${detail}`)
+    }
+  }
+  if ((config.patch_files?.length ?? 0) > 0) {
+    throw new Error(
+      `public ${route} does not apply candidate patches; remediation is a separate directive`,
+    )
+  }
+}
+
+function assertPublicServiceLoopbackAuthorized(policy, service) {
+  const decision = authorizeAction(policy, {
+    type: 'network',
+    url: `http://127.0.0.1:${service.port}/`,
+    redirects: [],
+  })
+  if (decision.allowed) return
+  const detail = decision.reasons
+    .map(({ code, message }) => `${code}: ${message}`)
+    .join('; ')
+  throw new Error(
+    `service loopback port 127.0.0.1:${service.port} is not authorized by the run policy: ${detail}`,
+  )
+}
+
+function serviceProofContainerName(role) {
+  return `rta-proof-service-${role}-${randomUUID().replaceAll('-', '').toLowerCase()}`
+}
+
+function normalizedServiceProofFailure(error) {
+  const code = typeof error?.code === 'string' ? error.code : ''
+  const cleanupVerified = error?.evidence?.cleanup_verified === true
+  if (!/^SERVICE_PROOF_[A-Z0-9_]+$/.test(code)) return null
+  if (!cleanupVerified) return null
+  let lifecyclePhase
+  let blockingReason
+  if (code.startsWith('SERVICE_PROOF_PRE_BOOT_')) {
+    lifecyclePhase = 'pre-boot'
+    blockingReason = 'the controller could not prove the loopback service port closed before boot'
+  } else if (code.startsWith('SERVICE_PROOF_STARTUP_')) {
+    lifecyclePhase = 'startup'
+    blockingReason = 'the fixed loopback TCP readiness probe did not succeed before startup timeout'
+  } else if (code.startsWith('SERVICE_PROOF_POST_PROBE_')) {
+    lifecyclePhase = 'post-probe'
+    blockingReason = 'the fixed loopback TCP readiness probe did not remain valid after the target probe'
+  } else {
+    lifecyclePhase = 'execution'
+    blockingReason = 'the controller stopped the local service lifecycle before trusted T2 proof completed'
+  }
+  return {
+    code,
+    lifecycle_phase: lifecyclePhase,
+    cleanup_verified: true,
+    blocking_reason: blockingReason,
+  }
+}
+
+function serviceProofErrorCauses(error) {
+  return error instanceof AggregateError && Array.isArray(error.errors)
+    ? [...error.errors]
+    : [error]
+}
+
+async function removeServiceProofHostTemporaryDirectories(remove, paths) {
+  const outcomes = await Promise.allSettled(paths.map((path) => (
+    Promise.resolve().then(() => remove(path, { recursive: true, force: true }))
+  )))
+  return outcomes
+    .filter(({ status }) => status === 'rejected')
+    .map(({ reason }) => (
+      reason instanceof Error ? reason : new Error(String(reason))
+    ))
+}
+
+function serviceProofHostTemporaryCleanupError(primaryError, cleanupErrors) {
+  const error = new AggregateError(
+    [
+      ...(primaryError === undefined ? [] : serviceProofErrorCauses(primaryError)),
+      ...cleanupErrors,
+    ],
+    'service-proof host temporary directory cleanup failed',
+  )
+  error.code = 'SERVICE_PROOF_HOST_TEMP_CLEANUP_FAILED'
+  return error
+}
+
+async function materializeCompleteProofSource({
+  directory,
+  run,
+  sourceIndex,
+  maxSourceBytes,
+  inventoryOptions,
+}) {
+  const unavailable = sourceIndex.files.filter(
+    ({ availability }) => availability !== 'AVAILABLE',
+  )
+  if (unavailable.length > 0) {
+    const sample = unavailable.slice(0, 3).map(({ path, kind }) => `${path} (${kind})`)
+    throw new Error(
+      'PROOF_SOURCE_INCOMPLETE: sealed execution source contains unavailable files: '
+      + sample.join(', '),
+    )
+  }
+  const totalBytes = sourceIndex.files.reduce((total, file) => total + file.size, 0)
+  if (totalBytes > maxSourceBytes) {
+    throw new Error(
+      `PROOF_SOURCE_LIMIT: sealed source is ${totalBytes} bytes; worker permits ${maxSourceBytes}`,
+    )
+  }
+  const parent = await mkdtemp(join(tmpdir(), 'red-team-audit-sealed-proof-'))
+  const root = join(parent, 'source')
+  await mkdir(root, { mode: 0o700 })
+  try {
+    const shardCache = new Map()
+    const files = []
+    for (const file of sourceIndex.files) {
+      files.push({
+        path: file.path,
+        bytes: await readIndexedSnapshotFile(
+          directory,
+          run,
+          'source',
+          sourceIndex,
+          file,
+          shardCache,
+        ),
+      })
+    }
+    await materializeSealedFiles(root, files)
+    const staged = await inventoryRepository(root, inventoryOptions)
+    if (staged.treeDigest !== run.repository.tree_digest) {
+      throw new Error(
+        'PROOF_SOURCE_DIGEST_MISMATCH: reconstructed sealed source does not match the planned tree',
+      )
+    }
+    return { parent, root, totalBytes }
+  } catch (error) {
+    await rm(parent, { recursive: true, force: true })
+    throw error
+  }
+}
+
+export async function runProofCommand(positionals, options = {}, dependencies = {}) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
   if (loaded.run.capability_mode !== 'TEST_EXECUTION') {
@@ -4852,45 +5690,792 @@ export async function runProofCommand(positionals, _options = {}, dependencies =
   if (!loaded.run.source_snapshot) {
     throw new Error('run-proof requires a bundle created with plan --seal-source')
   }
-  const config = assertValidProofConfig(await readJson(
-    requirePositional(positionals, 1, 'proof configuration'),
-    { maxBytes: 8 * 1024 * 1024, label: 'proof configuration JSON' },
+  const proofConfigPath = requirePositional(positionals, 1, 'proof configuration')
+  const internalSpawn = dependencies.spawn
+  const publicRoute = typeof internalSpawn !== 'function'
+  const config = assertValidProofConfig(await readExternalProofDocument(
+    proofConfigPath,
+    'proof configuration JSON',
+    loaded.run.repository.root,
+    loaded.directory,
+    8 * 1024 * 1024,
   ))
+  if (publicRoute && config.schema_version !== '2.0.0') {
+    throw new Error('public run-proof requires a v2 proof configuration')
+  }
 
-  const control = await verifyControlBundle(loaded.directory, loaded.run, {
-    requireCurrentLensPack: true,
-  })
+  const { finding, job } = currentProofVerificationJob(loaded.run, config.job_id)
+  // This is deliberately the final repository read before the controller
+  // creates the disposable mirror and starts the authored proof commands.
+  const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
   const policy = normalizePolicy(control.policy, {
     workspaceRoot: control.policy.workspace_root,
     policySource: 'external',
   })
+  let worker = null
+  if (publicRoute) {
+    assertPublicProofWritesAuthorized(policy, config)
+    if (typeof options.worker !== 'string') {
+      throw new Error('public run-proof requires --worker <proof-worker.json>')
+    }
+    worker = normalizeProofWorkerConfig(await readExternalProofDocument(
+      options.worker,
+      'proof worker configuration JSON',
+      loaded.run.repository.root,
+      loaded.directory,
+      1024 * 1024,
+    ))
+  }
+  const expectedPacket = dispatchPacket(loaded.run, job, undefined)
+  const started = beginJob(loaded.run, job.job_id)
 
-  const targetRoot = loaded.run.repository.root
+  const inventoryOptions = {
+    maxTextBytes: loaded.run.coverage?.policy?.max_shard_bytes,
+    includedRoots: policy.capabilities?.read_file?.enabled
+      ? policy.capabilities.read_file.roots
+      : [],
+  }
+  let sealedSource = null
+  const targetRoot = publicRoute
+    ? (sealedSource = await materializeCompleteProofSource({
+        directory: loaded.directory,
+        run: loaded.run,
+        sourceIndex: control.sealedSnapshots.source,
+        maxSourceBytes: worker.limits.max_source_bytes,
+        inventoryOptions,
+      })).root
+    : loaded.run.repository.root
   const mirrorRoot = join(await mkdtemp(join(tmpdir(), 'red-team-audit-proof-')), 'mirror')
   // The non-mutation check must measure the target exactly as plan did, or it
   // reports every real run as mutated. Both inputs are recorded in the bundle.
-  const readCapability = policy.capabilities?.read_file
-  const outcome = await executeProof({
-    targetRoot,
-    mirrorRoot,
-    expectedTreeDigest: loaded.run.repository.tree_digest,
-    inventoryOptions: {
-      maxTextBytes: loaded.run.coverage?.policy?.max_shard_bytes,
-      includedRoots: readCapability?.enabled ? readCapability.roots : [],
-    },
-    policy,
-    config,
-    spawn: dependencies.spawn ?? spawnProofCommand,
-  })
+  let outcome
+  try {
+    const dockerProof = dependencies.dockerProof ?? runDockerProofCommand
+    outcome = await executeProof({
+      targetRoot,
+      mirrorRoot,
+      expectedTreeDigest: loaded.run.repository.tree_digest,
+      inventoryOptions,
+      policy,
+      config,
+      spawn: publicRoute
+        ? (program, args, sourceRoot, limits) => dockerProof({
+            config: worker,
+            sourceRoot,
+            program,
+            args,
+            limits,
+          })
+        : internalSpawn,
+    })
+  } finally {
+    if (sealedSource) {
+      await rm(sealedSource.parent, { recursive: true, force: true })
+    }
+  }
 
   // The pair runner's sixth rule replays against the previous revision, which a
   // target with no history cannot supply. Recorded, never silently skipped.
   const ruleSixApplicable = existsSync(join(targetRoot, '.git'))
-  process.stdout.write(`${stableJson({
+  const provisionalEvidence = proofEvidence({
+    ...outcome,
+    // executeProof uses null for an absent optional control; proofEvidence's
+    // legacy migration branch distinguishes absence from an observed result.
+    control: outcome.control ?? undefined,
+  }, config, { ruleSixApplicable })
+  const { artifact: _ephemeralProofArtifact, ...receiptEvidence } = provisionalEvidence
+  const receipt = buildProofReceipt({
+    run: loaded.run,
+    job,
+    config,
+    packetSha256: expectedPacket.packet_sha256,
+    outcome,
+    evidence: receiptEvidence,
+    ruleSixApplicable,
+    ...(worker
+      ? {
+          proofWorker: {
+            protocol: worker.protocol,
+            config_sha256: proofWorkerConfigDigest(worker),
+            image: worker.image,
+            dependency_manifest_sha256: worker.dependency_manifest_sha256,
+          },
+        }
+      : {}),
+  })
+  const receiptContent = stableJson(receipt)
+  const receiptSha256 = sha256(receiptContent)
+  const receiptArtifact = {
+    path: `proofs/${artifactToken(job.job_id)}/receipt-${receiptSha256}.json`,
+    sha256: receiptSha256,
+  }
+  const evidence = {
+    ...receiptEvidence,
+    artifact: receiptArtifact,
+  }
+  const jobResult = {
+    schema_version: '1.0.0',
+    run_id: loaded.run.run_id,
+    job_id: job.job_id,
+    input_sha256: expectedPacket.packet_sha256,
+    producer: {
+      name: 'red-team-audit-proof-controller',
+      version: PLATFORM_VERSION,
+      instance_id: 'run-proof:controller',
+    },
+    state: 'SUCCEEDED',
+    examined_files: [],
+    findings: [findingWithProofEvidence(finding, evidence)],
+    coverage_gaps: [],
+  }
+  const applied = applyJobResult(started, jobResult, {
+    expectedPacketSha256: expectedPacket.packet_sha256,
+    artifact: receiptArtifact,
+    inventoryEntries: control.inventoryEntries,
+  })
+  const advanced = advanceUntilBlocked(applied)
+  assertRunManifestSize(stableJson(advanced))
+  reserveBundleArtifactCapacity(
+    control.artifactCapacity,
+    receiptContent,
+    'proof receipt artifact',
+  )
+  await writeOnceBundleArtifact(
+    loaded.directory,
+    receiptArtifact.path,
+    receiptContent,
+  )
+  await persistLoadedRun(loaded, advanced)
+
+  const rendered = stableJson({
     job_id: config.job_id,
     owned_paths: outcome.ownedPaths,
-    evidence: proofEvidence(outcome, config, { ruleSixApplicable }),
-  })}\n`)
+    evidence,
+    receipt: receiptArtifact,
+  })
+  if (typeof dependencies.output === 'function') dependencies.output(rendered)
+  else process.stdout.write(terminalSafeSerializedJson(rendered))
+}
+
+function serviceProofConfigurationDigest(config) {
+  return sha256(stableJson(config, 0))
+}
+
+function serviceProofSessionBudget(controllerBudget) {
+  const captureGraceMs = 60_000
+  const sessionMs = controllerBudget.controller_session_budget_ms
+  return {
+    attack_controller_wall_clock_ms: sessionMs,
+    control_controller_wall_clock_ms: sessionMs,
+    capture_grace_ms: captureGraceMs,
+    controller_wall_clock_ms: (2 * sessionMs) + captureGraceMs,
+  }
+}
+
+function assertServiceProofAttemptConfiguration(
+  attempt,
+  { packetSha256, proofConfigSha256, proofWorkerConfigSha256, serviceSessionBudget },
+) {
+  if (
+    attempt.lease.backend !== 'SERVICE_PROOF_CONTAINER'
+    || attempt.lease.packet_sha256 !== packetSha256
+    || attempt.lease.proof_config_sha256 !== proofConfigSha256
+    || attempt.lease.proof_worker_config_sha256 !== proofWorkerConfigSha256
+    || stableJson(attempt.lease.service_session_budget, 0)
+      !== stableJson(serviceSessionBudget, 0)
+  ) {
+    throw new Error(
+      `service-proof attempt ${attempt.attempt_id} is bound to different trusted inputs`,
+    )
+  }
+}
+
+function assertServiceProofRecoveryCleanupResult(result, expectedNames) {
+  if (
+    result === null
+    || typeof result !== 'object'
+    || Array.isArray(result)
+    || result.cleanup_verified !== true
+    || result.service_container_names === null
+    || typeof result.service_container_names !== 'object'
+    || Array.isArray(result.service_container_names)
+    || stableJson(result.service_container_names, 0) !== stableJson(expectedNames, 0)
+  ) {
+    const error = new Error(
+      'service-proof recovery cleanup did not attest both exact leased container names',
+    )
+    error.code = 'SERVICE_PROOF_RECOVERY_CLEANUP_UNVERIFIED'
+    error.cleanup_verified = false
+    error.evidence = {
+      verification_status: 'UNPROVEN',
+      cleanup_verified: false,
+    }
+    throw error
+  }
+  return result
+}
+
+async function assertServiceProofDispatchLeaseCurrent(loaded, attempt, now) {
+  const current = await loadRun(loaded.directory)
+  const currentAttempt = findActiveAttempt(current.run, attempt.job_id)
+  const recovery = classifyServiceProofAttemptRecovery(
+    current.run,
+    attempt.attempt_id,
+    { now },
+  )
+  if (
+    current.sourceDigest !== loaded.sourceDigest
+    || currentAttempt?.attempt_id !== attempt.attempt_id
+    || recovery.status !== 'ACTIVE_UNEXPIRED'
+    || recovery.state !== 'STARTED'
+  ) {
+    const error = new Error(
+      `service-proof attempt ${attempt.attempt_id} is no longer dispatchable`,
+    )
+    error.code = 'SERVICE_PROOF_ATTEMPT_EXPIRED_BEFORE_DISPATCH'
+    error.evidence = {
+      verification_status: 'UNPROVEN',
+      cleanup_verified: false,
+    }
+    throw error
+  }
+}
+
+function serviceProofPersistedFailureCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(error.code)
+    ? error.code
+    : 'SERVICE_PROOF_CONTROLLER_FAILED'
+}
+
+function appendServiceProofRunError(previous, candidate, job, error) {
+  const code = serviceProofPersistedFailureCode(error)
+  const message = code === 'SERVICE_PROOF_RECOVERY_CLEANUP_UNVERIFIED'
+    ? 'expired service-proof container cleanup could not be verified'
+    : 'service-proof controller failed before trusted proof evidence committed'
+  candidate.errors.push({
+    error_id: `${job.job_id}:error:${candidate.errors.length + 1}`,
+    phase: candidate.phase,
+    code,
+    message,
+    recoverable: false,
+    job_id: job.job_id,
+  })
+  assertValidRunTransition(previous, candidate)
+  return candidate
+}
+
+async function failActiveServiceProofAttempt(loaded, job, attempt, error) {
+  const code = serviceProofPersistedFailureCode(error)
+  const previous = loaded.run
+  const failed = failServiceProofAttempt(previous, attempt.attempt_id, {
+    reason: code === 'SERVICE_PROOF_RECOVERY_CLEANUP_UNVERIFIED'
+      ? 'expired service-proof container cleanup could not be verified'
+      : 'service-proof controller failed before trusted proof evidence committed',
+    recoverable: false,
+  })
+  await persistLoadedRun(
+    loaded,
+    advanceUntilBlocked(appendServiceProofRunError(previous, failed, job, error)),
+  )
+}
+
+async function completeServiceProofAttempt({
+  loaded,
+  control,
+  finding,
+  job,
+  attempt,
+  output,
+  resumed = false,
+}) {
+  let active = attempt
+  let receipt = await readServiceProofAttemptReceipt(loaded, active)
+  if (active.state === 'RESULT_CAPTURED') {
+    const validated = recordServiceProofResultValidated(
+      loaded.run,
+      active.attempt_id,
+    )
+    await persistLoadedRun(loaded, validated)
+    active = findProviderAttempt(loaded.run, active.attempt_id)
+  }
+  if (active.state !== 'VALIDATED') {
+    throw new Error(
+      `service-proof attempt ${active.attempt_id} cannot commit from ${active.state}`,
+    )
+  }
+  receipt = await readServiceProofAttemptReceipt(loaded, active)
+  const receiptArtifact = structuredClone(
+    loaded.run.artifacts[active.execution_artifact_key],
+  )
+  const evidence = {
+    ...structuredClone(receipt.evidence),
+    artifact: receiptArtifact,
+  }
+  const jobResult = {
+    schema_version: '1.0.0',
+    run_id: loaded.run.run_id,
+    job_id: job.job_id,
+    input_sha256: active.lease.packet_sha256,
+    producer: {
+      name: 'red-team-audit-service-proof-controller',
+      version: PLATFORM_VERSION,
+      instance_id: 'run-service-proof:controller',
+    },
+    state: 'SUCCEEDED',
+    examined_files: [],
+    findings: [findingWithProofEvidence(finding, evidence)],
+    coverage_gaps: [],
+  }
+  const applied = applyJobResult(loaded.run, jobResult, {
+    expectedPacketSha256: active.lease.packet_sha256,
+    inventoryEntries: control.inventoryEntries,
+    commitObservedAttempt: (previous, candidate) => commitServiceProofAttempt(
+      previous,
+      candidate,
+      active.attempt_id,
+    ),
+  })
+  const advanced = advanceUntilBlocked(applied)
+  await persistLoadedRun(loaded, advanced)
+
+  const rendered = stableJson({
+    job_id: job.job_id,
+    owned_paths: receipt.outcome.owned_paths,
+    evidence,
+    receipt: receiptArtifact,
+    attempt_id: active.attempt_id,
+    resumed,
+  })
+  if (typeof output === 'function') output(rendered)
+  else process.stdout.write(terminalSafeSerializedJson(rendered))
+}
+
+async function runServiceProofCommandWithLockHeld(
+  positionals,
+  options,
+  dependencies,
+  loaded,
+) {
+  const completeServiceProof = dependencies.completeServiceProofAttempt
+    ?? completeServiceProofAttempt
+  if (typeof completeServiceProof !== 'function') {
+    throw new TypeError('completeServiceProofAttempt must be a function')
+  }
+  assertValidRun(loaded.run)
+  if (loaded.run.capability_mode !== 'LOCAL_DYNAMIC') {
+    throw new Error(
+      'run-service-proof requires a LOCAL_DYNAMIC run; plan with local_dynamic Rules of Engagement',
+    )
+  }
+  if (!loaded.run.source_snapshot) {
+    throw new Error('run-service-proof requires a bundle created with plan --seal-source')
+  }
+  if (loaded.run.schema_version !== '7.0.0') {
+    throw new Error('run-service-proof durable service-container attempts require a v7 run')
+  }
+
+  const config = assertValidProofConfig(await readExternalProofDocument(
+    requirePositional(positionals, 1, 'service proof configuration'),
+    'service proof configuration JSON',
+    loaded.run.repository.root,
+    loaded.directory,
+    8 * 1024 * 1024,
+  ))
+  if (config.schema_version !== '3.0.0') {
+    throw new Error('public run-service-proof requires a v3 service proof configuration')
+  }
+  if (typeof options.worker !== 'string') {
+    throw new Error('public run-service-proof requires --worker <proof-worker.json>')
+  }
+
+  let { finding, job } = serviceProofVerificationJob(loaded.run, config.job_id)
+  // This remains the final read of the named target. All execution below uses
+  // only the separately reconstructed and verified source snapshot.
+  const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
+  const policy = normalizePolicy(control.policy, {
+    workspaceRoot: control.policy.workspace_root,
+    policySource: 'external',
+  })
+  assertPublicProofWritesAuthorized(policy, config, 'T2 run-service-proof')
+  assertPublicServiceLoopbackAuthorized(policy, config.service)
+  const worker = normalizeProofWorkerConfig(await readExternalProofDocument(
+    options.worker,
+    'proof worker configuration JSON',
+    loaded.run.repository.root,
+    loaded.directory,
+    1024 * 1024,
+  ))
+  const controllerBudget = serviceProofControllerBudget(worker)
+  const serviceSessionBudget = serviceProofSessionBudget(controllerBudget)
+  const proofConfigSha256 = serviceProofConfigurationDigest(config)
+  const proofWorkerConfigSha256 = proofWorkerConfigDigest(worker)
+  const proofWorkerReceipt = {
+    protocol: worker.protocol,
+    config_sha256: proofWorkerConfigSha256,
+    image: worker.image,
+    dependency_manifest_sha256: worker.dependency_manifest_sha256,
+    wall_time_ms: worker.limits.wall_time_ms,
+    ...controllerBudget,
+  }
+
+  let expectedPacket = dispatchPacket(loaded.run, job, undefined)
+  let activeAttempt = findActiveAttempt(loaded.run, job.job_id)
+  if (job.state === 'RUNNING' && activeAttempt === null) {
+    throw new Error(
+      `LEGACY_SERVICE_PROOF_RUNNING_UNRECOVERABLE: ${job.job_id} was started before `
+      + 'durable two-container leases existed; its container identities are unknown',
+    )
+  }
+  if (activeAttempt !== null) {
+    if (activeAttempt.lease.backend !== 'SERVICE_PROOF_CONTAINER') {
+      throw new Error(
+        `active attempt ${activeAttempt.attempt_id} belongs to ${activeAttempt.lease.backend}; `
+        + 'run-service-proof will not take over another backend',
+      )
+    }
+    assertServiceProofAttemptConfiguration(activeAttempt, {
+      packetSha256: expectedPacket.packet_sha256,
+      proofConfigSha256,
+      proofWorkerConfigSha256,
+      serviceSessionBudget,
+    })
+    const recoveryOccurredAt = typeof dependencies.serviceProofNow === 'function'
+      ? dependencies.serviceProofNow()
+      : new Date().toISOString()
+    const recovery = classifyServiceProofAttemptRecovery(
+      loaded.run,
+      activeAttempt.attempt_id,
+      { now: recoveryOccurredAt },
+    )
+    if (recovery.status === 'ACTIVE_UNEXPIRED') {
+      throw new Error(
+        `service-proof attempt ${activeAttempt.attempt_id} is active until `
+        + `${recovery.expires_at}; refusing concurrent or premature replay`,
+      )
+    }
+    if (recovery.status === 'RESUMABLE') {
+      await completeServiceProof({
+        loaded,
+        control,
+        finding,
+        job,
+        attempt: activeAttempt,
+        output: dependencies.output,
+        resumed: true,
+      })
+      return
+    }
+    if (recovery.status === 'EXPIRED_STARTED') {
+      const cleanupServiceProofContainers = dependencies.cleanupServiceProofContainers
+        ?? cleanupDockerServiceProofContainers
+      try {
+        const cleanupResult = await cleanupServiceProofContainers({
+          config: worker,
+          service: config.service,
+          limits: config.limits,
+          serviceContainerNames: recovery.service_container_names,
+        })
+        assertServiceProofRecoveryCleanupResult(
+          cleanupResult,
+          recovery.service_container_names,
+        )
+      } catch (error) {
+        const cleanupError = error?.code === 'SERVICE_PROOF_RECOVERY_CLEANUP_UNVERIFIED'
+          ? error
+          : Object.assign(new AggregateError(
+              [error],
+              'expired service-proof container cleanup could not be verified',
+            ), {
+              code: 'SERVICE_PROOF_RECOVERY_CLEANUP_UNVERIFIED',
+              cleanup_verified: false,
+            })
+        const previous = loaded.run
+        const terminal = recoverExpiredServiceProofAttempt(
+          previous,
+          activeAttempt.attempt_id,
+          {
+            occurred_at: recoveryOccurredAt,
+            cleanup_verified: false,
+            service_container_names: recovery.service_container_names,
+          },
+        )
+        await persistLoadedRun(
+          loaded,
+          advanceUntilBlocked(
+            appendServiceProofRunError(previous, terminal, job, cleanupError),
+          ),
+        )
+        throw cleanupError
+      }
+    } else if (recovery.status !== 'EXPIRED_LEASED') {
+      throw new Error(
+        `service-proof attempt ${activeAttempt.attempt_id} cannot recover from `
+        + recovery.status,
+      )
+    }
+    const recovered = recoverExpiredServiceProofAttempt(
+      loaded.run,
+      activeAttempt.attempt_id,
+      {
+        occurred_at: recoveryOccurredAt,
+        ...(recovery.status === 'EXPIRED_STARTED'
+          ? {
+              cleanup_verified: true,
+              service_container_names: recovery.service_container_names,
+            }
+          : {}),
+      },
+    )
+    await persistLoadedRun(loaded, recovered)
+    ;({ finding, job } = serviceProofVerificationJob(loaded.run, config.job_id))
+    expectedPacket = dispatchPacket(loaded.run, job, undefined)
+    activeAttempt = null
+  }
+  const inventoryOptions = {
+    maxTextBytes: loaded.run.coverage?.policy?.max_shard_bytes,
+    includedRoots: policy.capabilities?.read_file?.enabled
+      ? policy.capabilities.read_file.roots
+      : [],
+  }
+  const removeHostTemporaryDirectory = dependencies.removeHostTemporaryDirectory ?? rm
+  const sealedSource = await materializeCompleteProofSource({
+    directory: loaded.directory,
+    run: loaded.run,
+    sourceIndex: control.sealedSnapshots.source,
+    maxSourceBytes: worker.limits.max_source_bytes,
+    inventoryOptions,
+  })
+  let ruleSixApplicable
+  let mirrorParent
+  try {
+    ruleSixApplicable = existsSync(join(sealedSource.root, '.git'))
+    mirrorParent = await (
+      dependencies.createServiceProofMirrorTemporaryDirectory ?? mkdtemp
+    )(join(tmpdir(), 'red-team-audit-service-proof-'))
+  } catch (error) {
+    const cleanupErrors = await removeServiceProofHostTemporaryDirectories(
+      removeHostTemporaryDirectory,
+      [sealedSource.parent],
+    )
+    if (cleanupErrors.length > 0) {
+      throw serviceProofHostTemporaryCleanupError(error, cleanupErrors)
+    }
+    throw error
+  }
+  const mirrorRoot = join(mirrorParent, 'mirror')
+  let outcome
+  let proofWorktreeSha256
+  let executionError
+  try {
+    const serviceContainerNames = {
+      attack: serviceProofContainerName('attack'),
+      control: serviceProofContainerName('control'),
+    }
+    const leased = leaseServiceProofAttempt(loaded.run, job.job_id, {
+      packet_sha256: expectedPacket.packet_sha256,
+      proof_config_sha256: proofConfigSha256,
+      proof_worker_config_sha256: proofWorkerConfigSha256,
+      service_container_names: serviceContainerNames,
+      service_session_budget: serviceSessionBudget,
+    })
+    // LEASED is the single-winner CAS. STARTED is durable before Docker can be
+    // reached, so a later controller can clean these two exact names.
+    await persistLoadedRun(loaded, leased)
+    activeAttempt = findActiveAttempt(loaded.run, job.job_id)
+    const attemptStarted = markServiceProofAttemptStarted(
+      loaded.run,
+      activeAttempt.attempt_id,
+    )
+    await persistLoadedRun(loaded, attemptStarted)
+    activeAttempt = findProviderAttempt(loaded.run, activeAttempt.attempt_id)
+    const dockerServiceProof = dependencies.dockerServiceProof
+      ?? runDockerServiceProofCommand
+    let invocation = 0
+    try {
+      outcome = await executeProof({
+        targetRoot: sealedSource.root,
+        mirrorRoot,
+        expectedTreeDigest: loaded.run.repository.tree_digest,
+        inventoryOptions,
+        policy,
+        config,
+        spawn: async (program, args, sourceRoot, limits) => {
+          const role = invocation === 0 ? 'attack' : invocation === 1 ? 'control' : null
+          invocation += 1
+          if (role === null) {
+            throw new Error('public service proof attempted an unexpected third service session')
+          }
+          const observedProofWorktreeSha256 = await proofSourceTreeDigest(
+            sourceRoot,
+            worker.limits.max_source_bytes,
+          )
+          if (proofWorktreeSha256 === undefined) {
+            proofWorktreeSha256 = observedProofWorktreeSha256
+          } else if (proofWorktreeSha256 !== observedProofWorktreeSha256) {
+            throw new Error('proof worktree changed between isolated service sessions')
+          }
+          const dispatchNow = typeof dependencies.serviceProofDispatchNow === 'function'
+            ? dependencies.serviceProofDispatchNow()
+            : new Date().toISOString()
+          await assertServiceProofDispatchLeaseCurrent(
+            loaded,
+            activeAttempt,
+            dispatchNow,
+          )
+          return await dockerServiceProof({
+            config: worker,
+            sourceRoot,
+            service: config.service,
+            program,
+            args,
+            limits,
+            containerName: activeAttempt.lease.service_container_names[role],
+          })
+        },
+      })
+    } catch (error) {
+      const failure = normalizedServiceProofFailure(error)
+      if (!failure) throw error
+      const partial = error?.proof_outcome
+      outcome = {
+        demonstration: partial?.demonstration ?? null,
+        control: partial?.control ?? null,
+        remediation: partial?.remediation ?? null,
+        ownedPaths: partial?.ownedPaths ?? config.proof_files
+          .map(({ path }) => path)
+          .sort(compareCanonicalStrings),
+        mirrorRoot,
+        mirrorRetained: false,
+        failure,
+      }
+    }
+  } catch (error) {
+    executionError = error
+  }
+
+  const cleanupErrors = await removeServiceProofHostTemporaryDirectories(
+    removeHostTemporaryDirectory,
+    [mirrorParent, sealedSource.parent],
+  )
+  if (cleanupErrors.length > 0) {
+    executionError = serviceProofHostTemporaryCleanupError(
+      executionError,
+      cleanupErrors,
+    )
+  }
+  if (executionError !== undefined) {
+    if (activeAttempt?.state === 'STARTED') {
+      try {
+        await failActiveServiceProofAttempt(
+          loaded,
+          job,
+          activeAttempt,
+          executionError,
+        )
+      } catch (persistenceError) {
+        throw new AggregateError(
+          [...serviceProofErrorCauses(executionError), persistenceError],
+          `service-proof attempt ${activeAttempt.attempt_id} failed and its FAILED event could not be persisted`,
+        )
+      }
+    }
+    throw executionError
+  }
+
+  try {
+    const provisionalEvidence = proofEvidence({
+      ...outcome,
+      control: outcome.control ?? undefined,
+    }, config, {
+      ruleSixApplicable,
+      proofWorker: proofWorkerReceipt,
+      proofWorktreeSha256,
+    })
+    const { artifact: _ephemeralProofArtifact, ...receiptEvidence } = provisionalEvidence
+    const receipt = buildProofReceipt({
+      run: loaded.run,
+      job,
+      config,
+      packetSha256: expectedPacket.packet_sha256,
+      outcome,
+      evidence: receiptEvidence,
+      ruleSixApplicable,
+      proofWorker: proofWorkerReceipt,
+      proofWorktreeSha256,
+      serviceProofAttempt: activeAttempt,
+    })
+    const receiptContent = stableJson(receipt)
+    const receiptSha256 = sha256(receiptContent)
+    const receiptArtifact = {
+      path: `proofs/${artifactToken(job.job_id)}/receipt-${receiptSha256}.json`,
+      sha256: receiptSha256,
+    }
+    reserveBundleArtifactCapacity(
+      control.artifactCapacity,
+      receiptContent,
+      'service proof receipt artifact',
+    )
+    await writeOnceBundleArtifact(
+      loaded.directory,
+      receiptArtifact.path,
+      receiptContent,
+    )
+    const captured = recordServiceProofResultCaptured(
+      loaded.run,
+      activeAttempt.attempt_id,
+      {
+        execution_artifact_key:
+          `service_proof_${artifactKeyToken(job.job_id).toLowerCase()}`,
+        execution_artifact: receiptArtifact,
+        receipt_sha256: receiptSha256,
+      },
+    )
+    assertRunManifestSize(stableJson(captured))
+    await persistLoadedRun(loaded, captured)
+    activeAttempt = findProviderAttempt(loaded.run, activeAttempt.attempt_id)
+    await completeServiceProof({
+      loaded,
+      control,
+      finding,
+      job,
+      attempt: activeAttempt,
+      output: dependencies.output,
+      resumed: false,
+    })
+  } catch (error) {
+    const stillActive = findActiveAttempt(loaded.run, job.job_id)
+    if (
+      stillActive?.lease.backend === 'SERVICE_PROOF_CONTAINER'
+      && stillActive.state === 'STARTED'
+    ) {
+      try {
+        await failActiveServiceProofAttempt(loaded, job, stillActive, error)
+      } catch (persistenceError) {
+        throw new AggregateError(
+          [error, persistenceError],
+          `service-proof attempt ${stillActive.attempt_id} could not capture evidence or persist failure`,
+        )
+      }
+    }
+    throw error
+  }
+}
+
+export async function runServiceProofCommand(positionals, options = {}, dependencies = {}) {
+  const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
+  const commandLock = await acquireServiceProofCommandLock(loaded.path, {
+    processIsAlive: dependencies.serviceProofProcessIsAlive,
+  })
+  try {
+    return await runServiceProofCommandWithLockHeld(
+      positionals,
+      options,
+      dependencies,
+      loaded,
+    )
+  } finally {
+    await releaseOwnedLock(commandLock.path, commandLock.token)
+  }
 }
 
 export async function runProviderCommand(positionals, _options = {}, dependencies = {}) {
@@ -4937,9 +6522,20 @@ export async function runProviderCommand(positionals, _options = {}, dependencie
   }
   if (activeAttempts.length === 1) {
     const active = activeAttempts[0]
+    if (active.lease.backend === 'SERVICE_PROOF_CONTAINER') {
+      throw new Error(
+        `active attempt ${active.attempt_id} belongs to the service-proof backend; `
+        + 'use run-service-proof',
+      )
+    }
     if (active.lease.backend === 'REMOTE_GATEWAY') {
       throw new Error(
         `active attempt ${active.attempt_id} belongs to the remote gateway backend; use run-remote`,
+      )
+    }
+    if (active.lease.backend !== 'SEALED_CONTAINER') {
+      throw new Error(
+        `active attempt ${active.attempt_id} uses an unsupported backend`,
       )
     }
     const recovery = classifyProviderAttemptRecovery(
@@ -5235,7 +6831,10 @@ async function prepareOneResult(
     ? beginJob(loaded.run, job.job_id)
     : loaded.run
   const canonicalResult = stableJson(jobResult)
-  const resultRelativePath = `results/${artifactToken(job.job_id)}.json`
+  const resultDigest = sha256(canonicalResult)
+  const resultRelativePath = (
+    `results/${artifactToken(job.job_id)}.${resultDigest}.json`
+  )
   const applied = applyJobResult(started, jobResult, {
     expectedPacketSha256: expectedPacket.packet_sha256,
     sidecar,
@@ -5278,14 +6877,15 @@ async function ingestOneResult(loaded, resultPath, artifactCapacity, inventoryEn
   const prepared = await prepareOneResult(
     loaded, resultPath, artifactCapacity, inventoryEntries,
   )
-  await writeOnceBundleArtifact(
-    loaded.directory,
-    prepared.resultRelativePath,
-    prepared.canonicalResult,
-  )
-  await persistRun(loaded.path, prepared.advanced, loaded.sourceDigest)
+  await persistRun(loaded.path, prepared.advanced, loaded.sourceDigest, {
+    beforeCommit: () => writeOnceBundleArtifact(
+      loaded.directory,
+      prepared.resultRelativePath,
+      prepared.canonicalResult,
+    ),
+  })
   loaded.run = prepared.advanced
-  loaded.sourceDigest = sha256(prepared.serializedRun)
+  loaded.sourceDigest = sha256(Buffer.from(prepared.serializedRun, 'utf8'))
   logAcceptedResult(prepared)
   return prepared.nextArtifactCapacity
 }
@@ -5332,9 +6932,81 @@ async function ingestBatchCommand(positionals) {
   console.log(`Batch accepted ${accepted} result${accepted === 1 ? '' : 's'}`)
 }
 
+function finalizedArtifactPayloads(run) {
+  const payloads = {
+    coverage: stableJson(run.coverage),
+    report: renderMarkdownReport(run),
+    sarif: stableJson(renderSarif(run)),
+  }
+  for (const [key, content] of Object.entries(payloads)) {
+    const artifact = run.artifacts?.[key]
+    if (!artifact || typeof artifact.path !== 'string') {
+      throw new Error(`finalized run is missing its ${key} artifact commitment`)
+    }
+    if (sha256(content) !== artifact.sha256) {
+      throw new Error(
+        `finalized run ${key} content does not match its committed digest`,
+      )
+    }
+  }
+  return payloads
+}
+
+async function writeFinalizedArtifacts(directory, run, payloads) {
+  for (const key of ['coverage', 'report', 'sarif']) {
+    await writeOnceBundleArtifact(
+      directory,
+      run.artifacts[key].path,
+      payloads[key],
+    )
+  }
+}
+
+async function assertFinalizedArtifactsCompatible(directory, run, payloads) {
+  for (const key of ['coverage', 'report', 'sarif']) {
+    const artifactPath = run.artifacts[key].path
+    let existing
+    try {
+      existing = await readSafeBundleFile(directory, artifactPath, {
+        maxBytes: MAX_BUNDLE_ARTIFACT_BYTES,
+        label: `existing ${key} artifact`,
+      })
+    } catch (error) {
+      if (error.code === 'ENOENT') continue
+      throw error
+    }
+    if (!existing.content.equals(Buffer.from(payloads[key], 'utf8'))) {
+      throw new Error(
+        `refusing to finalize over conflicting artifact ${artifactPath}`,
+      )
+    }
+  }
+}
+
 async function finalizeCommand(positionals) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   assertValidRun(loaded.run)
+  if (
+    loaded.run.phase === 'FINALIZED'
+    && ['COMPLETED', 'COMPLETE_WITH_GAPS'].includes(loaded.run.state)
+  ) {
+    const payloads = finalizedArtifactPayloads(loaded.run)
+    await persistRun(loaded.path, loaded.run, loaded.sourceDigest, {
+      afterCommit: () => writeFinalizedArtifacts(
+        loaded.directory,
+        loaded.run,
+        payloads,
+      ),
+    })
+    await verifyControlBundle(loaded.directory, loaded.run)
+    console.log(terminalSafeText(
+      `Verified final artifacts for ${loaded.run.run_id}: ${loaded.run.state}`,
+    ))
+    console.log(terminalSafeText(
+      `Report: ${join(loaded.directory, loaded.run.artifacts.report.path)}`,
+    ))
+    return
+  }
   const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
   const finalized = buildFinalizedRun(loaded.run)
   assertRunManifestSize(stableJson(finalized.run))
@@ -5343,12 +7015,30 @@ async function finalizeCommand(positionals) {
     [finalized.coverage, finalized.report, finalized.sarif],
     'final report artifacts',
   )
-  await writeOnceBundleArtifact(loaded.directory, 'coverage.json', finalized.coverage)
-  await writeOnceBundleArtifact(loaded.directory, 'report.md', finalized.report)
-  await writeOnceBundleArtifact(loaded.directory, 'results.sarif', finalized.sarif)
-  await persistRun(loaded.path, finalized.run, loaded.sourceDigest)
-  console.log(`Finalized ${finalized.run.run_id}: ${finalized.run.state}`)
-  console.log(`Report: ${join(loaded.directory, 'report.md')}`)
+  const payloads = {
+    coverage: finalized.coverage,
+    report: finalized.report,
+    sarif: finalized.sarif,
+  }
+  await persistRun(loaded.path, finalized.run, loaded.sourceDigest, {
+    beforeCommit: () => assertFinalizedArtifactsCompatible(
+      loaded.directory,
+      finalized.run,
+      payloads,
+    ),
+    afterCommit: () => writeFinalizedArtifacts(
+      loaded.directory,
+      finalized.run,
+      payloads,
+    ),
+  })
+  await verifyControlBundle(loaded.directory, finalized.run)
+  console.log(terminalSafeText(
+    `Finalized ${finalized.run.run_id}: ${finalized.run.state}`,
+  ))
+  console.log(terminalSafeText(
+    `Report: ${join(loaded.directory, finalized.run.artifacts.report.path)}`,
+  ))
 }
 
 async function abortCommand(positionals, options) {
@@ -5417,9 +7107,9 @@ async function unlockCommand(positionals) {
     }
     await unlink(lockPath)
     if (before.record) {
-      console.log(`Removed stale run lock for PID ${before.record.pid}: ${lockPath}`)
+      console.log(terminalSafeText(`Removed stale run lock for PID ${before.record.pid}: ${lockPath}`))
     } else {
-      console.log(`Removed stable malformed run lock: ${lockPath}`)
+      console.log(terminalSafeText(`Removed stable malformed run lock: ${lockPath}`))
     }
   } finally {
     await releaseOwnedLock(recoveryPath, recovery.token)
@@ -5446,19 +7136,21 @@ async function reportCommand(positionals, options) {
       )
     : undefined
   await verifyControlBundle(directory, run, { pinnedReceiptKeyId })
-  if (rootAuthenticity.status === 'VERIFIED') {
-    console.error(`Root authenticity: VERIFIED (${rootAuthenticity.key_id})`)
+  if (rootAuthenticity.status === 'SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY') {
+    console.error(terminalSafeText(
+      `Root signature: VERIFIED WITH SUPPLIED KEY (${rootAuthenticity.key_id})`,
+    ))
   } else {
     console.error('Root authenticity: UNANCHORED')
   }
   if (transparencyInclusion.status === 'VERIFIED') {
-    console.error(
+    console.error(terminalSafeText(
       `Transparency inclusion: VERIFIED (${transparencyInclusion.origin}, tree ${transparencyInclusion.tree_size}, leaf ${transparencyInclusion.leaf_index})`,
-    )
+    ))
     if (transparencyInclusion.continuity) {
-      console.error(
+      console.error(terminalSafeText(
         `Checkpoint continuity: ${transparencyInclusion.continuity.consistency}`,
-      )
+      ))
     }
   } else {
     console.error('Transparency inclusion: NOT SUPPLIED')
@@ -5466,15 +7158,15 @@ async function reportCommand(positionals, options) {
   const markdown = renderMarkdownReport(run)
   if (outputs.markdownPath) {
     await writeFile(outputs.markdownPath, markdown, { encoding: 'utf8', flag: 'wx' })
-    console.log(`Wrote ${outputs.markdownPath}`)
+    console.log(terminalSafeText(`Wrote ${outputs.markdownPath}`))
   } else {
-    process.stdout.write(markdown)
+    process.stdout.write(terminalSafeDocumentText(markdown))
   }
   if (outputs.sarifPath) {
     await writeJson(outputs.sarifPath, renderSarif(run))
     const status = `Wrote ${outputs.sarifPath}`
-    if (outputs.markdownPath) console.log(status)
-    else console.error(status)
+    if (outputs.markdownPath) console.log(terminalSafeText(status))
+    else console.error(terminalSafeText(status))
   }
 }
 
@@ -5496,9 +7188,9 @@ async function compareCommand(positionals, options) {
   const comparison = compareRuns(baseline.run, current.run)
   if (typeof options.out === 'string') {
     await writeJson(options.out, comparison)
-    console.log(`Wrote ${resolve(options.out)}`)
+    console.log(terminalSafeText(`Wrote ${resolve(options.out)}`))
   } else {
-    process.stdout.write(stableJson(comparison))
+    process.stdout.write(terminalSafeSerializedJson(stableJson(comparison)))
   }
 }
 
@@ -5621,7 +7313,7 @@ async function benchmarkCommand(positionals, options) {
     'observedFindings',
     expectedCaseIds,
   )
-  const repeatedRuns = (input.repeatedRuns ?? []).map((run, index) => {
+  const normalizedRepeats = (input.repeatedRuns ?? []).map((run, index) => {
     if (
       run === null
       || typeof run !== 'object'
@@ -5640,8 +7332,13 @@ async function benchmarkCommand(positionals, options) {
     return {
       run_id: run.run_id.trim(),
       findings: normalized.findings,
+      schemaInvalidCount: normalized.invalid.length,
+      ...(run.caseOutcomes === undefined ? {} : { caseOutcomes: run.caseOutcomes }),
     }
   })
+  const { caseOutcomes, repeatedRuns } = bindBenchmarkPrimaryOutcomes(
+    input.primary_run_id, input.caseOutcomes, normalizedRepeats,
+  )
   const primaryRunBinding = bindBenchmarkPrimaryRun(
     input.primary_run_id,
     observed.findings,
@@ -5650,10 +7347,11 @@ async function benchmarkCommand(positionals, options) {
   const metrics = scoreEvaluation({
     expectedCases: caseManifest.cases,
     observedFindings: observed.findings,
-    caseOutcomes: input.caseOutcomes ?? [],
+    caseOutcomes,
     schemaInvalidCount: observed.invalid.length,
   })
   metrics.stability = scoreFingerprintStability(repeatedRuns, caseManifest.cases)
+  metrics.repeated = scoreRepeatedEvaluations(repeatedRuns, caseManifest.cases)
   const gate = evaluateThresholds(metrics, thresholds)
   const scorecard = {
     schema_version: 1,
@@ -5673,6 +7371,8 @@ async function benchmarkCommand(positionals, options) {
         sha256: sha256(thresholdsText),
       },
       primary_run: primaryRunBinding,
+      measurement: input.measurement ?? null,
+      measurement_authority: 'CALLER_DECLARED',
       observation_authority: 'caller-supplied; canonical finding contracts enforced',
     },
     invalid_records: observed.invalid,
@@ -5681,9 +7381,9 @@ async function benchmarkCommand(positionals, options) {
   }
   if (typeof options.out === 'string') {
     await writeJson(options.out, scorecard)
-    console.log(`Wrote ${resolve(options.out)}`)
+    console.log(terminalSafeText(`Wrote ${resolve(options.out)}`))
   } else {
-    process.stdout.write(stableJson(scorecard))
+    process.stdout.write(terminalSafeSerializedJson(stableJson(scorecard)))
   }
   if (!gate.passed) process.exitCode = 2
 }
@@ -5694,13 +7394,51 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(HELP)
     return
   }
+  assertLocalFilesystemEndpoint(process.cwd(), 'working directory')
+  assertNoRemoteFilesystemArguments(argv)
   const { positionals, options } = parseArguments(argv.slice(1))
   assertArgumentShape(command, positionals, options)
+  if (command === 'run-provider') {
+    const error = new Error(
+      'run-provider is disabled before bundle or configuration access pending controller-enrolled, identity-pinned container runtime execution',
+    )
+    error.code = 'PROVIDER_RUNTIME_ENROLLMENT_REQUIRED'
+    throw error
+  }
+  if (command === 'run-remote') {
+    const error = new Error(
+      'run-remote is disabled before bundle or configuration access pending independently enrolled gateway identity and outbound-data authorization',
+    )
+    error.code = 'REMOTE_GATEWAY_ENROLLMENT_REQUIRED'
+    throw error
+  }
+  if (command === 'publish') {
+    const error = new Error(
+      'publish is disabled before run, attestation, key, output, or configuration access pending independently enrolled transparency-log identity',
+    )
+    error.code = 'TRANSPARENCY_LOG_ENROLLMENT_REQUIRED'
+    throw error
+  }
+  if (command === 'plan' && typeof options['evidence-bundle'] === 'string') {
+    const error = new Error(
+      'evidence-bundle import is disabled before repository or bundle access pending controller-authenticated manifest semantics and atomic verification',
+    )
+    error.code = 'EVIDENCE_BUNDLE_TRUST_ENROLLMENT_REQUIRED'
+    throw error
+  }
   if (command === 'plan') return planCommand(positionals, options)
   if (command === 'next') return nextCommand(positionals, options)
+  if (command === 'status') return statusCommand(positionals, options)
+  if (command === 'capabilities') return capabilitiesCommand(options)
+  if (command === 'doctor') return doctorCommand(options)
+  if (command === 'review-template') return reviewTemplateCommand(positionals, options)
+  if (command === 'check-result') return checkResultCommand(positionals, options)
+  if (command === 'verdict') return verdictCommand(positionals, options)
+  if (command === 'repair-brief') return repairBriefCommand(positionals, options)
   if (command === 'run-provider') return runProviderCommand(positionals, options)
   if (command === 'run-remote') return runRemoteCommand(positionals, options)
   if (command === 'run-proof') return runProofCommand(positionals, options)
+  if (command === 'run-service-proof') return runServiceProofCommand(positionals, options)
   if (command === 'ingest') return ingestCommand(positionals, options)
   if (command === 'ingest-batch') return ingestBatchCommand(positionals, options)
   if (command === 'finalize') return finalizeCommand(positionals, options)
@@ -5719,11 +7457,13 @@ const isDirectRun = isMainModule(import.meta.url)
 
 if (isDirectRun) {
   main().catch((error) => {
-    console.error(`ERROR: ${error.message}`)
+    console.error(`ERROR: ${terminalSafeText(error.message)}`)
     const details = error.errors ?? error.details
     if (Array.isArray(details)) {
       for (const issue of details) {
-        console.error(`- ${issue.code ?? issue.keyword}: ${issue.instancePath || '/'} ${issue.message}`)
+        console.error(terminalSafeText(
+          `- ${issue.code ?? issue.keyword}: ${issue.instancePath || '/'} ${issue.message}`,
+        ))
       }
     }
     process.exitCode = 1

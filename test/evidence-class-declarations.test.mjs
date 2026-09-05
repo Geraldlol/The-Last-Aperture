@@ -36,7 +36,7 @@ const ALL_NOT_CONSUMED = Object.fromEntries(
 
 test('every canonical lens declares all four evidence classes', () => {
   const lenses = corpus()
-  assert.equal(lenses.length, 15)
+  assert.equal(lenses.length, 22)
   assert.deepEqual(checkEvidenceClasses(lenses), [])
   for (const lens of lenses) {
     const declared = lens.frontmatter.activates_on?.evidence_classes ?? {}
@@ -138,7 +138,7 @@ test('R9 requires may_conclude for a consumed non-source class and exempts sourc
 
 test('lensEvidenceDeclarations exposes the corpus as a lookup', () => {
   const declarations = lensEvidenceDeclarations(corpus())
-  assert.equal(declarations.size, 15)
+  assert.equal(declarations.size, 22)
   assert.equal(declarations.get('cloud-and-iac')['built-artifact'].state, 'consumed')
   assert.equal(declarations.get('threat-modeling')['built-artifact'].state, 'not-consumed')
   assert.equal(declarations.get('no-such-lens'), undefined)

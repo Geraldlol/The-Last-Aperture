@@ -115,6 +115,11 @@ function normalizeExpectedCases(expectedCases) {
     const topic = nonEmptyString(entry.topic) ? entry.topic.trim() : null
     if (!topic) issues.push(`${field}.topic must be a non-empty string`)
 
+    const lens = nonEmptyString(entry.lens) ? entry.lens.trim() : null
+    if (entry.lens !== undefined && !lens) {
+      issues.push(`${field}.lens must be a non-empty string when provided`)
+    }
+
     const expectedSeverity = expectation === 'vulnerable'
       ? normalizeSeverity(entry.expected_severity, `${field}.expected_severity`, issues)
       : null
@@ -152,6 +157,7 @@ function normalizeExpectedCases(expectedCases) {
     return {
       case_id: caseId,
       expectation,
+      lens,
       topic,
       expected_severity: expectedSeverity,
       also_acceptable_topics: acceptable,
@@ -185,6 +191,7 @@ function normalizeFindings(observedFindings, expectedIds = null, fieldName = 'ob
     const caseId = nonEmptyString(entry.case_id) ? entry.case_id.trim() : null
     const candidateId = nonEmptyString(entry.candidate_id) ? entry.candidate_id.trim() : null
     const topic = nonEmptyString(entry.topic) ? entry.topic.trim() : null
+    const lens = nonEmptyString(entry.lens) ? entry.lens.trim() : null
     if (!caseId) issues.push(`${field}.case_id must be a non-empty string`)
     else if (expectedIds && !expectedIds.has(caseId)) {
       issues.push(`${field}.case_id references unknown case ${JSON.stringify(caseId)}`)
@@ -196,6 +203,9 @@ function normalizeFindings(observedFindings, expectedIds = null, fieldName = 'ob
       seenCandidates.add(candidateId)
     }
     if (!topic) issues.push(`${field}.topic must be a non-empty string`)
+    if (entry.lens !== undefined && !lens) {
+      issues.push(`${field}.lens must be a non-empty string when provided`)
+    }
 
     const severity = normalizeSeverity(entry.effective_severity, `${field}.effective_severity`, issues)
     const disposition = entry.triage_disposition
@@ -218,6 +228,7 @@ function normalizeFindings(observedFindings, expectedIds = null, fieldName = 'ob
       ...entry,
       case_id: caseId,
       candidate_id: candidateId,
+      lens,
       topic,
       effective_severity: severity,
       fingerprint: nonEmptyString(entry.fingerprint) ? entry.fingerprint.trim() : undefined,
@@ -331,6 +342,12 @@ function summarizeDetails(details) {
     unexpected_findings: 0,
     duplicate_findings: 0,
     false_clears: 0,
+    assessed_cases: 0,
+    assessed_correct: 0,
+    incomplete_cases: 0,
+    not_assessed_cases: 0,
+    unspecified_cases: 0,
+    abstentions: 0,
     severity_assessed: 0,
     severity_exact: 0,
     severity_over: 0,
@@ -346,6 +363,15 @@ function summarizeDetails(details) {
     counts.unexpected_findings += detail.unexpected_candidate_ids.length
     counts.duplicate_findings += detail.duplicate_candidate_ids.length
     if (detail.false_clear) counts.false_clears += 1
+    if (detail.assessment_status === 'assessed') {
+      counts.assessed_cases += 1
+      if (detail.classification === 'TP' || detail.classification === 'TN') {
+        counts.assessed_correct += 1
+      }
+    } else {
+      counts[`${detail.assessment_status}_cases`] += 1
+      if (detail.assessment_status !== 'unspecified') counts.abstentions += 1
+    }
     if (detail.severity_result) {
       counts.severity_assessed += 1
       counts[`severity_${detail.severity_result}`] += 1
@@ -353,6 +379,11 @@ function summarizeDetails(details) {
   }
 
   const rates = {
+    accuracy: ratio(counts.tp + counts.tn, counts.cases),
+    assessed_accuracy: ratio(counts.assessed_correct, counts.assessed_cases),
+    assessment_rate: ratio(counts.assessed_cases, counts.cases),
+    abstention_rate: ratio(counts.abstentions, counts.cases),
+    unspecified_rate: ratio(counts.unspecified_cases, counts.cases),
     precision: ratio(counts.tp, counts.tp + counts.fp),
     recall: ratio(counts.tp, counts.tp + counts.fn),
     tpr: ratio(counts.tp, counts.tp + counts.fn),
@@ -397,6 +428,12 @@ export function scoreEvaluation({
       ? reportable.filter((finding) => finding.topic === entry.topic)
       : []
     const selected = primary.length > 0 ? choosePrimaryFinding(primary) : null
+    const lensPrimary = entry.expectation === 'vulnerable' && entry.lens
+      ? primary.filter((finding) => finding.lens === entry.lens)
+      : []
+    const lensSelected = lensPrimary.length > 0
+      ? choosePrimaryFinding(lensPrimary)
+      : null
     const acceptedTopics = new Set(entry.also_acceptable_topics)
     const acceptedCandidateIds = new Set(
       reportable
@@ -422,21 +459,34 @@ export function scoreEvaluation({
     const severityResult = selected
       ? compareSeverity(selected.effective_severity, entry.expected_severity)
       : null
+    const lensSeverityResult = lensSelected
+      ? compareSeverity(lensSelected.effective_severity, entry.expected_severity)
+      : null
 
     return {
       case_id: entry.case_id,
       expectation: entry.expectation,
+      lens: entry.lens,
       topic: entry.topic,
       classification,
+      lens_classification: entry.expectation === 'vulnerable' && entry.lens
+        ? (lensSelected ? 'TP' : 'FN')
+        : classification,
       expected_severity: entry.expected_severity,
       observed_severity: selected?.effective_severity ?? null,
       severity_result: severityResult,
       matched_candidate_id: selected?.candidate_id ?? null,
+      matched_lens_candidate_id: lensSelected?.candidate_id ?? null,
+      matched_lens_observed_severity: lensSelected?.effective_severity ?? null,
+      matched_lens_severity_result: lensSeverityResult,
       reportable_finding_count: reportable.length,
       false_positive_finding_count: entry.expectation === 'clean' ? reportable.length : 0,
       duplicate_candidate_ids: duplicateCandidateIds,
       unexpected_candidate_ids: unexpectedCandidateIds,
       explicit_verdict: outcomes.get(entry.case_id) ?? null,
+      assessment_status: ['finding', 'clear'].includes(outcomes.get(entry.case_id))
+        ? 'assessed'
+        : (outcomes.get(entry.case_id) ?? 'unspecified'),
       false_clear: entry.expectation === 'vulnerable' && outcomes.get(entry.case_id) === 'clear',
     }
   })
@@ -462,6 +512,28 @@ export function scoreEvaluation({
     ? Math.min(...vulnerableTopicRecalls)
     : null
 
+  const perLens = [...new Set(expected
+    .filter(({ expectation, lens }) => expectation === 'vulnerable' && lens)
+    .map(({ lens }) => lens))]
+    .sort(compareCanonicalStrings)
+    .map((lens) => ({
+      lens,
+      ...summarizeDetails(details
+        .filter((detail) => detail.lens === lens)
+        .map((detail) => ({
+          ...detail,
+          classification: detail.lens_classification,
+          matched_candidate_id: detail.matched_lens_candidate_id,
+          observed_severity: detail.matched_lens_observed_severity,
+          severity_result: detail.matched_lens_severity_result,
+        }))),
+    }))
+  const vulnerableLensRecalls = perLens.map((entry) => entry.rates.recall)
+  summary.counts.vulnerable_lenses = perLens.length
+  summary.rates.minimum_vulnerable_lens_recall = vulnerableLensRecalls.length > 0
+    ? Math.min(...vulnerableLensRecalls)
+    : null
+
   const unexpectedByTopic = new Map()
   for (const detail of details) {
     const byId = new Map(findingsByCase.get(detail.case_id).map((finding) => [
@@ -479,6 +551,7 @@ export function scoreEvaluation({
     counts: summary.counts,
     rates: summary.rates,
     per_topic: perTopic,
+    per_lens: perLens,
     unexpected_by_topic: [...unexpectedByTopic]
       .sort(([left], [right]) => compareCanonicalStrings(left, right))
       .map(([topic, count]) => ({ topic, count })),
@@ -494,6 +567,62 @@ export function jaccardSimilarity(leftValues, rightValues) {
   let intersection = 0
   for (const value of left) if (right.has(value)) intersection += 1
   return intersection / union.size
+}
+
+function summarizeRunMetrics(runs, field) {
+  return Object.fromEntries(Object.keys(runs[0][field]).map((metric) => {
+    const values = runs.map((run) => run[field][metric])
+      .filter((value) => typeof value === 'number' && Number.isFinite(value))
+    return [metric, {
+      minimum: values.length ? Math.min(...values) : null,
+      maximum: values.length ? Math.max(...values) : null,
+      mean: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+      assessed_runs: values.length,
+      unassessed_runs: runs.length - values.length,
+    }]
+  }))
+}
+
+/** Score every repeat against the same ground truth, without pooling case
+ * denominators or substituting absent outcomes with another run's verdicts.
+ * Null metrics remain visible in aggregate assessed/unassessed run counts.
+ */
+export function scoreRepeatedEvaluations(runs, expectedCases) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    throw new EvaluationInputError('runs must be a non-empty array')
+  }
+  if (runs.length > EVALUATION_LIMITS.repeatedRuns) {
+    throw new EvaluationInputError(
+      `runs must contain at most ${EVALUATION_LIMITS.repeatedRuns} items`,
+    )
+  }
+  const seenRuns = new Set()
+  const scoredRuns = runs.map((run, index) => {
+    if (!isRecord(run) || !nonEmptyString(run.run_id)) {
+      throw new EvaluationInputError(`runs[${index}].run_id must be a non-empty string`)
+    }
+    const runId = run.run_id.trim()
+    if (seenRuns.has(runId)) {
+      throw new EvaluationInputError(`runs[${index}].run_id duplicates ${JSON.stringify(runId)}`)
+    }
+    seenRuns.add(runId)
+    const score = scoreEvaluation({
+      expectedCases,
+      observedFindings: run.findings,
+      caseOutcomes: run.caseOutcomes,
+      schemaInvalidCount: run.schemaInvalidCount,
+    })
+    return { run_id: runId, counts: score.counts, rates: score.rates }
+  }).sort((left, right) => compareCanonicalStrings(left.run_id, right.run_id))
+
+  return {
+    run_count: scoredRuns.length,
+    runs: scoredRuns,
+    aggregate: {
+      counts: summarizeRunMetrics(scoredRuns, 'counts'),
+      rates: summarizeRunMetrics(scoredRuns, 'rates'),
+    },
+  }
 }
 
 /**

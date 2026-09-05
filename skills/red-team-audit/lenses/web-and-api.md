@@ -40,6 +40,11 @@ activates_on:
     - '**/Caddyfile'
     - '**/helmet*.{ts,js}'
     - '**/cors*.{ts,js,py,go}'
+    - '**/*.{html,htm,jsx,tsx,vue,svelte}'
+    - '**/{client,frontend,public,static,web}/**/*.{js,mjs,cjs,ts}'
+    - '**/*{csv,spreadsheet,excel}*.{js,jsx,ts,tsx,py,rb,php,java,kt,cs,go}'
+    - '**/*{mailer,email,mail,memcache}*.{js,jsx,ts,tsx,py,rb,php,java,kt,cs,go}'
+    - '**/{mailer,mailers,email,emails,mail,memcache}/**/*.{js,jsx,ts,tsx,py,rb,php,java,kt,cs,go}'
   signals:
     - 'express'
     - 'fastify'
@@ -72,7 +77,7 @@ activates_on:
     - 'django'
     - 'rest_framework'
     - 'werkzeug'
-    - 'pyjwt / `import jwt`'
+    - any_of: ['pyjwt', 'import jwt']
     - 'requests'
     - 'httpx'
     - 'aiohttp'
@@ -87,7 +92,7 @@ activates_on:
     - '[ApiController]'
     - '[Authorize]'
     - 'ValidateAntiForgeryToken'
-    - 'rails / actionpack'
+    - any_of: ['rails', 'actionpack']
     - 'protect_from_forgery'
     - 'skip_before_action :verify_authenticity_token'
     - 'laravel/framework'
@@ -96,15 +101,15 @@ activates_on:
     - 'gorilla/mux'
     - 'go-chi/chi'
     - 'labstack/echo'
-    - 'net/http + http.HandleFunc'
+    - any_of: ['net/http', 'http.HandleFunc']
     - 'httputil.NewSingleHostReverseProxy'
-    - 'grpc / @grpc/grpc-js / grpcio'
-    - 'grpc reflection.Register'
+    - any_of: ['grpc', '@grpc/grpc-js', 'grpcio']
+    - any_of: ['grpc', 'reflection.Register']
     - 'ws'
     - 'socket.io'
     - 'websockets'
     - 'gorilla/websocket'
-    - 'EventSource / text/event-stream'
+    - any_of: ['EventSource', 'text/event-stream']
     - 'axios'
     - 'node-fetch'
     - 'undici'
@@ -116,10 +121,43 @@ activates_on:
     - 'Access-Control-Allow-Origin'
     - 'Content-Security-Policy'
     - 'Strict-Transport-Security'
-    - 'Set-Cookie / SameSite'
-    - 'res.redirect / HttpResponseRedirect'
+    - any_of: ['Set-Cookie', 'SameSite']
+    - any_of: ['res.redirect', 'HttpResponseRedirect']
     - 'dangerouslySetInnerHTML'
-    - '__schema / introspectionQuery'
+    - any_of: ['__schema', 'introspectionQuery']
+    - 'postMessage('
+    - 'MessageEvent'
+    - 'Sec-Fetch-Site'
+    - 'Cross-Origin-Resource-Policy'
+    - '__proto__'
+    - 'window.'
+    - 'document.'
+    - 'stringifyCsv('
+    - 'csv-stringify'
+    - 'csv.writer('
+    - 'ExcelJS'
+    - 'XLSX.write'
+    - 'javax.naming'
+    - 'InitialContext'
+    - 'memcached'
+    - 'MemcachedClient'
+    - 'pymemcache'
+    - 'printf('
+    - 'fprintf('
+    - 'sprintf('
+    - 'snprintf('
+    - 'fmt::format('
+    - 'fmt.Printf('
+    - 'String.format('
+    - 'string.Format('
+    - 'nodemailer'
+    - 'smtplib'
+    - 'MimeMessage'
+    - 'mail('
+    - 'new RegExp('
+    - 'Pattern.compile('
+    - 're.compile('
+    - 'new Regex('
   evidence_classes:
     source:
       state: consumed
@@ -165,6 +203,8 @@ owns:
   - debug-and-admin-endpoint-exposure
   - client-trusted-business-rules      # business-logic (triage) files multi-step workflow abuse against this slug
   - race-conditions-and-toctou         # same: business-logic raises, this lens owns
+  - browser-origin-and-runtime-trust
+  - specialized-interpreter-and-format-injection
 defers:
   tls-and-certificate-validation: crypto-and-key-management
   jwt-jws-and-jwks-verification: crypto-and-key-management
@@ -220,12 +260,24 @@ defers:
   exfiltration-path-enumeration: threat-modeling
   cross-boundary-attribution-logging: threat-modeling
   architecture-trust-design-gaps: threat-modeling
+  security-event-coverage: security-observability-and-response
+  audit-log-integrity-and-access: security-observability-and-response
+  detection-alerting-and-escalation: security-observability-and-response
+  security-telemetry-pipeline-resilience: security-observability-and-response
+  control-failure-observability: security-observability-and-response
+  security-control-failure-mode: failure-semantics-and-resilience
+  partial-operation-and-rollback: failure-semantics-and-resilience
+  retry-backoff-and-redelivery-safety: failure-semantics-and-resilience
+  resource-exhaustion-and-bounded-work: failure-semantics-and-resilience
+  null-default-and-unknown-state-handling: failure-semantics-and-resilience
+  cleanup-and-resource-release: failure-semantics-and-resilience
+  safe-degradation-and-last-resort-handling: failure-semantics-and-resilience
 frameworks:
   - owasp-top-10          # 2025 A01-A10 is the body's section spine; the A10:2021 SSRF mapping stays as an in-body compatibility note
   - owasp-api-top-10      # 2023 API1-API10 walk
-  - nist-sp-800-63b       # password guidance only (length over complexity, no forced rotation, breach-corpus check)
+  - owasp-asvs-5.0.0      # only exact requirement mappings below; this lens does not claim ASVS level conformance
+  - nist-sp-800-63b-4     # password guidance only; mandate strength is preserved below
   - cwe                   # if a top-25 lineage is claimed anywhere in the body the identifier is exactly cwe-top-25; "SANS Top 25" is not a real list and must never appear
-  # owasp-asvs deliberately omitted: the body's "ASVS L1/L2 patterns" claim is not traceable to a single ASVS requirement ID, and 5.0.0 renumbered the whole catalogue. Re-add this identifier only in the same change that cites real 5.0 requirement IDs in the body.
 severity_floor: low
 ---
 
@@ -277,6 +329,8 @@ Four framing facts drive everything below.
 | `debug-and-admin-endpoint-exposure` | Debug, profiling, health, metrics, admin and metadata endpoints reachable by someone who should not reach them. |
 | `client-trusted-business-rules` | A rule enforced only where the client can change it: price, discount, quantity, entitlement, workflow step. The `business-logic` triage lens raises multi-step abuse against this slug; the finding is filed here. |
 | `race-conditions-and-toctou` | Check-then-act windows and missing idempotency: double-spend, double-redeem, signup and limit races. |
+| `browser-origin-and-runtime-trust` | Browser-to-browser trust boundaries beyond CORS: `postMessage`, DOM clobbering, JSONP/XSSI, Fetch Metadata and CORP decisions, and prototype-pollution source-to-gadget paths. |
+| `specialized-interpreter-and-format-injection` | Untrusted data entering secondary interpreters and formats not covered by the SQL/shell/template slugs: spreadsheet formulas, JNDI, memcache command syntax, format strings, mail protocols, and pathological regular expressions. |
 
 ### Does not own
 
@@ -299,8 +353,12 @@ Do not raise findings on these. Where the code shows one, note it in the candida
 ### Frameworks this lens may and may not cite
 
 - `owasp-top-10` (2025) and `owasp-api-top-10` (2023) are the two spines. Write category identifiers with their edition — `A01:2025`, `API1:2023` — because this lens deliberately keeps 2021 compatibility in scope, and a bare letter-number is ambiguous between two published lists whose fifth and tenth categories are entirely different bug classes.
-- **`A09:2025 Security Logging and Alerting Failures` is the official category title. Do not "correct" it** to "Logging & Alerting Failures" or to the 2021 wording. Routing is done on these strings. The leading "Security" has been challenged once already and the challenge was rejected by a fact-check against `owasp.org` — that is why the lock is here rather than the string simply being written down. It is nonetheless the one string in this lens whose every routing decision depends on a single external source, so re-verify it against `owasp.org/Top10/2025/` before this lens is published. If it does turn out to be "Logging & Alerting Failures", the change is this line and the crosswalk row, and no routing moves.
-- `nist-sp-800-63b` is cited for password and authenticator policy only. It is not an authority for hashing parameters here — that is crypto's slug.
+- **Route on `A09:2025`, not its display punctuation.** OWASP currently renders
+  the category with both “and” and “&” on official pages. The identifier is the
+  stable crosswalk key; presentation differences never move ownership.
+- `nist-sp-800-63b-4` is cited for password and authenticator policy only. It is
+  not an authority for hashing parameters here — that is crypto's slug — and
+  this lens preserves each `SHALL`, `SHALL NOT`, and `SHOULD` distinction.
 - `cwe` identifiers are cited inline, and the ones this lens actually uses are these — a framework may not be declared without something traceable to it, which is the same rule that removed ASVS below:
 
   | Checklist item | CWE |
@@ -316,7 +374,7 @@ Do not raise findings on these. Where the code shows one, note it in the candida
   | [19](#19-server-side-request-forgery-ssrf-application-path) SSRF | `CWE-918` |
 
   Timing-comparison weaknesses (`CWE-208`) are `constant-time-comparison` in `crypto-and-key-management` and are cited there, not here. If a top-25 lineage is ever claimed it is written exactly `cwe-top-25`. **"SANS Top 25" is not a real list and must never appear.**
-- **Do not cite OWASP ASVS as an authority in this lens, and do not add `owasp-asvs` to `frameworks`.** The source material claimed "ASVS L1/L2 patterns" while containing no requirement traceable to an ASVS identifier, and 5.0.0 renumbered the whole catalogue, so any level claim inherited from the old text would be unverifiable at best. Re-add the identifier only in the same change that cites real ASVS 5.0 requirement IDs at the specific checks they justify.
+- **OWASP ASVS 5.0.0 is a requirement-level verification source, not a category or severity system.** This lens cites only version-pinned requirements that map to a concrete check: `v5.0.0-1.2.10` for spreadsheet-formula injection; `v5.0.0-1.3.8` through `v5.0.0-1.3.12` for JNDI, memcache, format-string, mail, and ReDoS injection; `v5.0.0-3.2.3` for DOM clobbering; `v5.0.0-3.5.5` through `v5.0.0-3.5.8` for cross-window messaging, JSONP, XSSI, Fetch Metadata and CORP; `v5.0.0-4.3.1` and `v5.0.0-4.3.2` for GraphQL cost and introspection; and `v5.0.0-15.3.6` for prototype pollution. A finding may cite one of those identifiers after its applicability and evidence are established. Passing this lens does not establish an ASVS level or whole-standard conformance.
 
 ### Category crosswalk
 
@@ -325,15 +383,15 @@ Every category resolves to a numbered Checklist item. Nothing in this lens refer
 | Category | Checklist item |
 |---|---|
 | `A01:2025` Broken Access Control | [1](#1-object-level-authorization-bolaidor-authz-object-level), [2](#2-tenant-isolation-tenant-isolation-enforcement), [3](#3-function-level-authorization-authz-function-level), [6](#6-property-level-authorization-on-the-way-out-authz-property-level), [19](#19-server-side-request-forgery-ssrf-application-path) |
-| `A02:2025` Security Misconfiguration | [4](#4-debug-admin-and-metadata-endpoints-debug-and-admin-endpoint-exposure), [10](#10-cors-cors-policy), [11](#11-security-headers-and-csp-security-headers-and-csp), [17](#17-path-traversal-and-file-access-path-traversal-and-file-access), [25](#25-api-inventory-and-version-deprecation-api-inventory-and-version-deprecation) |
+| `A02:2025` Security Misconfiguration | [4](#4-debug-admin-and-metadata-endpoints-debug-and-admin-endpoint-exposure), [10](#10-cors-cors-policy), [11](#11-security-headers-and-csp-security-headers-and-csp), [17](#17-path-traversal-and-file-access-path-traversal-and-file-access), [25](#25-api-inventory-and-version-deprecation-api-inventory-and-version-deprecation), [34](#34-browser-origin-and-runtime-trust-browser-origin-and-runtime-trust) |
 | `A03:2025` Software Supply Chain Failures | Not owned here. Routes to `cicd-and-supply-chain`, except the browser-side half in [28](#28-third-party-script-integrity-third-party-script-integrity-sri). |
 | `A04:2025` Cryptographic Failures | Not owned here. Routes to `crypto-and-key-management`, except the transport *headers* in [11](#11-security-headers-and-csp-security-headers-and-csp) and the cookie attributes in [8](#8-sessions-and-cookies-session-and-cookie-management). |
-| `A05:2025` Injection | [13](#13-sql-nosql-and-orm-injection-injection-sql-nosql-orm), [14](#14-command-and-template-injection-injection-command-and-template), [15](#15-cross-site-scripting-and-output-encoding-xss-and-output-encoding) |
+| `A05:2025` Injection | [13](#13-sql-nosql-and-orm-injection-injection-sql-nosql-orm), [14](#14-command-and-template-injection-injection-command-and-template), [15](#15-cross-site-scripting-and-output-encoding-xss-and-output-encoding), [35](#35-specialized-interpreters-and-formats-specialized-interpreter-and-format-injection) |
 | `A06:2025` Insecure Design | [32](#32-client-trusted-business-rules-client-trusted-business-rules), [22](#22-rate-limiting-and-request-quotas-rate-limiting-and-request-quotas), [7](#7-authentication-and-credential-flows-authentication-and-credential-flows). "Services trust each other by network position" is `architecture-trust-design-gaps` in `threat-modeling`. |
 | `A07:2025` Authentication Failures | [7](#7-authentication-and-credential-flows-authentication-and-credential-flows), [8](#8-sessions-and-cookies-session-and-cookie-management) |
 | `A08:2025` Software or Data Integrity Failures | [16](#16-deserialization-and-xxe-deserialization-and-xxe), [26](#26-webhook-handler-integrity-webhook-handler-integrity), [28](#28-third-party-script-integrity-third-party-script-integrity-sri) |
-| `A09:2025` Security Logging and Alerting Failures | [31](#31-application-log-and-url-content-application-log-and-url-content) |
-| `A10:2025` Mishandling of Exceptional Conditions | [30](#30-error-handling-verbose-responses-and-fail-open-error-handling-and-verbose-responses) |
+| `A09:2025` Security Logging and Alerting Failures | [31](#31-application-log-and-url-content-application-log-and-url-content) covers unsafe log content here; event coverage, integrity, detection, escalation, pipeline resilience, and failed-control telemetry route to `security-observability-and-response`. |
+| `A10:2025` Mishandling of Exceptional Conditions | [30](#30-error-handling-verbose-responses-and-fail-open-error-handling-and-verbose-responses) covers the HTTP response; secure failure state, rollback, retry, cleanup, bounded work, and last-resort handling route to `failure-semantics-and-resilience`. |
 | `A10:2021` Server-Side Request Forgery | [19](#19-server-side-request-forgery-ssrf-application-path). The 2025 list has no standalone SSRF category; the topic is owned here regardless of which category a report maps it to. |
 | `API1:2023` Broken Object Level Authorization | [1](#1-object-level-authorization-bolaidor-authz-object-level) |
 | `API2:2023` Broken Authentication | [7](#7-authentication-and-credential-flows-authentication-and-credential-flows), [8](#8-sessions-and-cookies-session-and-cookie-management), [31](#31-application-log-and-url-content-application-log-and-url-content). Signature and claim verification route to `jwt-jws-and-jwks-verification` in `crypto-and-key-management`. |
@@ -378,6 +436,8 @@ clean web result.
 | Outbound Python, Go and Node HTTP-client signals | PARTIAL | `third-party-api-response-trust` | SSRF, destination and response-trust checks exist; client-specific redirect and resolver behavior requires reading |
 | Webhook receiver and signature signals | PARTIAL | `webhook-handler-integrity` | Signature, freshness and replay checks exist; provider-specific semantics are incomplete |
 | Nginx, header configuration and generic output-sink signals | PARTIAL | `security-headers-and-csp` | Actionable header and sink checks exist; deployment inheritance and framework defaults require reading |
+| Browser UI paths, window APIs, cross-origin headers and prototype keys | PARTIAL | `browser-origin-and-runtime-trust` | Dedicated detector pairs cover message-origin validation and prototype-pollution authority gadgets; UI path activation still requires mechanism-specific tracing |
+| Spreadsheet, naming, cache-text, format, mail and dynamic-regex sinks | PARTIAL | `specialized-interpreter-and-format-injection` | Dedicated detector pairs cover spreadsheet formulas and ReDoS; the other interpreter families require source-to-sink and runtime-specific validation |
 | Fastify, Remix, SvelteKit, FastAPI, Starlette, Gin, Gorilla, Echo, net/http, Caddy and static-host configs | NOT ASSESSED | — | Activation-only or isolated literals with no dedicated actionable body path |
 
 ## Checklist
@@ -839,7 +899,15 @@ nomatch: |
 `A07:2025`, `API2:2023`. Hashing parameters and token entropy are `crypto-and-key-management`'s; what follows is the flow.
 
 - **Account enumeration.** Different status codes, different bodies, different redirect targets, or a materially different response time for "no such user" versus "wrong password". The same applies to registration ("email already in use"), password reset, and any invite flow. A uniform response plus a rate limit is the fix; where the product requires telling the user the address is taken, say so and grade it Info with the reasoning.
-- **Password policy.** Length over composition. Composition rules (`(?=.*[A-Z])(?=.*\d)(?=.*[!@#])`), forced periodic rotation, security questions, and truncation or a low maximum length are all defects against NIST SP 800-63B's direction. Check against a breach corpus. **Two specifics worth naming because they are silent:** a maximum length below 64 characters, and a policy that strips or rejects spaces and Unicode — both break passphrases and password managers. *I have not pinned a minimum-length number to a revision of 800-63B here, because the number changed between revisions and citing the wrong one would be quoted back at the client; state the direction, and cite the revision only if you have it open.*
+- **Password policy.** Apply NIST SP 800-63B-4 with its mandate strength intact.
+  A password used as a single authentication factor has a minimum of 15
+  characters; one used only as part of MFA has a minimum of 8. Verifiers must
+  not impose composition rules or routine periodic changes and must block
+  commonly used, expected, or compromised values. The recommendation to permit
+  a maximum of at least 64 characters and to accept Unicode is a `SHOULD`, not a
+  mandatory conformance failure unless the engagement explicitly adopts it as
+  policy. Do not truncate accepted passwords, and test the complete
+  normalization and hashing path.
 - **Password reset.** The token must be single-use, short-lived, invalidated on use *and* on password change, unguessable, and not reusable after the mail is forwarded. The reset must invalidate existing sessions. A reset link in an email that also renders the token in a page URL puts it in `Referer` and in logs — that half is item 31.
 - **MFA.** Rate-limit the verification endpoint (a six-digit code with no limit is a one-million-request exhaustion, and a four-digit one is ten thousand — quote the code length from the generator before you quote a number), reject reused TOTP codes inside the window, treat recovery codes as credentials, and check that enrollment cannot be replaced by an unauthenticated flow. SMS as the only factor on a high-value account is a finding worth stating even though it is a design choice.
 - **Login as a state change.** Session fixation, rotation and revocation are item 8.
@@ -2501,6 +2569,77 @@ nomatch: |
       session.commit()
 ```
 
+### 34. Browser origin and runtime trust (`browser-origin-and-runtime-trust`)
+
+Treat every browser window, frame, worker, extension context, and third-party script as a separate principal. The same-origin policy does not authorize an application message, and a string that came from the DOM is not trusted merely because the server escaped it once.
+
+Verify five distinct mechanisms:
+
+- **Cross-window messaging (`v5.0.0-3.5.5`).** The exact ASVS requirement is that a receiver validates the trusted `event.origin` and the syntax of the message. This audit additionally checks `event.source`, message type, schema, and authorization of the requested action because origin alone does not identify the intended window or authorize a business operation. A sender uses an exact `targetOrigin`; `"*"` is acceptable only for data deliberately public to any embedding origin. Origin substring checks, suffix checks without a label boundary, and regexes that are not anchored are bypassable.
+- **DOM clobbering (`v5.0.0-3.2.3`).** Named elements must not replace security-relevant globals, configuration objects, form references, or URL variables. Trace attacker-controlled `id`/`name` values to the property lookup and then to a security decision or sink; the presence of named elements alone is not a finding.
+- **Legacy cross-origin data endpoints (`v5.0.0-3.5.6`, `v5.0.0-3.5.7`).** JSONP callbacks and script-readable JSON can expose authenticated data without CORS. Require an explicit public-data decision or retire the endpoint; prefixing JSON is relevant only where the consuming parser strips the prefix correctly.
+- **Resource isolation (`v5.0.0-3.5.8`).** Fetch Metadata checks (`Sec-Fetch-Site`, mode, destination) and `Cross-Origin-Resource-Policy` can reject cross-site requests and reads, but they are defense in depth. They do not replace authorization or CSRF controls and may be applied at an edge invisible to the checkout.
+- **Prototype pollution (`v5.0.0-15.3.6`).** Prove an attacker-controlled key such as `__proto__`, `prototype`, or `constructor` reaches a recursive merge, path setter, query-string parser, or object assignment, then prove a gadget consumes the polluted property. A vulnerable library version without a reachable source-to-gadget path belongs to dependency-CVE triage, not automatically here.
+
+```detector
+match: |
+  window.addEventListener("message", (event) => {
+    if (event.origin.includes("example.com")) {
+      billing.refund(event.data.invoiceId)
+    }
+  })
+nomatch: |
+  window.addEventListener("message", (event) => {
+    if (event.origin !== BILLING_ORIGIN || event.source !== billingFrame.contentWindow) return
+    const message = RefundMessage.parse(event.data)
+    billing.requestRefundForCurrentUser(message.invoiceId)
+  })
+```
+
+```detector
+match: |
+  const options = deepMerge(defaults, parseQuery(location.search))
+  if (options.isAdmin) renderAdminPanel()
+nomatch: |
+  const parsed = OptionsSchema.parse(Object.fromEntries(new URLSearchParams(location.search)))
+  const options = { ...defaults, theme: parsed.theme }
+  if (session.authorizedRoles.includes("admin")) renderAdminPanel()
+```
+
+The second detector is clean because it uses an allowlisted schema and derives authority from the authenticated session; swapping merge libraries without tracing the authority gadget would not prove remediation.
+
+### 35. Specialized interpreters and formats (`specialized-interpreter-and-format-injection`)
+
+The generic word “injection” is too coarse for parsers with different quoting and execution rules. Trace caller-controlled bytes to the specific interpreter and prove the context-specific delimiter, expansion, or complexity behavior. This section covers the ASVS 5.0.0 families that do not fit SQL/NoSQL, shell, template, XSS, or deserialization:
+
+- **Spreadsheet formula injection (`v5.0.0-1.2.10`).** The exact ASVS leading characters are `=`, `+`, `-`, `@`, TAB, and NUL. Escape a leading special character with a single quote (or an equivalently documented target-application encoding), then quote and escape the field according to RFC 4180. Carriage returns, leading-whitespace variants, and locale-specific formula markers are audit extensions only where the selected spreadsheet application is demonstrated to interpret them. Generic HTML escaping does nothing here.
+- **JNDI and naming lookups (`v5.0.0-1.3.8`).** Caller text must not select a lookup name, provider URL, or `${jndi:...}` expansion that can trigger remote resolution or object loading. Determine the runtime and library version; a historical payload string alone is not proof that a current configuration evaluates it.
+- **Memcache and text-protocol injection (`v5.0.0-1.3.9`).** Reject control characters and construct commands through a client API that separates keys and values. Concatenating an untrusted cache key into a line protocol can create extra commands even when the backing value is harmless.
+- **Format-string injection (`v5.0.0-1.3.10`).** In native format APIs the attacker-controlled value is an argument, never the format string. In logging frameworks, distinguish structured placeholder APIs from language-level `printf` semantics before grading.
+- **Mail-command/header injection (`v5.0.0-1.3.11`).** Reject CR/LF and use address/header constructors for SMTP, IMAP, and message headers. Prove the value reaches a protocol or header boundary; an email address stored as plain data is not the sink.
+- **Regular-expression denial of service (`v5.0.0-1.3.12`).** Establish attacker control, a backtracking or otherwise super-linear expression on the selected engine, and an input length reachable before a bound. Prefer linear-time engines or rewrite the expression; otherwise cap length and execution time before matching.
+
+```detector
+match: |
+  rows.push([customer.name, customer.note])
+  return stringifyCsv(rows)
+nomatch: |
+  rows.push([safeSpreadsheetCell(customer.name), safeSpreadsheetCell(customer.note)])
+  return stringifyCsv(rows)
+```
+
+```detector
+match: |
+  const pattern = /^(a+)+$/
+  if (pattern.test(req.body.value)) accept()
+nomatch: |
+  const value = String(req.body.value)
+  if (value.length > 256) throw new InputTooLarge()
+  if (/^a+$/.test(value)) accept()
+```
+
+Search hits are candidates only. A spreadsheet exporter whose values are all constants, an anchored linear regex over a ten-character enum, a structured mail API that refuses CR/LF, or a format string that is a literal is not cleared or condemned by the API name alone. The finding needs the untrusted source, the exact interpreter, and the reached consequence.
+
 ## Severity calibration
 
 `severity_floor: low` is presentational. It orders this lens's findings in the report. It never suppresses a finding, and no item above may be dropped because it lands at Low or Info.
@@ -2618,9 +2757,9 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **registry-driven enumerator**, the **two-subject fixture**, the **canary fixture set**, the **socket-layer destination recorder** and the **counting fake client**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository already boots. T2 requires the auditor to stand up infrastructure the repository does not, and the user is asked every time. **This lens is unusually well served by T1** — almost every recipe below runs under `pytest` or `npm test` against the application's own test client, with no network. Say so in the coverage block, because the contrast with the platform lenses is the reason a web finding can carry a higher tier than a Salesforce one for the same class of defect.
+**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository already boots. T2 starts infrastructure the repository does not. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap. **This lens is unusually well served by T1** — almost every recipe below runs under `pytest` or `npm test` against the application's own test client, with no network. Say so in the coverage block, because the contrast with the platform lenses is the reason a web finding can carry a higher tier than a Salesforce one for the same class of defect.
 
-**One hard rail, not a tier:** no recipe here sends a request to a host the repository does not start. No probing of a deployed environment, no scanning, no "just curl the staging URL". Where live evidence is needed, keep it outside this lens and repository-proof workflow and use only the canonical skill's separately authorized external controller.
+**One hard rail, not a tier:** no repository-proof recipe here sends a request to a host the repository does not start. A deployed-environment probe or scan is separate external evidence. An accepted authenticated operator statement naming its exact destination, scope, effect, and any credential use authorizes that route without another prompt, but execute only through a matching credential-aware, destination-bound controller using explicitly supplied or controller-referenced material. If the route or material is absent, record `UNPROVEN` with the technical gap; authority does not conjure either. Never infer a destination from repository configuration, and never promote the external result into a repository proof tier.
 
 ### R1 — Two-subject authorization sweep (T1)
 

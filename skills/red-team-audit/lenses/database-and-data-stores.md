@@ -215,12 +215,7 @@ defers:
   dependency-pinning-and-lockfiles: cicd-and-supply-chain
   phi-access-audit-controls: hipaa-and-phi
   phi-severity-uplift: hipaa-and-phi
-frameworks:
-  - owasp-database-security
-  - owasp-nosql-security
-  - cis-benchmarks
-  - cwe
-  - stride
+frameworks: []
 severity_floor: low
 ---
 
@@ -788,7 +783,11 @@ All proofs inherit `_harness.md`'s hard rails. Never point a database proof at a
 shared, production, cloud or credential-bearing endpoint. Use a disposable local
 engine/container/emulator supplied by the repository, synthetic markers and a
 dedicated security-test directory. Starting an engine the repository does not
-already start is T2 and requires approval.
+already start is T2. An accepted authenticated operator statement naming the
+target, scope, and launch is the sole authorization fact; do not ask again.
+The operator is accountable for that statement; the auditor does not
+independently adjudicate legal authority. Execute only through a matching
+implemented controller, or record `UNPROVEN` with the technical transport gap.
 
 ### P1 - Adapter fixture pair (T1)
 

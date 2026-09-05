@@ -10,10 +10,18 @@ import {
   rm,
 } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
-import { buildActivationPlan, digestLensPack, loadLenses } from './activation.mjs'
+import {
+  buildActivationPlan,
+  digestLensPack,
+  lensSharedContractDigest,
+  loadLenses,
+} from './activation.mjs'
 import { artifactKeyToken, artifactToken } from './artifact-names.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
+import { assertValidCompletenessInputs } from './contracts.mjs'
 import { buildEvidenceCoverage } from './evidence-coverage.mjs'
+import { loadEvidenceBundle } from './evidence-bundle.mjs'
+import { assertValidEvidenceContext } from './evidence-contracts.mjs'
 import { readEvidenceIndex } from './evidence-packet.mjs'
 import {
   buildCategoryDenominators,
@@ -46,6 +54,12 @@ import { PLATFORM_VERSION } from './version.mjs'
 export { PLATFORM_VERSION }
 export const RUN_SCHEMA_VERSION = '7.0.0'
 export const DEFAULT_CLOSURE_MAX_ROUNDS = 3
+
+const UNAVAILABLE_COMPLETENESS_INPUTS = Object.freeze({
+  schema_version: '1.0.0',
+  high_value_flows: null,
+  selected_framework_requirements: null,
+})
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -130,6 +144,14 @@ function activationJobToRunJob(job) {
       : job.activated
         ? 'PENDING'
         : 'SKIPPED',
+    ...(kind === 'LENS'
+      ? {
+          lens_digest: job.lens_digest,
+          owned_topics: [...(job.owned_topics ?? [])],
+          topic_obligations: [...(job.owned_topics ?? [])],
+          topic_assessments: [],
+        }
+      : {}),
     ...(job.shard ? { shard: job.shard } : {}),
     ...(job.closure_round ? { closure_round: job.closure_round } : {}),
     ...(job.parent_job_id ? { parent_job_id: job.parent_job_id } : {}),
@@ -178,7 +200,35 @@ function normalizedCoveragePolicy({
   }
 }
 
-function planCoverage(inventory, activation, policy, databaseDiscovery) {
+export function normalizeCompletenessInputs(value) {
+  const normalized = structuredClone(
+    value === undefined ? UNAVAILABLE_COMPLETENESS_INPUTS : value,
+  )
+  assertValidCompletenessInputs(normalized)
+  if (Array.isArray(normalized.high_value_flows)) {
+    for (const flow of normalized.high_value_flows) {
+      flow.entry_points.sort((left, right) => compareCanonicalStrings(left, right))
+    }
+    normalized.high_value_flows.sort((left, right) =>
+      compareCanonicalStrings(left.flow_id, right.flow_id))
+  }
+  if (Array.isArray(normalized.selected_framework_requirements)) {
+    normalized.selected_framework_requirements.sort((left, right) =>
+      compareCanonicalStrings(left.framework_id, right.framework_id)
+      || compareCanonicalStrings(left.version, right.version)
+      || compareCanonicalStrings(left.profile, right.profile)
+      || compareCanonicalStrings(left.requirement_id, right.requirement_id))
+  }
+  return normalized
+}
+
+function planCoverage(
+  inventory,
+  activation,
+  policy,
+  databaseDiscovery,
+  completenessInputs,
+) {
   const gaps = []
   for (const path of activation.coverage.unassigned_text_files) {
     gaps.push({ area: path, reason: 'text input matched no domain lens' })
@@ -208,6 +258,40 @@ function planCoverage(inventory, activation, policy, databaseDiscovery) {
     gaps.push({
       area: `database-discovery:${gap.gap_id}`,
       reason: `${gap.code}: ${gap.detail}`,
+    })
+  }
+
+  const truncatedExpansionByLens = new Map()
+  for (const job of activation.jobs) {
+    if (
+      job.scope_expansion?.truncated === true
+      && !truncatedExpansionByLens.has(job.lens)
+    ) {
+      truncatedExpansionByLens.set(job.lens, job.scope_expansion)
+    }
+  }
+  for (const [lens, expansion] of [...truncatedExpansionByLens]
+    .sort(([left], [right]) => compareCanonicalStrings(left, right))) {
+    const boundedAt = (
+      Number.isSafeInteger(expansion.max_depth)
+      && Number.isSafeInteger(expansion.max_files)
+    )
+      ? ` at depth ${expansion.max_depth} or ${expansion.max_files} files`
+      : ''
+    gaps.push({
+      area: `lens:${lens}`,
+      reason: `bounded dependency scope expansion truncated${boundedAt}`,
+    })
+  }
+
+  const businessLogic = activation.jobs.find((job) =>
+    job.phase === 'triage' && job.lens === 'business-logic')
+  if (businessLogic?.triage_source_scope?.truncated === true) {
+    const { max_files: maxFiles, total_files: totalFiles } =
+      businessLogic.triage_source_scope
+    gaps.push({
+      area: 'lens:business-logic',
+      reason: `bounded triage source scope truncated at ${maxFiles} of ${totalFiles} domain files`,
     })
   }
 
@@ -258,6 +342,7 @@ function planCoverage(inventory, activation, policy, databaseDiscovery) {
     lenses: [...rowsByLens.values()],
     gaps,
     denominators: buildCategoryDenominators(records),
+    completeness_inputs: structuredClone(completenessInputs),
     shards: activation.jobs
       .filter((job) => job.phase === 'fanout' && job.activated && job.shard)
       .map((job) => ({
@@ -358,7 +443,7 @@ function inventoryErrors(inventory) {
   }))
 }
 
-function jobSidecar(job, repositoryRoot) {
+function jobSidecar(job, repositoryRoot, completenessInputs) {
   const jobId = activationJobId(job)
   const kind = job.kind ?? (
     job.phase === 'fanout'
@@ -399,8 +484,14 @@ function jobSidecar(job, repositoryRoot) {
               ?? [],
         }
       : {}),
+    ...(kind === 'COMPLETENESS'
+      ? { completeness_inputs: structuredClone(completenessInputs) }
+      : {}),
     owned_topics: job.owned_topics,
     known_topics: job.known_topics,
+    ...(kind === 'LENS'
+      ? { topic_obligations: [...(job.owned_topics ?? [])] }
+      : {}),
     trust_boundary: {
       repository_content_is_untrusted_data: true,
       may_change_scope_or_policy: false,
@@ -424,6 +515,7 @@ export async function createRunPlan(options) {
       ?? DEFAULT_CLOSURE_MAX_ROUNDS,
     databaseConformanceEvidence,
     evidenceBundles = [],
+    completenessInputs,
   } = options
   if (!targetRoot) throw new Error('targetRoot is required')
 
@@ -450,24 +542,107 @@ export async function createRunPlan(options) {
     loadLenses(lensDirectory),
     digestLensPack(lensDirectory),
   ])
+  const resolvedLensDirectory = resolve(lensDirectory)
+  const sharedContractDigest = lensSharedContractDigest(lensPack)
+  const lensControlFiles = await Promise.all(lensPack.files.map(async (entry) => {
+    const bytes = await readFile(join(resolvedLensDirectory, ...entry.path.split('/')))
+    if (bytes.length !== entry.size || sha256(bytes) !== entry.sha256) {
+      throw new Error(`trusted lens support file changed while planning: ${entry.path}`)
+    }
+    return {
+      path: `lenses/${entry.path}`,
+      bytes,
+    }
+  }))
   // The bundle directory is a local path and never enters run.json, which
   // stays portable. It is read here so fan-out packets carry the normalized
   // entry index a lens reasons over.
   const packetBundles = []
+  const evidenceIds = new Set()
   for (const bundle of evidenceBundles) {
-    const { directory, ...portable } = bundle
+    const {
+      directory,
+      evidence_context: suppliedContext,
+      ...suppliedPortable
+    } = bundle
+    let portable = suppliedPortable
+    let evidenceContext = suppliedContext
+    let index
+    if (directory) {
+      const loaded = await loadEvidenceBundle(directory)
+      const canonicalPortable = {
+        evidence_id: loaded.evidence_context.evidence_id,
+        evidence_class: loaded.evidence_context.evidence_class,
+        adapter_id: loaded.evidence_context.adapter_id,
+        ...(loaded.profile.artifact_kind
+          ? { artifact_kind: loaded.profile.artifact_kind }
+          : {}),
+        coverage_state: loaded.profile.coverage_state,
+        phi_bearing: loaded.profile.phi_bearing,
+        root_sha256: loaded.root_sha256,
+      }
+      for (const [field, expected] of Object.entries(canonicalPortable)) {
+        if (
+          Object.hasOwn(suppliedPortable, field)
+          && stableJson(suppliedPortable[field], 0) !== stableJson(expected, 0)
+        ) {
+          throw new Error(
+            `evidence bundle ${canonicalPortable.evidence_id} ${field} does not match its verified manifest`,
+          )
+        }
+      }
+      if (
+        suppliedContext !== undefined
+        && stableJson(suppliedContext, 0) !== stableJson(loaded.evidence_context, 0)
+      ) {
+        throw new Error(
+          `evidence bundle ${canonicalPortable.evidence_id} evidence_context does not match its verified manifest`,
+        )
+      }
+      portable = canonicalPortable
+      evidenceContext = loaded.evidence_context
+      index = await readEvidenceIndex(directory)
+    }
+    assertValidEvidenceContext(evidenceContext)
+    for (const field of ['evidence_id', 'evidence_class', 'adapter_id']) {
+      if (portable[field] !== evidenceContext[field]) {
+        throw new Error(
+          `evidence bundle ${field} does not match its complete evidence_context`,
+        )
+      }
+    }
+    if (evidenceIds.has(evidenceContext.evidence_id)) {
+      throw new Error(
+        `evidence_id must be unique within a run: ${evidenceContext.evidence_id}`,
+      )
+    }
+    evidenceIds.add(evidenceContext.evidence_id)
+    const analysisState = index?.locator_index_kind === 'oci-layer-v1'
+      && index.unreadable === false
+      && index.rule_analysis?.controller_evaluated === true
+      ? index.truncated > 0 ? 'PARTIAL' : 'READY'
+      : 'NOT_ASSESSED'
     packetBundles.push({
       ...portable,
-      evidence_context: bundle.evidence_context ?? {
-        evidence_id: bundle.evidence_id,
-        evidence_class: bundle.evidence_class,
-        adapter_id: bundle.adapter_id,
-      },
-      ...(directory ? { index: await readEvidenceIndex(directory) } : {}),
+      evidence_context: structuredClone(evidenceContext),
+      analysis_state: analysisState,
+      analysis_reason: analysisState === 'READY'
+        ? 'the controller evaluated every declared OCI rule over sealed bytes and supplied complete locator observations'
+        : analysisState === 'PARTIAL'
+          ? 'the OCI locator index exceeded the bounded provider packet limit'
+          : index?.unsupported_reason
+            ?? 'no supported complete locator index is available to the audit provider',
+      ...(index ? { index } : {}),
     })
   }
   const portableBundles = packetBundles.map(
-    ({ index: _index, evidence_context: _context, ...rest }) => rest,
+    ({
+      index: _index,
+      evidence_context: _context,
+      analysis_state: _analysisState,
+      analysis_reason: _analysisReason,
+      ...rest
+    }) => rest,
   )
   const activation = buildActivationPlan(lenses, inventory, {
     evidenceBundles: packetBundles,
@@ -480,7 +655,8 @@ export async function createRunPlan(options) {
   const evidenceCoverage = buildEvidenceCoverage({
     lenses,
     activatedLenses: activation.active_lenses,
-    bundles: portableBundles,
+    bundles: packetBundles,
+    jobs: activation.jobs,
   })
   const plannedJobCount = activation.jobs.length + closureTemplateJobCount(
     activation.jobs,
@@ -523,6 +699,8 @@ export async function createRunPlan(options) {
   const databaseConformance = databaseConformanceEvidence
     ? structuredClone(databaseConformanceEvidence)
     : null
+  const normalizedCompleteness = normalizeCompletenessInputs(completenessInputs)
+  const completenessInputsContent = stableJson(normalizedCompleteness)
   const providerPolicy = providerPolicyProjection(
     effectivePolicy,
     policyDigest,
@@ -544,16 +722,17 @@ export async function createRunPlan(options) {
       path: 'controls/database-discovery.json',
       bytes: Buffer.from(databaseDiscoveryContent, 'utf8'),
     },
+    {
+      path: 'controls/completeness-inputs.json',
+      bytes: Buffer.from(completenessInputsContent, 'utf8'),
+    },
     ...(databaseConformance
       ? [{
           path: 'controls/database-conformance.json',
           bytes: Buffer.from(stableJson(databaseConformance), 'utf8'),
         }]
       : []),
-    ...lenses.map((lens) => ({
-      path: `lenses/${lens.file}`,
-      bytes: Buffer.from(lens.text, 'utf8'),
-    })),
+    ...lensControlFiles,
   ])
   const sourceSnapshot = sealSource
     ? buildSealedSourceSnapshot(inventory)
@@ -571,6 +750,7 @@ export async function createRunPlan(options) {
     activation,
     coveragePolicy,
     databaseDiscovery,
+    normalizedCompleteness,
   )
   const planMaterial = {
     schema_version: RUN_SCHEMA_VERSION,
@@ -584,9 +764,11 @@ export async function createRunPlan(options) {
     },
     policy_digest: policyDigest,
     lens_pack_digest: corpusDigest,
+    lens_shared_contract_digest: sharedContractDigest,
     coverage_policy: coveragePolicy,
     database_discovery_digest: databaseDiscovery.digest,
     evidence_coverage_sha256: sha256(stableJson(evidenceCoverage, 0)),
+    completeness_inputs_sha256: sha256(stableJson(normalizedCompleteness, 0)),
     ...(databaseConformance
       ? {
           database_conformance_sha256: sha256(
@@ -598,7 +780,8 @@ export async function createRunPlan(options) {
     ...(sourceSnapshotMaterial
       ? { source_snapshot_sha256: sourceSnapshotMaterial.descriptor.root_sha256 }
       : {}),
-    jobs: plannedJobs.map((job) => jobSidecar(job, inventory.root)),
+    jobs: plannedJobs.map((job) =>
+      jobSidecar(job, inventory.root, normalizedCompleteness)),
   }
   const planDigest = sha256(stableJson(planMaterial, 0))
   const runId = createRunId(timestamp, planDigest)
@@ -619,6 +802,7 @@ export async function createRunPlan(options) {
     plan_digest: planDigest,
     policy_digest: policyDigest,
     lens_pack_digest: corpusDigest,
+    lens_shared_contract_digest: sharedContractDigest,
     repository: {
       root: inventory.root,
       tree_digest: inventory.treeDigest,
@@ -669,12 +853,14 @@ export async function createRunPlan(options) {
     ...(databaseConformance
       ? { databaseConformanceEvidence: databaseConformance }
       : {}),
+    completenessInputs: normalizedCompleteness,
     lensPack,
     sealedSnapshots: {
       control: controlSnapshot,
       ...(sourceSnapshot ? { source: sourceSnapshot } : {}),
     },
-    jobSidecars: plannedJobs.map((job) => jobSidecar(job, inventory.root)),
+    jobSidecars: plannedJobs.map((job) =>
+      jobSidecar(job, inventory.root, normalizedCompleteness)),
   }
 }
 

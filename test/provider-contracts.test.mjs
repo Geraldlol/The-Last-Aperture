@@ -52,12 +52,22 @@ test('provider config enforces internally usable bounded limits', () => {
 test('packet sanitization is an allowlist and strips target absolute paths', () => {
   const packet = sanitizeProviderPacket({
     ...providerPacket(),
+    shard: { shard_id: 'shard-0001-aaaaaaaaaaaa', index: 1, count: 1 },
+    evidence: [{ evidence_id: 'build-image', evidence_class: 'built-artifact' }],
+    database_discovery: { schema_version: 1, stores: [] },
+    database_store_ids: ['orders-primary'],
+    profile_authority_store_ids: ['orders-primary'],
     future_host_secret: 'do-not-copy',
   })
   assert.equal(packet.repository_root, undefined)
   assert.equal(packet.lens_file, undefined)
   assert.equal(packet.future_host_secret, undefined)
   assert.equal(packet.scoped_files[0], 'src/app.js')
+  assert.equal(packet.shard.shard_id, 'shard-0001-aaaaaaaaaaaa')
+  assert.equal(packet.evidence[0].evidence_id, 'build-image')
+  assert.deepEqual(packet.database_store_ids, ['orders-primary'])
+  assert.deepEqual(packet.profile_authority_store_ids, ['orders-primary'])
+  assert.deepEqual(packet.database_discovery, { schema_version: 1, stores: [] })
   assert.equal(packet.trust_boundary.provider_has_target_filesystem_authority, false)
   assert.equal(packet.trust_boundary.provider_has_network_authority, false)
   assert.equal(packet.trust_boundary.provider_has_host_process_authority, false)

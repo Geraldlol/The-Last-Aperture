@@ -1,5 +1,14 @@
 # `registry` Adapter Implementation Plan (Plan 4 of 5)
 
+> **Superseded security notice (2026-09-03):** Do not use this historical plan
+> as current operational guidance. Public registry acquisition `plan` and `run`
+> are disabled before argument, bundle, process, credential, or registry access.
+> Planning launched a caller-PATH-resolved executable, and execution trusted a
+> mutable unsigned acquisition plan without revalidating its registry target.
+> Re-enable only with signed canonical plans, controller-enrolled executable and
+> registry identities, exact target/credential reconstruction at dispatch, and
+> independent review. Contrary examples and safety claims below are historical.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Acquire a `built-artifact` bundle directly from a container registry — digest-pinned, credential-sealed, attested — reusing the normalizer and bundle writer Plan 3 already proved, and adding exactly one new thing: the first acquisition that leaves the machine.

@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,6 +41,42 @@ const request = {
   authorization_reference: 'JIRA-4418',
 }
 
+const PUBLIC_ACQUISITION_COMMANDS = Object.freeze([
+  'plan',
+  'run',
+  'finalize',
+  'validate',
+  'stop',
+])
+
+function disabledCliCases(adapter) {
+  return [
+    ...PUBLIC_ACQUISITION_COMMANDS.map((command) => [adapter, command]),
+    [adapter, 'future-command', '--caller-path', '\\\\host\\share\\target'],
+    [adapter, 'plan', '--source', '\\\\host\\share\\artifact.tar'],
+    [adapter, 'run', '--confirm-authorization-current'],
+    [
+      adapter,
+      'run',
+      `C:\\forged\\${adapter}-acquisition`,
+      '--operator-id',
+      'gmaida',
+      '--confirm-authorization-current',
+    ],
+    [adapter, 'finalize', 'C:\\forged\\bundle'],
+    [adapter, 'validate', 'C:\\forged\\bundle'],
+    [
+      adapter,
+      'stop',
+      'C:\\forged\\bundle',
+      '--operator-id',
+      'gmaida',
+      '--reason',
+      'test stop',
+    ],
+  ]
+}
+
 async function scratch() {
   return join(await mkdtemp(join(tmpdir(), 'rta-live-')), 'ev')
 }
@@ -56,35 +93,54 @@ test('all four adapters are reachable through the controller', async () => {
   assert.equal(planned.plan.evidence_context_seed.evidence_class, 'deployed-state')
 })
 
-test('the CLI accepts and plumbs --acknowledge-third-party into a deployed plan', async () => {
-  const out = await scratch()
-  await assert.rejects(
-    () => acquireMain([
-      'deployed',
-      'plan',
-      '--context',
-      'client-cluster',
-      '--evidence-id',
-      'client-third-party-cluster',
-      '--operation',
-      'not-allowlisted:',
-      '--target-class',
-      'THIRD_PARTY',
-      '--phi-scope',
-      'none',
-      '--operator-id',
-      'gmaida',
-      '--authorized-by',
-      'client-owner',
-      '--authorization-reference',
-      'SOW-42',
-      '--attest-authorized',
-      '--acknowledge-third-party',
-      '--out',
-      out,
-    ]),
-    /not allowlisted/i,
-  )
+test('every public acquisition command refuses every adapter name before controllers are touched', async () => {
+  const adapters = ['artifact', 'registry', 'deployed', 'runtime', 'spoofed-live-adapter']
+  const invocations = adapters.flatMap(disabledCliCases)
+
+  for (const argv of invocations) {
+    const calls = []
+    const forbidden = (name) => async () => {
+      calls.push(name)
+      throw new Error(`${name} must not be invoked`)
+    }
+    await assert.rejects(
+      () => acquireMain(argv, {
+        planAcquisitionImpl: forbidden('plan'),
+        runAcquisitionImpl: forbidden('run'),
+        finalizeAcquisitionImpl: forbidden('finalize'),
+        validateAcquisitionImpl: forbidden('validate'),
+        requestAcquisitionStopImpl: forbidden('stop'),
+      }),
+      (error) => error?.code === 'ACQUIRE_LIVE_IO_DISABLED'
+        && /before argument parsing, controller loading, acquisition-plan, filesystem/i
+          .test(error.message),
+      argv.join(' '),
+    )
+    assert.deepEqual(calls, [], argv.join(' '))
+  }
+})
+
+test('the acquisition executable refuses missing and forged plans for every adapter name', () => {
+  for (const adapter of ['artifact', 'registry', 'deployed', 'runtime', 'spoofed-live-adapter']) {
+    for (const args of disabledCliCases(adapter)) {
+      const refused = spawnSync(process.execPath, ['scripts/acquire.mjs', ...args], {
+        encoding: 'utf8',
+        shell: false,
+        windowsHide: true,
+      })
+      assert.equal(refused.status, 1, args.join(' '))
+      assert.match(
+        refused.stderr,
+        /\S+ is disabled before argument parsing, controller loading/i,
+        args.join(' '),
+      )
+      assert.doesNotMatch(
+        refused.stderr,
+        /ENOENT|expects 1 positional|requires --operator-id|node:internal/i,
+        args.join(' '),
+      )
+    }
+  }
 })
 
 test('a class requiring attestation refuses to run without the confirmation', async () => {
@@ -92,7 +148,12 @@ test('a class requiring attestation refuses to run without the confirmation', as
   const out = await scratch()
   await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await assert.rejects(
-    () => runAcquisition({ bundle: out, operatorId: 'gmaida', resolver: stub.resolver }),
+    () => runAcquisition({
+      bundle: out,
+      expectedAdapterId: 'deployed',
+      operatorId: 'gmaida',
+      resolver: stub.resolver,
+    }),
     /authorization/i,
   )
 })
@@ -105,6 +166,7 @@ test('the controller rejects truthy non-boolean current-authorization confirmati
     await assert.rejects(
       () => runAcquisition({
         bundle: out,
+        expectedAdapterId: 'deployed',
         operatorId: 'gmaida',
         authorizationConfirmed,
         resolver: stub.resolver,
@@ -133,6 +195,7 @@ test('stop halts an acquisition that is already planned', async () => {
   await assert.rejects(
     () => runAcquisition({
       bundle: out,
+      expectedAdapterId: 'deployed',
       operatorId: 'gmaida',
       authorizationConfirmed: true,
       resolver: stub.resolver,
@@ -155,6 +218,7 @@ test('a deployed-state locator resolves to its acquired object', async () => {
   await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
+    expectedAdapterId: 'deployed',
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,
@@ -170,6 +234,7 @@ test('an unresolvable object locator resolves to nothing rather than guessing', 
   await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
+    expectedAdapterId: 'deployed',
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,
@@ -184,6 +249,7 @@ test('the acquisition plan records what was executed for the report', async () =
   await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
+    expectedAdapterId: 'deployed',
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,

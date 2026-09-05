@@ -1,6 +1,4 @@
-import { createPublicKey } from 'node:crypto'
-import { constants as fsConstants } from 'node:fs'
-import { lstat, open, unlink } from 'node:fs/promises'
+import { open, unlink } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 
 import {
@@ -11,7 +9,6 @@ import {
   OPERATOR_ATTESTED_AUTHED_STATEMENT,
   sha256Hex,
   verifyHttpAuthedAuthorization,
-  WRITTEN_AUTHORIZATION_AUTHED_STATEMENT,
 } from './http-authed-contracts.mjs'
 import {
   HttpAuthedCredentialError,
@@ -19,14 +16,6 @@ import {
 } from './http-authed-credential.mjs'
 import { discoverHttpAuthedCandidates } from './http-authed-discovery.mjs'
 import { createHttpReconResponseObservationDescriptor } from './http-recon-response-observations.mjs'
-
-const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
-  | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
-
-const INPUT_LIMITS = Object.freeze({
-  authorizationDocument: 16 * 1024 * 1024,
-  approverPublicKey: 64 * 1024,
-})
 
 const DEFAULT_LIMITS = Object.freeze({
   request_timeout_ms: 10_000,
@@ -130,59 +119,6 @@ function clockInstant(clock) {
     throw plannerError('HTTP_AUTHED_PLAN_TIME_INVALID', 'planner clock returned an invalid time')
   }
   return instant
-}
-
-async function readStableBoundedFile(
-  path,
-  label,
-  maximum,
-  { lstatImpl = lstat, openImpl = open } = {},
-) {
-  let info
-  try {
-    info = await lstatImpl(path)
-  } catch {
-    throw plannerError('HTTP_AUTHED_PLAN_INPUT_UNREADABLE', `${label} cannot be read`)
-  }
-  if (
-    !info.isFile()
-    || info.isSymbolicLink()
-    || info.size < 1
-    || info.size > maximum
-  ) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_INPUT_UNSAFE',
-      `${label} must be a bounded regular non-symlink file`,
-    )
-  }
-
-  let handle
-  try {
-    handle = await openImpl(path, OPEN_READ_ONLY_NO_FOLLOW)
-    const before = await handle.stat()
-    const bytes = await handle.readFile()
-    const after = await handle.stat()
-    if (
-      before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs
-      || before.ino !== after.ino
-      || bytes.length !== after.size
-      || bytes.length < 1
-      || bytes.length > maximum
-    ) {
-      throw plannerError('HTTP_AUTHED_PLAN_INPUT_CHANGED', `${label} changed while it was read`)
-    }
-    return bytes
-  } catch (error) {
-    if (error instanceof HttpAuthedPlannerError) throw error
-    throw plannerError('HTTP_AUTHED_PLAN_INPUT_UNREADABLE', `${label} cannot be read`)
-  } finally {
-    try {
-      await handle?.close()
-    } catch {
-      // The read cannot be trusted when its handle did not close cleanly.
-    }
-  }
 }
 
 async function resolveCredentialBinding(credential, deps) {
@@ -385,71 +321,6 @@ function buildDiscovery(discovery, { targetOrigin, pathPrefixes, methods, catego
   }
 }
 
-function parseEd25519Approver(bytes, approver, createPublicKeyImpl) {
-  let key
-  try {
-    const text = bytes.toString('latin1')
-    key = createPublicKeyImpl(text.startsWith('-----BEGIN ')
-      ? bytes
-      : { key: bytes, format: 'der', type: 'spki' })
-  } catch {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_APPROVER_KEY_INVALID',
-      'the approver public key must be a valid Ed25519 public key',
-    )
-  }
-  if (key.asymmetricKeyType !== 'ed25519') {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_APPROVER_KEY_INVALID',
-      'the approver public key must be Ed25519',
-    )
-  }
-  const spki = key.export({ type: 'spki', format: 'der' })
-  return {
-    mechanism: 'ed25519_file',
-    key_id: `ed25519:${sha256Hex(spki)}`,
-    public_key: {
-      format: 'spki_der_b64',
-      value_base64: spki.toString('base64'),
-    },
-    enrollment: {
-      enrolled_by: approver.enrollment?.enrolledBy,
-      enrolled_at: approver.enrollment?.enrolledAt,
-      provenance: approver.enrollment?.provenance,
-      ...(approver.enrollment?.fourEyesBy === undefined
-        ? {}
-        : { four_eyes_by: approver.enrollment.fourEyesBy }),
-    },
-  }
-}
-
-async function buildApprover(approver, mutationAuthorized, io) {
-  if (!mutationAuthorized) return undefined
-  if (
-    approver === null
-    || typeof approver !== 'object'
-    || Array.isArray(approver)
-    || typeof approver.publicKeyPath !== 'string'
-    || approver.publicKeyPath.length === 0
-  ) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_APPROVER_REQUIRED',
-      'explicit mutation authorization requires an Ed25519 approver public key and enrollment',
-    )
-  }
-  const bytes = await readStableBoundedFile(
-    resolve(approver.publicKeyPath),
-    'approver public key',
-    INPUT_LIMITS.approverPublicKey,
-    io,
-  )
-  try {
-    return parseEd25519Approver(bytes, approver, io.createPublicKeyImpl)
-  } finally {
-    bytes.fill(0)
-  }
-}
-
 async function exclusiveCanonicalWrite(path, value, { openImpl = open, unlinkImpl = unlink } = {}) {
   let handle
   let created = false
@@ -495,12 +366,9 @@ function validateMutationFlag(value) {
 }
 
 function publicSummary(scope, outputPath, verified) {
-  const written = scope.authorization.mode === 'WRITTEN_AUTHORIZATION_AUTHED'
   const evidence = httpAuthedAuthorizationEvidence(scope)
   return {
-    kind: written
-      ? 'red-team-audit/http-authed-written-plan'
-      : 'red-team-audit/http-authed-attested-plan',
+    kind: 'red-team-audit/http-authed-attested-plan',
     schema_version: scope.schema_version,
     engagement_id: scope.engagement_id,
     authorization_mode: scope.authorization.mode,
@@ -515,9 +383,6 @@ function publicSummary(scope, outputPath, verified) {
     authorization_assurance: evidence.authorizationAssurance,
     authorization_nonclaim: evidence.authorizationNonclaim,
     authorization_binding_sha256: verified.authorizationBindingSha256,
-    ...(verified.authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorization_document_sha256: verified.authorizationDocumentSha256 }),
     campaign_grant_sha256: verified.campaignGrantSha256,
     output_path: outputPath,
   }
@@ -614,61 +479,26 @@ function assertDiscoverySeedsArePersistenceSafe(scope) {
   }
 }
 
-async function planHttpAuthedScope(input, deps, authorizationMode) {
+async function planHttpAuthedScope(input, deps) {
   const planned = snapshotInput(input)
-  const attested = authorizationMode === 'OPERATOR_ATTESTED_AUTHED'
-  const written = authorizationMode === 'WRITTEN_AUTHORIZATION_AUTHED'
-  if (!attested && !written) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_MODE_INVALID',
-      'planner requires an operator-attested or written authorization mode',
-    )
-  }
   if (typeof planned.outputPath !== 'string' || !isAbsolute(planned.outputPath)) {
     throw plannerError(
       'HTTP_AUTHED_PLAN_OUTPUT_ABSOLUTE_REQUIRED',
       'scope output path must be absolute',
     )
   }
-  if (written && (
-    typeof planned.authorizationDocumentPath !== 'string'
-    || planned.authorizationDocumentPath.length === 0
-  )) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_AUTHORIZATION_DOCUMENT_REQUIRED',
-      'a written authorization document path is required',
-    )
-  }
-  if (attested && planned.authorizationDocumentPath !== undefined) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_ATTESTED_DOCUMENT_REFUSED',
-      'operator-attested planning does not accept a written authorization document',
-    )
-  }
-
   const io = {
-    lstatImpl: deps.lstatImpl ?? lstat,
     openImpl: deps.openImpl ?? open,
     unlinkImpl: deps.unlinkImpl ?? unlink,
-    createPublicKeyImpl: deps.createPublicKeyImpl ?? createPublicKey,
   }
   const environment = deps.env ?? process.env
   const now = clockInstant(deps.clock ?? (() => new Date()))
   const mutationAuthorized = validateMutationFlag(planned.mutationAuthorized)
   const authorization = planned.authorization ?? {}
-  if (attested && authorization.attestAuthorized !== true) {
+  if (authorization.attestAuthorized !== true) {
     throw plannerError(
       'HTTP_AUTHED_PLAN_ATTESTATION_REQUIRED',
       'operator-attested planning requires an explicit current authorization attestation',
-    )
-  }
-  if (attested && (
-    authorization.documentIssuer !== undefined
-    || authorization.documentIssuedAt !== undefined
-  )) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_ATTESTED_DOCUMENT_REFUSED',
-      'operator-attested planning does not accept written-document metadata',
     )
   }
   const permissions = authorization.permissions ?? {}
@@ -700,132 +530,102 @@ async function planHttpAuthedScope(input, deps, authorizationMode) {
   if (boundedResponseObservation !== undefined) {
     requests[0].response_observation = boundedResponseObservation
   }
-  const approver = await buildApprover(planned.approver, mutationAuthorized, io)
-  const documentBytes = written
-    ? await readStableBoundedFile(
-        resolve(planned.authorizationDocumentPath),
-        'written authorization document',
-        INPUT_LIMITS.authorizationDocument,
-        io,
-      )
-    : undefined
-
-  try {
-    const browserSession = credential.mode === 'CHROME_ACTIVE_TAB_SESSION'
-    const credentialBindingSha256 = browserSession
-      ? undefined
-      : await resolveCredentialBinding(credential, {
-          env: environment,
-          transientCredential: deps.transientCredential,
-          credentialInput: deps.credentialInput,
-          readStdin: deps.credentialStdinReader,
-        })
-    const scope = {
-      schema_version: boundedResponseObservation !== undefined
-        ? '1.3.0'
-        : responseObservation === undefined
-          ? '1.0.0'
-          : responseObservation.mode === 'ASPNET_D_JSON_SHAPE_ONLY'
-            ? '1.2.0'
-            : '1.1.0',
-      kind: 'red-team-audit/http-authed-scope',
-      engagement_id: planned.engagementId,
-      environment: classification.environment,
-      data_class: classification.dataClass,
-      authorization: {
-        mode: authorizationMode,
-        authorization_id: authorization.authorizationId,
-        statement: written
-          ? WRITTEN_AUTHORIZATION_AUTHED_STATEMENT
-          : OPERATOR_ATTESTED_AUTHED_STATEMENT,
-        operator_id: authorization.operatorId,
-        authorized_by: authorization.authorizedBy,
-        authorization_reference: authorization.authorizationReference,
-        attested_at: authorization.attestedAt ?? now.toISOString(),
-        independently_verified: false,
-        ...(written
-          ? {
-              written_authorization_sha256: sha256Hex(documentBytes),
-              document_issuer: authorization.documentIssuer,
-              document_issued_at: authorization.documentIssuedAt,
-            }
-          : {}),
-        permissions: {
-          active_testing: permissions.activeTesting === true,
-          production: permissions.production === true,
-          third_party: permissions.thirdParty === true,
-          phi: permissions.phi === true,
-          mutation: mutationAuthorized,
-        },
-        authorized_scope: {
-          origins: authorizedScope.origins ?? [target.origin],
-          path_prefixes: pathPrefixes,
-          methods,
-          test_categories: categories,
-        },
+  const browserSession = credential.mode === 'CHROME_ACTIVE_TAB_SESSION'
+  const credentialBindingSha256 = browserSession
+    ? undefined
+    : await resolveCredentialBinding(credential, {
+        env: environment,
+        transientCredential: deps.transientCredential,
+        credentialInput: deps.credentialInput,
+        readStdin: deps.credentialStdinReader,
+      })
+  const scope = {
+    schema_version: boundedResponseObservation !== undefined
+      ? '1.3.0'
+      : responseObservation === undefined
+        ? '1.0.0'
+        : responseObservation.mode === 'ASPNET_D_JSON_SHAPE_ONLY'
+          ? '1.2.0'
+          : '1.1.0',
+    kind: 'red-team-audit/http-authed-scope',
+    engagement_id: planned.engagementId,
+    environment: classification.environment,
+    data_class: classification.dataClass,
+    authorization: {
+      mode: 'OPERATOR_ATTESTED_AUTHED',
+      authorization_id: authorization.authorizationId,
+      statement: OPERATOR_ATTESTED_AUTHED_STATEMENT,
+      operator_id: authorization.operatorId,
+      authorized_by: authorization.authorizedBy,
+      authorization_reference: authorization.authorizationReference,
+      attested_at: authorization.attestedAt ?? now.toISOString(),
+      independently_verified: false,
+      permissions: {
+        active_testing: permissions.activeTesting === true,
+        production: permissions.production === true,
+        third_party: permissions.thirdParty === true,
+        phi: permissions.phi === true,
+        mutation: mutationAuthorized,
       },
-      target: {
-        origin: target.origin,
-        ownership: target.ownership,
-        tls: target.tls ?? { mode: 'PKIX_HOSTNAME' },
+      authorized_scope: {
+        origins: authorizedScope.origins ?? [target.origin],
+        path_prefixes: pathPrefixes,
+        methods,
+        test_categories: categories,
       },
-      credential: plannedCredential(credential, credentialBindingSha256),
-      evidence_handling: { ...EVIDENCE_HANDLING },
-      ...(approver === undefined ? {} : { approver }),
-      liveness: {
-        credential_preflight: {
-          method: 'GET',
-          url: preflightUrl,
-        },
+    },
+    target: {
+      origin: target.origin,
+      ownership: target.ownership,
+      tls: target.tls ?? { mode: 'PKIX_HOSTNAME' },
+    },
+    credential: plannedCredential(credential, credentialBindingSha256),
+    evidence_handling: { ...EVIDENCE_HANDLING },
+    liveness: {
+      credential_preflight: {
+        method: 'GET',
+        url: preflightUrl,
       },
-      validity: {
-        not_before: planned.validity?.notBefore,
-        not_after: planned.validity?.notAfter,
-        cleanup_not_after: planned.validity?.cleanupNotAfter
-          ?? planned.validity?.notAfter,
-      },
-      limits,
-      stop_conditions: [...STOP_CONDITIONS],
-      requests,
-    }
-    if (responseObservation !== undefined) scope.response_observation = responseObservation
-    const discovery = buildDiscovery(planned.discovery, {
-      targetOrigin: target.origin,
-      pathPrefixes,
-      methods,
-      categories,
-      limits,
-    })
-    if (discovery !== undefined) scope.discovery = discovery
-    assertDiscoverySeedsArePersistenceSafe(scope)
-
-    const assertScope = deps.assertValidScope ?? assertValidHttpAuthedScope
-    const verifyAuthorization = deps.verifyAuthorization
-      ?? deps.verifyWrittenAuthorization
-      ?? verifyHttpAuthedAuthorization
-    let verified
-    try {
-      assertScope(scope)
-      verified = verifyAuthorization({ scope, documentBytes, now })
-    } catch (error) {
-      throw plannerError(
-        'HTTP_AUTHED_PLAN_SCOPE_INVALID',
-        safeContractFailure(error),
-      )
-    }
-
-    const outputPath = resolve(planned.outputPath)
-    await exclusiveCanonicalWrite(outputPath, scope, io)
-    return publicSummary(scope, outputPath, verified)
-  } finally {
-    documentBytes?.fill(0)
+    },
+    validity: {
+      not_before: planned.validity?.notBefore,
+      not_after: planned.validity?.notAfter,
+      cleanup_not_after: planned.validity?.cleanupNotAfter
+        ?? planned.validity?.notAfter,
+    },
+    limits,
+    stop_conditions: [...STOP_CONDITIONS],
+    requests,
   }
-}
+  if (responseObservation !== undefined) scope.response_observation = responseObservation
+  const discovery = buildDiscovery(planned.discovery, {
+    targetOrigin: target.origin,
+    pathPrefixes,
+    methods,
+    categories,
+    limits,
+  })
+  if (discovery !== undefined) scope.discovery = discovery
+  assertDiscoverySeedsArePersistenceSafe(scope)
 
-export function planHttpAuthedWrittenScope(input, deps = {}) {
-  return planHttpAuthedScope(input, deps, 'WRITTEN_AUTHORIZATION_AUTHED')
+  const assertScope = deps.assertValidScope ?? assertValidHttpAuthedScope
+  const verifyAuthorization = deps.verifyAuthorization ?? verifyHttpAuthedAuthorization
+  let verified
+  try {
+    assertScope(scope)
+    verified = verifyAuthorization({ scope, now })
+  } catch (error) {
+    throw plannerError(
+      'HTTP_AUTHED_PLAN_SCOPE_INVALID',
+      safeContractFailure(error),
+    )
+  }
+
+  const outputPath = resolve(planned.outputPath)
+  await exclusiveCanonicalWrite(outputPath, scope, io)
+  return publicSummary(scope, outputPath, verified)
 }
 
 export function planHttpAuthedAttestedScope(input, deps = {}) {
-  return planHttpAuthedScope(input, deps, 'OPERATOR_ATTESTED_AUTHED')
+  return planHttpAuthedScope(input, deps)
 }

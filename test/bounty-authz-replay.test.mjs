@@ -8,6 +8,7 @@ const ENV = { TB_BOB: 'Bearer bob' }
 
 function sealedScope() {
   return {
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'wildcard', host: 'acme.example' }],
       deny: [{ rule_id: 'd1', host_kind: 'exact', host: 'legacy.acme.example' }],

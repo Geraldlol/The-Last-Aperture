@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/adversarial-break-glass.schema.json",
+  "title": "Red Team Audit sealed break-glass preflight override",
+  "description": "A one-use, short-lived operator decision that can waive only specifically disclosed health-monitoring or cleanup readiness failures for a READ_ONLY L3 plan. It cannot waive scope, impact classification, exact controller authorization, finite budgets, revocation, evidence custody, credential isolation, control-plane loss handling, or the operator kill switch.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "override_id",
+    "engagement_id",
+    "scope_revision_sha256",
+    "plan_sha256",
+    "authorization_id",
+    "authorization_sha256",
+    "failed_controls",
+    "waived_controls",
+    "rationale",
+    "incident_reference",
+    "compensating_limits",
+    "issued_at",
+    "expires_at",
+    "nonce",
+    "approver",
+    "signing",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/adversarial-break-glass" },
+    "override_id": { "$ref": "#/$defs/id" },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "scope_revision_sha256": { "$ref": "#/$defs/sha256" },
+    "plan_sha256": { "$ref": "#/$defs/sha256" },
+    "authorization_id": { "$ref": "#/$defs/id" },
+    "authorization_sha256": { "$ref": "#/$defs/sha256" },
+    "failed_controls": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/failed_control" }
+    },
+    "waived_controls": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/waivable_control" }
+    },
+    "rationale": { "$ref": "#/$defs/long_text" },
+    "incident_reference": { "$ref": "#/$defs/text" },
+    "compensating_limits": { "$ref": "#/$defs/limits" },
+    "issued_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "approver": { "$ref": "#/$defs/approver" },
+    "signing": { "$ref": "#/$defs/signing" },
+    "signature": {
+      "type": "string",
+      "minLength": 88,
+      "maxLength": 88,
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "long_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "waivable_control": {
+      "enum": [
+        "target_health_monitoring",
+        "cleanup_or_rollback"
+      ]
+    },
+    "failed_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control", "status", "observation_sha256"],
+      "properties": {
+        "control": { "$ref": "#/$defs/waivable_control" },
+        "status": { "enum": ["UNAVAILABLE", "DEGRADED", "FAILED"] },
+        "observation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_actions",
+        "max_wall_time_ms",
+        "max_aggregate_output_bytes",
+        "max_concurrency"
+      ],
+      "properties": {
+        "max_actions": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_wall_time_ms": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "max_aggregate_output_bytes": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+        "max_concurrency": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "approver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "role": { "$ref": "#/$defs/text" }
+      }
+    },
+    "signing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "delegation"],
+      "properties": {
+        "algorithm": { "const": "Ed25519" },
+        "key_id": { "type": "string", "pattern": "^ed25519:[a-f0-9]{64}$" },
+        "delegation": { "const": "break_glass" }
+      }
+    }
+  }
+}

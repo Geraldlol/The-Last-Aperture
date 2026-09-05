@@ -137,47 +137,7 @@
       "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
     },
     "authority": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/externalSignedAuthority"
-        },
-        {
-          "$ref": "#/$defs/operatorAttestedAuthority"
-        }
-      ]
-    },
-    "externalSignedAuthority": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "mode",
-        "authorization_id",
-        "authorization_document_sha256",
-        "owner_key_id",
-        "plan_sha256",
-        "target_proof_sha256"
-      ],
-      "properties": {
-        "mode": {
-          "const": "EXTERNAL_SIGNED"
-        },
-        "authorization_id": {
-          "$ref": "#/$defs/id"
-        },
-        "authorization_document_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "owner_key_id": {
-          "type": "string",
-          "pattern": "^ed25519:[a-f0-9]{64}$"
-        },
-        "plan_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "target_proof_sha256": {
-          "$ref": "#/$defs/sha256"
-        }
-      }
+      "$ref": "#/$defs/operatorAttestedAuthority"
     },
     "operatorAttestedAuthority": {
       "type": "object",
@@ -188,7 +148,6 @@
         "operator_id",
         "scope_sha256",
         "plan_sha256",
-        "target_proof_sha256",
         "independently_verified"
       ],
       "properties": {
@@ -206,9 +165,6 @@
         },
         "plan_sha256": {
           "$ref": "#/$defs/sha256"
-        },
-        "target_proof_sha256": {
-          "type": "null"
         },
         "independently_verified": {
           "const": false

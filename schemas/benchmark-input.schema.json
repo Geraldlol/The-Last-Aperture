@@ -18,8 +18,17 @@
       "maxItems": 4096
     },
     "caseOutcomes": {
-      "type": "array",
-      "maxItems": 4096
+      "$ref": "#/$defs/caseOutcomes"
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "harness", "corpus"],
+      "properties": {
+        "model": { "$ref": "#/$defs/configuredVersion" },
+        "harness": { "$ref": "#/$defs/configuredVersion" },
+        "corpus": { "$ref": "#/$defs/namedVersion" }
+      }
     },
     "repeatedRuns": {
       "type": "array",
@@ -39,12 +48,56 @@
           "findings": {
             "type": "array",
             "maxItems": 4096
+          },
+          "caseOutcomes": {
+            "$ref": "#/$defs/caseOutcomes"
           }
         }
       }
     }
   },
   "$defs": {
+    "caseOutcomes": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "verdict"],
+        "properties": {
+          "case_id": { "$ref": "#/$defs/runId" },
+          "verdict": { "enum": ["finding", "clear", "incomplete", "not_assessed"] }
+        }
+      }
+    },
+    "versionLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$"
+    },
+    "namedVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/versionLabel" },
+        "version": { "$ref": "#/$defs/versionLabel" }
+      }
+    },
+    "configuredVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "$ref": "#/$defs/versionLabel" },
+        "version": { "$ref": "#/$defs/versionLabel" },
+        "configuration_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
     "runId": {
       "type": "string",
       "minLength": 1,

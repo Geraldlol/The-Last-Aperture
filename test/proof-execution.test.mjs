@@ -3,7 +3,10 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executeProof } from '../scripts/lib/proof-execution.mjs'
+import {
+  assertValidProofConfig,
+  executeProof,
+} from '../scripts/lib/proof-execution.mjs'
 import { normalizePolicy } from '../scripts/lib/policy.mjs'
 import { inventoryRepository } from '../scripts/lib/inventory.mjs'
 
@@ -24,7 +27,13 @@ const policyFor = (root) => normalizePolicy({
   capabilities: {
     read_file: { enabled: true, roots: ['.'] },
     write_file: { enabled: true, roots: ['test/security'] },
-    execute: { enabled: true, commands: [{ program: 'npm', args: ['test'] }] },
+    execute: {
+      enabled: true,
+      commands: [
+        { program: 'npm', args: ['test'] },
+        { program: 'npm', args: ['test', '--', 'control'] },
+      ],
+    },
     network: { enabled: false, destinations: [] },
   },
 }, { workspaceRoot: root, policySource: 'external' })
@@ -36,6 +45,28 @@ const baseConfig = {
   command: { program: 'npm', args: ['test'] },
   destination_guard: { installed: false },
 }
+
+test('proof paths reject aliases and Windows special names before materialization', () => {
+  for (const path of [
+    'test//security/a.mjs',
+    'test/./security/a.mjs',
+    'test/security/a.mjs/',
+    'test/security/foo:bar.mjs',
+    'test/security/NUL.txt',
+    'test/security/com1',
+    'test/security/trailing.',
+    'test/security/trailing ',
+  ]) {
+    assert.throws(
+      () => assertValidProofConfig({
+        ...baseConfig,
+        proof_files: [{ path, contents: 'x\n' }],
+      }),
+      /proof configuration is invalid/i,
+      path,
+    )
+  }
+})
 
 async function run(config, spawn, overrides = {}) {
   const targetRoot = overrides.targetRoot ?? makeTarget()
@@ -65,6 +96,68 @@ test('a demonstration-only proof runs the command once', async () => {
   assert.equal(outcome.remediation, null)
 })
 
+test('a v2 proof runs a paired control after the attack', async () => {
+  const calls = []
+  const spawn = async (program, args, cwd, limits) => {
+    calls.push({ program, args, cwd, limits })
+    return args.at(-1) === 'control'
+      ? { code: 0, stdout: 'control passed', stderr: '' }
+      : { code: 1, stdout: 'attack reproduced', stderr: '' }
+  }
+  const outcome = await run({
+    ...baseConfig,
+    schema_version: '2.0.0',
+    destination_guard: { installed: true, path: 'test/security/a.test.mjs' },
+    strategy: { id: 'exact.reproducer', version: '1.0.0' },
+    control_command: { program: 'npm', args: ['test', '--', 'control'] },
+    oracle: {
+      id: 'security-test-exit-differential',
+      attack_exit_codes: [1],
+      control_exit_codes: [0],
+    },
+    limits: { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    reproducer: { path: 'test/security/a.test.mjs', format: 'text' },
+  }, spawn)
+  assert.deepEqual(calls.map(({ args }) => args), [
+    ['test'],
+    ['test', '--', 'control'],
+  ])
+  assert.deepEqual(calls.map(({ limits }) => limits), [
+    { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+  ])
+  assert.equal(outcome.demonstration.code, 1)
+  assert.equal(outcome.control.code, 0)
+})
+
+test('an unauthorized v2 control command is refused before the mirror is created', async () => {
+  const targetRoot = makeTarget()
+  const mirrorRoot = mirrorPath()
+  let spawned = false
+  await assert.rejects(
+    () => run({
+      ...baseConfig,
+      schema_version: '2.0.0',
+      destination_guard: { installed: true, path: 'test/security/a.test.mjs' },
+      strategy: { id: 'exact.reproducer', version: '1.0.0' },
+      control_command: { program: 'node', args: ['control.mjs'] },
+      oracle: {
+        id: 'security-test-exit-differential',
+        attack_exit_codes: [1],
+        control_exit_codes: [0],
+      },
+      limits: { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+      reproducer: { path: 'test/security/a.test.mjs', format: 'text' },
+    }, async () => {
+      spawned = true
+      return { code: 0, stdout: '', stderr: '' }
+    }, { targetRoot, mirrorRoot }),
+    /control command.*not authorized|not authorized.*control command/i,
+  )
+  assert.equal(spawned, false)
+  assert.equal(existsSync(mirrorRoot), false)
+})
+
 test('a proof with a patch runs the command twice, patched only on the second', async () => {
   const seen = []
   const codes = [1, 0]
@@ -79,6 +172,30 @@ test('a proof with a patch runs the command twice, patched only on the second', 
   assert.equal(outcome.demonstration.code, 1)
   assert.equal(outcome.remediation.code, 0)
   assert.deepEqual(seen, ['export const x = 1\n', 'export const x = 2\n'])
+})
+
+test('proof material cannot replace a path from the sealed target', async () => {
+  const targetRoot = makeTarget()
+  const mirrorRoot = mirrorPath()
+  let spawned = false
+
+  await assert.rejects(
+    () => run({
+      ...baseConfig,
+      proof_files: [{
+        path: 'src/app.js',
+        contents: 'export const x = "attacker-controlled replacement"\n',
+      }],
+    }, async () => {
+      spawned = true
+      return { code: 0, stdout: '', stderr: '' }
+    }, { targetRoot, mirrorRoot }),
+    /proof file.*already exists|replace.*sealed target|sealed target.*collision/i,
+  )
+
+  assert.equal(spawned, false)
+  assert.equal(readFileSync(join(targetRoot, 'src', 'app.js'), 'utf8'), 'export const x = 1\n')
+  assert.equal(existsSync(mirrorRoot), false)
 })
 
 test('a command absent from the allowlist is refused before anything is copied', async () => {
@@ -129,4 +246,108 @@ test('the mirror is destroyed on success', async () => {
   const outcome = await run(baseConfig, spawn)
   assert.equal(outcome.mirrorRetained, false)
   assert.equal(existsSync(outcome.mirrorRoot), false)
+})
+
+test('v3 failures retain hash-only observations from completed proof phases', async () => {
+  const targetRoot = makeTarget()
+  const mirrorRoot = mirrorPath()
+  const { treeDigest } = await inventoryRepository(targetRoot)
+  const command = (path) => ({ program: 'node', args: [path] })
+  const config = {
+    schema_version: '3.0.0',
+    job_id: 'proof-verification:cand:service',
+    proof_files: [
+      { path: 'test/security/service.mjs', contents: '// service\n' },
+      { path: 'test/security/attack.mjs', contents: '// attack\n' },
+      { path: 'test/security/control.mjs', contents: '// control\n' },
+    ],
+    command: command('test/security/attack.mjs'),
+    control_command: command('test/security/control.mjs'),
+    service: {
+      protocol: 'loopback-tcp-v1',
+      command: command('test/security/service.mjs'),
+      port: 31_337,
+      startup_timeout_ms: 1_000,
+      probe_interval_ms: 10,
+    },
+    destination_guard: { installed: true, path: 'test/security/attack.mjs' },
+    strategy: { id: 'exact.service-reproducer', version: '1.0.0' },
+    oracle: {
+      id: 'service-exit-differential',
+      attack_exit_codes: [1],
+      control_exit_codes: [0],
+    },
+    limits: { timeout_ms: 1_000, kill_grace_ms: 10, max_output_bytes: 4_096 },
+    reproducer: { path: 'test/security/attack.mjs', format: 'text' },
+  }
+  const policy = normalizePolicy({
+    schema_version: '1.0',
+    policy_id: 'service-proof-partial-observation',
+    mode: 'local_dynamic',
+    workspace_root: targetRoot,
+    capabilities: {
+      read_file: { enabled: true, roots: ['.'] },
+      write_file: { enabled: true, roots: ['test/security'] },
+      execute: {
+        enabled: true,
+        commands: [config.service.command, config.command, config.control_command],
+      },
+      network: {
+        enabled: true,
+        destinations: [{
+          scheme: 'http',
+          host: '127.0.0.1',
+          ports: [31_337],
+          path_prefix: '/',
+        }],
+      },
+    },
+  }, { workspaceRoot: targetRoot, policySource: 'external' })
+  const attack = {
+    code: 1,
+    stdout: '',
+    stderr: '',
+    stdout_bytes: 7,
+    stdout_sha256: 'a'.repeat(64),
+    stderr_bytes: 0,
+    stderr_sha256: 'b'.repeat(64),
+    output_omitted: true,
+  }
+  const controlPartial = {
+    ...attack,
+    code: 0,
+    stdout_bytes: 3,
+    stdout_sha256: 'c'.repeat(64),
+  }
+  let calls = 0
+  let caught
+  try {
+    await executeProof({
+      targetRoot,
+      mirrorRoot,
+      expectedTreeDigest: treeDigest,
+      policy,
+      config,
+      spawn: async () => {
+        calls += 1
+        if (calls === 1) return attack
+        const error = new Error('post-probe readiness failed')
+        error.code = 'SERVICE_PROOF_POST_PROBE_NOT_READY'
+        error.partial_result = controlPartial
+        throw error
+      },
+    })
+  } catch (error) {
+    caught = error
+  }
+  assert.ok(caught)
+  assert.equal(caught.proof_outcome.demonstration, attack)
+  assert.deepEqual(caught.proof_outcome.control, controlPartial)
+  assert.equal(caught.proof_outcome.remediation, null)
+  assert.deepEqual(caught.proof_outcome.ownedPaths, [
+    'test/security/attack.mjs',
+    'test/security/control.mjs',
+    'test/security/service.mjs',
+  ])
+  assert.equal(existsSync(mirrorRoot), false)
 })

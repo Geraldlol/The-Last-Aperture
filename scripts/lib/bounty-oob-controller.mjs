@@ -10,6 +10,7 @@ import {
 } from './bounty-oob-correlator.mjs'
 import { generateSessionKeypair } from './bounty-oob-crypto.mjs'
 import {
+  assertHostedServerAllowed,
   deregisterHostedSession,
   pollHostedSession,
   registerHostedSession,
@@ -35,11 +36,13 @@ export function assertValidOobSession(value) {
     const ajv = new Ajv2020({ allErrors: true, strict: false })
     compiledValidator = ajv.compile(JSON.parse(readFileSync(SESSION_SCHEMA_URL, 'utf8')))
   }
-  if (compiledValidator(value)) return
-  const detail = (compiledValidator.errors ?? [])
-    .map((error) => `${error.instancePath || '/'} ${error.message}`)
-    .join('; ')
-  throw new Error(`oob session failed schema validation: ${detail}`)
+  if (!compiledValidator(value)) {
+    const detail = (compiledValidator.errors ?? [])
+      .map((error) => `${error.instancePath || '/'} ${error.message}`)
+      .join('; ')
+    throw new Error(`oob session failed schema validation: ${detail}`)
+  }
+  if (value.backend === 'hosted') assertHostedServerAllowed(value.server)
 }
 
 function sessionPath(bundlePath) {
@@ -83,10 +86,12 @@ export async function openOobSession({
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
     throw new Error('now must be a valid Date')
   }
+  if (backend === 'hosted') assertHostedServerAllowed(server)
   const keys = generateSessionKeypair()
   const correlationId = createCorrelationId(randomBytes)
   const secret = randomUUID()
-  // A self-hosted session is entirely local: no registration call exists to make.
+  // Self-hosted mode makes no hosted registration call. Its listener and
+  // persistence still require separately controlled local/network endpoints.
   if (backend === 'hosted') {
     await registerHostedSession({
       server,

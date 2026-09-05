@@ -1,5 +1,9 @@
 # `registry` acquisition adapter
 
+> **Release gate (2026-09-03):** Public registry `plan` and `run` are disabled
+> before argument, process, credential, or network access. This document
+> describes the retained adapter kernel, not enabled authority.
+
 Adapter ID: `registry`
 
 Evidence class: `built-artifact`
@@ -52,17 +56,17 @@ credential to the bundle contract's own last-resort guard.
 
 ## Authorization
 
-Above the `built-artifact` floor, this adapter requires:
+When this disabled adapter is re-enabled, an authenticated operator statement
+naming the registry target, digest, and allowed pull scope is the sole
+authorization primitive. A digest-pinned image reference, sealed credential
+reference, impact limits, and any target-class acknowledgment are
+controller-bound execution parameters, not separate proof of authority. The
+controller must issue and ledger-consume a permit for the exact plan before the
+pull begins.
 
-- `--attest-authorized`, a recorded operator declaration, not independently
-  verified owner permission;
-- a named operator, the authorizing party, and an authorization reference;
-- a digest-pinned reference;
-- a sealed credential reference.
-
-`PRODUCTION` and `THIRD_PARTY` target classes require explicit acknowledgment.
-`THIRD_PARTY` routes through the existing higher-assurance signed-artifact
-mode; this adapter neither creates nor approves those artifacts.
+Changing the registry, repository, digest, or allowed operation requires a new
+operator statement. There is no separate signed-artifact route for
+`THIRD_PARTY` targets.
 
 ## Impact
 

@@ -55,7 +55,7 @@ test('root attestation signs and verifies the exact terminal run identity', () =
       publicKeyBytes: keys.publicKey,
     }),
     {
-      status: 'VERIFIED',
+      status: 'SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY',
       key_id: attestation.signing.key_id,
       run_sha256: runSha256,
       signed_at: '2026-07-30T10:01:02.003Z',

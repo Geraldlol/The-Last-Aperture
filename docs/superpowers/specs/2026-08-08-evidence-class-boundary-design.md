@@ -1,7 +1,28 @@
 # Evidence-Class Boundary — Design
 
+> **Superseded security notice (2026-09-03):** This is a historical design
+> record, not current operational guidance. Every public acquisition command,
+> plus audit `--evidence-bundle` import, is disabled
+> before argument, caller-path, bundle, or process access. Review found that
+> artifact paths could trigger UNC/device/pipe access and unbounded reads;
+> evidence manifests did not authenticate semantic profile or plan identity;
+> planning invoked PATH-resolved
+> CLI probes (including a context-ambient `kubectl version`), serialized plans
+> were mutable and
+> could carry arbitrary executable/argument vectors, Kubernetes `context` was
+> recorded but not bound to dispatch, stop-state read failures were fail-open,
+> and metadata-only runtime file capture could retain secret-bearing lines.
+> Re-enable only after controller-sealed canonical plans, command reconstruction from a
+> fixed operation identifier, attested target identity, fail-closed stop state,
+> and protected/redacted evidence storage are implemented and independently
+> reviewed. Any contrary `run` examples or “read-only” guarantees below describe
+> the old design and must not be followed.
+> ADR 0021 also supersedes every signed-authorization or owner-artifact rule
+> below. Only an authenticated operator target/scope statement creates authority;
+> controller permits supply technical integrity and replay protection.
+
 - **Date:** 2026-08-08
-- **Status:** **Implemented and merged 2026-08-09.** All five plans landed; see *Implementation reconciliation* at the end for every place the built system differs from this design, and why.
+- **Status:** Historical; the public acquisition CLI and audit evidence import were superseded and disabled 2026-09-03.
 - **Scope:** Phase 0 of a four-phase program (see *Program phases*)
 - **Motivating incident:** DEF CON 34 Kubernetes Learning CTF — "Terminate Transfer", "Shell in the Ghost"
 - **Canonical contracts this design extends:** `skills/red-team-audit/lenses/_schema.md`, `skills/red-team-audit/lenses/_topics.md`, `skills/red-team-audit/lenses/_harness.md`, `skills/red-team-audit/lenses/_database-adapters/contract.md`
@@ -129,6 +150,10 @@ npm.cmd run audit:acquire <class> -- finalize <evidence-bundle>
 npm.cmd run audit:acquire <class> -- validate <evidence-bundle>
 npm.cmd run audit:acquire <class> -- stop <evidence-bundle> --operator-id <id> --reason <text>
 ```
+
+The registry/deployed/runtime `plan` and `run` forms shown above are historical
+and currently refuse before argument or bundle access. The artifact adapter has
+a separate local-file boundary.
 
 **`audit`** — existing workflow, one new repeatable input:
 

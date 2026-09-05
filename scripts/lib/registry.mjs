@@ -7,6 +7,7 @@ import {
   isEvidenceArtifactKind,
   isEvidenceClaimKind,
 } from './evidence-classes.mjs'
+import { validateSignalSelector } from './activation-selectors.mjs'
 
 // Ownership model. Pure functions over parsed lenses — no file I/O, so the
 // rules are testable against synthetic lens sets rather than the real corpus.
@@ -106,8 +107,22 @@ export function checkShapes(lenses) {
     }
 
     const owns = fm.owns ?? []
-    const paths = fm.activates_on?.paths ?? []
-    const signals = fm.activates_on?.signals ?? []
+    const declaredPaths = fm.activates_on?.paths
+    const declaredSignals = fm.activates_on?.signals
+    if (!Array.isArray(declaredPaths)) push(`${name}: activates_on.paths must be an array`)
+    if (!Array.isArray(declaredSignals)) push(`${name}: activates_on.signals must be an array`)
+    const paths = Array.isArray(declaredPaths) ? declaredPaths : []
+    const signals = Array.isArray(declaredSignals) ? declaredSignals : []
+    for (const [index, path] of paths.entries()) {
+      if (typeof path !== 'string' || path.length === 0 || path.trim() !== path) {
+        push(`${name}: activates_on.paths[${index}] path selector must be a non-empty trimmed string`)
+      }
+    }
+    for (const [index, signal] of signals.entries()) {
+      for (const message of validateSignalSelector(signal)) {
+        push(`${name}: activates_on.signals[${index}] ${message}`)
+      }
+    }
     const matches = paths.length + signals.length
 
     if (fm.runs_in === 'triage') {

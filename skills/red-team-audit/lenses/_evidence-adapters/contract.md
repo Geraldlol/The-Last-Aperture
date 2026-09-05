@@ -1,5 +1,14 @@
 # Evidence acquisition adapter contract
 
+> **Release gate (2026-09-03):** The entire public acquisition CLI, and audit
+> evidence-bundle import, are disabled before caller-path, bundle, process, or
+> target access. The
+> adapter contracts below describe retained kernels, not current execution
+> authority. Re-enablement requires controller-sealed immutable plans and semantic
+> manifests, one-handle bounded/no-follow reads, enrolled source roots,
+> controller-enrolled executable and target identities, fail-closed durable stop
+> state with descendant termination, and protected output.
+
 Contract version: `1`
 
 Verified: `2026-08-08`
@@ -53,7 +62,9 @@ inventory what it saw and write a coverage gap; it cannot clear anything.
 
 ## Artifact kinds
 
-`oci-image`, `apk`, `ipa`, `jar`, `dist-bundle`.
+`apk`, `desktop-package`, `dist-bundle`, `firmware-image`, `ipa`, `jar`,
+`model-bundle`, `native-executable`, `oci-image`, `sbom`, `shared-library`,
+`smart-contract-build`, or `vex`.
 
 A `built-artifact` bundle names exactly one kind. A lens declares the kinds it
 has rules for and must not claim coverage of a kind it cannot interpret. An
@@ -126,6 +137,43 @@ because a tool was absent is the exact failure this contract exists to prevent.
   to refuse. Evidence of uncertain provenance is worse than absent evidence
   because it launders into findings.
 
+### Current provider-analysis boundary
+
+The acquisition adapter, not the planner or provider, authors the complete
+`evidence_context`. Planning verifies the bundle, derives the portable bundle
+identity from that verified manifest, and requires any supplied context to
+match the adapter-authored context exactly.
+
+OCI images are the currently supported non-source provider-analysis path. The
+controller verifies the manifest and each payload read, evaluates these five
+rules over the sealed bytes, and places bounded locator observations and their
+matching rule IDs in the lens packet:
+
+- `ev.built-artifact.oci.whiteout-named-file-with-content`
+- `ev.built-artifact.oci.blob-unreferenced-by-manifest`
+- `ev.built-artifact.oci.sibling-size-mtime-outlier`
+- `ev.built-artifact.oci.recursive-encoded-payload`
+- `ev.built-artifact.oci.secret-in-config-history`
+
+The provider does not receive raw evidence bytes. It may originate an
+evidence-qualified finding only for a locator and rule match already present
+in the controller projection, using that rule's exact claim kind and owning
+lens/topic. Every retained match is a sealed `required_matches` obligation and
+must be cited by exactly one finding in a successful owning-lens result. The
+canonical groups are locator-sorted chunks of at most 128 with identical
+bundle, rule, claim, lens, and topic; the provider must preserve those exact
+groups so lifecycle fingerprints remain stable. The rules are
+positive-match coverage only: supported topics stay `PARTIAL`, and unsupported
+lens/topics stay `NOT_ASSESSED`. A missing or unreadable index authorizes no
+new location. Truncation remains a non-clear `PARTIAL` denominator but does not
+discard retained matches; omitted or invented locators remain unauthorized.
+
+The `deployed` and `runtime` acquisition adapters are implemented, but their
+current packets have no supported sealed-byte or controller-owned semantic
+analysis delivery. Their acquisition result can describe what was captured;
+provider-side lens analysis remains `NOT_ASSESSED` and cannot originate an
+evidence-qualified finding. Acquisition alone never becomes clearance.
+
 ## Claim kinds
 
 A finding derived from a non-`source` class asserts exactly one of these, and
@@ -133,12 +181,19 @@ only where the lens declares it in `may_conclude`:
 
 | Claim kind | What it asserts |
 |---|---|
+| `artifact-signature-invalid` | Required artifact signing, provenance, or verification fails for the exact acquired artifact. |
+| `binary-hardening-missing` | A native executable or library lacks an applicable binary hardening property. |
 | `secret-present-in-artifact` | Secret material is readable in the acquired evidence. |
 | `unexpected-artifact-content` | Content is present that the source does not account for. |
 | `vulnerable-component-present` | A component with a known defect is present in the evidence. |
 | `drift-from-source` | Deployed or built state differs from what the repository declares. |
+| `firmware-trust-gap` | Firmware boot, update, recovery, or rollback trust is absent or contradicted. |
+| `model-integrity-or-robustness-gap` | A model bundle contradicts declared provenance, integrity, privacy, or robustness controls. |
+| `resilience-policy-misconfiguration` | Effective retry, rollback, queue, timeout, or fail-safe policy is unsafe. |
 | `runtime-misconfiguration` | Effective configuration is unsafe as it actually stands. |
 | `sensitive-data-at-rest` | Regulated or sensitive data is present in the acquired evidence. |
+| `smart-contract-deployment-drift` | Deployed bytecode, proxy target, storage layout, or initialization differs from the reviewed build. |
+| `telemetry-delivery-failure` | Required security telemetry is dropped, unrouted, unacknowledged, or unavailable at the observed sink. |
 
 A finding asserting outside its class's declared `may_conclude` is malformed.
 A new claim kind is added here first; a lens may not invent one.
@@ -189,12 +244,13 @@ An adapter may exceed its class floor. It may never fall below it.
 Credential **values** never appear in a bundle — only a `credential_ref`. This
 mirrors `_database-adapters/contract.md:48`.
 
-`PRODUCTION` and `THIRD_PARTY` target classes require separate explicit
-acknowledgments. `THIRD_PARTY` deployed/runtime acquisition may use
-`--acknowledge-third-party`; that route remains operator-attested, read-only,
-and not independently verified. It does not authorize active testing or
-mutation. Operator-attested and document-bound authenticated campaigns belong
-only to the separate `http-authed-v1` controller and never widen this adapter.
+For any re-enabled live adapter, the authenticated operator target/scope
+statement is the sole authorization primitive. Target class, acknowledgments,
+credentials, impact limits, and stop state are controller-bound execution
+parameters; none is an independent authority source. A controller-sealed permit
+must bind the exact plan and be durably consumed before dispatch. Changing the
+target or scope requires a new operator statement. The separate
+`http-authed-v1` controller never widens this adapter.
 
 **Impact counters exist for read-only classes.** They count commands executed,
 bytes read, and distinct objects touched per target, each with a cap that halts
@@ -227,7 +283,8 @@ Every adapter passes one shared suite:
   external dependency.
 - `plan` seals target identity, target class and PHI scope, performs no
   acquisition, and probes for its external CLI, failing there when absent.
-- `run` emits a bundle whose `evidence_context` is complete and immutable.
+- `run` emits a bundle whose adapter-authored `evidence_context` is complete
+  and immutable.
 - A missing dependency yields `NOT_ASSESSED` with a named reason, never an
   empty success.
 - `COVERED` with an empty payload is refused.

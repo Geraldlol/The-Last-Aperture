@@ -4,6 +4,7 @@ import { assertApproved, gateCandidates } from '../scripts/lib/bounty-recon-gate
 
 function sealedScope() {
   return {
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [
         { rule_id: 'allow-wildcard', host_kind: 'wildcard', host: 'target.example' },
@@ -62,6 +63,7 @@ test('a zone hint is never probeable even when its zone is in scope', () => {
 
 test('honours a non-default port only when the scope seals it', () => {
   const ported = {
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [{ rule_id: 'allow-8443', host_kind: 'wildcard', host: 'target.example', ports: [8443] }],
       deny: [],

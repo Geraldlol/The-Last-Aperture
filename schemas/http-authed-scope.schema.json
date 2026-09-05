@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-authed-scope.schema.json",
   "title": "Red Team Audit authenticated HTTP action scope (http-authed-v1)",
-  "description": "The released http-authed-v1 controller scope for authenticated operator-attested or document-bound HTTP campaigns and declared reversible mutations.",
+  "description": "The released http-authed-v1 controller scope for authenticated operator-statement HTTP campaigns and declared reversible mutations.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -41,23 +41,21 @@
         "authorized_by",
         "authorization_reference",
         "attested_at",
-        "independently_verified"
+        "independently_verified",
+        "permissions",
+        "authorized_scope"
       ],
       "properties": {
-        "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] },
+        "mode": { "const": "OPERATOR_ATTESTED_AUTHED" },
         "authorization_id": { "$ref": "#/$defs/id" },
-        "statement": { "$ref": "#/$defs/humanText" },
+        "statement": {
+          "const": "I confirm that I am authorized to perform these exact bounded authenticated HTTP actions."
+        },
         "operator_id": { "$ref": "#/$defs/id" },
         "authorized_by": { "$ref": "#/$defs/humanText" },
         "authorization_reference": { "$ref": "#/$defs/referenceText" },
         "attested_at": { "$ref": "#/$defs/timestamp" },
-        "independently_verified": { "type": "boolean" },
-        "signed_roe_sha256": { "$ref": "#/$defs/sha256" },
-        "document_sha256": { "$ref": "#/$defs/sha256" },
-        "owner_key_id": { "$ref": "#/$defs/keyId" },
-        "written_authorization_sha256": { "$ref": "#/$defs/sha256" },
-        "document_issuer": { "$ref": "#/$defs/humanText" },
-        "document_issued_at": { "$ref": "#/$defs/timestamp" },
+        "independently_verified": { "const": false },
         "permissions": {
           "type": "object",
           "additionalProperties": false,
@@ -104,56 +102,7 @@
             }
           }
         }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "mode": { "const": "EXTERNAL_SIGNED_AUTHED" } } },
-          "then": {
-            "required": ["signed_roe_sha256", "document_sha256", "owner_key_id"],
-            "properties": { "independently_verified": { "const": true } }
-          },
-          "else": {
-            "if": { "properties": { "mode": { "const": "WRITTEN_AUTHORIZATION_AUTHED" } } },
-            "then": {
-              "required": [
-                "written_authorization_sha256",
-                "document_issuer",
-                "document_issued_at",
-                "permissions",
-                "authorized_scope"
-              ],
-              "properties": {
-                "statement": {
-                  "const": "I attest that the supplied written authorization permits authenticated HTTP testing throughout the sealed engagement scope."
-                },
-                "independently_verified": { "const": false }
-              },
-              "not": { "anyOf": [
-                { "required": ["signed_roe_sha256"] },
-                { "required": ["document_sha256"] },
-                { "required": ["owner_key_id"] }
-              ] }
-            },
-            "else": {
-              "required": ["permissions", "authorized_scope"],
-              "properties": {
-                "statement": {
-                  "const": "I confirm that I am authorized by the asset owner to perform these exact bounded authenticated HTTP actions."
-                },
-                "independently_verified": { "const": false }
-              },
-              "not": { "anyOf": [
-                { "required": ["signed_roe_sha256"] },
-                { "required": ["document_sha256"] },
-                { "required": ["owner_key_id"] },
-                { "required": ["written_authorization_sha256"] },
-                { "required": ["document_issuer"] },
-                { "required": ["document_issued_at"] }
-              ] }
-            }
-          }
-        }
-      ]
+      }
     },
 
     "target": {
@@ -220,43 +169,6 @@
         "stop_on_sensitive_data": { "const": true },
         "test_data": { "const": "synthetic_only" }
       }
-    },
-
-    "approver": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mechanism", "key_id", "public_key", "enrollment"],
-      "properties": {
-        "mechanism": { "enum": ["webauthn_passkey", "ed25519_file"] },
-        "key_id": { "$ref": "#/$defs/keyId" },
-        "public_key": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["format", "value_base64"],
-          "properties": {
-            "format": { "enum": ["spki_der_b64", "cose_b64"] },
-            "value_base64": { "$ref": "#/$defs/base64" }
-          }
-        },
-        "enrollment": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["enrolled_by", "enrolled_at", "provenance"],
-          "properties": {
-            "enrolled_by": { "$ref": "#/$defs/humanText" },
-            "enrolled_at": { "$ref": "#/$defs/timestamp" },
-            "provenance": { "$ref": "#/$defs/referenceText" },
-            "four_eyes_by": { "$ref": "#/$defs/humanText" }
-          }
-        }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "mechanism": { "const": "webauthn_passkey" } } },
-          "then": { "properties": { "public_key": { "properties": { "format": { "const": "cose_b64" } } } } },
-          "else": { "properties": { "public_key": { "properties": { "format": { "const": "spki_der_b64" } } } } }
-        }
-      ]
     },
 
     "liveness": {
@@ -418,64 +330,28 @@
       }
     },
     {
-      "$comment": "A mutation-capable campaign requires a pinned approver. Probe-only attested or written campaigns use campaign-level authorization and do not need a per-action mutation approver.",
-      "if": {
-        "anyOf": [
-          {
-            "properties": {
-              "authorization": {
-                "properties": {
-                  "permissions": {
-                    "properties": { "mutation": { "const": true } },
-                    "required": ["mutation"]
-                  }
-                },
-                "required": ["permissions"]
-              }
-            },
-            "required": ["authorization"]
-          },
-          {
-            "properties": {
-              "requests": {
-                "contains": {
-                  "properties": { "kind": { "const": "mutate" } },
-                  "required": ["kind"]
-                }
-              }
-            },
-            "required": ["requests"]
-          }
-        ]
-      },
-      "then": { "required": ["approver"] }
-    },
-    {
-      "$comment": "Routing matrix: production is permitted under explicitly labeled operator-attested, document-bound written, or externally signed authorization.",
+      "$comment": "Production requires explicit permission in the exact operator-statement scope.",
       "if": { "properties": { "environment": { "const": "production" } } },
-      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+      "then": { "properties": { "authorization": { "properties": { "mode": { "const": "OPERATOR_ATTESTED_AUTHED" } } } } }
     },
     {
       "$comment": "Routing matrix: PHI classification is permitted only when the selected mode carries its matching explicit permission semantics.",
       "if": { "properties": { "data_class": { "const": "phi" } } },
-      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+      "then": { "properties": { "authorization": { "properties": { "mode": { "const": "OPERATOR_ATTESTED_AUTHED" } } } } }
     },
     {
       "$comment": "Routing matrix: third-party ownership is permitted under the selected mode's truthful assurance label and explicit permission semantics.",
       "if": { "properties": { "target": { "properties": { "ownership": { "const": "third_party_owned" } }, "required": ["ownership"] } } },
-      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
+      "then": { "properties": { "authorization": { "properties": { "mode": { "const": "OPERATOR_ATTESTED_AUTHED" } } } } }
     },
     {
-      "$comment": "Any mutate action retains explicit mutation permission, pinned approver, countersignature, observation, and rollback requirements in every authorization mode.",
+      "$comment": "Any mutate action retains explicit mutation permission, a controller-issued one-use dispatch permit, observation, and rollback requirements.",
       "if": {
         "properties": {
           "requests": { "contains": { "properties": { "kind": { "const": "mutate" } }, "required": ["kind"] } }
         }
       },
-      "then": { "properties": { "authorization": { "properties": { "mode": { "enum": ["OPERATOR_ATTESTED_AUTHED", "WRITTEN_AUTHORIZATION_AUTHED", "EXTERNAL_SIGNED_AUTHED"] } } } } }
-    },
-    {
-      "$comment": "PROD FOUR-EYES: when environment=production, owner_key_id must differ from approver.key_id. JSON Schema (without $data) cannot express cross-field inequality, so this is enforced in http-authed-contracts.mjs assertValidHttpAuthedScope()."
+      "then": { "properties": { "authorization": { "properties": { "mode": { "const": "OPERATOR_ATTESTED_AUTHED" } } } } }
     }
   ],
 
@@ -485,12 +361,6 @@
       "minLength": 3,
       "maxLength": 160,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
-    },
-    "keyId": {
-      "type": "string",
-      "minLength": 8,
-      "maxLength": 200,
-      "pattern": "^(ed25519:[a-f0-9]{64}|passkey:[A-Za-z0-9._~+/=-]{8,180})$"
     },
     "humanText": {
       "type": "string",
@@ -511,7 +381,6 @@
       "pattern": "^SYNTHETIC_[A-Z0-9_-]{4,128}$"
     },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "base64": { "type": "string", "minLength": 4, "maxLength": 4096, "pattern": "^[A-Za-z0-9+/]+={0,2}$" },
     "nonce": { "type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[A-Za-z0-9._~-]+$" },
     "pathPrefix": {
       "type": "string",
@@ -788,8 +657,7 @@
             "before_read",
             "after_read",
             "rollback",
-            "rollback_policy",
-            "requires_countersignature"
+            "rollback_policy"
           ],
           "properties": {
             "kind": { "const": "mutate" },
@@ -803,8 +671,7 @@
             "before_read": { "$ref": "#/$defs/readSubRequest" },
             "after_read": { "$ref": "#/$defs/readSubRequest" },
             "rollback": { "$ref": "#/$defs/rollback" },
-            "rollback_policy": { "const": "ALWAYS" },
-            "requires_countersignature": { "const": true }
+            "rollback_policy": { "const": "ALWAYS" }
           },
           "allOf": [
             {

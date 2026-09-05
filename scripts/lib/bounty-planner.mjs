@@ -80,6 +80,24 @@ function checkPermissions(permissions) {
   }
 }
 
+// Printable ASCII with no leading or trailing space. A marker carrying CR, LF,
+// or a tab would smuggle a second header past the kernel, which decides on hosts
+// and never inspects bytes.
+const USER_AGENT_PATTERN = /^[\x21-\x7e]([\x20-\x7e]*[\x21-\x7e])?$/
+
+// Programs may mandate an identifying marker (for example, BugBounty-Example) so their
+// logs can attribute the traffic to a researcher. Defaulting to our own tool
+// string would send unidentified traffic under a perimeter claiming to be
+// identified, so an undeclared marker is an unsealed field and fails closed.
+function checkUserAgent(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('a required user agent must be declared; the program mandates an identifying marker')
+  }
+  if (value.length > 256 || !USER_AGENT_PATTERN.test(value)) {
+    throw new Error('required user agent must be printable ASCII with no leading, trailing, or control whitespace')
+  }
+}
+
 export function createProgramSealedScope(options) {
   const {
     engagementId,
@@ -89,6 +107,7 @@ export function createProgramSealedScope(options) {
     policySnapshotBytes,
     operatorId,
     authorizedBy,
+    requiredUserAgent,
     allowSpecs,
     denySpecs = [],
     permissions,
@@ -100,6 +119,7 @@ export function createProgramSealedScope(options) {
   if (!Array.isArray(allowSpecs) || allowSpecs.length === 0) {
     throw new Error('at least one allow scope rule is required; empty allow lists are refused')
   }
+  checkUserAgent(requiredUserAgent)
   checkPermissions(permissions)
   const notBefore = new Date(validity?.notBefore ?? '')
   const notAfter = new Date(validity?.notAfter ?? '')
@@ -129,6 +149,7 @@ export function createProgramSealedScope(options) {
       program_handle: programHandle,
       policy_url: policyUrl,
       policy_snapshot_sha256: digestPolicySnapshot(policySnapshotBytes),
+      required_user_agent: requiredUserAgent,
     },
     authorization: {
       mode: 'PROGRAM_POLICY_SEALED',

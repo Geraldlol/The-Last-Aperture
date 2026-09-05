@@ -12,22 +12,27 @@ import {
 } from './lib/database-conformance-controller.mjs'
 import { assertValidDatabaseConformanceConfig } from './lib/database-conformance-contracts.mjs'
 import { isMainModule } from './lib/main-module.mjs'
+import {
+  assertLocalFilesystemEndpoint,
+  assertNoRemoteFilesystemArguments,
+} from './lib/filesystem-endpoint.mjs'
 import { stableJson } from './lib/run-engine.mjs'
+import { terminalSafeSerializedJson, terminalSafeText } from './lib/terminal-text.mjs'
 
 const HELP = `red-team-audit database conformance 0.7.0
 
 Usage:
   database-conformance plan <outside-target-directory> [--engines <comma-separated-engine-ids>] [--json]
-  database-conformance run <bundle> <trusted-config.json>
+  database-conformance run <bundle> <trusted-config.json>  [DISABLED]
   database-conformance unlock <bundle>
   database-conformance validate <bundle> [--json]
   database-conformance report <bundle>
 
 Safety:
-  This is opt-in LOCAL_DYNAMIC execution of controller-owned synthetic SQL.
-  It starts digest-pinned disposable reference engines through an absolute,
-  trusted Docker CLI path. It never reads or executes an audited repository.
-  Reference-engine behavior is not target deployment proof.
+  The LOCAL_DYNAMIC protocol uses controller-owned synthetic SQL and never reads
+  or executes an audited repository. Public run is disabled before argument,
+  bundle, or config access because a caller-selected absolute runtime path is not
+  authenticated Docker identity. Reference-engine behavior is not target proof.
 
 Exit codes:
   0  command succeeded
@@ -148,6 +153,15 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(HELP)
     return
   }
+  if (command === 'run') {
+    const error = new Error(
+      'database-conformance run is disabled before argument, bundle, or configuration access pending controller-enrolled, identity-pinned container runtime execution',
+    )
+    error.code = 'DATABASE_RUNTIME_ENROLLMENT_REQUIRED'
+    throw error
+  }
+  assertLocalFilesystemEndpoint(process.cwd(), 'working directory')
+  assertNoRemoteFilesystemArguments(argv)
   const { positionals, options } = parseArguments(argv.slice(1))
   assertShape(command, positionals, options)
 
@@ -157,17 +171,17 @@ export async function main(argv = process.argv.slice(2)) {
       engineIds: parseEngineIds(options.engines),
     })
     if (options.json) {
-      process.stdout.write(stableJson({
+      process.stdout.write(terminalSafeSerializedJson(stableJson({
         bundle: planned.directory,
         run_id: planned.run.run_id,
         state: planned.run.state,
         engine_ids: planned.run.requested_engine_ids,
         gaps: planned.run.gaps,
-      }))
+      })))
     } else {
-      console.log(`Planned ${planned.run.run_id}`)
-      console.log(`Bundle: ${planned.directory}`)
-      console.log(`Engines: ${planned.run.requested_engine_ids.join(', ')}`)
+      console.log(terminalSafeText(`Planned ${planned.run.run_id}`))
+      console.log(terminalSafeText(`Bundle: ${planned.directory}`))
+      console.log(terminalSafeText(`Engines: ${planned.run.requested_engine_ids.join(', ')}`))
     }
     return
   }
@@ -178,8 +192,8 @@ export async function main(argv = process.argv.slice(2)) {
       bundle: positionals[0],
       config,
     })
-    console.log(`Database conformance: ${run.state}`)
-    console.log(`Report: ${await databaseConformanceReportPath(positionals[0])}`)
+    console.log(terminalSafeText(`Database conformance: ${run.state}`))
+    console.log(terminalSafeText(`Report: ${await databaseConformanceReportPath(positionals[0])}`))
     if (run.state !== 'COMPLETE') process.exitCode = 1
     return
   }
@@ -187,14 +201,14 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'validate') {
     const validation = await validateDatabaseConformanceBundle(positionals[0])
     if (options.json) {
-      process.stdout.write(stableJson(validation))
+      process.stdout.write(terminalSafeSerializedJson(stableJson(validation)))
     } else if (validation.valid) {
-      console.log(`Valid: ${validation.path}`)
-      console.log(`Root authenticity: ${validation.root_authenticity.status}`)
+      console.log(terminalSafeText(`Valid: ${validation.path}`))
+      console.log(terminalSafeText(`Root authenticity: ${validation.root_authenticity.status}`))
     } else {
-      console.error(`Invalid: ${validation.path}`)
+      console.error(terminalSafeText(`Invalid: ${validation.path}`))
       for (const error of validation.errors) {
-        console.error(`- ${error.code}: ${error.message}`)
+        console.error(terminalSafeText(`- ${error.code}: ${error.message}`))
       }
     }
     if (!validation.valid) process.exitCode = 1
@@ -203,26 +217,26 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (command === 'unlock') {
     const unlocked = await unlockDatabaseConformanceBundle(positionals[0])
-    console.log(`Removed stale lock for PID ${unlocked.removed_pid}`)
-    console.log(unlocked.warning)
+    console.log(terminalSafeText(`Removed stale lock for PID ${unlocked.removed_pid}`))
+    console.log(terminalSafeText(unlocked.warning))
     return
   }
 
   if (command === 'report') {
-    console.log(await databaseConformanceReportPath(positionals[0]))
+    console.log(terminalSafeText(await databaseConformanceReportPath(positionals[0])))
   }
 }
 
 if (isMainModule(import.meta.url)) {
   main().catch((error) => {
-    console.error(`ERROR: ${error.message}`)
+    console.error(terminalSafeText(`ERROR: ${error.message}`))
     for (const detail of error.details ?? []) {
-      console.error(
+      console.error(terminalSafeText(
         `- ${detail.code ?? detail.keyword}: ` +
         `${detail.instancePath ?? '/'} ${detail.message}`,
-      )
+      ))
     }
-    if (error.bundle) console.error(`Bundle: ${error.bundle}`)
+    if (error.bundle) console.error(terminalSafeText(`Bundle: ${error.bundle}`))
     process.exitCode = 1
   })
 }

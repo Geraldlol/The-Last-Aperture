@@ -32,6 +32,12 @@ const ajv = new Ajv2020({
   validateFormats: false,
 })
 const validateSchema = ajv.compile(evidenceBundleSchema)
+const validateContextSchema = ajv.compile({
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  $id: 'https://red-team-audit.dev/schemas/evidence-context.schema.json',
+  ...evidenceBundleSchema.$defs.evidenceContext,
+  $defs: evidenceBundleSchema.$defs,
+})
 
 // The schema is data and the registry is code; a drift between them would let
 // a bundle declare a class no lens can consume. Fail at import, not at audit.
@@ -223,4 +229,15 @@ export function assertValidEvidenceProfile(profile) {
     )
   }
   return profile
+}
+
+export function assertValidEvidenceContext(context) {
+  if (!validateContextSchema(context)) {
+    const errors = normalizeAjvErrors(validateContextSchema.errors)
+    throw new EvidenceContractValidationError(
+      'Evidence context contract validation failed',
+      errors,
+    )
+  }
+  return context
 }

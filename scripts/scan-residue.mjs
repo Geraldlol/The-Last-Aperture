@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { isMainModule } from './lib/main-module.mjs'
+import { terminalSafeText } from './lib/terminal-text.mjs'
 
 // The banned term list is supplied at the shell via RESIDUE_TERMS and is
 // deliberately absent from this file and from every other tracked file.
@@ -84,7 +85,7 @@ if (isMainModule(import.meta.url)) {
       .split('\0')
       .filter(Boolean)
   } catch (err) {
-    console.error(`scan-residue: could not list candidate files — ${String(err.message).trim().split('\n')[0]}`)
+    console.error(`scan-residue: could not list candidate files — ${terminalSafeText(String(err.message).trim().split('\n')[0])}`)
     console.error('INCOMPLETE: nothing was scanned. This is not a clean result.')
     process.exit(3)
   }
@@ -117,8 +118,14 @@ if (isMainModule(import.meta.url)) {
     }
   }
 
-  for (const hit of hits) console.error(`RESIDUE ${hit.where}: contains "${hit.term}"`)
-  for (const source of unscanned) console.error(`UNSCANNED ${source}`)
+  for (const hit of hits) {
+    console.error(
+      `RESIDUE ${terminalSafeText(hit.where)}: contains "${terminalSafeText(hit.term)}"`,
+    )
+  }
+  for (const source of unscanned) {
+    console.error(`UNSCANNED ${terminalSafeText(source)}`)
+  }
 
   console.log(`\nscanned ${tracked.length} candidate file(s) and ${GIT_SOURCES.length} git source(s) against ${terms.length} term(s).`)
 

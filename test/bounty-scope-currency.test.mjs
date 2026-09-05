@@ -113,6 +113,7 @@ test('the planner refuses to seal a window that excludes its own attestation', (
     policySnapshotBytes: Buffer.from('policy\n'),
     operatorId: 'op',
     authorizedBy: 'acme',
+    requiredUserAgent: 'BugBounty-acme',
     allowSpecs: ['*.acme.example'],
     permissions: {
       active_testing: true, production: true, third_party: false, mutation: false,
@@ -140,6 +141,7 @@ async function bundleWith(validity) {
     engagement_id: 'currency',
     authorization: { permissions: { rate_limit_rps: 10 } },
     validity,
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'wildcard', host: 'acme.example' }],
       deny: [],
@@ -177,6 +179,7 @@ test('recon refuses a scope with no validity window at all', async () => {
     await writeFile(join(dir, 'scope.json'), JSON.stringify({
       engagement_id: 'no-window',
       authorization: { permissions: { rate_limit_rps: 10 } },
+      program: { required_user_agent: 'BugBounty-acme' },
       scope_rules: { allow: [{ rule_id: 'a1', host_kind: 'wildcard', host: 'acme.example' }], deny: [] },
     }), 'utf8')
     await assert.rejects(

@@ -102,9 +102,9 @@ activates_on:
     - 'masked: true'
     - 'cosign verify'
     - 'gh attestation verify'
-    - 'syft / trivy / grype'
-    - 'gitleaks / trufflehog'
-    - 'zizmor / actionlint / poutine'
+    - any_of: ['syft', 'trivy', 'grype']
+    - any_of: ['gitleaks', 'trufflehog']
+    - any_of: ['zizmor', 'actionlint', 'poutine']
     - 'cargo build --locked'
     - 'GOFLAGS=-mod=mod'
     - 'set -x'
@@ -165,11 +165,14 @@ defers:
   trust-boundary-inventory: threat-modeling
   attacker-profile-model: threat-modeling
 frameworks:
-  - nist-ssdf
-  - slsa
+  - nist-ssdf-1.1
+  - slsa-1.2
+  - openssf-osps-baseline-2026-08-28
+  - owasp-scvs-1.0
+  - owasp-asvs-5.0.0
   - cyclonedx
   - spdx
-  - owasp-top-10
+  - owasp-top-10-2025
   - cwe
 severity_floor: low
 ---
@@ -228,21 +231,33 @@ Do not raise findings on these. Where the code shows one, record it in the candi
 
 ### Frameworks this lens may and may not cite
 
-`nist-ssdf`, `slsa`, `cyclonedx`, `spdx`, `owasp-top-10`, `cwe`. Nothing else, and each only where an artifact in the checkout supports it.
+`nist-ssdf-1.1`, `slsa-1.2`, `openssf-osps-baseline-2026-08-28`, `owasp-scvs-1.0`, `cyclonedx`, `spdx`, `owasp-top-10-2025`, `cwe`. Nothing else, and each only where an artifact in a consumed evidence class supports it. This lens does not consume provider settings or deployed state; those requirements remain `UNVERIFIED` unless a separately scoped evidence adapter is used.
 
 - **NIST SSDF (SP 800-218)** — cite a practice only where the repository shows the artifact behind it. The organizational-process questions this lens inherited — "are there documented security requirements for code", "is there a threat-modeling step in the design process", "are patch SLAs documented", "is there a process for triaging reported vulnerabilities" — are **not answerable from a repository and are not findings here.** Where a report template asks for them, answer *N/A — org-level, not visible in source*. The practices that survive are the ones with files behind them: an advisory scanner and a secret scanner wired into the pipeline, a `SECURITY.md` carrying a reporting channel, provenance emission, and dependency-update automation.
-- **SLSA Build Track** — use the current Build-level terminology, never the older single 0–4 model.
+- **SLSA 1.2 Build and Source Tracks** — assess the tracks independently and use their qualified names, never the obsolete single unqualified 0–4 model.
   - **Build L0** — no provenance and no build-integrity guarantees.
   - **Build L1** — provenance exists, so the artifact can be traced to the process that built it.
   - **Build L2** — a hosted build platform emits *signed* provenance, so a consumer can validate its authenticity.
   - **Build L3** — hardened build platform: runs cannot influence each other, and signing material is kept out of user-controlled build steps.
 
-  Derive the target from the repository rather than importing a house policy: **L1** is adequate for an artifact never consumed outside the organization; **L2** is the minimum for anything published to a public registry or shipped to a customer; **L3** is the bar where a third party executes the artifact with elevated privilege or it carries regulatory weight. Say which of those the repository is, from evidence — a publish step to a public registry, a customer-facing installer, an image pushed to a public tag — and grade against that.
+  The 1.2 Source Track covers the revision before the build: **Source L1** uses version control; **Source L2** preserves change history and emits source provenance; **Source L3** continuously enforces the organization's declared technical controls; **Source L4** requires two-party review. A checkout can show version control and workflow intent, but it cannot by itself prove source-control-system enforcement, continuity, source VSAs/provenance issuance, branch protection, or non-author approval. Those require separately scoped source-control settings evidence and the applicable attestations; they cannot be claimed by this source-focused lens. Never infer Source L3/L4 from a `CODEOWNERS` file or a pull-request template.
+
+  Select the target level as an explicit engagement or organizational policy and record its rationale; do not present an invented artifact-class matrix as SLSA. The SLSA 1.2 Build Track describes Build L3 as the intended level for most software releases, while leaving adopters to choose requirements appropriate to their needs. Repository evidence such as a public-registry publish step, customer installer, or privileged image can inform that choice, but it does not silently set the target.
 - **CycloneDX / SPDX** — name the format actually produced (`*.cdx.json`, `*.spdx.json`) rather than asserting a preference between them. Executive Order 14028 (2021) is the usual reason an SBOM is contractually required; cite it as the driver, not as a control.
+- **OpenSSF OSPS Baseline 2026.08.28** — use only for an open-source project and select the maturity level from its published applicability: Level 1 for any project, Level 2 for a code project with at least two maintainers and a small consistent user base, Level 3 for a code project with a large consistent user base. Requirement identifiers such as `OSPS-BR-01.01` (untrusted CI metadata), `OSPS-BR-01.03` (untrusted code must not reach privileged assets), `OSPS-BR-06.01` (signed release or signed manifest), `OSPS-QA-02.02` (release SBOM), and `OSPS-VM-05.03` / `OSPS-VM-06.02` (policy-gated dependency and code scanning) may be cited only when applicable. Repository settings such as MFA, direct-push prevention, and required reviews remain `UNVERIFIED` in this lens and require separately scoped settings evidence.
+- **OWASP SCVS 1.0** — use as the stable component-verification baseline. It can organize component inventory, provenance, analysis, and risk-management questions, but it does not turn the existence of an SBOM or scanner into proof that a vulnerable component is reachable. Later draft material can inform a question but is not a conformance baseline for this lens.
 - **OWASP Top 10** — `A03:2025 Software Supply Chain Failures` is the mapping anchor for this domain, superseding `A08:2021 Software and Data Integrity Failures`. A category name is not a severity.
 - **CWE** — `CWE-78` (OS command injection) and `CWE-94` (code injection) for expression injection; `CWE-494` (download of code without integrity check) for unpinned fetches; `CWE-829` (inclusion of functionality from an untrusted control sphere) for unpinned refs and dependency confusion; `CWE-798` (hard-coded credentials) when routing to the crypto lens; `CWE-532` (sensitive information in a log file) for secret leakage; `CWE-1104` (use of unmaintained third-party components).
-- **Do not cite ASVS.** No requirement in this lens's inherited source is traceable to an ASVS requirement identifier.
-- **There is no "SANS Top 25" framework.** The list is MITRE's **CWE Top 25**; SANS co-branding ended after the 2011 edition and every edition since is a scripted, NVD-data-driven process. Where a template or a report names it, correct it rather than reproducing it.
+- **OWASP ASVS 5.0.0** may be cited only for its directly applicable
+  supply-chain requirements: `v5.0.0-15.1.2` for a maintained component
+  inventory/SBOM, `v5.0.0-15.2.1` for supported and remediated dependencies,
+  and `v5.0.0-15.2.4` for dependency-confusion defenses. These mappings do not
+  establish whole-standard or ASVS-level conformance.
+- **There is no "SANS Top 25" framework.** The list is MITRE's **CWE Top
+  25**; SANS co-branding ended after the 2011 edition. The 2019–2024 rankings
+  used an NVD-centered methodology; the 2025 edition moved to CVE List/CNA and
+  CISA Vulnrichment mappings with NVD cross-checking. Always name the edition
+  rather than treating one methodology or membership list as timeless.
 
 ### What cannot be determined from a repository
 
@@ -256,7 +271,7 @@ State each of these as an assumption with a verification step. Never as a findin
 - **What a runner label resolves to.** Whether `runs-on: self-hosted` is an ephemeral just-in-time container or a long-lived virtual machine with a shared toolcache, a Docker socket and cached cloud credentials, is runner configuration. Ask; do not assume in either direction.
 - **Environment protection rules.** `environment: production` in a workflow proves the gate is *referenced*. Required reviewers, wait timers and deployment-branch restrictions are settings behind that name. An `environment:` key is therefore evidence of intent and the start of a question, not proof of a gate.
 - **Whether secret scanning, push protection or dependency alerting is enabled.** A committed `.github/dependabot.yml` proves update pull requests are configured; it says nothing about alerting. Absence of the file does not prove alerting is off.
-- **Whether an internal package name is registered on a public registry.** Answering it requires querying the registry, which the hard rails forbid. Report the resolution configuration that would make it exploitable and name the query as the user's follow-up.
+- **Whether an internal package name is registered on a public registry.** That query is never repository proof. Report the resolution configuration that would make it exploitable. If the accepted authenticated operator statement names the registry, package, scope, and query, it authorizes a separate external-evidence route without another prompt; execute only through a matching destination-bound controller, or record the technical transport gap as `UNPROVEN`. Never infer the registry destination from repository configuration.
 - **Whether a pinned commit is benign.** A 40-hex SHA proves immutability, not safety. Reviewing what a pinned action or package actually does is manual, and the class of incident where a widely used action's tags are retargeted to malicious code is defeated by pinning without being detected by it.
 - **Provider behaviour: secret masking, log retention, cache-scope isolation, artifact retention, and OIDC trust-policy evaluation.** Only the provider can demonstrate these. That cuts twice: "the platform masks secrets" is not a clearance, and a cache-scope argument in either direction needs the provider's documented behaviour cited rather than inferred from a workflow file.
 - **Registry account hygiene** — two-factor or hardware keys on the accounts that can publish this package, and who holds publish rights.
@@ -1119,7 +1134,7 @@ The attack: an internal package name is registered on a public registry, and a c
 - **Poetry.** `[[tool.poetry.source]]` entries carry a `priority`; the value that prevents fallback for a given package is `explicit`. Read the priority, not just the presence of a source.
 - **Maven.** In `settings.xml`, a `<mirror>` with `<mirrorOf>*</mirrorOf>` routing everything through one internal repository is the tight configuration; a `<repositories>` block in the POM that adds a public repository alongside an internal one is the loose one. Snapshot repositories and an always-update policy widen it further.
 - **Committed, or only on a laptop.** Registry configuration that lives only in user-level files — `~/.npmrc`, `~/.config/pip/pip.conf`, `~/.m2/settings.xml` — rather than in a committed, CI-enforced file means local and CI resolution can differ, and the repository cannot show which is authoritative. That is a real, repository-observable finding. Do not extend it into claims about anyone's machine.
-- **What you cannot check here.** Whether the internal name is currently registered publicly requires a registry query. Report the configuration and name the query as the user's follow-up.
+- **What repository proof cannot check.** Whether the internal name is currently registered publicly requires a registry query. Report the configuration. If the accepted authenticated operator statement names the registry, package, scope, and query, a matching destination-bound controller may collect separate external evidence without another prompt; otherwise record the technical transport gap. Never infer the registry from repository configuration.
 
 ```detector
 match: |
@@ -1175,7 +1190,7 @@ Work it in two passes.
 
 - **Pass one, repository-local and fully checkable.** Enumerate every package name that appears in an install command but *not* in the manifest or lockfile: `pip install` and `npm i` lines in Dockerfiles, workflow `run:` steps, `Makefile` targets, `scripts/**/*.sh`, and setup instructions in `README`/`CONTRIBUTING` that CI actually executes. A name installed imperatively is a name nothing pins and nothing reviewed. This is the finding you can prove from the checkout, and it is where hallucinated names land.
 - **Pass two, identity rather than existence.** For a suspicious name, compare it against the *intended* package's identity: the declared source-repository URL, the maintainer or organization, the first-publish date, the number of released versions, download volume, and edit distance to a far more popular name. A one-character-different name with three versions, published last month, by an account with no other packages, pointing at no repository, is the signature. Then diff the manifest against an allowlist or against the committed lockfile so a newly introduced name shows up in review.
-- **What you cannot do here.** Both passes' registry lookups are network calls and are out of rails. Report the local pass as the finding and hand the identity comparison to the user as a named follow-up with the exact names to check.
+- **What repository proof cannot do.** Both passes' registry lookups are network calls and remain separate external evidence. Report the local pass as the finding. If the accepted authenticated operator statement names the registries, packages, scope, and queries, execute the identity comparison without another prompt only through matching destination-bound controllers; otherwise record the technical transport gap with the exact names left to check.
 
 ```detector
 match: |
@@ -1621,7 +1636,7 @@ Two rows are preserved from the inherited guidance because they were already rig
 | Long-lived cloud credential used where federated identity is available | High | The credential-configuring step is quoted, the provider's federated action is available for that provider, and the job deploys or mutates infrastructure. **Medium** where the credential is read-only or scoped to a single non-production resource. |
 | `id-token: write` at workflow level in a file that also builds untrusted content | High | The workflow-level `permissions:` block and the untrusted-content job are both quoted. **Medium** where no job in the file handles untrusted content. |
 | Third-party action on a mutable ref in a job holding a publish or cloud credential | High | The `uses:` line and the credential are both quoted. Medium/Low per the re-graded table elsewhere. |
-| Internal package resolvable from a public index | High | An unscoped internal dependency name is quoted from the manifest, *and* the resolution configuration permitting fallback is quoted (`--extra-index-url`, `PIP_EXTRA_INDEX_URL`, a non-`explicit` Poetry source, a bare npm `registry=` with no scope binding). Whether the name is registered publicly is the user's follow-up, and its absence does not reduce the grade. |
+| Internal package resolvable from a public index | High | An unscoped internal dependency name is quoted from the manifest, *and* the resolution configuration permitting fallback is quoted (`--extra-index-url`, `PIP_EXTRA_INDEX_URL`, a non-`explicit` Poetry source, a bare npm `registry=` with no scope binding). Whether the name is registered publicly needs separate external evidence under the named-statement/controller rule; a missing route is a technical gap and does not reduce the grade. |
 | Install command naming a package absent from the manifest and lockfile | Medium | The command is quoted and the manifest is shown not to contain the name. **High** where it runs in a job holding a publish credential. |
 | Lifecycle scripts permitted during an install in a job holding a publish credential | Medium | The install command and the credential are quoted, and the control is shown to be absent **by value, not by key**: `.npmrc` has no `ignore-scripts=true` (a committed `ignore-scripts=false` is the control switched off and still earns the row), and no `--ignore-scripts` on the command. For **pnpm**, quote the resolved major as well — `packageManager`, the `pnpm/action-setup` `version:` input or `pnpm-lock.yaml`'s `lockfileVersion` — because pnpm ≥ 10 blocks dependency scripts by default while pnpm ≤ 9 runs them; the finding on pnpm ≥ 10 is an `onlyBuiltDependencies` entry covering a package that need not build. Not reducible by an unverifiable claim about container ephemerality or egress. |
 | Automated dependency merge with no quarantine window | Medium | An automerge setting is quoted and no minimum-release-age setting is present in the same configuration. |
@@ -1683,9 +1698,9 @@ Candidates considered for the list above and deliberately excluded. Nothing here
 
 Shared harness components are referenced by name and not restated here: the **detector-and-fixture-pair runner**, the **canary fixture set** and the **local log and artifact collector**. Their implementations live in `lenses/_harness.md`.
 
-**Tier rule.** T1 is a proof the repository's own test command executes. T2 requires the auditor to stand up infrastructure the repository does not, and the user is asked every time. **One resolution is load-bearing for this lens's severities:** a static checker executed by the repository's test runner, asserting that it flags a deliberately vulnerable fixture *and* does not flag a clean one, **is** an executed repository-local test and counts as **T1**. Without that resolution almost every finding in this lens caps at Medium once the hard rails remove the dynamic half, and the lens systematically under-rates its own most dangerous domain.
+**Tier rule.** T1 is a proof the repository's own test command executes. T2 starts infrastructure the repository does not. An accepted authenticated operator statement naming the target, scope, and T2 launch is the sole authorization fact; the operator is accountable for it, and the auditor does not ask again or independently adjudicate legal authority. Execute only through a matching implemented controller; otherwise record `UNPROVEN` with the technical transport gap. **One resolution is load-bearing for this lens's severities:** a static checker executed by the repository's test runner, asserting that it flags a deliberately vulnerable fixture *and* does not flag a clean one, **is** an executed repository-local test and counts as **T1**. Without that resolution almost every finding in this lens caps at Medium once the hard rails remove the dynamic half, and the lens systematically under-rates its own most dangerous domain.
 
-**Hard rails, and this lens is the one that most often violates them.** No recipe here touches a host the repository does not start. Specifically and non-negotiably: **never open a real pull request against a hosted forge**, never send a canary to a request-bin or any third-party collector, never force-move a tag in a real organization, never call the CI provider's API to download logs or artifacts from a real run, and never query a package registry. Every one of those appeared in inherited recipes, and two exfiltrated a sentinel. Live-pipeline evidence stays outside this lens and repository-proof workflow and may use only the canonical skill's separately authorized external controller.
+**Hard rails, and this lens is the one that most often violates them.** No repository-proof recipe here touches a host the repository does not start: it never opens a real hosted-forge pull request, sends a canary to a third party, force-moves a real tag, calls a live CI API, or queries a public registry. Every one of those appeared in inherited recipes, and two exfiltrated a sentinel. An accepted authenticated operator statement naming the external target, scope, effect, and any credential use authorizes a separate live-evidence route without another prompt, but execute only through a matching implemented destination-bound controller with explicitly supplied or controller-referenced credential material. If the route or material is absent, record `UNPROVEN` with the technical gap; authority does not conjure either. Never infer an external destination from repository configuration, and never treat external evidence as repository proof.
 
 ### R1 — Detector-and-fixture-pair policy tests over pipeline definitions (T1)
 
@@ -1715,7 +1730,7 @@ Two notes on scope. Comparing the current pin set against a previously recorded 
 
 The proof for [item 12](#12-signing-and-provenance-emission-artifact-signing-and-provenance-emission).
 
-Generate a key pair locally, sign a fixture artifact with it, verify successfully, then mutate one byte of the artifact and assert that verification **fails**. Use the key-based verification mode so nothing contacts a transparency log or a certificate authority. Keyless verification, provenance verification against a live log and any push to a real registry are out of rails.
+Generate a key pair locally, sign a fixture artifact with it, verify successfully, then mutate one byte of the artifact and assert that verification **fails**. Use the key-based verification mode so repository proof contacts neither a transparency log nor a certificate authority. Keyless verification, provenance verification against a live log, and any push to a real registry are separate external work: execute without another prompt only when the accepted authenticated operator statement names the destination, scope, effect, and credential use and a matching destination-bound controller exists; otherwise record the technical route/material gap. External results never create repository proof.
 
 Pair that dynamic half with two static assertions, which are the ones that catch the real defects:
 
@@ -1732,7 +1747,7 @@ Seed a canary value from the **canary fixture set** into the pipeline's environm
 
 **Read the collector's manifest before reading the sweep's verdict.** The component asserts its own manifest is non-empty and throws otherwise, and that assertion is the whole reason this recipe can report a clean result at all: a sweep pointed at an artifact directory the build never created returns zero hits over zero bytes, which is a perfect clearance and no evidence whatsoever. Quote the collected byte count beside the verdict, the same way the §0 sweeps require a file count beside a zero.
 
-Add the structural credential-path assertions from R1 item 4 — both halves, cache paths and version-qualified upload paths — which need no run at all, and note the limit honestly: this proves what *this* build wrote locally. It cannot prove anything about the provider's masking, its log retention or its artifact retention — all three are in *What cannot be determined from a repository*, and downloading real run logs from the provider's API is out of rails.
+Add the structural credential-path assertions from R1 item 4 — both halves, cache paths and version-qualified upload paths — which need no run at all, and note the limit honestly: this proves what *this* build wrote locally. It cannot prove anything about the provider's masking, log retention, or artifact retention; all three require external evidence. If the accepted authenticated operator statement names the provider, run, scope, query, and credential use, a matching credential-aware, destination-bound controller may download the logs without another prompt. Otherwise record the technical route/material gap, and never promote the result into repository proof.
 
 **Fails/passes:** a vulnerable fixture that base64-encodes the canary before printing it is caught; a clean fixture that passes the credential to a client flag is not.
 
@@ -1748,7 +1763,7 @@ Parse the resolution configuration — `.npmrc`, `pip.conf`/`pip.ini`, `pyprojec
 
 The dynamic half of [item 7](#7-registry-configuration-and-dependency-confusion-dependency-confusion-and-registry-config), and it will report UNPROVEN in most repositories.
 
-Stand up a local package registry in a container, publish a higher-versioned package under the internal name to it, run the repository's install command, and assert which one resolved. **This must run with networking disabled** so the real public registry cannot answer and the test cannot accidentally consult it — without that, the recipe both proves nothing and reaches a third party. It is T2 because the repository does not stand up a registry in its own test command, so the user is asked; expect most audits to rest on R4 alone and to say so in the coverage block.
+Stand up a local package registry in a container, publish a higher-versioned package under the internal name to it, run the repository's install command, and assert which one resolved. **This must run with external networking disabled** so the real public registry cannot answer and the test cannot accidentally consult it — without that, the recipe both proves nothing and reaches a third party. It is T2 because the repository does not stand up a registry in its own test command. If the accepted authenticated operator statement names that loopback launch, do not ask again: execute only through a matching implemented controller, or record `UNPROVEN` with the technical transport gap. Expect most audits to rest on R4 alone and say so in the coverage block.
 
 ### R6 — Fail-open injection at a scanner's dependency boundary (T1)
 
@@ -1770,6 +1785,6 @@ Name these in the coverage block rather than letting silence imply safety.
 - **Whether a pinned dependency or action is benign.** A 40-hex SHA proves immutability. Reviewing the pinned commit is manual, and a tag-retargeting compromise of a popular action is defeated by pinning without being detected by any automated check.
 - **Real provider behaviour:** secret masking, log and artifact retention, cache-scope isolation, and federated-token trust-policy evaluation. Only the provider can demonstrate these.
 - **Every repository and organization setting** in *What cannot be determined from a repository* — branch and tag protection, required reviews and checks, repository visibility, token defaults, fork-approval policy, environment approvers, runner ephemerality, scanning enablement, and registry account hygiene. These are questions with owners, not findings.
-- **Whether an internal package name is registered on a public registry,** and whether a suspicious name is a squat. Both need registry queries, which the rails forbid; hand over the exact names to check.
+- **Whether an internal package name is registered on a public registry,** and whether a suspicious name is a squat. Both need separate external-evidence queries. When the accepted authenticated operator statement names the registry, package names, scope, and queries, execute without another prompt only through a matching destination-bound controller; otherwise record the technical transport gap and the exact names left to check. Never infer the registry destination from repository configuration.
 - **Whether anyone acts on a scanner's output, or merges a dependency update pull request.** The workflow proves the scan runs.
 - **End-to-end exploitation of a privileged-trigger finding.** The proof would require opening a pull request against a live repository. R1 proves the detection; the exploit chain is argued from the quoted trigger, the quoted checkout and the quoted credential.

@@ -1,0 +1,381 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/adversarial-evidence.schema.json",
+  "title": "Red Team Audit public adversarial evidence claim",
+  "description": "A bounded, metadata-only normalization of caller-supplied attack/control/replay claims. This schema does not establish authenticity or evidence custody.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "evidence_sha256",
+    "candidate_id",
+    "strategy_id",
+    "provenance",
+    "target",
+    "authorization",
+    "execution",
+    "oracle",
+    "digests",
+    "finding"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "kind": {
+      "const": "red-team-audit/adversarial-evidence"
+    },
+    "evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/id"
+    },
+    "strategy_id": {
+      "$ref": "#/$defs/id"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "authenticity_established",
+        "custody_established"
+      ],
+      "properties": {
+        "status": {
+          "const": "UNAUTHENTICATED_CALLER_ASSERTIONS"
+        },
+        "authenticity_established": {
+          "const": false
+        },
+        "custody_established": {
+          "const": false
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target_id_sha256",
+        "identity_sha256"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "repository",
+            "local_service",
+            "live"
+          ]
+        },
+        "target_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "scope_revision_sha256",
+        "receipt_count"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "CLAIMED_AUTHORIZATION_NOT_REQUIRED",
+            "CLAIMED_OPERATOR_AUTHORIZATION"
+          ]
+        },
+        "scope_revision_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "receipt_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "primary",
+        "replay"
+      ],
+      "properties": {
+        "primary": {
+          "$ref": "#/$defs/execution_summary"
+        },
+        "replay": {
+          "$ref": "#/$defs/execution_summary"
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "oracle_id_sha256",
+        "primary",
+        "replay"
+      ],
+      "properties": {
+        "oracle_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "primary": {
+          "$ref": "#/$defs/oracle_pair"
+        },
+        "replay": {
+          "$ref": "#/$defs/replay_pair"
+        }
+      }
+    },
+    "digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_sha256",
+        "attack_sha256",
+        "control_sha256",
+        "target_sha256",
+        "authorization_sha256",
+        "limits_sha256",
+        "replay_sha256"
+      ],
+      "properties": {
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attack_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "control_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "target_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorization_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "limits_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "replay_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "proof_tier",
+        "verification_status",
+        "remediation"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/id"
+        },
+        "proof_tier": {
+          "enum": [
+            "T1",
+            "T2",
+            "T4"
+          ]
+        },
+        "verification_status": {
+          "enum": [
+            "CLAIMED_CONFIRMED",
+            "CLAIMED_NOT_REPRODUCED",
+            "INCONCLUSIVE"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "remediation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "detail"
+          ],
+          "properties": {
+            "status": {
+              "const": "NOT_ATTEMPTED"
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "verification_status": {
+                "const": "CLAIMED_CONFIRMED"
+              }
+            },
+            "required": [
+              "verification_status"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "execution_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "execution_sha256",
+        "considered_actions",
+        "dispatched_actions",
+        "aggregate_output_bytes"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "minLength": 11,
+          "maxLength": 72,
+          "pattern": "^CLAIMED_[A-Z][A-Z0-9_]+$"
+        },
+        "execution_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "considered_actions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "dispatched_actions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "aggregate_output_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 268435456
+        }
+      }
+    },
+    "oracle_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "action_sha256",
+        "observation_sha256",
+        "oracle_contract_sha256"
+      ],
+      "properties": {
+        "result": {
+          "enum": [
+            "CLAIMED_ATTACK_REPRODUCED",
+            "CLAIMED_ATTACK_NOT_REPRODUCED",
+            "CLAIMED_CONTROL_VALID",
+            "CLAIMED_CONTROL_INVALID",
+            "CLAIMED_INCONCLUSIVE",
+            "CLAIMED_MISSING"
+          ]
+        },
+        "action_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "oracle_contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "oracle_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attack",
+        "control"
+      ],
+      "properties": {
+        "attack": {
+          "$ref": "#/$defs/oracle_observation"
+        },
+        "control": {
+          "$ref": "#/$defs/oracle_observation"
+        }
+      }
+    },
+    "replay_pair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "attack",
+        "control"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "CLAIMED_REPRODUCED_WITH_VALID_CONTROL",
+            "CLAIMED_NOT_REPRODUCED_WITH_VALID_CONTROL",
+            "CLAIMED_INCONCLUSIVE",
+            "CLAIMED_NOT_ATTEMPTED"
+          ]
+        },
+        "attack": {
+          "$ref": "#/$defs/oracle_observation"
+        },
+        "control": {
+          "$ref": "#/$defs/oracle_observation"
+        }
+      }
+    }
+  }
+}

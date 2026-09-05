@@ -106,10 +106,13 @@ function directoryIsExcluded(relativePath, name, exclusions) {
   return exclusions.has(name) || exclusions.has(normalized)
 }
 
-function boundedInteger(name, value, fallback) {
+function boundedInteger(name, value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
   const resolvedValue = value ?? fallback
   if (!Number.isSafeInteger(resolvedValue) || resolvedValue < 0) {
     throw new Error(`${name} must be a non-negative safe integer`)
+  }
+  if (resolvedValue > maximum) {
+    throw new Error(`${name} must be at most ${maximum}`)
   }
   return resolvedValue
 }
@@ -181,6 +184,7 @@ export async function inventoryRepository(targetRoot, options = {}) {
   const maxInventoryFiles = boundedInteger(
     'maxInventoryFiles',
     options.maxInventoryFiles,
+    DEFAULT_INVENTORY_LIMITS.maxInventoryFiles,
     DEFAULT_INVENTORY_LIMITS.maxInventoryFiles,
   )
   const maxInventoryBytes = boundedInteger(

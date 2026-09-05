@@ -1,14 +1,12 @@
 import { Buffer } from 'node:buffer'
 
 import {
-  buildActionCountersignaturePayload,
   canonicalJson,
   httpAuthedAuthorizationEvidence,
   httpAuthedAuthorizationBindingSha256,
   httpAuthedCampaignLedgerBindingSha256,
   isHttpAuthedBrowserSessionCredential,
   sha256Hex,
-  verifyHttpAuthedActionCountersignature,
   verifyHttpAuthedCandidate,
   verifyHttpAuthedCleanupCandidate,
 } from './http-authed-contracts.mjs'
@@ -22,11 +20,13 @@ const REQUIRED_LEDGER_METHODS = [
   'actionState',
   'enqueueCandidate',
   'leaseAction',
-  'consumeApproval',
+  'consumeAuthorization',
   'markPreDispatch',
   'markOutcome',
   'recordVerification',
+  'recordVerificationFailure',
   'terminalizeAction',
+  'observeStopRequest',
 ]
 
 export class HttpAuthedMutationControllerError extends Error {
@@ -128,6 +128,16 @@ function responseMetadata(response) {
   }
 }
 
+function responseStopReason(status) {
+  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
+  if (status === 429) return 'LIMIT_REACHED'
+  if (Number.isSafeInteger(status) && status >= 300 && status <= 399) {
+    return 'UNEXPECTED_REDIRECT'
+  }
+  if (Number.isSafeInteger(status) && status >= 500) return 'TARGET_HEALTH_DEGRADED'
+  return null
+}
+
 function requestBinding({ actionId, phase, method, url, body }) {
   return sha256Hex(Buffer.from(canonicalJson({
     action_id: actionId,
@@ -177,40 +187,38 @@ function phaseRequest(action, phase, mutationBody, rollbackBody) {
   throw mutationError('HTTP_AUTHED_MUTATION_PHASE_INVALID', 'mutation phase is invalid')
 }
 
-function defaultCountersignatureVerifier({
+function controllerActionPermit({
   scope,
   action,
-  countersignature,
+  actionId,
+  leaseId,
   expectedCampaignGrantSha256,
   campaignLedgerSha256,
-  now,
+  operatorId,
 }) {
-  if (scope.approver.mechanism !== 'ed25519_file') {
+  if (operatorId !== scope.authorization.operator_id) {
     throw mutationError(
-      'HTTP_AUTHED_MUTATION_APPROVER_UNSUPPORTED',
-      'declared mutation execution currently requires an Ed25519 file approver',
+      'HTTP_AUTHED_MUTATION_OPERATOR_MISMATCH',
+      'mutation operator does not match the sealed campaign authorization',
     )
   }
-  const expected = buildActionCountersignaturePayload({
-    action,
-    planSha256: expectedCampaignGrantSha256,
-    campaignLedgerSha256,
-    nonce: countersignature?.nonce,
-    at: countersignature?.at,
-  })
-  const identity = verifyHttpAuthedActionCountersignature({
-    countersignature,
-    approverPublicKeyBytes: Buffer.from(scope.approver.public_key.value_base64, 'base64'),
-    expected,
-    now,
-  })
-  if (identity.keyId !== scope.approver.key_id) {
-    throw mutationError(
-      'HTTP_AUTHED_MUTATION_APPROVER_MISMATCH',
-      'mutation countersignature does not match the sealed approver key',
-    )
+  const binding = {
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-authed-action-dispatch-permit',
+    operator_id: operatorId,
+    authorization_binding_sha256: httpAuthedAuthorizationBindingSha256(scope),
+    campaign_grant_sha256: expectedCampaignGrantSha256,
+    campaign_ledger_sha256: campaignLedgerSha256,
+    action_id: actionId,
+    lease_id: leaseId,
+    action_sha256: sha256Hex(Buffer.from(canonicalJson(action), 'utf8')),
   }
-  return identity
+  const permitSha256 = sha256Hex(Buffer.from(canonicalJson(binding), 'utf8'))
+  return Object.freeze({
+    ...binding,
+    nonce: `permit-${permitSha256}`,
+    permit_sha256: permitSha256,
+  })
 }
 
 function observationResult(value) {
@@ -366,10 +374,19 @@ function expectedStatusesForPhase(action, phase) {
   throw mutationError('HTTP_AUTHED_MUTATION_PHASE_INVALID', 'mutation phase is invalid')
 }
 
-function publicResult({ lease, action, outcome, verification, responses }) {
+function publicResult({
+  lease,
+  action,
+  outcome,
+  verification,
+  verificationFailures,
+  terminalReasonCode,
+  responses,
+  stopReason,
+}) {
   return {
     kind: 'red-team-audit/http-authed-mutation-result',
-    schema_version: '1.0.0',
+    schema_version: verificationFailures.length === 0 ? '1.0.0' : '1.1.0',
     outcome,
     action: {
       action_id: lease.actionId,
@@ -382,6 +399,13 @@ function publicResult({ lease, action, outcome, verification, responses }) {
       after: verification.after,
       rollback: verification.rollback,
     },
+    ...(verificationFailures.length === 0
+      ? {}
+      : {
+          verification_failures: structuredClone(verificationFailures),
+          terminal_reason_code: terminalReasonCode,
+        }),
+    stop_reason: stopReason,
     responses: structuredClone(responses),
   }
 }
@@ -396,10 +420,8 @@ export async function runDeclaredHttpAuthedMutation({
   ledger,
   scope,
   action,
-  documentBytes,
   expectedCampaignGrantSha256,
   operatorId,
-  countersignature,
   credentialValue,
   requestBodyBytes,
   rollbackBodyBytes,
@@ -407,7 +429,6 @@ export async function runDeclaredHttpAuthedMutation({
   transport,
   verifyCandidate = verifyHttpAuthedCandidate,
   verifyCleanupCandidate = verifyHttpAuthedCleanupCandidate,
-  verifyCountersignature = defaultCountersignatureVerifier,
   verifyObservation = verifyTransientHttpAuthedJsonObservation,
   existingLease,
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -423,7 +444,6 @@ export async function runDeclaredHttpAuthedMutation({
     || typeof transport !== 'function'
     || typeof verifyCandidate !== 'function'
     || typeof verifyCleanupCandidate !== 'function'
-    || typeof verifyCountersignature !== 'function'
     || typeof verifyObservation !== 'function'
     || typeof wait !== 'function'
   ) {
@@ -470,7 +490,6 @@ export async function runDeclaredHttpAuthedMutation({
       return await verifier({
         scope,
         action: candidate,
-        documentBytes,
         expectedCampaignGrantSha256,
         now: now(),
       })
@@ -482,38 +501,7 @@ export async function runDeclaredHttpAuthedMutation({
       )
     }
   }
-  const verifyCountersignatureNow = async (candidate) => {
-    try {
-      return await verifyCountersignature({
-        scope,
-        action: candidate,
-        countersignature,
-        expectedCampaignGrantSha256,
-        campaignLedgerSha256,
-        now: now(),
-      })
-    } catch (cause) {
-      throw mutationError(
-        'HTTP_AUTHED_MUTATION_COUNTERSIGNATURE_REJECTED',
-        'declared mutation countersignature verification failed',
-        { cause },
-      )
-    }
-  }
-
   await verifyCandidateNow(action)
-  await verifyCountersignatureNow(action)
-  if (
-    typeof countersignature?.nonce !== 'string'
-    || countersignature.nonce.length < 16
-    || countersignature.nonce.length > 128
-    || !/^[A-Za-z0-9._~-]+$/.test(countersignature.nonce)
-  ) {
-    throw mutationError(
-      'HTTP_AUTHED_MUTATION_APPROVAL_NONCE_INVALID',
-      'declared mutation countersignature must carry a valid one-use nonce',
-    )
-  }
   let lease
   if (existingLease === undefined) {
     await ledger.enqueueCandidate({
@@ -538,6 +526,15 @@ export async function runDeclaredHttpAuthedMutation({
     lease = existingLease
   }
   const allocatedAction = lease.allocatedAction
+  const dispatchPermit = controllerActionPermit({
+    scope,
+    action: allocatedAction,
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    expectedCampaignGrantSha256,
+    campaignLedgerSha256,
+    operatorId,
+  })
   Object.defineProperty(allocatedAction, '__credential_preflight', {
     value: structuredClone(scope.liveness.credential_preflight),
     enumerable: false,
@@ -545,10 +542,16 @@ export async function runDeclaredHttpAuthedMutation({
     writable: false,
   })
   const verification = { before: false, after: false, rollback: false }
+  const verificationFailures = []
   const responses = {}
+  let stopReason = null
   let dispatchAttempts = 0
 
   const terminal = async (outcome, reasonCode) => {
+    // Import an out-of-band operator stop before the terminal record so the
+    // durable history qualifies both the stop and the action outcome. A stop
+    // received after the write boundary never suppresses mandatory cleanup.
+    await ledger.observeStopRequest()
     await ledger.terminalizeAction({
       actionId: lease.actionId,
       leaseId: lease.leaseId,
@@ -560,7 +563,10 @@ export async function runDeclaredHttpAuthedMutation({
       action: allocatedAction,
       outcome,
       verification,
+      verificationFailures,
+      terminalReasonCode: reasonCode,
       responses,
+      stopReason,
     })
     credentialBytes?.fill(0)
     mutationBody?.fill(0)
@@ -575,6 +581,8 @@ export async function runDeclaredHttpAuthedMutation({
     }
     dispatchAttempts += 1
     let preDispatched = false
+    let preDispatchSettled = false
+    let sendPermitGranted = false
     const beforeSend = async () => {
       if (preDispatched) {
         throw mutationError(
@@ -582,21 +590,41 @@ export async function runDeclaredHttpAuthedMutation({
           'mutation transport invoked its pre-dispatch permit more than once',
         )
       }
-      await verifyCandidateNow(allocatedAction, {
-        cleanup: ['AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY'].includes(phase),
-      })
+      const cleanupPhase = ['AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY'].includes(phase)
+      const operatorStopped = await ledger.observeStopRequest()
+      if (operatorStopped && !cleanupPhase) {
+        throw mutationError(
+          'HTTP_AUTHED_MUTATION_STOP_REQUESTED',
+          `operator stop was requested before mutation phase ${phase}`,
+        )
+      }
+      await verifyCandidateNow(allocatedAction, { cleanup: cleanupPhase })
+      if (!cleanupPhase && await ledger.observeStopRequest()) {
+        throw mutationError(
+          'HTTP_AUTHED_MUTATION_STOP_REQUESTED',
+          `operator stop was requested while mutation phase ${phase} was being qualified`,
+        )
+      }
       if (phase === 'MUTATION') {
         assertCleanupWindowAvailable(scope, now())
-        await verifyCountersignatureNow(allocatedAction)
-        await ledger.consumeApproval({
+        if (await ledger.observeStopRequest()) {
+          throw mutationError(
+            'HTTP_AUTHED_MUTATION_STOP_REQUESTED',
+            'operator stop was requested while the mutation dispatch permit was being qualified',
+          )
+        }
+        await ledger.consumeAuthorization({
           actionId: lease.actionId,
           leaseId: lease.leaseId,
-          nonce: countersignature.nonce,
-          countersignatureBindingSha256: sha256Hex(Buffer.from(
-            canonicalJson(countersignature),
-            'utf8',
-          )),
+          nonce: dispatchPermit.nonce,
+          dispatchPermitSha256: dispatchPermit.permit_sha256,
         })
+      }
+      if (!cleanupPhase && await ledger.observeStopRequest()) {
+        throw mutationError(
+          'HTTP_AUTHED_MUTATION_STOP_REQUESTED',
+          `operator stop was requested before mutation phase ${phase} pre-dispatch`,
+        )
       }
       await ledger.markPreDispatch({
         actionId: lease.actionId,
@@ -611,10 +639,35 @@ export async function runDeclaredHttpAuthedMutation({
         }),
       })
       preDispatched = true
+      if (!cleanupPhase && await ledger.observeStopRequest()) {
+        try {
+          await ledger.markOutcome({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            phase,
+            outcome: 'FAILED',
+            responseMetadata: {
+              status: null,
+              bytes: 0,
+              headerNames: [],
+              requestMayHaveBeenSent: false,
+            },
+          })
+        } finally {
+          preDispatchSettled = ledger.actionState(lease.actionId)
+            ?.phase_outcomes?.[phase]?.outcome === 'FAILED'
+        }
+        throw mutationError(
+          'HTTP_AUTHED_MUTATION_STOP_REQUESTED',
+          `operator stop was committed with mutation phase ${phase} pre-dispatch; request was not sent`,
+        )
+      }
+      sendPermitGranted = true
     }
 
+    let rawResponse
     try {
-      const rawResponse = await transport({
+      rawResponse = await transport({
         phase,
         method: request.method,
         url: request.url,
@@ -642,6 +695,7 @@ export async function runDeclaredHttpAuthedMutation({
         },
       })
       responses[phase] = metadata
+      stopReason ??= responseStopReason(metadata.status)
       if (
         !['BEFORE_READ', 'AFTER_READ', 'ROLLBACK_VERIFY'].includes(phase)
         && (Buffer.isBuffer(rawResponse.body) || rawResponse.body instanceof Uint8Array)
@@ -657,8 +711,16 @@ export async function runDeclaredHttpAuthedMutation({
         metadata,
       }
     } catch (cause) {
-      const mayHaveBeenSent = preDispatched || cause?.request_may_have_been_sent === true
-      if (preDispatched) {
+      if (Buffer.isBuffer(rawResponse?.body) || rawResponse?.body instanceof Uint8Array) {
+        rawResponse.body.fill(0)
+      }
+      const durableState = ledger.actionState(lease.actionId)
+      const durablePreDispatch = preDispatched
+        || durableState?.pending_phase === phase
+        || durableState?.phase_outcomes?.[phase] !== undefined
+      preDispatchSettled ||= durableState?.phase_outcomes?.[phase] !== undefined
+      const mayHaveBeenSent = sendPermitGranted || cause?.request_may_have_been_sent === true
+      if (durablePreDispatch && !preDispatchSettled) {
         await ledger.markOutcome({
           actionId: lease.actionId,
           leaseId: lease.leaseId,
@@ -678,6 +740,7 @@ export async function runDeclaredHttpAuthedMutation({
 
   const observe = async (phase, dispatched, expectedDigest, baselineContextToken) => {
     let decision
+    let failed = false
     try {
       decision = observationResult(await verifyObservation({
         phase,
@@ -687,12 +750,26 @@ export async function runDeclaredHttpAuthedMutation({
         baselineContextToken,
       }))
     } catch {
-      return { completed: false, matched: false, contextToken: undefined }
+      failed = true
     } finally {
       if (Buffer.isBuffer(dispatched.response?.body)) dispatched.response.body.fill(0)
       else if (dispatched.response?.body instanceof Uint8Array) {
         dispatched.response.body.fill(0)
       }
+    }
+    if (failed) {
+      const failure = {
+        phase,
+        reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+      }
+      await ledger.recordVerificationFailure({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase,
+        reasonCode: failure.reason_code,
+      })
+      verificationFailures.push(failure)
+      return { completed: false, matched: false, contextToken: undefined }
     }
     await ledger.recordVerification({
       actionId: lease.actionId,
@@ -724,6 +801,9 @@ export async function runDeclaredHttpAuthedMutation({
     undefined,
   )
   verification.before = beforeDecision.matched
+  if (!beforeDecision.completed) {
+    return terminal('FAILED_BEFORE_MUTATION', 'BEFORE_OBSERVATION_FAILED')
+  }
   if (!verification.before) {
     return terminal('FAILED_BEFORE_MUTATION', 'BEFORE_VERIFICATION_MISMATCH')
   }
@@ -737,6 +817,7 @@ export async function runDeclaredHttpAuthedMutation({
   const mutationDeliveryAmbiguous = !mutation.ok
 
   const after = await dispatch('AFTER_READ')
+  let afterObservationFailed = false
   if (after.ok && after.acceptedStatus) {
     const afterDecision = await observe(
       'AFTER_READ',
@@ -745,6 +826,7 @@ export async function runDeclaredHttpAuthedMutation({
       beforeDecision.contextToken,
     )
     verification.after = afterDecision.matched
+    afterObservationFailed = !afterDecision.completed
   }
   // Once a mutation may have crossed the send boundary, the sealed idempotent
   // restore is attempted exactly once even when the response or after-read is
@@ -763,6 +845,9 @@ export async function runDeclaredHttpAuthedMutation({
     beforeDecision.contextToken,
   )
   verification.rollback = rollbackDecision.matched
+  if (!rollbackDecision.completed) {
+    return terminal('MANUAL_INTERVENTION_REQUIRED', 'ROLLBACK_OBSERVATION_FAILED')
+  }
   if (!verification.rollback) {
     return terminal('MANUAL_INTERVENTION_REQUIRED', 'ROLLBACK_VERIFICATION_MISMATCH')
   }
@@ -772,12 +857,16 @@ export async function runDeclaredHttpAuthedMutation({
     && rollback.acceptedStatus
     && !mutationDeliveryAmbiguous
     && !rollbackDeliveryFailed
-    return terminal(
-      completeSuccess
-        ? 'MUTATION_VERIFIED_ROLLBACK_VERIFIED'
-        : 'ROLLBACK_VERIFIED_AFTER_FAILURE',
-      completeSuccess ? null : 'MUTATION_OR_VERIFICATION_MISMATCH',
-    )
+  return terminal(
+    completeSuccess
+      ? 'MUTATION_VERIFIED_ROLLBACK_VERIFIED'
+      : 'ROLLBACK_VERIFIED_AFTER_FAILURE',
+    completeSuccess
+      ? null
+      : afterObservationFailed
+        ? 'AFTER_OBSERVATION_FAILED'
+        : 'MUTATION_OR_VERIFICATION_MISMATCH',
+  )
   } finally {
     credentialBytes?.fill(0)
     mutationBody?.fill(0)
@@ -795,7 +884,6 @@ export async function recoverDeclaredHttpAuthedMutation({
   scope,
   action,
   existingLease,
-  documentBytes,
   expectedCampaignGrantSha256,
   credentialValue,
   rollbackBodyBytes,
@@ -837,7 +925,7 @@ export async function recoverDeclaredHttpAuthedMutation({
     !state
     || state.terminal
     || state.action_kind !== 'mutate'
-    || state.approval_consumed !== true
+    || state.authorization_consumed !== true
     || state.action_id !== identity.actionId
     || state.lease_id !== existingLease?.leaseId
     || existingLease?.actionId !== identity.actionId
@@ -854,6 +942,7 @@ export async function recoverDeclaredHttpAuthedMutation({
     'AFTER_READ_SETTLED',
     'AFTER_READ_FAILED',
     'AFTER_READ_VERIFIED',
+    'AFTER_READ_VERIFICATION_FAILED',
   ])
   const verifyOnlyStates = new Set(['ROLLBACK_SETTLED', 'ROLLBACK_FAILED'])
   if (!rollbackRequiredStates.has(state.state) && !verifyOnlyStates.has(state.state)) {
@@ -872,7 +961,7 @@ export async function recoverDeclaredHttpAuthedMutation({
       || currentState.action_id !== identity.actionId
       || currentState.lease_id !== existingLease.leaseId
       || currentState.action_kind !== 'mutate'
-      || currentState.approval_consumed !== true
+      || currentState.authorization_consumed !== true
       || ledger.snapshot().stopped !== true
       || !allowed.has(currentState.state)
     ) {
@@ -888,7 +977,6 @@ export async function recoverDeclaredHttpAuthedMutation({
       const verified = await verifyCandidate({
         scope,
         action,
-        documentBytes,
         expectedCampaignGrantSha256,
         now: now(),
       })
@@ -918,6 +1006,7 @@ export async function recoverDeclaredHttpAuthedMutation({
       })
   const rollbackBody = boundBody(action.rollback.request_body, rollbackBodyBytes, 'rollback')
   const responses = {}
+  const verificationFailures = []
   let dispatchAttempts = 0
   const terminal = async (outcome, reasonCode) => {
     await ledger.terminalizeAction({
@@ -928,7 +1017,7 @@ export async function recoverDeclaredHttpAuthedMutation({
     })
     return {
       kind: 'red-team-audit/http-authed-mutation-recovery-result',
-      schema_version: '1.0.0',
+      schema_version: verificationFailures.length === 0 ? '1.0.0' : '1.1.0',
       outcome,
       action: {
         action_id: existingLease.actionId,
@@ -939,6 +1028,12 @@ export async function recoverDeclaredHttpAuthedMutation({
         rollback_value: outcome === 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED',
         sibling_context: false,
       },
+      ...(verificationFailures.length === 0
+        ? {}
+        : {
+            verification_failures: structuredClone(verificationFailures),
+            terminal_reason_code: reasonCode,
+          }),
       responses,
     }
   }
@@ -1031,6 +1126,7 @@ export async function recoverDeclaredHttpAuthedMutation({
       return terminal('MANUAL_INTERVENTION_REQUIRED', 'RECOVERY_ROLLBACK_VERIFY_FAILED')
     }
     let decision
+    let observationFailed = false
     try {
       decision = observationResult(await verifyObservation({
         phase: 'ROLLBACK_VERIFY',
@@ -1040,12 +1136,26 @@ export async function recoverDeclaredHttpAuthedMutation({
         baselineContextToken: undefined,
       }))
     } catch {
-      return terminal('MANUAL_INTERVENTION_REQUIRED', 'RECOVERY_OBSERVATION_FAILED')
+      observationFailed = true
     } finally {
       if (Buffer.isBuffer(verificationRead.response?.body)
         || verificationRead.response?.body instanceof Uint8Array) {
         verificationRead.response.body.fill(0)
       }
+    }
+    if (observationFailed) {
+      const failure = {
+        phase: 'ROLLBACK_VERIFY',
+        reason_code: 'TRANSIENT_OBSERVATION_FAILED',
+      }
+      await ledger.recordVerificationFailure({
+        actionId: existingLease.actionId,
+        leaseId: existingLease.leaseId,
+        phase: failure.phase,
+        reasonCode: failure.reason_code,
+      })
+      verificationFailures.push(failure)
+      return terminal('MANUAL_INTERVENTION_REQUIRED', 'RECOVERY_OBSERVATION_FAILED')
     }
     await ledger.recordVerification({
       actionId: existingLease.actionId,

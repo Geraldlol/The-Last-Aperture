@@ -1,5 +1,12 @@
 # ADR: Disposable multi-engine database conformance lab
 
+> **Current release gate (2026-09-03):** Public `database-conformance run` is
+> disabled before argument, bundle, or configuration access. The absolute
+> caller-selected `runtime_path` is not authenticated Docker identity and can be
+> replaced by an arbitrary host executable. This ADR documents the protocol and
+> internal conformance harness; re-enablement requires a controller-enrolled,
+> identity-pinned runtime and independent review.
+
 Date: 2026-07-30
 Status: Accepted for 0.7.0
 

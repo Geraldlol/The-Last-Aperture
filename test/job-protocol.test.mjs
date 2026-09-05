@@ -183,9 +183,33 @@ function runToProof() {
   run = beginJob(run, 'triage:business-logic')
   run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
     findings: [triaged()],
-  }))
+  }), { sidecar: businessLogicSidecar })
   ;({ run } = advanceRun(run))
   return run
+}
+
+function runReadyForFinalization() {
+  let run = runToProof()
+  const candidateId = stageOne().candidate_id
+  const existenceJobId = `proof-existence:${candidateId}`
+  run = beginJob(run, existenceJobId)
+  run = applyJobResult(run, jobResult(run, existenceJobId, {
+    findings: [withExistence()],
+  }))
+  ;({ run } = advanceRun(run))
+  const verificationJobId = `proof-verification:${candidateId}`
+  run = beginJob(run, verificationJobId)
+  run = applyJobResult(run, jobResult(run, verificationJobId, {
+    findings: [staticProof()],
+  }))
+  ;({ run } = advanceRun(run))
+  ;({ run } = advanceRun(run))
+  ;({ run } = advanceRun(run))
+  run = beginJob(run, 'completeness:completeness')
+  return applyJobResult(
+    run,
+    jobResult(run, 'completeness:completeness'),
+  )
 }
 
 function runManyToProof(count) {
@@ -208,7 +232,7 @@ function runManyToProof(count) {
   run = beginJob(run, 'triage:business-logic')
   run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
     findings: triagedFindings,
-  }))
+  }), { sidecar: businessLogicSidecar })
   ;({ run } = advanceRun(run))
   return { run, triagedFindings }
 }
@@ -229,6 +253,87 @@ const lensSidecar = {
   owned_topics: ['authz-object-level'],
   known_topics: ['authz-object-level'],
 }
+
+const businessLogicSidecar = {
+  job_id: 'triage:business-logic',
+  scoped_files: ['src/routes/invoices.ts'],
+  owned_topics: [],
+  known_topics: ['authz-object-level'],
+}
+
+function runToBusinessLogicWithAdditionalInventory() {
+  const planned = plannedRun()
+  planned.scope.included_paths.push('src/services/payments.ts')
+  planned.coverage.inventory.push('src/services/payments.ts')
+  planned.coverage.unexamined.push({
+    path: 'src/services/payments.ts',
+    reason: 'audit job has not run',
+  })
+
+  let run = beginJob(planned, 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+  }), { sidecar: lensSidecar })
+  ;({ run } = advanceRun(run))
+  return beginJob(run, 'triage:business-logic')
+}
+
+test('business-logic triage rejects examined files outside its sealed source scope', () => {
+  const run = runToBusinessLogicWithAdditionalInventory()
+
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, 'triage:business-logic', {
+      examined_files: ['src/services/payments.ts'],
+    }), { sidecar: businessLogicSidecar }),
+    /job triage:business-logic examined path outside its scoped files: src\/services\/payments\.ts/,
+  )
+})
+
+test('business-logic triage rejects an originating location outside its sealed source scope', () => {
+  const run = runToBusinessLogicWithAdditionalInventory()
+  const finding = triaged({
+    candidate_id: 'business-logic:unsealed-payment-path',
+    lens: 'business-logic',
+    topic: 'business-logic',
+    raised_by: 'business-logic',
+    location: ['src/services/payments.ts:41'],
+  })
+
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, 'triage:business-logic', {
+      examined_files: ['src/routes/invoices.ts'],
+      findings: [finding],
+    }), { sidecar: businessLogicSidecar }),
+    /finding business-logic:unsealed-payment-path cites a path outside triage:business-logic scope/,
+  )
+})
+
+test('business-logic triage accepts in-scope examination and an in-scope originating finding', () => {
+  const run = runToBusinessLogicWithAdditionalInventory()
+  const finding = triaged({
+    candidate_id: 'business-logic:sealed-invoice-path',
+    lens: 'business-logic',
+    topic: 'business-logic',
+    raised_by: 'business-logic',
+  })
+
+  const accepted = applyJobResult(run, jobResult(run, 'triage:business-logic', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: [finding],
+  }), { sidecar: businessLogicSidecar })
+
+  assert.equal(accepted.jobs[1].state, 'SUCCEEDED')
+  assert.equal(accepted.findings[0].candidate_id, finding.candidate_id)
+})
+
+test('business-logic triage requires its immutable source sidecar', () => {
+  const run = runToBusinessLogicWithAdditionalInventory()
+
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, 'triage:business-logic')),
+    /business-logic triage job triage:business-logic requires its immutable job sidecar/,
+  )
+})
 
 const databasePrincipal = {
   authenticated_principal: 'application user',
@@ -589,7 +694,7 @@ test('the dispatched proof queue puts a reachability-capped Critical ahead of an
       effective_severity: finding.reachable_from === 'unknown' ? 'Medium' : 'High',
       triage_disposition: 'queued',
     })),
-  }))
+  }), { sidecar: businessLogicSidecar })
   ;({ run } = advanceRun(run))
 
   assert.equal(validateRun(run).valid, true)
@@ -720,6 +825,28 @@ test('N findings dispatch as candidate-bound proof waves with a global existence
   assert.doesNotThrow(() => beginJob(run, lastVerification.job_id))
 })
 
+test('an unauthenticated provider drop cannot remove a candidate from proof scheduling', () => {
+  let run = beginJob(plannedRun(), 'lens:web-and-api')
+  run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
+    examined_files: ['src/routes/invoices.ts'],
+    findings: [stageOne()],
+  }), { sidecar: lensSidecar })
+  ;({ run } = advanceRun(run))
+  run = beginJob(run, 'triage:business-logic')
+  run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
+    findings: [triaged({
+      triage_disposition: 'dropped',
+      drop_reason: 'provider claims the route is unreachable',
+    })],
+  }), { sidecar: businessLogicSidecar })
+  ;({ run } = advanceRun(run))
+
+  assert.equal(run.findings[0].triage_authority, 'UNAUTHENTICATED_PROVIDER_ASSERTION')
+  assert.ok(run.jobs.some(({ job_id: jobId, state }) =>
+    jobId === 'proof-existence:authz-object-level:a3f19c2e'
+    && state === 'PENDING'))
+})
+
 test('one failed existence result fails an N-finding proof wave before verification', () => {
   let { run } = runManyToProof(5)
   const failed = run.jobs.filter(({ job_id: jobId }) =>
@@ -758,7 +885,7 @@ test('full provider-neutral state machine reaches a validated static final repor
   run = beginJob(run, 'triage:business-logic')
   run = applyJobResult(run, jobResult(run, 'triage:business-logic', {
     findings: [triaged()],
-  }))
+  }), { sidecar: businessLogicSidecar })
 
   ;({ run } = advanceRun(run))
   assert.equal(run.phase, 'PROOF')
@@ -780,6 +907,10 @@ test('full provider-neutral state machine reaches a validated static final repor
   run = applyJobResult(run, jobResult(run, 'proof-verification:authz-object-level:a3f19c2e', {
     findings: [staticProof()],
   }))
+  assert.equal(
+    run.findings[0].verification_authority,
+    'UNAUTHENTICATED_PROVIDER_ASSERTION',
+  )
 
   ;({ run } = advanceRun(run))
   assert.equal(run.phase, 'PATCH')
@@ -802,6 +933,96 @@ test('full provider-neutral state machine reaches a validated static final repor
   assert.deepEqual(JSON.parse(finalized.coverage), finalized.run.coverage)
   assert.equal(finalized.run.artifacts.coverage.path, 'coverage.json')
   assert.equal(Object.isFrozen(finalized.run), true)
+})
+
+test('attached but unassessable evidence finalizes COMPLETE_WITH_GAPS', () => {
+  const evidenceCoverage = {
+    cells: [{
+      lens: 'web-and-api',
+      topic: 'authz-object-level',
+      evidence_class: 'deployed-state',
+      state: 'NOT_ASSESSED',
+      reason: 'provider evidence-byte delivery is not implemented',
+    }],
+    summary: {
+      cell_count: 1,
+      bundle_count: 1,
+      unreached_class_count: 1,
+      unreached_classes: ['deployed-state'],
+      not_assessed_cell_count: 1,
+      inventory_only_cell_count: 0,
+    },
+  }
+
+  const withoutAttachment = runReadyForFinalization()
+  withoutAttachment.evidence_bundles = []
+  withoutAttachment.evidence_coverage = {
+    ...structuredClone(evidenceCoverage),
+    summary: {
+      ...evidenceCoverage.summary,
+      bundle_count: 0,
+    },
+  }
+  assert.equal(
+    buildFinalizedRun(withoutAttachment, {
+      completedAt: new Date('2026-07-28T20:10:00Z'),
+    }).run.state,
+    'COMPLETED',
+  )
+
+  const attached = runReadyForFinalization()
+  attached.evidence_bundles = [{
+    evidence_id: 'prod-cluster',
+    evidence_class: 'deployed-state',
+    adapter_id: 'deployed',
+    coverage_state: 'COVERED',
+    phi_bearing: false,
+    root_sha256: 'd'.repeat(64),
+  }]
+  attached.evidence_coverage = evidenceCoverage
+  assert.equal(
+    buildFinalizedRun(attached, {
+      completedAt: new Date('2026-07-28T20:10:00Z'),
+    }).run.state,
+    'COMPLETE_WITH_GAPS',
+  )
+
+  const unconsumed = runReadyForFinalization()
+  unconsumed.evidence_bundles = [{
+    evidence_id: 'portable-model',
+    evidence_class: 'built-artifact',
+    adapter_id: 'artifact',
+    artifact_kind: 'model-bundle',
+    coverage_state: 'COVERED',
+    phi_bearing: false,
+    root_sha256: 'e'.repeat(64),
+  }]
+  unconsumed.evidence_coverage = {
+    cells: [],
+    bundle_coverage: [{
+      evidence_id: 'portable-model',
+      evidence_class: 'built-artifact',
+      artifact_kind: 'model-bundle',
+      root_sha256: 'e'.repeat(64),
+      state: 'INVENTORY_ONLY',
+      consumer_lenses: [],
+      reason: 'model-bundle was acquired; no lens declares it consumed',
+    }],
+    summary: {
+      cell_count: 0,
+      bundle_count: 1,
+      unreached_class_count: 0,
+      unreached_classes: [],
+      not_assessed_cell_count: 0,
+      inventory_only_cell_count: 0,
+    },
+  }
+  assert.equal(
+    buildFinalizedRun(unconsumed, {
+      completedAt: new Date('2026-07-28T20:10:00Z'),
+    }).run.state,
+    'COMPLETE_WITH_GAPS',
+  )
 })
 
 test('a lens cannot smuggle proof fields into fan-out', () => {
@@ -831,6 +1052,97 @@ test('out-of-scope reads and silently skipped scoped files cannot clear coverage
   assert.ok(run.coverage.gaps.some(({ reason }) => /did not report/.test(reason)))
 })
 
+test('proof jobs cannot examine or append repository paths outside their candidate source scope', () => {
+  let run = runToProof()
+  run.coverage.inventory.push('src/unrelated.ts')
+  run.coverage.unexamined.push({
+    path: 'src/unrelated.ts',
+    reason: 'audit job has not run',
+  })
+  const proofJobId = 'proof-existence:authz-object-level:a3f19c2e'
+  run = beginJob(run, proofJobId)
+
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, proofJobId, {
+      examined_files: ['src/unrelated.ts'],
+      findings: [withExistence()],
+    })),
+    /examined path outside its scoped files: src\/unrelated\.ts/,
+  )
+
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, proofJobId, {
+      findings: [withExistence({
+        location: ['src/routes/invoices.ts:88', 'src/unrelated.ts:1'],
+      })],
+    })),
+    /cites a path outside .* scope: src\/unrelated\.ts/,
+  )
+})
+
+test('attack chaining cannot append a repository path outside component source scope', () => {
+  const sourceId = 'authz-object-level:chain-source'
+  const hostId = 'authz-object-level:chain-host'
+  const source = triaged({ candidate_id: sourceId })
+  const host = triaged({ candidate_id: hostId })
+  let run = plannedRun()
+  run.state = 'RUNNING'
+  run.phase = 'TRIAGE'
+  run.activated_lenses = ['attack-chaining']
+  run.jobs = [{
+    job_id: 'triage:attack-chaining',
+    kind: 'TRIAGE',
+    lens: 'attack-chaining',
+    state: 'PENDING',
+  }]
+  run.coverage.inventory.push('src/unrelated.ts')
+  run.coverage.unexamined.push({
+    path: 'src/unrelated.ts',
+    reason: 'audit job has not run',
+  })
+  run.coverage.lenses = [{
+    lens: 'attack-chaining',
+    status: 'NOT_ASSESSED',
+    examined_paths: [],
+    reason: 'audit job has not run',
+  }]
+  run.findings = [source, host]
+  run = beginJob(run, 'triage:attack-chaining')
+
+  const elevated = {
+    ...host,
+    location: [...host.location, 'src/unrelated.ts:1'],
+    effective_severity: 'Critical',
+    triage_disposition: 'elevated',
+    raised_by: 'attack-chaining',
+    component_finding_ids: [sourceId, hostId],
+    chain: {
+      prerequisites: ['an authenticated tenant account'],
+      blast_radius: 'all invoice records reachable by the service role',
+      steps: [
+        {
+          candidate_id: sourceId,
+          produces: 'another tenant invoice identifier',
+          consumes: 'an attacker-selected search term',
+          joint_evidence: 'src/routes/invoices.ts:88 exposes the identifier',
+        },
+        {
+          candidate_id: hostId,
+          produces: 'another tenant invoice',
+          consumes: 'another tenant invoice identifier',
+          joint_evidence: 'src/routes/invoices.ts:88 loads it without tenant authorization',
+        },
+      ],
+    },
+  }
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, 'triage:attack-chaining', {
+      findings: [elevated],
+    })),
+    /cites a path outside .* scope: src\/unrelated\.ts/,
+  )
+})
+
 test('a failed job is preserved as structured run evidence', () => {
   let run = beginJob(plannedRun(), 'lens:web-and-api')
   run = applyJobResult(run, jobResult(run, 'lens:web-and-api', {
@@ -855,7 +1167,9 @@ test('a required triage failure terminates FAILED without inventing a dispositio
   ;({ run } = advanceRun(run))
 
   run = beginJob(run, 'triage:business-logic')
-  run = applyJobResult(run, failedJobResult(run, 'triage:business-logic'))
+  run = applyJobResult(run, failedJobResult(run, 'triage:business-logic'), {
+    sidecar: businessLogicSidecar,
+  })
   const providerError = structuredClone(run.errors[0])
   const result = advanceRun(run)
   run = result.run
@@ -945,6 +1259,30 @@ test('a verification proof cannot consume its job without recording a decision',
   assert.equal(
     run.jobs.find(({ job_id: jobId }) => jobId === verificationJobId).state,
     'RUNNING',
+  )
+  assert.equal(run.findings[0].verification_status, undefined)
+})
+
+test('a provider cannot self-assign verification authority', () => {
+  let run = runToProof()
+  const candidateId = stageOne().candidate_id
+  const existenceJobId = `proof-existence:${candidateId}`
+  run = beginJob(run, existenceJobId)
+  run = applyJobResult(run, jobResult(run, existenceJobId, {
+    findings: [withExistence()],
+  }))
+  ;({ run } = advanceRun(run))
+
+  const verificationJobId = `proof-verification:${candidateId}`
+  run = beginJob(run, verificationJobId)
+  assert.throws(
+    () => applyJobResult(run, jobResult(run, verificationJobId, {
+      findings: [staticProof({
+        verification_status: 'CONFIRMED',
+        verification_authority: 'UNAUTHENTICATED_PROVIDER_ASSERTION',
+      })],
+    })),
+    /providers cannot supply or change .*verification_authority/,
   )
   assert.equal(run.findings[0].verification_status, undefined)
 })

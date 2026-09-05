@@ -31,20 +31,17 @@ activates_on:
     - '**/*virtualservice*.y*ml'
     - '**/*authorizationpolicy*.y*ml'
   signals:
-    - 'Markdown containing mermaid diagram blocks: ```mermaid with graph TD / flowchart / sequenceDiagram / C4Context'
-    - 'PlantUML @startuml / @startdot in repo docs'
-    - 'docker-compose.yml with 3 or more entries under services:'
-    - '3+ top-level directories that each contain their own Dockerfile or entrypoint (multi-deployable repo)'
-    - 'Kubernetes manifests with kind: Ingress, kind: NetworkPolicy, or kind: ServiceAccount'
-    - 'Service mesh / workload identity: istio.io VirtualService, AuthorizationPolicy, linkerd annotations, spiffe:// IDs, SPIRE'
-    - 'openapi: / asyncapi: top-level keys, or .proto files declaring service X { ... }'
-    - 'Inter-service transport deps: @grpc/grpc-js, grpcio, kafkajs, confluent-kafka, pika, bullmq, celery, @aws-sdk/client-sqs, @aws-sdk/client-eventbridge'
-    - 'Multi-tenancy markers: tenant_id / org_id / account_id columns, Postgres CREATE POLICY (RLS), SET app.current_tenant, per-tenant schema switching'
-    - 'Identity brokers spanning components: auth0, @okta/, keycloak, next-auth, passport, oidc-client-ts, openid-client, python-social-auth'
-    - 'Webhook receivers plus outbound third-party integrations in the same repo (an organizational trust boundary inside one codebase)'
-    - 'Admin and end-user surfaces in one deployable: /admin routes, is_staff, role === "admin", impersonation / "login as user" helpers'
-    - 'Literal strings "trust boundary", "threat model", "STRIDE", "DFD", "data flow diagram" anywhere in docs or ADRs'
-    - 'User prompt supplies a diagram, topology description, or design proposal instead of code'
+    - any_of: ['```mermaid', 'graph TD', 'flowchart', 'sequenceDiagram', 'C4Context']
+    - any_of: ['@startuml', '@startdot']
+    - any_of: ['kind: Ingress', 'kind: NetworkPolicy', 'kind: ServiceAccount']
+    - any_of: ['istio.io', 'VirtualService', 'AuthorizationPolicy', 'linkerd', 'spiffe://', 'SPIRE']
+    - any_of: ['openapi:', 'asyncapi:']
+    - any_of: ['@grpc/grpc-js', 'grpcio', 'kafkajs', 'confluent-kafka', 'pika', 'bullmq', 'celery', '@aws-sdk/client-sqs', '@aws-sdk/client-eventbridge']
+    - any_of: ['tenant_id', 'org_id', 'account_id', 'CREATE POLICY', 'SET app.current_tenant', 'search_path']
+    - any_of: ['auth0', '@okta/', 'keycloak', 'next-auth', 'passport', 'oidc-client-ts', 'openid-client', 'python-social-auth']
+    - any_of: ['webhook', 'X-Hub-Signature', 'stripe.webhooks']
+    - any_of: ['/admin', 'is_staff', 'role === "admin"', 'impersonation', 'login as user']
+    - any_of: ['trust boundary', 'threat model', 'STRIDE', 'DFD', 'data flow diagram']
   evidence_classes:
     source:
       state: not-consumed
@@ -1046,7 +1043,7 @@ Then declare the assertion signature before the run. "It failed" is not a signat
 
 Contributes to `exfiltration-path-enumeration`.
 
-**The consent gate, restated.** It governs R1 and R2 as well — all three execute the project's test runner under one consent asked once for the whole audit — and it is restated here because this is the recipe that puts a network on the far side of it. Running the repository's own test suite requires **explicit consent for this audit**, asked before Phase 3 and never remembered — the right answer depends on what the repository is wired to today. Without that consent this recipe does not run and `exfiltration-path-enumeration` stays at T0. And the project **does not sandbox the run and does not pretend to**: the test command executes with the repository's own environment, so if that environment applies migrations, starts containers, emits telemetry or points at shared infrastructure, this run does all of it. The destination recorder makes the run *safer* than an unmonitored `npm test` — it fails loudly on an unexpected outbound connection — but it is disclosure, not isolation. State in the finding that the run happened and under whose consent.
+**The sealed execution boundary, restated.** It governs R1–R3. An accepted authenticated operator statement naming the repository, scope, and dynamic tests is the sole launch-authority fact; the operator is accountable for it, and the auditor neither asks again nor independently adjudicates legal authority. T1 runs only through the public sealed worker with manifest-bound immutable-image verification, fresh attack/control containers, no host mounts or ambient credentials, and external networking denied. The destination recorder is assertion instrumentation, not isolation, and repository configuration never authorizes a destination. The worker cannot boot services or use live credentials. If the sealed route or its prerequisites are unavailable, do not fall back to a host process: keep the applicable static result and record `UNPROVEN` with the technical transport gap. T2, credentials, and external services named by the statement retain authority for a matching implemented controller without another prompt; their absence is a technical gap, not an authorization denial, and any external observation remains outside repository proof.
 
 Install the **socket-layer destination recorder** *first*, so an unexpected connection fails loudly instead of silently reaching the internet. Then run the repository's own test suite and the scheduled-job entry points under it, record the destination set, and assert it is a subset of a committed allowlist.
 
@@ -1075,7 +1072,7 @@ Name these in the coverage block. Silence implies safety, and for five of nine t
 - **`attacker-profile-model`.** There is no oracle for "this is the realistic adversary set".
 - **`stride-decomposition`.** Whether the right threats were enumerated, and whether an N/A is justified, are judgements.
 - **`attack-tree-construction`.** Tree structure and cost propagation are analysis. Individual leaves may be proven by other lenses; the composition is not.
-- **`pivot-feasibility`.** The composed path through a real topology cannot be executed under this project's rails, and the hops' individual controls belong to other lenses. Findings here are analytical and inherit their hops' tiers.
+- **`pivot-feasibility`.** The composed path through a real topology is never repository proof, and the hops' individual controls belong to other lenses. If the accepted authenticated operator statement names each external destination, scope, effect, and credential use, matching destination-bound controllers may collect attributed external evidence without another prompt; absent routes or material are technical gaps. Findings here remain analytical and inherit their repository-proof hops' tiers; external observations do not promote them.
 - **Whether an emitted event is alerted on**, anywhere.
 - **Whether the deployed topology matches the manifests in the checkout.**
 - **Whether a control exists in infrastructure outside the repository** — a mesh, a gateway, a WAF, an identity-aware proxy.

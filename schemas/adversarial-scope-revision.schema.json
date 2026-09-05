@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/adversarial-scope-revision.schema.json",
+  "title": "Red Team Audit adversarial scope decision and successor revision",
+  "description": "An exact controller-qualified operator decision and, for an approved or narrowed request, the immutable predecessor-bound successor scope revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "engagement_id",
+    "scope_revision",
+    "previous_scope_sha256",
+    "request_id",
+    "request_sha256",
+    "operator_decision",
+    "scope_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/adversarial-scope-revision" },
+    "engagement_id": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/id"
+    },
+    "scope_revision": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 2147483647
+    },
+    "previous_scope_sha256": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+    },
+    "request_id": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/id"
+    },
+    "request_sha256": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+    },
+    "operator_decision": { "$ref": "#/$defs/operatorDecision" },
+    "attack_plan_sha256": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+    },
+    "scope_sha256": {
+      "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "operatorDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "decision_id",
+        "request_id",
+        "request_sha256",
+        "base_scope_revision",
+        "base_scope_sha256",
+        "disposition",
+        "rationale",
+        "decided_at",
+        "valid_until",
+        "operator_id",
+        "authorization_reference",
+        "statement",
+        "authority_basis"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "red-team-audit/adversarial-scope-decision" },
+        "decision_id": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/id"
+        },
+        "request_id": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/id"
+        },
+        "request_sha256": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+        },
+        "base_scope_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "base_scope_sha256": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+        },
+        "disposition": {
+          "enum": ["DENY", "DEFER", "NARROW", "APPROVE"]
+        },
+        "rationale": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/explanation"
+        },
+        "decided_at": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/timestamp"
+        },
+        "valid_until": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/timestamp"
+        },
+        "operator_id": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/id"
+        },
+        "authorization_reference": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/explanation"
+        },
+        "statement": {
+          "const": "I confirm this exact scope decision."
+        },
+        "authority_basis": {
+          "const": "OPERATOR_DECLARATION_ACCEPTED_AS_FACT"
+        },
+        "approved_delta": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/scopeDelta"
+        },
+        "approved_delta_sha256": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+        },
+        "attack_plan_sha256": {
+          "$ref": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": { "enum": ["NARROW", "APPROVE"] }
+            },
+            "required": ["disposition"]
+          },
+          "then": {
+            "required": ["approved_delta", "approved_delta_sha256"]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                { "required": ["approved_delta"] },
+                { "required": ["approved_delta_sha256"] },
+                { "required": ["attack_plan_sha256"] }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

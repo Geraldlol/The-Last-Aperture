@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDeployedAdapter } from '../scripts/lib/evidence-adapters/deployed.mjs'
 import { verifyEvidenceBundle } from '../scripts/lib/evidence-bundle.mjs'
+import { readEvidenceIndex } from '../scripts/lib/evidence-packet.mjs'
+import { createRunPlan } from '../scripts/lib/run-engine.mjs'
 import { runEvidenceAdapterConformance } from './helpers/evidence-adapter-conformance.mjs'
 import { absentCliResolver, stubCli } from './helpers/stub-cli.mjs'
 
@@ -146,6 +148,40 @@ test('run acquires the objects and the bundle verifies', async () => {
   assert.equal(written.profile.evidence_context.evidence_class, 'deployed-state')
   assert.equal(written.profile.coverage_state, 'COVERED')
   assert.equal(Object.hasOwn(written.profile, 'artifact_kind'), false)
+  const index = await readEvidenceIndex(written.directory)
+  assert.equal(index.locator_index_kind, 'unsupported')
+  assert.match(index.unsupported_reason, /provider evidence-byte delivery/i)
+})
+
+test('a real deployed bundle remains an explicit audit gap until bytes are delivered', async () => {
+  const adapter = await adapterWithStub()
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-plan-')), 'ev')
+  const written = await adapter.run(await adapter.plan(REQUEST), { out })
+  const repository = await mkdtemp(join(tmpdir(), 'rta-deployed-repo-'))
+  await writeFile(join(repository, 'Dockerfile'), 'FROM node:20-alpine\n', 'utf8')
+  const plan = await createRunPlan({
+    targetRoot: repository,
+    evidenceBundles: [{
+      evidence_id: written.profile.evidence_context.evidence_id,
+      evidence_class: written.profile.evidence_context.evidence_class,
+      adapter_id: written.profile.evidence_context.adapter_id,
+      evidence_context: written.profile.evidence_context,
+      coverage_state: written.profile.coverage_state,
+      phi_bearing: written.profile.phi_bearing,
+      root_sha256: written.root_sha256,
+      directory: written.directory,
+    }],
+  })
+  const cells = plan.run.evidence_coverage.cells.filter(
+    ({ lens, evidence_class: evidenceClass }) =>
+      lens === 'cloud-and-iac' && evidenceClass === 'deployed-state',
+  )
+  assert.ok(cells.length > 0)
+  assert.ok(cells.every(({ state }) => state === 'NOT_ASSESSED'))
+  const sidecarEvidence = plan.jobSidecars
+    .flatMap(({ evidence = [] }) => evidence)
+    .find(({ evidence_context: context }) => context.evidence_id === 'prod-cluster')
+  assert.equal(sidecarEvidence.locator_index_kind, 'unsupported')
 })
 
 test('phi_scope possible captures key names and shapes but no values', async () => {

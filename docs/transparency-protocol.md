@@ -1,5 +1,13 @@
 # Transparency publication and checkpoint-continuity protocols
 
+> **Current release gate (2026-09-03):** Public `audit publish` is disabled
+> before run, attestation, key, output, or configuration access. A caller-chosen
+> HTTPS endpoint/SPKI/key is not independently enrolled log identity, and even a
+> fixed canonical POST can trigger state on an arbitrary endpoint. The transport
+> kernel also still needs an independent total wall-time deadline rather than
+> only socket-inactivity timeout. The protocol below is retained for conformance
+> testing, not current operational use.
+
 Version 0.9 publishes one detached root-manifest attestation to a separately
 operated HTTPS log. Version 0.10 preserves that request, Merkle leaf, and
 inclusion receipt and adds an optional, read-only checkpoint-consistency

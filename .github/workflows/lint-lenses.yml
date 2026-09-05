@@ -1,14 +1,15 @@
 name: lint-lenses
 on:
-  pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,12 +20,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
-      - name: Install shell-fixture dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes ripgrep
-          rg --version
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm test
       - if: matrix.node == '24'
         run: npm run lint
@@ -32,8 +28,12 @@ jobs:
         run: npm run gen -- --check
       - if: matrix.node == '24'
         run: npm run gen:benchmarks -- --check
+      - if: matrix.node == '24'
+        run: npm run gen:capabilities -- --check
 
   transparency-https-conformance:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: release-conformance
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -41,16 +41,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-      - name: Install conformance fixture dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes ripgrep
-          rg --version
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Run stateful HTTPS transparency-log conformance
         run: npm run test:transparency:https
 
   provider-docker-conformance:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: release-conformance
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,7 +55,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Build digest-pinned hostile conformance peer
         run: >-
           docker build --pull=true
@@ -79,7 +76,38 @@ jobs:
           RTA_PROVIDER_IMAGE: ${{ steps.docker.outputs.image }}
         run: npm run test:provider:docker
 
+  service-proof-docker-conformance:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: release-conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - name: Build digest-pinned service-proof worker
+        run: >-
+          docker build --pull=true
+          --file containers/node-proof-worker.Dockerfile
+          --tag red-team-audit-node-proof-worker:conformance
+          .
+      - name: Resolve immutable runtime and proof-worker identities
+        id: service-proof-docker
+        shell: bash
+        run: |
+          echo "runtime=$(realpath "$(command -v docker)")" >> "$GITHUB_OUTPUT"
+          echo "image=$(docker image inspect --format '{{.Id}}' red-team-audit-node-proof-worker:conformance)" >> "$GITHUB_OUTPUT"
+      - name: Run real-Docker loopback service-proof gate
+        env:
+          RTA_DOCKER_RUNTIME: ${{ steps.service-proof-docker.outputs.runtime }}
+          RTA_PROOF_WORKER_IMAGE: ${{ steps.service-proof-docker.outputs.image }}
+        run: npm run test:service-proof:docker
+
   database-docker-conformance:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: release-conformance
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -87,7 +115,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Pull exact disposable database engines
         run: |
           docker pull postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296

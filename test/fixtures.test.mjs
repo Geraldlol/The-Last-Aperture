@@ -164,11 +164,11 @@ test('every tracked fixture payload has exactly one logical owner', () => {
 
   assert.deepEqual(
     [...ids].filter((id) => id.startsWith('V-')).sort(),
-    Array.from({ length: 22 }, (_, index) => `V-${String(index + 1).padStart(3, '0')}`),
+    Array.from({ length: 32 }, (_, index) => `V-${String(index + 1).padStart(3, '0')}`),
   )
   assert.deepEqual(
     [...ids].filter((id) => id.startsWith('C-')).sort(),
-    Array.from({ length: 42 }, (_, index) => `C-${String(index + 1).padStart(3, '0')}`),
+    Array.from({ length: 52 }, (_, index) => `C-${String(index + 1).padStart(3, '0')}`),
   )
 })
 

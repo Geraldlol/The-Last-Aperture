@@ -1,5 +1,13 @@
 # bounty-v1 — Authorized Bug Bounty Hunting Protocol (Design)
 
+> **Historical design; superseded for public execution.** The current release
+> disables recon, authorization replay, crafted scanning, proxy forwarding, and
+> OOB mint/poll before target, session, or network access. These paths may be
+> reactivated only through authenticated operator ingress, controller-sealed
+> permits, and the trusted transport/ledger gates, not by the mutable bundle
+> trust model described below. ADR 0021 supersedes every signed-authorization,
+> document-as-authority, owner-key, and caller-countersignature rule below.
+
 - **Date:** 2026-08-20
 - **Status:** Proposed — awaiting operator review
 - **Becomes:** ADR 0019 at implementation time

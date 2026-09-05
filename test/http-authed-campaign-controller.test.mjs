@@ -1,19 +1,24 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { openHttpAuthedCampaignLedger } from '../scripts/lib/http-authed-campaign-ledger.mjs'
+import {
+  openHttpAuthedCampaignLedger,
+  requestHttpAuthedCampaignStop,
+} from '../scripts/lib/http-authed-campaign-ledger.mjs'
 import { runHttpAuthedCampaign } from '../scripts/lib/http-authed-campaign-controller.mjs'
-import { runDeclaredHttpAuthedMutation } from '../scripts/lib/http-authed-mutation-controller.mjs'
+import {
+  recoverDeclaredHttpAuthedMutation,
+  runDeclaredHttpAuthedMutation,
+} from '../scripts/lib/http-authed-mutation-controller.mjs'
 import {
   sha256Hex,
-  verifyHttpAuthedWrittenAuthorization,
+  verifyHttpAuthedAuthorization,
 } from '../scripts/lib/http-authed-contracts.mjs'
 import {
-  AUTHORIZATION_DOCUMENT,
-  writtenScope,
+  attestedScope,
 } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-16T12:00:00.000Z')
@@ -22,7 +27,7 @@ const MUTATION_BODY = Buffer.alloc(64, 0x61)
 const ROLLBACK_BODY = Buffer.alloc(64, 0x62)
 
 function campaignScope() {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
   scope.limits.min_interval_ms = 0
   const origin = scope.target.origin
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
@@ -49,11 +54,10 @@ function campaignScope() {
   return scope
 }
 
-test('campaign durably drains discovered probes beyond the old 64-action gate and replays none', async (t) => {
+test('campaign uses sealed authority without repeat authorization and replays no completed probes', async (t) => {
   const scope = campaignScope()
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-campaign-'))
@@ -80,22 +84,20 @@ test('campaign durably drains discovered probes beyond the old 64-action gate an
   const ledger = await openHttpAuthedCampaignLedger({
     directory: ledgerDirectory,
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: sha256Hex(AUTHORIZATION_DOCUMENT),
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     initialize: true,
     now: () => NOW,
   })
   const result = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
-    reauthorize: async ({ action }) => verifyHttpAuthedWrittenAuthorization({
+    reauthorize: async ({ action }) => verifyHttpAuthedAuthorization({
       scope,
-      documentBytes: AUTHORIZATION_DOCUMENT,
       now: NOW,
     }) && action,
     executeProbe,
@@ -111,16 +113,15 @@ test('campaign durably drains discovered probes beyond the old 64-action gate an
   const reopened = await openHttpAuthedCampaignLedger({
     directory: ledgerDirectory,
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: sha256Hex(AUTHORIZATION_DOCUMENT),
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     now: () => NOW,
   })
   const replay = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger: reopened,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -140,9 +141,8 @@ test('an ambiguous probe delivery stops the campaign before the next action', as
     sequence: 2,
     url: `${scope.target.origin}/approved/node-1`,
   })
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-probe-uncertain-'))
@@ -150,7 +150,8 @@ test('an ambiguous probe delivery stops the campaign before the next action', as
   const ledger = await openHttpAuthedCampaignLedger({
     directory: join(root, 'ledger'),
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     initialize: true,
     now: () => NOW,
@@ -158,10 +159,8 @@ test('an ambiguous probe delivery stops the campaign before the next action', as
   let sends = 0
   const result = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -182,7 +181,67 @@ test('an ambiguous probe delivery stops the campaign before the next action', as
   assert.equal(snapshot.queued_actions, 1)
 })
 
-test('settled JSON-shape observation failure terminalizes once and continues independent probes', async (t) => {
+test('a stop committed with probe pre-dispatch is settled before the transport sends', async (t) => {
+  const scope = campaignScope()
+  delete scope.discovery
+  const verified = verifyHttpAuthedAuthorization({
+    scope,
+    now: NOW,
+  })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-probe-stop-race-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledgerDirectory = join(root, 'ledger')
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: ledgerDirectory,
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const durablePreDispatch = ledger.markPreDispatch.bind(ledger)
+  let actionId
+  ledger.markPreDispatch = async (input) => {
+    const result = await durablePreDispatch(input)
+    actionId = input.actionId
+    await requestHttpAuthedCampaignStop({
+      directory: ledgerDirectory,
+      campaignGrantSha256: verified.campaignGrantSha256,
+      operatorId: scope.authorization.operator_id,
+      now: () => NOW,
+    })
+    return result
+  }
+  let sends = 0
+
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      return { response: { status: 204, bytes: 0, header_names: [] } }
+    },
+  })
+  const state = ledger.actionState(actionId)
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(sends, 0)
+  assert.equal(result.actions.failed, 1)
+  assert.equal(snapshot.stopped, true)
+  assert.equal(snapshot.stop_reason, 'OPERATOR_REQUESTED')
+  assert.equal(state.outcome, 'FAILED_BEFORE_SEND')
+  assert.equal(state.phase_outcomes.PROBE.outcome, 'FAILED')
+  assert.equal(state.phase_outcomes.PROBE.request_may_have_been_sent, false)
+})
+
+test('settled JSON-shape observation failure still honors its response stop status', async (t) => {
   const scope = campaignScope()
   delete scope.discovery
   scope.schema_version = '1.2.0'
@@ -196,9 +255,8 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
     sequence: 2,
     url: `${scope.target.origin}/approved/node-1`,
   })
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-observation-failed-'))
@@ -207,7 +265,8 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
   const ledger = await openHttpAuthedCampaignLedger({
     directory: ledgerDirectory,
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     initialize: true,
     now: () => NOW,
@@ -229,10 +288,8 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
   }
   const result = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -241,10 +298,10 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
   const snapshot = ledger.snapshot()
   await ledger.close()
 
-  assert.equal(sends, 2)
+  assert.equal(sends, 1)
   assert.equal(result.schema_version, '1.3.0')
   assert.deepEqual(result.actions, {
-    completed: 1,
+    completed: 0,
     discovered: 0,
     duplicates: 0,
     rejected: 0,
@@ -252,9 +309,10 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
     uncertain: 0,
     already_terminal: 0,
   })
-  assert.equal(snapshot.stopped, false)
-  assert.equal(snapshot.queued_actions, 0)
-  assert.equal(snapshot.terminal_actions, 2)
+  assert.equal(snapshot.stopped, true)
+  assert.equal(snapshot.stop_reason, 'TARGET_HEALTH_DEGRADED')
+  assert.equal(snapshot.queued_actions, 1)
+  assert.equal(snapshot.terminal_actions, 1)
   assert.deepEqual(result.observation_failures, [{
     action_sequence: 1,
     method: 'GET',
@@ -269,36 +327,34 @@ test('settled JSON-shape observation failure terminalizes once and continues ind
   const reopened = await openHttpAuthedCampaignLedger({
     directory: ledgerDirectory,
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     now: () => NOW,
   })
   const replay = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger: reopened,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
     executeProbe,
   })
   await reopened.close()
-  assert.equal(sends, 2)
-  assert.equal(replay.actions.already_terminal, 2)
+  assert.equal(sends, 1)
+  assert.equal(replay.actions.already_terminal, 0)
   assert.equal(replay.observation_failures, undefined)
 })
 
 test('campaign executes a declared mutation through its existing durable lease', async (t) => {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
   scope.limits.min_interval_ms = 0
   scope.credential.binding_sha256 = sha256Hex(CREDENTIAL)
   scope.requests[0].request_body.sha256 = sha256Hex(MUTATION_BODY)
   scope.requests[0].rollback.request_body.sha256 = sha256Hex(ROLLBACK_BODY)
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-campaign-mutate-'))
@@ -306,7 +362,8 @@ test('campaign executes a declared mutation through its existing durable lease',
   const ledger = await openHttpAuthedCampaignLedger({
     directory: join(root, 'ledger'),
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     initialize: true,
     now: () => NOW,
@@ -314,10 +371,8 @@ test('campaign executes a declared mutation through its existing durable lease',
   const phases = []
   const result = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -327,18 +382,12 @@ test('campaign executes a declared mutation through its existing durable lease',
       scope,
       action,
       existingLease: lease,
-      documentBytes: AUTHORIZATION_DOCUMENT,
       expectedCampaignGrantSha256: verified.campaignGrantSha256,
       operatorId: scope.authorization.operator_id,
-      countersignature: {
-        nonce: 'synthetic-campaign-mutation-nonce-0001',
-        at: NOW.toISOString(),
-      },
       credentialValue: CREDENTIAL,
       requestBodyBytes: MUTATION_BODY,
       rollbackBodyBytes: ROLLBACK_BODY,
       now: () => NOW,
-      verifyCountersignature: async () => ({ keyId: scope.approver.key_id }),
       verifyObservation: async ({ phase }) => ({
         valueMatch: true,
         contextMatch: true,
@@ -356,6 +405,12 @@ test('campaign executes a declared mutation through its existing durable lease',
       },
     }),
   })
+  const ledgerRecords = await Promise.all(
+    (await readdir(ledger.directory))
+      .filter((name) => name.endsWith('.json'))
+      .sort()
+      .map(async (name) => JSON.parse(await readFile(join(ledger.directory, name), 'utf8'))),
+  )
   await ledger.close()
 
   assert.deepEqual(phases, [
@@ -365,15 +420,19 @@ test('campaign executes a declared mutation through its existing durable lease',
   assert.equal(result.actions.completed, 1)
   assert.equal(result.actions.failed, 0)
   assert.equal(result.ledger.terminal_actions, 1)
+  const authorizationConsumed = ledgerRecords.find(
+    ({ event }) => event.type === 'AUTHORIZATION_CONSUMED',
+  )
+  assert.match(authorizationConsumed.event.dispatch_permit_sha256, /^[a-f0-9]{64}$/)
+  assert.equal(ledgerRecords.some(({ event }) => event.type === 'APPROVAL_CONSUMED'), false)
   assert.doesNotMatch(JSON.stringify(result), /security-test-resource|credential|nonce/i)
 })
 
 test('a failed mutation cleanup durably stops the campaign before the next action', async (t) => {
-  const scope = writtenScope({ actionCount: 2 })
+  const scope = attestedScope({ actionCount: 2 })
   scope.limits.min_interval_ms = 0
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: NOW,
   })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-campaign-stop-'))
@@ -381,7 +440,8 @@ test('a failed mutation cleanup durably stops the campaign before the next actio
   const ledger = await openHttpAuthedCampaignLedger({
     directory: join(root, 'ledger'),
     campaignGrantSha256: verified.campaignGrantSha256,
-    authorizationDocumentSha256: verified.authorizationDocumentSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
     operatorId: scope.authorization.operator_id,
     initialize: true,
     now: () => NOW,
@@ -389,10 +449,8 @@ test('a failed mutation cleanup durably stops the campaign before the next actio
   let mutationCalls = 0
   const result = await runHttpAuthedCampaign({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     expectedCampaignGrantSha256: verified.campaignGrantSha256,
     operatorId: scope.authorization.operator_id,
-    authorizationConfirmed: true,
     ledger,
     now: () => NOW,
     reauthorize: async ({ action }) => action,
@@ -416,3 +474,208 @@ test('a failed mutation cleanup durably stops the campaign before the next actio
   assert.equal(snapshot.stopped, true)
   assert.equal(snapshot.queued_actions, 1)
 })
+
+test('a post-write executor failure enters cleanup recovery without replaying the mutation', async (t) => {
+  const scope = attestedScope({ actionCount: 1 })
+  scope.limits.min_interval_ms = 0
+  scope.credential.binding_sha256 = sha256Hex(CREDENTIAL)
+  scope.requests[0].request_body.sha256 = sha256Hex(MUTATION_BODY)
+  scope.requests[0].rollback.request_body.sha256 = sha256Hex(ROLLBACK_BODY)
+  const verified = verifyHttpAuthedAuthorization({
+    scope,
+    now: NOW,
+  })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-post-write-recovery-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  let mutationExecutions = 0
+  let mutationActionId
+  const recoveryPhases = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async () => { throw new Error('probe executor must not run') },
+    executeMutation: async ({ lease }) => {
+      mutationExecutions += 1
+      mutationActionId = lease.actionId
+      for (const phase of ['CREDENTIAL_PREFLIGHT', 'BEFORE_READ']) {
+        await ledger.markPreDispatch({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          phase,
+          requestBindingSha256: sha256Hex(Buffer.from(`synthetic-${phase}`)),
+        })
+        await ledger.markOutcome({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          phase,
+          outcome: 'SETTLED',
+          responseMetadata: {
+            status: 200,
+            bytes: 0,
+            headerNames: [],
+            requestMayHaveBeenSent: true,
+          },
+        })
+        if (phase === 'BEFORE_READ') {
+          await ledger.recordVerification({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            phase,
+            valueMatch: true,
+            contextMatch: true,
+          })
+        }
+      }
+      await ledger.consumeAuthorization({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        nonce: 'synthetic-post-write-controller-authorization-nonce-0001',
+        dispatchPermitSha256: 'a'.repeat(64),
+      })
+      await ledger.markPreDispatch({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase: 'MUTATION',
+        requestBindingSha256: 'b'.repeat(64),
+      })
+      await ledger.markOutcome({
+        actionId: lease.actionId,
+        leaseId: lease.leaseId,
+        phase: 'MUTATION',
+        outcome: 'SETTLED',
+        responseMetadata: {
+          status: 500,
+          bytes: 0,
+          headerNames: [],
+          requestMayHaveBeenSent: true,
+        },
+      })
+      throw new Error('synthetic executor failure after the write settlement')
+    },
+    executeMutationRecovery: ({ action, lease }) => recoverDeclaredHttpAuthedMutation({
+      ledger,
+      scope,
+      action,
+      existingLease: lease,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      credentialValue: CREDENTIAL,
+      rollbackBodyBytes: ROLLBACK_BODY,
+      now: () => NOW,
+      verifyObservation: async () => ({ valueMatch: true, contextMatch: false }),
+      transport: async (request) => {
+        await request.beforeSend()
+        recoveryPhases.push(request.phase)
+        return {
+          status: 200,
+          responseBytes: 0,
+          responseHeaderNames: [],
+          body: Buffer.from('{}'),
+        }
+      },
+    }),
+  })
+  const actionState = ledger.actionState(mutationActionId)
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(mutationExecutions, 1)
+  assert.deepEqual(recoveryPhases, ['ROLLBACK', 'ROLLBACK_VERIFY'])
+  assert.equal(result.actions.uncertain, 1)
+  assert.equal(snapshot.stopped, true)
+  assert.equal(snapshot.stop_reason, 'TARGET_HEALTH_DEGRADED')
+  assert.equal(snapshot.terminal_actions, 1)
+  assert.equal(actionState.authorization_consumed, true)
+  assert.equal(actionState.outcome, 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED')
+})
+
+for (const [status, expectedStopReason] of [
+  [401, 'CREDENTIAL_INVALID'],
+  [403, 'CREDENTIAL_INVALID'],
+  [429, 'LIMIT_REACHED'],
+  [302, 'UNEXPECTED_REDIRECT'],
+  [500, 'TARGET_HEALTH_DEGRADED'],
+]) {
+  test(`mutation status ${status} preserves campaign stop reason ${expectedStopReason}`, async (t) => {
+    const scope = attestedScope({ actionCount: 2 })
+    scope.limits.min_interval_ms = 0
+    scope.credential.binding_sha256 = sha256Hex(CREDENTIAL)
+    for (const action of scope.requests) {
+      action.request_body.sha256 = sha256Hex(MUTATION_BODY)
+      action.rollback.request_body.sha256 = sha256Hex(ROLLBACK_BODY)
+    }
+    const verified = verifyHttpAuthedAuthorization({
+      scope,
+      now: NOW,
+    })
+    const root = await mkdtemp(join(tmpdir(), `rta-http-authed-mutation-status-${status}-`))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const ledger = await openHttpAuthedCampaignLedger({
+      directory: join(root, 'ledger'),
+      campaignGrantSha256: verified.campaignGrantSha256,
+      authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+      operatorId: scope.authorization.operator_id,
+      initialize: true,
+      now: () => NOW,
+    })
+    let mutationExecutions = 0
+    let mutationResult
+    const result = await runHttpAuthedCampaign({
+      scope,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      operatorId: scope.authorization.operator_id,
+      ledger,
+      now: () => NOW,
+      reauthorize: async ({ action }) => action,
+      executeProbe: async () => { throw new Error('probe executor must not run') },
+      executeMutation: async ({ action, lease }) => {
+        mutationExecutions += 1
+        mutationResult = await runDeclaredHttpAuthedMutation({
+          ledger,
+          scope,
+          action,
+          existingLease: lease,
+          expectedCampaignGrantSha256: verified.campaignGrantSha256,
+          operatorId: scope.authorization.operator_id,
+          credentialValue: CREDENTIAL,
+          requestBodyBytes: MUTATION_BODY,
+          rollbackBodyBytes: ROLLBACK_BODY,
+          now: () => NOW,
+          verifyObservation: async () => ({ valueMatch: true, contextMatch: true }),
+          transport: async (request) => {
+            await request.beforeSend()
+            return {
+              status,
+              responseBytes: 0,
+              responseHeaderNames: [],
+              body: Buffer.from('{}'),
+            }
+          },
+        })
+        return mutationResult
+      },
+    })
+    const snapshot = ledger.snapshot()
+    await ledger.close()
+
+    assert.equal(mutationExecutions, 1)
+    assert.equal(mutationResult.stop_reason, expectedStopReason)
+    assert.equal(result.ledger.stop_reason, expectedStopReason)
+    assert.equal(snapshot.stop_reason, expectedStopReason)
+    assert.equal(snapshot.terminal_actions, 1)
+    assert.equal(snapshot.queued_actions, 1)
+  })
+}

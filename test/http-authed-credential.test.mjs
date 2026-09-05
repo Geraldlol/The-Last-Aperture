@@ -3,10 +3,11 @@ import { spawnSync } from 'node:child_process'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { test } from 'node:test'
 
 import { main } from '../scripts/http-authed.mjs'
+import { runHttpAuthedAttestedCampaign } from '../scripts/lib/http-authed-campaign-runtime.mjs'
 import {
   HTTP_AUTHED_STDIN_CREDENTIAL_REF,
   MAX_HTTP_AUTHED_CREDENTIAL_BYTES,
@@ -14,14 +15,12 @@ import {
   resolveHttpAuthedCredential,
 } from '../scripts/lib/http-authed-credential.mjs'
 import {
-  readAndVerifyHttpAuthedWrittenAuthorization,
+  OPERATOR_ATTESTED_AUTHED_STATEMENT,
+  readAndVerifyHttpAuthedAuthorization,
   sha256Hex,
-  verifyHttpAuthedWrittenAuthorization,
+  verifyHttpAuthedAuthorization,
 } from '../scripts/lib/http-authed-contracts.mjs'
-import {
-  AUTHORIZATION_DOCUMENT,
-  writtenScope,
-} from './helpers/http-authed-fixtures.mjs'
+import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-17T10:00:00.000Z')
 const EXECUTION_NOW = new Date('2026-08-16T12:00:00.000Z')
@@ -50,32 +49,22 @@ async function rejectsSafely(promise, code, secret = COOKIE) {
 async function plannerFixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'http-authed-credential-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const authorizationDocumentPath = join(directory, 'authorization.txt')
   const scopePath = join(directory, 'scope.json')
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_DOCUMENT)
-  return { directory, authorizationDocumentPath, scopePath }
+  return { directory, scopePath }
 }
 
 async function executionFixture(t, scope, name) {
   const directory = await mkdtemp(join(tmpdir(), `http-authed-${name}-`))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const scopePath = join(directory, 'scope.json')
-  const authorizationDocumentPath = join(directory, 'authorization.txt')
-  const candidatePath = join(directory, 'candidate.json')
-  const candidate = scope.requests[0]
-  const verified = verifyHttpAuthedWrittenAuthorization({
+  const verified = verifyHttpAuthedAuthorization({
     scope,
-    documentBytes: AUTHORIZATION_DOCUMENT,
     now: EXECUTION_NOW,
   })
   await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  await writeFile(authorizationDocumentPath, AUTHORIZATION_DOCUMENT)
-  await writeFile(candidatePath, JSON.stringify(candidate), 'utf8')
   return {
     directory,
     scopePath,
-    authorizationDocumentPath,
-    candidatePath,
     campaignGrantSha256: verified.campaignGrantSha256,
   }
 }
@@ -85,7 +74,11 @@ function executableCookieScope({
   binding = sha256Hex(Buffer.from(COOKIE, 'ascii')),
   discovery = false,
 } = {}) {
-  const scope = writtenScope({ actionCount: 1 })
+  const scope = attestedScope({ actionCount: 1 })
+  scope.authorization.mode = 'OPERATOR_ATTESTED_AUTHED'
+  scope.authorization.statement = OPERATOR_ATTESTED_AUTHED_STATEMENT
+  scope.authorization.attested_at = EXECUTION_NOW.toISOString()
+  scope.authorization.independently_verified = false
   scope.limits.min_interval_ms = 0
   scope.credential = { ref, kind: 'cookie', binding_sha256: binding }
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
@@ -114,24 +107,19 @@ function executableCookieScope({
   return scope
 }
 
-function probeArguments(files, scope, { credentialStdin = true } = {}) {
-  return [
-    'probe-written',
-    '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
-    '--candidate', files.candidatePath,
-    '--campaign-grant-sha256', files.campaignGrantSha256,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    ...(credentialStdin ? ['--credential-stdin'] : []),
-    '--json',
-  ]
+function runAttestedCampaign(files, scope, ledgerDirectory, overrides = {}) {
+  return runHttpAuthedAttestedCampaign({
+    scopePath: files.scopePath,
+    expectedCampaignGrantSha256: files.campaignGrantSha256,
+    ledgerDirectory,
+    operatorId: scope.authorization.operator_id,
+    ...overrides,
+  })
 }
 
 // Used wherever the test injects its own clock. Fixed on purpose: a
 // deterministic test is worth more than a uniform one.
 const SEALED_WINDOW = {
-  documentIssuedAt: '2026-08-01T00:00:00.000Z',
   notBefore: '2026-08-17T09:00:00.000Z',
   notAfter: '2026-08-18T09:00:00.000Z',
 }
@@ -146,24 +134,20 @@ function relativeValidityWindow(reference = new Date()) {
   const HOUR = 60 * 60 * 1000
   const at = (offsetMs) => new Date(reference.getTime() + offsetMs).toISOString()
   return {
-    documentIssuedAt: at(-30 * 24 * HOUR),
     notBefore: at(-HOUR),
     notAfter: at(22 * HOUR),
   }
 }
 
-function stdinPlannerArguments({ authorizationDocumentPath, scopePath }, window = SEALED_WINDOW) {
+function stdinPlannerArguments({ scopePath }, window = SEALED_WINDOW) {
   return [
-    'plan-written',
+    'plan-attested',
     '--scope', scopePath,
-    '--authorization-document', authorizationDocumentPath,
     '--engagement-id', 'generic-vendor-cookie-campaign',
     '--authorization-id', 'vendor-program-2026',
     '--operator-id', 'security-researcher',
     '--authorized-by', 'Vendor security team',
     '--authorization-reference', 'Vendor bug bounty authorization 2026',
-    '--document-issuer', 'Vendor security team',
-    '--document-issued-at', window.documentIssuedAt,
     '--not-before', window.notBefore,
     '--not-after', window.notAfter,
     '--target-origin', 'https://bounty.example.test',
@@ -222,6 +206,17 @@ test('redirected credential stdin accepts the byte limit and refuses TTY, empty,
     ])),
     'HTTP_AUTHED_CREDENTIAL_LENGTH_INVALID',
   )
+})
+
+test('campaign stop aborts and destroys a blocked credential stream', async () => {
+  const input = new PassThrough()
+  Object.defineProperty(input, 'isTTY', { value: false })
+  const controller = new AbortController()
+  const reading = readHttpAuthedCredentialFromStdin(input, { signal: controller.signal })
+  controller.abort()
+
+  await rejectsSafely(reading, 'HTTP_AUTHED_CREDENTIAL_READ_ABORTED', 'not-present')
+  assert.equal(input.destroyed, true)
 })
 
 test('redirected credential stdin refuses controls and a copied Cookie header name without echoing it', async () => {
@@ -335,7 +330,7 @@ test('credential binding drift is rejected before a caller can dispatch network 
   assert.equal(transportCalls, 0)
 })
 
-test('plan-written binds one explicitly piped cookie without network or secret persistence', async (t) => {
+test('plan-attested binds one explicitly piped cookie without network or secret persistence', async (t) => {
   const files = await plannerFixture(t)
   let output = ''
   let transportCalls = 0
@@ -366,11 +361,12 @@ test('plan-written binds one explicitly piped cookie without network or secret p
   })
   assert.equal(scopeText.includes(COOKIE), false)
   assert.equal(output.includes(COOKIE), false)
-  assert.equal(scopeText.includes(AUTHORIZATION_DOCUMENT.toString('utf8')), false)
+  assert.equal(scope.authorization.mode, 'OPERATOR_ATTESTED_AUTHED')
+  assert.equal(scope.authorization.statement, OPERATOR_ATTESTED_AUTHED_STATEMENT)
 
-  const verified = await readAndVerifyHttpAuthedWrittenAuthorization({
+  const verified = await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
-    authorizationDocumentPath: files.authorizationDocumentPath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: NOW,
   })
   assert.deepEqual(verified.scope.credential, scope.credential)
@@ -403,7 +399,7 @@ test('the real CLI consumes redirected credential stdin without exposing it', as
   assert.equal(JSON.parse(scopeText).credential.ref, HTTP_AUTHED_STDIN_CREDENTIAL_REF)
 })
 
-test('plan-written requires exactly one environment or stdin credential source', async (t) => {
+test('plan-attested requires exactly one environment or stdin credential source', async (t) => {
   const files = await plannerFixture(t)
   let credentialReads = 0
   const both = stdinPlannerArguments(files)
@@ -442,15 +438,13 @@ test('plan-written requires exactly one environment or stdin credential source',
   assert.equal(credentialReads, 0)
 })
 
-test('probe-written sends the exact stdin-bound Cookie value through one injected reader', async (t) => {
+test('operator-attested single-action campaign sends the exact stdin-bound Cookie value through one injected reader', async (t) => {
   const scope = executableCookieScope()
   const files = await executionFixture(t, scope, 'stdin-probe')
   const credentialInput = Symbol('synthetic redirected credential input')
   let credentialReads = 0
   let transportCalls = 0
-  let output = ''
-
-  await main(probeArguments(files, scope), {
+  const result = await runAttestedCampaign(files, scope, join(files.directory, 'ledger'), {
     clock: () => EXECUTION_NOW,
     env: {},
     credentialInput,
@@ -459,33 +453,30 @@ test('probe-written sends the exact stdin-bound Cookie value through one injecte
       credentialReads += 1
       return Buffer.from(COOKIE, 'ascii')
     },
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       await request.beforeSend()
       transportCalls += 1
       assert.equal(request.headers.cookie, COOKIE)
       assert.equal(request.headers.authorization, undefined)
       return { status: 200, responseBytes: 0, responseHeaderNames: ['set-cookie'] }
     },
-    write: (text) => { output += text },
   })
 
   assert.equal(credentialReads, 1)
   assert.equal(transportCalls, 1)
-  assert.equal(JSON.parse(output).response.status, 200)
-  assert.equal(output.includes('SYNTHETIC_SECRET_COOKIE'), false)
+  assert.equal(result.actions.completed, 1)
+  assert.equal(JSON.stringify(result).includes('SYNTHETIC_SECRET_COOKIE'), false)
 })
 
-test('probe-written rejects a drifted stdin credential binding before transport', async (t) => {
+test('operator-attested campaign rejects a drifted stdin credential binding before transport', async (t) => {
   const scope = executableCookieScope({
     binding: sha256Hex(Buffer.from('session=SEALED_DIFFERENT_COOKIE', 'ascii')),
   })
   const files = await executionFixture(t, scope, 'stdin-probe-drift')
   let credentialReads = 0
   let transportCalls = 0
-  let output = ''
-
   await rejectsSafely(
-    main(probeArguments(files, scope), {
+    runAttestedCampaign(files, scope, join(files.directory, 'ledger'), {
       clock: () => EXECUTION_NOW,
       env: {},
       credentialInput: Symbol('synthetic redirected credential input'),
@@ -493,8 +484,7 @@ test('probe-written rejects a drifted stdin credential binding before transport'
         credentialReads += 1
         return Buffer.from(COOKIE, 'ascii')
       },
-      transport: async () => { transportCalls += 1 },
-      write: (text) => { output += text },
+      protectedTransport: async () => { transportCalls += 1 },
     }),
     'HTTP_AUTHED_CREDENTIAL_BINDING_MISMATCH',
     'SYNTHETIC_SECRET_COOKIE',
@@ -502,26 +492,23 @@ test('probe-written rejects a drifted stdin credential binding before transport'
 
   assert.equal(credentialReads, 1)
   assert.equal(transportCalls, 0)
-  assert.equal(output.includes('SYNTHETIC_SECRET_COOKIE'), false)
 })
 
-test('probe-written refuses CLI credential input that does not match the sealed scope reference', async (t) => {
+test('operator-attested campaign refuses credential input that does not match the sealed scope reference', async (t) => {
   let credentialReads = 0
   let transportCalls = 0
 
   const stdinScope = executableCookieScope()
   const stdinFiles = await executionFixture(t, stdinScope, 'missing-stdin-flag')
   await rejectsSafely(
-    main(probeArguments(stdinFiles, stdinScope, { credentialStdin: false }), {
+    runAttestedCampaign(stdinFiles, stdinScope, join(stdinFiles.directory, 'ledger'), {
       clock: () => EXECUTION_NOW,
       env: {},
-      credentialInput: Symbol('must not be forwarded without the CLI flag'),
       credentialStdinReader: async () => {
         credentialReads += 1
         return Buffer.from(COOKIE, 'ascii')
       },
-      transport: async () => { transportCalls += 1 },
-      write: () => {},
+      protectedTransport: async () => { transportCalls += 1 },
     }),
     'HTTP_AUTHED_CREDENTIAL_UNAVAILABLE',
   )
@@ -529,7 +516,7 @@ test('probe-written refuses CLI credential input that does not match the sealed 
   const envScope = executableCookieScope({ ref: 'env:VENDOR_COOKIE' })
   const envFiles = await executionFixture(t, envScope, 'stdin-flag-env-scope')
   await rejectsSafely(
-    main(probeArguments(envFiles, envScope), {
+    runAttestedCampaign(envFiles, envScope, join(envFiles.directory, 'ledger'), {
       clock: () => EXECUTION_NOW,
       env: { VENDOR_COOKIE: COOKIE },
       credentialInput: Symbol('stdin must conflict with an env-bound scope'),
@@ -537,8 +524,7 @@ test('probe-written refuses CLI credential input that does not match the sealed 
         credentialReads += 1
         return Buffer.from(COOKIE, 'ascii')
       },
-      transport: async () => { transportCalls += 1 },
-      write: () => {},
+      protectedTransport: async () => { transportCalls += 1 },
     }),
     'HTTP_AUTHED_CREDENTIAL_SOURCE_MISMATCH',
   )
@@ -547,7 +533,7 @@ test('probe-written refuses CLI credential input that does not match the sealed 
   assert.equal(transportCalls, 0)
 })
 
-test('campaign-written reads stdin once for seed and discovery and never journals the credential', async (t) => {
+test('operator-attested campaign runtime reads stdin once for seed and discovery and never journals the credential', async (t) => {
   const scope = executableCookieScope({ discovery: true })
   const files = await executionFixture(t, scope, 'stdin-campaign')
   const ledgerDirectory = join(files.directory, 'ledger')
@@ -555,19 +541,7 @@ test('campaign-written reads stdin once for seed and discovery and never journal
   const responseSentinel = 'SYNTHETIC_TRANSIENT_RESPONSE_SENTINEL'
   let credentialReads = 0
   const sentCookies = []
-  let output = ''
-
-  await main([
-    'campaign-written',
-    '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
-    '--campaign-grant-sha256', files.campaignGrantSha256,
-    '--ledger', ledgerDirectory,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    '--credential-stdin',
-    '--json',
-  ], {
+  const result = await runAttestedCampaign(files, scope, ledgerDirectory, {
     clock: () => EXECUTION_NOW,
     env: {},
     credentialInput,
@@ -576,7 +550,7 @@ test('campaign-written reads stdin once for seed and discovery and never journal
       credentialReads += 1
       return Buffer.from(COOKIE, 'ascii')
     },
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       await request.beforeSend()
       sentCookies.push(request.headers.cookie)
       assert.equal(request.headers.authorization, undefined)
@@ -595,16 +569,15 @@ test('campaign-written reads stdin once for seed and discovery and never journal
         responseHeaderNames: ['location', 'set-cookie'],
       }
     },
-    write: (text) => { output += text },
   })
 
   assert.equal(credentialReads, 1)
   assert.deepEqual(sentCookies, [COOKIE, COOKIE])
-  const result = JSON.parse(output)
   assert.equal(result.actions.completed, 2)
   assert.equal(result.actions.discovered, 1)
-  assert.equal(output.includes('SYNTHETIC_SECRET_COOKIE'), false)
-  assert.equal(output.includes(responseSentinel), false)
+  const serialized = JSON.stringify(result)
+  assert.equal(serialized.includes('SYNTHETIC_SECRET_COOKIE'), false)
+  assert.equal(serialized.includes(responseSentinel), false)
 
   const ledgerEntries = await readdir(ledgerDirectory, { withFileTypes: true })
   const ledgerText = (await Promise.all(
@@ -616,7 +589,7 @@ test('campaign-written reads stdin once for seed and discovery and never journal
   assert.equal(ledgerText.includes(responseSentinel), false)
 })
 
-test('stdin bearer and cookie campaigns retain only bounded JSON shape metadata', async (t) => {
+test('operator-attested campaign retains only bounded JSON shape metadata for stdin bearer and cookie credentials', async (t) => {
   const responseValue = 'SYNTHETIC_CLINICAL_RESPONSE_VALUE_MUST_NOT_PERSIST'
   for (const kind of ['bearer', 'cookie']) {
     const credential = kind === 'bearer'
@@ -635,19 +608,7 @@ test('stdin bearer and cookie campaigns retain only bounded JSON shape metadata'
     const files = await executionFixture(t, scope, `stdin-json-shape-${kind}`)
     const ledgerDirectory = join(files.directory, 'ledger')
     let credentialReads = 0
-    let output = ''
-
-    await main([
-      'campaign-written',
-      '--scope', files.scopePath,
-      '--authorization-document', files.authorizationDocumentPath,
-      '--campaign-grant-sha256', files.campaignGrantSha256,
-      '--ledger', ledgerDirectory,
-      '--operator-id', scope.authorization.operator_id,
-      '--confirm-authorization-current',
-      '--credential-stdin',
-      '--json',
-    ], {
+    const result = await runAttestedCampaign(files, scope, ledgerDirectory, {
       clock: () => EXECUTION_NOW,
       env: {},
       credentialInput: Symbol(`redirected-${kind}-credential`),
@@ -655,7 +616,7 @@ test('stdin bearer and cookie campaigns retain only bounded JSON shape metadata'
         credentialReads += 1
         return Buffer.from(credential, 'ascii')
       },
-      transport: async (request) => {
+      protectedTransport: async (request) => {
         await request.beforeSend()
         assert.equal(
           kind === 'bearer' ? request.headers.authorization : request.headers.cookie,
@@ -674,20 +635,19 @@ test('stdin bearer and cookie campaigns retain only bounded JSON shape metadata'
           responseHeaderNames: ['content-type', 'set-cookie'],
         }
       },
-      write: (text) => { output += text },
     })
 
     assert.equal(credentialReads, 1)
-    const result = JSON.parse(output)
     assert.equal(result.json_shapes.length, 1)
     assert.deepEqual(result.json_shapes[0].json_shape.key_names, [
       'client_id',
       'display_name',
       'records',
     ])
-    assert.equal(output.includes(responseValue), false)
-    assert.equal(output.includes('8675309'), false)
-    assert.equal(output.includes(credential), false)
+    const serialized = JSON.stringify(result)
+    assert.equal(serialized.includes(responseValue), false)
+    assert.equal(serialized.includes('8675309'), false)
+    assert.equal(serialized.includes(credential), false)
 
     const ledgerEntries = await readdir(ledgerDirectory, { withFileTypes: true })
     const ledgerText = (await Promise.all(
@@ -703,7 +663,7 @@ test('stdin bearer and cookie campaigns retain only bounded JSON shape metadata'
   }
 })
 
-test('stdin campaign persists only projected ASP.NET d shape metadata', async (t) => {
+test('operator-attested campaign persists only projected ASP.NET d shape metadata', async (t) => {
   const responseValue = 'SYNTHETIC_ASMX_CLINICAL_VALUE_MUST_NOT_PERSIST'
   const scope = executableCookieScope()
   scope.schema_version = '1.2.0'
@@ -714,24 +674,12 @@ test('stdin campaign persists only projected ASP.NET d shape metadata', async (t
   }
   const files = await executionFixture(t, scope, 'stdin-aspnet-d-json-shape')
   const ledgerDirectory = join(files.directory, 'ledger')
-  let output = ''
-
-  await main([
-    'campaign-written',
-    '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
-    '--campaign-grant-sha256', files.campaignGrantSha256,
-    '--ledger', ledgerDirectory,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    '--credential-stdin',
-    '--json',
-  ], {
+  const result = await runAttestedCampaign(files, scope, ledgerDirectory, {
     clock: () => EXECUTION_NOW,
     env: {},
     credentialInput: Symbol('redirected-aspnet-d-credential'),
     credentialStdinReader: async () => Buffer.from(COOKIE, 'ascii'),
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       await request.beforeSend()
       await request.responseObserver({
         status: 200,
@@ -748,18 +696,17 @@ test('stdin campaign persists only projected ASP.NET d shape metadata', async (t
         responseHeaderNames: ['content-type'],
       }
     },
-    write: (text) => { output += text },
   })
 
-  const result = JSON.parse(output)
   assert.equal(result.schema_version, '1.2.0')
   assert.equal(result.json_shapes.length, 1)
   assert.equal(
     result.json_shapes[0].json_shape.projection,
     'ASPNET_D_JSON_STRING',
   )
-  assert.equal(output.includes(responseValue), false)
-  assert.equal(output.includes('8675309'), false)
+  const serialized = JSON.stringify(result)
+  assert.equal(serialized.includes(responseValue), false)
+  assert.equal(serialized.includes('8675309'), false)
 
   const ledgerEntries = await readdir(ledgerDirectory, { withFileTypes: true })
   const ledgerText = (await Promise.all(
@@ -772,7 +719,7 @@ test('stdin campaign persists only projected ASP.NET d shape metadata', async (t
   assert.equal(ledgerText.includes('8675309'), false)
 })
 
-test('malformed claimed JSON settles an stdin campaign as a bounded observation failure', async (t) => {
+test('operator-attested campaign settles malformed claimed JSON as a bounded observation failure', async (t) => {
   const marker = 'SYNTHETIC_MALFORMED_JSON_MUST_NOT_PERSIST'
   const scope = executableCookieScope()
   scope.schema_version = '1.1.0'
@@ -783,24 +730,12 @@ test('malformed claimed JSON settles an stdin campaign as a bounded observation 
   }
   const files = await executionFixture(t, scope, 'stdin-json-shape-malformed')
   const ledgerDirectory = join(files.directory, 'ledger')
-  let output = ''
-
-  await main([
-    'campaign-written',
-    '--scope', files.scopePath,
-    '--authorization-document', files.authorizationDocumentPath,
-    '--campaign-grant-sha256', files.campaignGrantSha256,
-    '--ledger', ledgerDirectory,
-    '--operator-id', scope.authorization.operator_id,
-    '--confirm-authorization-current',
-    '--credential-stdin',
-    '--json',
-  ], {
+  const result = await runAttestedCampaign(files, scope, ledgerDirectory, {
     clock: () => EXECUTION_NOW,
     env: {},
     credentialInput: Symbol('redirected-malformed-json-credential'),
     credentialStdinReader: async () => Buffer.from(COOKIE, 'ascii'),
-    transport: async (request) => {
+    protectedTransport: async (request) => {
       await request.beforeSend()
       await request.responseObserver({
         status: 200,
@@ -813,10 +748,8 @@ test('malformed claimed JSON settles an stdin campaign as a bounded observation 
         responseHeaderNames: ['content-type', 'x-synthetic-subject-8675309'],
       }
     },
-    write: (text) => { output += text },
   })
 
-  const result = JSON.parse(output)
   assert.equal(result.schema_version, '1.3.0')
   assert.equal(result.actions.failed, 1)
   assert.equal(result.actions.uncertain, 0)
@@ -830,8 +763,9 @@ test('malformed claimed JSON settles an stdin campaign as a bounded observation 
     response_byte_bucket: 'LE_1_KIB',
     failure_stage_code: 'JSON_SHAPE_OBSERVATION',
   }])
-  assert.equal(output.includes(marker), false)
-  assert.equal(output.includes('8675309'), false)
+  const serialized = JSON.stringify(result)
+  assert.equal(serialized.includes(marker), false)
+  assert.equal(serialized.includes('8675309'), false)
   const ledgerEntries = await readdir(ledgerDirectory, { withFileTypes: true })
   const ledgerTexts = await Promise.all(
     ledgerEntries

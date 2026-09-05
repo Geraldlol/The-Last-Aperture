@@ -1,5 +1,9 @@
 # `runtime` acquisition adapter
 
+> **Release gate (2026-09-03):** Public runtime `plan` and `run` are disabled
+> before argument, process, credential, or target access. This document describes
+> the retained adapter kernel, not enabled authority.
+
 Adapter ID: `runtime`
 
 Evidence class: `live-runtime`
@@ -56,17 +60,18 @@ outside this table.
 
 ## Authorization
 
-Everything `deployed-state` requires — attestation, target class, named
-operator, impact counters, kill switch — **plus a per-run authorization
-confirmation**. Attestation at plan time is not enough for this class:
-authorization can lapse between planning and running, and this is the tier
-where that difference has consequences.
+When this disabled adapter is re-enabled, the authenticated operator statement
+must name the runtime target and allowed read scope. That statement is the sole
+authorization primitive. Target class, impact counters, kill-switch state, and
+any risk acknowledgment are controller-bound execution parameters, not a
+second authority path. The controller must issue a short-lived technical permit
+for the exact plan and record its consumption in the ledger before dispatch.
 
-`PRODUCTION` requires an explicit acknowledgment. Until the higher-assurance
-signed-artifact controller is available, `THIRD_PARTY` also requires
-`--acknowledge-third-party`. This interim route is operator-attested, not
-independently verified, and remains restricted to controller-built read-only
-inspection; it does not authorize mutation or exploitation.
+Expanding from one runtime target, namespace, or read profile to another
+requires a new operator statement. No signed-artifact or document-bound route
+may substitute for that statement. This adapter remains restricted to
+controller-built read-only inspection; it does not authorize mutation or
+exploitation.
 
 ## Impact counters and stop
 

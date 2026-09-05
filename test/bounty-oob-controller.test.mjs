@@ -85,6 +85,35 @@ test('open registers a hosted session and persists it', async () => {
   }
 })
 
+test('hosted open refuses an arbitrary server before transport or session state', async () => {
+  const dir = await workspace()
+  try {
+    let transportCalls = 0
+    const fetchImpl = async () => {
+      transportCalls += 1
+      return registerOk()
+    }
+    await assert.rejects(
+      () => openOobSession({
+        bundlePath: dir,
+        backend: 'hosted',
+        server: '127.0.0.1:8443',
+        randomBytes: seq,
+        now: NOW,
+        fetchImpl,
+      }),
+      /fixed hosted OOB server allowlist/,
+    )
+    assert.equal(transportCalls, 0)
+    await assert.rejects(
+      () => readFile(join(dir, 'oob-session.json'), 'utf8'),
+      /ENOENT/,
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('refuses an unknown backend', async () => {
   const dir = await workspace()
   try {

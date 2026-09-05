@@ -958,11 +958,10 @@ test('a later transition cannot append a store profile without a database result
 test('run merge lineage must resolve within the topic and cannot cycle', () => {
   const survivor = confirmed()
   const merged = {
-    ...stageOne({
+    ...confirmed({
       candidate_id: 'authz-object-level:b82d1190',
       location: ['src/routes/invoice-export.ts:31'],
     }),
-    effective_severity: 'High',
     triage_disposition: 'merged',
     merged_into_candidate_id: survivor.candidate_id,
   }
@@ -1019,6 +1018,92 @@ test('attack-chain component graphs cannot contain cycles', () => {
   const validation = validateRun(current)
   assert.equal(validation.valid, false)
   assert.ok(hasCode(validation, 'CHAIN_CYCLE'))
+})
+
+test('findings carry versioned machine-readable framework references', () => {
+  const current = stageOne({
+    framework_refs: [{
+      framework_id: 'owasp-asvs',
+      version: '5.0.0',
+      requirement_id: 'V4.2.1',
+      relationship: 'maps-to',
+      applicability: 'applicable',
+      source_url: 'https://owasp.org/www-project-application-security-verification-standard/',
+    }],
+  })
+  assert.equal(validateFinding(current, { stage: 1 }).valid, true)
+
+  const invalid = structuredClone(current)
+  delete invalid.framework_refs[0].version
+  const validation = validateFinding(invalid, { stage: 1 })
+  assert.equal(validation.valid, false)
+  assert.ok(validation.errors.some(({ instancePath = '' }) =>
+    instancePath.includes('/framework_refs/0')))
+})
+
+test('structured chain steps must exactly match component finding order', () => {
+  const firstId = 'authz-object-level:chain-source'
+  const hostId = 'authz-object-level:chain-host'
+  const host = triaged({
+    candidate_id: hostId,
+    effective_severity: 'Critical',
+    triage_disposition: 'elevated',
+    raised_by: 'attack-chaining',
+    component_finding_ids: [firstId, hostId],
+    chain: {
+      prerequisites: ['an authenticated tenant account'],
+      blast_radius: 'all invoice exports reachable by the tenant service role',
+      steps: [
+        {
+          candidate_id: firstId,
+          produces: 'another tenant invoice identifier',
+          consumes: 'an attacker-selected invoice reference',
+          joint_evidence: 'src/routes/search.ts:31 returns the identifier consumed by the export route',
+          framework_refs: [{
+            framework_id: 'mitre-attack',
+            version: '17.1',
+            requirement_id: 'T1213',
+            relationship: 'technique',
+            applicability: 'applicable',
+            source_url: 'https://attack.mitre.org/techniques/T1213/',
+          }],
+        },
+        {
+          candidate_id: hostId,
+          produces: 'another tenant invoice export',
+          consumes: 'another tenant invoice identifier',
+          joint_evidence: 'src/routes/export.ts:42 accepts the identifier without tenant authorization',
+        },
+      ],
+    },
+  })
+  assert.equal(
+    validateFinding(host, { stage: 2 }).valid,
+    true,
+    JSON.stringify(validateFinding(host, { stage: 2 }).errors, null, 2),
+  )
+
+  const invalid = structuredClone(host)
+  invalid.chain.steps.reverse()
+  const validation = validateFinding(invalid, { stage: 2 })
+  assert.equal(validation.valid, false)
+  assert.ok(hasCode(validation, 'CHAIN_STEP_IDS_MISMATCH'))
+})
+
+test('attack-chain elevation cannot fall back to an unstructured component list', () => {
+  const validation = validateFinding(triaged({
+    candidate_id: 'authz-object-level:unstructured-host',
+    effective_severity: 'Critical',
+    triage_disposition: 'elevated',
+    raised_by: 'attack-chaining',
+    component_finding_ids: [
+      'authz-object-level:unstructured-source',
+      'authz-object-level:unstructured-host',
+    ],
+  }), { stage: 2 })
+
+  assert.equal(validation.valid, false)
+  assert.ok(hasCode(validation, 'CHAIN_DETAILS_REQUIRED'))
 })
 
 test('run job and error identities are unique', () => {

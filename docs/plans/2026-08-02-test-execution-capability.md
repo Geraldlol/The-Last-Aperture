@@ -1,5 +1,12 @@
 # TEST_EXECUTION Capability Implementation Plan
 
+> **Historical implementation plan.** Public `run-proof` and `run-provider`
+> execution is disabled as recorded in ADR 0020. ADR 0021 supersedes every
+> RoE-as-consent or external-authority instruction below: an authenticated
+> operator target/scope statement is the sole authorization primitive. Any RoE
+> retained in a future implementation is technical capability policy or
+> evidence only, and cannot unlock execution by itself.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make proof tier `T1` reachable, so a finding can exceed the Medium ceiling by arriving with a demonstration and a candidate fix that both actually ran.

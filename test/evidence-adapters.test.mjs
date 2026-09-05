@@ -142,7 +142,7 @@ test('the registry adapter document states its authorization requirements', () =
   const doc = readFileSync(REGISTRY_DOC, 'utf8')
   assert.match(doc, /digest-pinned/i)
   assert.match(doc, /credential_ref/)
-  assert.match(doc, /attestation|attest-authorized/i)
+  assert.match(doc, /authenticated operator statement/i)
   assert.match(doc, /never a credential value/i)
 })
 
@@ -163,7 +163,7 @@ for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runti
     assert.match(doc, /impact counter/i)
     assert.match(doc, /kill switch|stop/i)
     assert.match(doc, /phi-scope|phi_scope/)
-    assert.match(doc, /attestation/i)
+    assert.match(doc, /authenticated operator statement/i)
     assert.match(doc, /mutat/i)
   })
 }

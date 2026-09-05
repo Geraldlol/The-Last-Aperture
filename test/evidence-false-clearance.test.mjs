@@ -3,11 +3,15 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
 import { createRunPlan } from '../scripts/lib/run-engine.mjs'
 import { renderMarkdownReport } from '../scripts/lib/report.mjs'
 import { writeEvidenceBundle } from '../scripts/lib/evidence-bundle.mjs'
 
 const CLEARANCE_LANGUAGE = /\b(?:no findings|clean|secure|passed|no issues)\b/i
+const artifactAdapter = createArtifactAdapter({
+  clock: () => '2026-08-08T14:22:10Z',
+})
 
 async function repositoryWithADockerfile() {
   const root = await mkdtemp(join(tmpdir(), 'rta-false-clearance-'))
@@ -60,7 +64,7 @@ test('the Dockerfile whiteout case is the one this encodes', async () => {
   assert.ok(plan.run.evidence_coverage.summary.not_assessed_cell_count > 0)
 })
 
-test('supplying a covering bundle lifts exactly the class it covers', async () => {
+test('supplying an unindexable bundle cannot manufacture covered audit evidence', async () => {
   const bundleDirectory = join(await mkdtemp(join(tmpdir(), 'rta-ev-')), 'ev')
   const bundle = await writeEvidenceBundle({
     directory: bundleDirectory,
@@ -95,22 +99,66 @@ test('supplying a covering bundle lifts exactly the class it covers', async () =
       evidence_id: 'peerstar-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
+      evidence_context: bundle.profile.evidence_context,
       artifact_kind: 'oci-image',
       coverage_state: 'COVERED',
       phi_bearing: false,
       root_sha256: bundle.root_sha256,
+      directory: bundle.directory,
     }],
   })
 
   const artifact = plan.run.evidence_coverage.cells.filter(
     (cell) => cell.lens === 'cloud-and-iac' && cell.evidence_class === 'built-artifact',
   )
-  for (const cell of artifact) assert.equal(cell.state, 'COVERED')
+  for (const cell of artifact) {
+    assert.equal(cell.state, 'NOT_ASSESSED')
+    assert.match(cell.reason, /no supported complete locator index/i)
+  }
 
   // deployed-state was not supplied and must stay unreached.
   assert.ok(plan.run.evidence_coverage.summary.unreached_classes.includes('deployed-state'))
-  assert.equal(
-    plan.run.evidence_coverage.summary.unreached_classes.includes('built-artifact'),
-    false,
+  assert.ok(plan.run.evidence_coverage.summary.unreached_classes.includes('built-artifact'))
+})
+
+test('OCI detector coverage is lens/topic-aware and never whole-topic clearance', async () => {
+  const directory = join(await mkdtemp(join(tmpdir(), 'rta-ev-')), 'ev')
+  const request = await artifactAdapter.plan({
+    evidence_id: 'peerstar-api-image',
+    source_path: 'test/fixtures/evidence/vulnerable-image.tar',
+    target_class: 'LAB',
+    phi_scope: 'none',
+  })
+  const acquired = await artifactAdapter.run(request, { out: directory })
+  const plan = await createRunPlan({
+    targetRoot: await repositoryWithADockerfile(),
+    evidenceBundles: [{
+      evidence_id: 'peerstar-api-image',
+      evidence_class: 'built-artifact',
+      adapter_id: 'artifact',
+      artifact_kind: 'oci-image',
+      coverage_state: acquired.profile.coverage_state,
+      phi_bearing: false,
+      root_sha256: acquired.root_sha256,
+      directory: acquired.directory,
+      evidence_context: acquired.profile.evidence_context,
+    }],
+  })
+  const state = (lens, topic) => plan.run.evidence_coverage.cells.find(
+    (cell) => cell.lens === lens
+      && cell.topic === topic
+      && cell.evidence_class === 'built-artifact',
   )
+
+  assert.equal(state('cloud-and-iac', 'dockerfile-and-image-content').state, 'PARTIAL')
+  assert.equal(
+    state('crypto-and-key-management', 'hardcoded-credentials-and-key-material').state,
+    'PARTIAL',
+  )
+  assert.equal(
+    state('cicd-and-supply-chain', 'package-dependency-cves').state,
+    'NOT_ASSESSED',
+  )
+  assert.equal(state('hipaa-and-phi', 'phi-classification').state, 'NOT_ASSESSED')
+  assert.ok(plan.run.evidence_coverage.summary.unreached_classes.includes('built-artifact'))
 })

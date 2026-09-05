@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  main,
   runProviderCommand,
   verifyControlBundle,
 } from '../scripts/audit.mjs'
@@ -29,6 +30,17 @@ const SHA_A = 'a'.repeat(64)
 const SHA_B = 'b'.repeat(64)
 const SHA_C = 'c'.repeat(64)
 
+test('public run-provider refuses before reading caller-selected bundle or runtime config', async () => {
+  await assert.rejects(
+    () => main(['run-provider', 'missing-bundle', 'missing-provider-config.json']),
+    (error) => {
+      assert.equal(error.code, 'PROVIDER_RUNTIME_ENROLLMENT_REQUIRED')
+      assert.match(error.message, /disabled before bundle or configuration access/i)
+      return true
+    },
+  )
+})
+
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -41,6 +53,9 @@ function rehashForgedPlan(plan) {
     repository: { tree_digest: run.repository.tree_digest },
     policy_digest: run.policy_digest,
     lens_pack_digest: run.lens_pack_digest,
+    ...(run.lens_shared_contract_digest
+      ? { lens_shared_contract_digest: run.lens_shared_contract_digest }
+      : {}),
     coverage_policy: run.coverage.policy,
     database_discovery_digest: run.database_discovery.digest,
     control_snapshot_sha256: run.control_snapshot.root_sha256,
@@ -85,6 +100,30 @@ function fakeExecution({
   artifacts,
   containerName,
 }, resultOverrides = {}) {
+  const state = resultOverrides.state ?? 'SUCCEEDED'
+  const findings = resultOverrides.findings ?? []
+  const topicAssessments = resultOverrides.topic_assessments ?? (
+    state === 'SUCCEEDED' && Array.isArray(packet.topic_obligations)
+      ? packet.topic_obligations.map((topic) => {
+          const topicFindings = findings.filter((finding) => finding.topic === topic)
+          return topicFindings.length > 0
+            ? {
+                topic,
+                disposition: 'finding',
+                reason: 'The integration fixture reported a finding for this topic.',
+                finding_ids: topicFindings.map(
+                  ({ candidate_id: candidateId }) => candidateId,
+                ),
+              }
+            : {
+                topic,
+                disposition: 'examined-clean',
+                reason: 'The integration fixture assessed this bounded topic.',
+                evidence: ['The fixture provider completed its bounded topic check.'],
+              }
+        })
+      : []
+  )
   const deliveries = artifacts.map((artifact, index) => ({
     delivery_id: `deliveryopaqueidentifier${String(index).padStart(4, '0')}`,
     artifact_id: artifact.artifact_id,
@@ -122,12 +161,15 @@ function fakeExecution({
         version: '1.0.0',
         instance_id: 'fixture:provider-1',
       },
-      state: resultOverrides.state ?? 'SUCCEEDED',
+      state,
       examined_files: artifacts
         .filter(({ kind }) => kind === 'FILE')
         .map(({ logical_name: logicalName }) => logicalName),
-      findings: resultOverrides.findings ?? [],
+      findings,
       coverage_gaps: resultOverrides.coverage_gaps ?? [],
+      ...(Array.isArray(packet.topic_obligations)
+        ? { topic_assessments: topicAssessments }
+        : {}),
       ...(resultOverrides.error ? { error: resultOverrides.error } : {}),
       ...(resultOverrides.store_contributions
         ? { store_contributions: resultOverrides.store_contributions }
@@ -277,6 +319,17 @@ test('run-provider uses sealed bytes, commits observed coverage, and signs one e
       ),
       false,
     )
+    assert.equal(completedJob?.lens, 'ai-generated-code')
+    for (const ownerLensPath of [
+      'lenses/web-and-api.md',
+      'lenses/embedded-iot-ot-security.md',
+    ]) {
+      const delivered = observedControls.find(
+        ({ logicalName }) => logicalName === ownerLensPath,
+      )
+      assert.ok(delivered, `${ownerLensPath} owner contract was not delivered`)
+      assert.match(delivered.text, /## Severity calibration/)
+    }
     const encodedRoot = JSON.stringify(root).slice(1, -1)
     for (const { text } of observedControls) {
       assert.equal(text.includes(root), false)

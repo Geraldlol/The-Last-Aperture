@@ -463,7 +463,6 @@ export function createHttpAuthedHttpsTransport({
 export async function dispatchHttpAuthedProbe({
   scope,
   action,
-  documentBytes,
   expectedCampaignGrantSha256,
   credentialValue,
   requestBodyBytes,
@@ -475,7 +474,6 @@ export async function dispatchHttpAuthedProbe({
   const verified = verifyHttpAuthedCandidate({
     scope,
     action,
-    documentBytes,
     expectedCampaignGrantSha256,
     now,
   })
@@ -618,9 +616,6 @@ export async function dispatchHttpAuthedProbe({
       authorization_assurance: authorizationEvidence.authorizationAssurance,
       authorization_nonclaim: authorizationEvidence.authorizationNonclaim,
       authorization_binding_sha256: verified.authorizationBindingSha256,
-      ...(verified.authorizationDocumentSha256 === undefined
-        ? {}
-        : { authorization_document_sha256: verified.authorizationDocumentSha256 }),
       campaign_grant_sha256: verified.campaignGrantSha256,
       action: {
         sequence: action.sequence,

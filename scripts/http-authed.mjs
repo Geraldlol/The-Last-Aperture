@@ -8,55 +8,61 @@ import { TextDecoder } from 'node:util'
 import {
   httpAuthedAuthorizationEvidence,
   readAndVerifyHttpAuthedAuthorization,
-  readAndVerifyHttpAuthedWrittenAuthorization,
 } from './lib/http-authed-contracts.mjs'
-import { runHttpAuthedWrittenProbe } from './lib/http-authed-controller.mjs'
 import {
   runHttpAuthedAttestedCampaign,
-  runHttpAuthedWrittenCampaign,
 } from './lib/http-authed-campaign-runtime.mjs'
+import { requestHttpAuthedCampaignStop } from './lib/http-authed-campaign-ledger.mjs'
 import {
   HTTP_AUTHED_STDIN_CREDENTIAL_REF,
   readHttpAuthedCredentialFromStdin,
 } from './lib/http-authed-credential.mjs'
 import {
   planHttpAuthedAttestedScope,
-  planHttpAuthedWrittenScope,
 } from './lib/http-authed-planner.mjs'
 import { isMainModule } from './lib/main-module.mjs'
+import {
+  assertLocalFilesystemEndpoint,
+  assertNoRemoteFilesystemArguments,
+} from './lib/filesystem-endpoint.mjs'
 import { PLATFORM_VERSION, stableJson } from './lib/run-engine.mjs'
+import {
+  terminalSafeLines,
+  terminalSafeSerializedJson,
+  terminalSafeText,
+} from './lib/terminal-text.mjs'
 
 const HELP = `red-team-audit authenticated HTTP campaigns ${PLATFORM_VERSION}
 
 Usage:
-  http-authed plan-attested --scope <absolute-new-scope.json> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <declared-authorizer> --authorization-reference <reference> --attest-authorized --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id>) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--response-observation-profile <controller-profile>] [--json]
+  http-authed plan-attested --scope <absolute-new-scope.json> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <declared-authorizer> --authorization-reference <reference> --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id>) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--response-observation-profile <controller-profile>] [--json]
   http-authed validate-attested --scope <scope.json> [--json]
-  http-authed campaign-attested --scope <scope.json> --campaign-grant-sha256 <hex> --ledger <absolute-external-directory> --operator-id <id> --confirm-authorization-current [--credential-stdin|--credential-browser] [--materials <absolute-directory>] [--trusted-ledger-record-count <integer> --trusted-ledger-head-sha256 <hex>] [--json]
-  http-authed plan-written --scope <absolute-new-scope.json> --authorization-document <document> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <issuer> --authorization-reference <reference> --document-issuer <issuer> --document-issued-at <timestamp> --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id>) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--response-observation-profile <controller-profile>] [--json]
-  http-authed validate-written --scope <scope.json> --authorization-document <document> [--json]
-  http-authed probe-written --scope <scope.json> --authorization-document <document> --candidate <candidate.json> --campaign-grant-sha256 <hex> --operator-id <id> --confirm-authorization-current [--credential-stdin] [--request-body <synthetic-body>] [--json]
-  http-authed campaign-written --scope <scope.json> --authorization-document <document> --campaign-grant-sha256 <hex> --ledger <absolute-external-directory> --operator-id <id> --confirm-authorization-current [--credential-stdin|--credential-browser] [--materials <absolute-directory>] [--trusted-ledger-record-count <integer> --trusted-ledger-head-sha256 <hex>] [--json]
-
+  http-authed campaign-attested --scope <scope.json> --campaign-grant-sha256 <hex> --ledger <absolute-external-directory> --operator-id <id> [--credential-stdin|--credential-browser] [--materials <absolute-directory>] [--trusted-ledger-record-count <integer> --trusted-ledger-head-sha256 <hex>] [--json]
+  http-authed campaign-stop --ledger <absolute-external-directory> --campaign-grant-sha256 <hex> --operator-id <id> [--json]
 Boundary:
-  Both planners and validators perform no network activity. plan-attested records
-  an operator declaration only: it does not independently verify vendor/program
-  permission, ownership, legal authority, or revocation. plan-written binds the
-  supplied document bytes but does not verify issuer identity or legal sufficiency.
-  Neither route invents authorization or target boundaries.
-  probe-written dispatches one scope-verified HTTPS probe, follows no redirect,
-  performs no retry, and refuses declared mutation actions. campaign-attested and
-  campaign-written use immutable campaign ledgers, drain scope-bounded synthetic-safe
-  discoveries, and execute declared reversible mutations with one-use countersignatures
-  from the materials directory. Commands
-  never print authorization-document bytes, credential references/values, full
+  Both planners and validators perform no network activity. Invoking plan-attested
+  is the explicit operator statement; the controller accepts it as the authorization
+  fact for the named target and scope without another flag or legal-proof artifact.
+  It does not independently prove the operator's underlying legal authority.
+  Invoking a live command is the operator's campaign launch directive; no repeated
+  legal-attestation flag is required. Public campaign execution is restricted to
+  the fixed sealed request list and refuses response-derived discovery. The runtime
+  revalidates scope and authorization before each send and uses a locally append-only,
+  hash-chained campaign ledger. Across restarts, rollback or valid-prefix truncation
+  detection requires the separately retained trusted record count and head digest to
+  be supplied with --trusted-ledger-record-count and --trusted-ledger-head-sha256.
+  Standalone probes are not public: use a single-action campaign so every active
+  authenticated request receives a durable lease and campaign ledger record.
+  campaign-stop writes an out-of-band request bound to that grant and operator;
+  the runner consumes it into the ledger before dispatching another action.
+  Commands never print credential references/values, full
   request URLs, request/response bodies, or header values.
   --credential-stdin reads one opaque value from redirected stdin, strips one pipe
   line ending, refuses terminal or multiline input, and never persists or prints it.
-  --credential-browser uses the current session in one operator-selected Chrome tab.
-  Chrome applies its current cookies on every sealed same-origin request; cookie,
-  Authorization, profile, storage, and browser-database values never enter the
-  controller. The companion requires one explicit attach gesture per campaign,
-  not one credential export per session rotation, and never falls back to stdin.
+  The packaged browser companion is release-disabled and exposes no attach
+  controls. --credential-browser can execute only with a separately supplied
+  protocol-compatible companion; that route uses browser-managed DNS rather than
+  the native transport's all-answer validation and socket IP pinning.
   JSON response shape observation is disabled unless --observe-json-shape is sealed
   at plan time with repeatable --json-shape-key values. It retains only allowed key
   names, structural types, and bounded counts; scalar values and raw bodies remain
@@ -68,8 +74,9 @@ Boundary:
   paths, and discards all response bytes and other HTML data.
 
 Materials:
-  countersignature-N.json approves mutation sequence N. A synthetic body is read
-  from body-SHA256.bin, where SHA256 is the lowercase SHA-256 of body_id UTF-8.
+  A synthetic body is read from body-SHA256.bin, where SHA256 is the lowercase
+  SHA-256 of body_id UTF-8. Each action receives a ledger-bound one-use dispatch
+  permit derived from the sealed operator-authorized campaign.
 
 Planner options:
   Repeat --path-prefix, --method, and --test-category to express the sealed boundary.
@@ -79,9 +86,8 @@ Planner options:
   either route. --cleanup-not-after defaults to --not-after and extends only
   ledger-proven rollback/verification, never new work. --enable-discovery accepts repeatable --discovery-source,
   --synthetic-query NAME=SYNTHETIC_VALUE, and --synthetic-path NAME=SYNTHETIC_VALUE.
-  Write-capable authority requires --mutation-authorized plus
-  --approver-public-key, --approver-enrolled-by, --approver-enrolled-at, and
-  --approver-provenance. Optional transport controls are --tls-spki-sha256,
+  Include --mutation-authorized in the explicit plan command to authorize the
+  exact sealed mutation and rollback sequence. Optional transport controls are --tls-spki-sha256,
   --request-timeout-ms, --max-response-bytes, --min-interval-ms, and --concurrency.
 `
 
@@ -91,10 +97,8 @@ const REQUEST_PLAN_MAX_BYTES = 1024 * 1024
 
 const FLAG_OPTIONS = new Set([
   'json',
-  'confirm-authorization-current',
   'enable-discovery',
   'mutation-authorized',
-  'attest-authorized',
   'credential-stdin',
   'credential-browser',
   'observe-json-shape',
@@ -152,7 +156,6 @@ const COMMANDS = {
       'operator-id',
       'authorized-by',
       'authorization-reference',
-      'attest-authorized',
       'not-before',
       'not-after',
       'target-origin',
@@ -185,10 +188,6 @@ const COMMANDS = {
       'synthetic-query',
       'synthetic-path',
       'mutation-authorized',
-      'approver-public-key',
-      'approver-enrolled-by',
-      'approver-enrolled-at',
-      'approver-provenance',
       'tls-spki-sha256',
       'request-timeout-ms',
       'max-response-bytes',
@@ -201,101 +200,16 @@ const COMMANDS = {
     required: ['scope'],
     optional: ['json'],
   },
+  'campaign-stop': {
+    required: ['ledger', 'campaign-grant-sha256', 'operator-id'],
+    optional: ['json'],
+  },
   'campaign-attested': {
     required: [
       'scope',
       'campaign-grant-sha256',
       'ledger',
       'operator-id',
-      'confirm-authorization-current',
-    ],
-    optional: [
-      'materials',
-      'credential-stdin',
-      'credential-browser',
-      'trusted-ledger-record-count',
-      'trusted-ledger-head-sha256',
-      'json',
-    ],
-  },
-  'plan-written': {
-    required: [
-      'scope',
-      'authorization-document',
-      'engagement-id',
-      'authorization-id',
-      'operator-id',
-      'authorized-by',
-      'authorization-reference',
-      'document-issuer',
-      'document-issued-at',
-      'not-before',
-      'not-after',
-      'target-origin',
-      'environment',
-      'data-class',
-      'ownership',
-      'path-prefix',
-      'method',
-      'test-category',
-    ],
-    optional: [
-      'requests',
-      'seed-url',
-      'preflight-url',
-      'cleanup-not-after',
-      'credential-env',
-      'credential-stdin',
-      'credential-browser',
-      'browser-extension-id',
-      'credential-kind',
-      'seed-method',
-      'seed-test-category',
-      'enable-discovery',
-      'observe-json-shape',
-      'json-shape-aspnet-d',
-      'json-shape-key',
-      'json-shape-max-depth',
-      'response-observation-profile',
-      'discovery-source',
-      'synthetic-query',
-      'synthetic-path',
-      'mutation-authorized',
-      'approver-public-key',
-      'approver-enrolled-by',
-      'approver-enrolled-at',
-      'approver-provenance',
-      'tls-spki-sha256',
-      'request-timeout-ms',
-      'max-response-bytes',
-      'min-interval-ms',
-      'concurrency',
-      'json',
-    ],
-  },
-  'validate-written': {
-    required: ['scope', 'authorization-document'],
-    optional: ['json'],
-  },
-  'probe-written': {
-    required: [
-      'scope',
-      'authorization-document',
-      'candidate',
-      'campaign-grant-sha256',
-      'operator-id',
-      'confirm-authorization-current',
-    ],
-    optional: ['credential-stdin', 'request-body', 'json'],
-  },
-  'campaign-written': {
-    required: [
-      'scope',
-      'authorization-document',
-      'campaign-grant-sha256',
-      'ledger',
-      'operator-id',
-      'confirm-authorization-current',
     ],
     optional: [
       'materials',
@@ -465,10 +379,8 @@ async function readRequestPlanFile(
   }
 }
 
-async function planInput(options, authorizationMode, requestPlanIo = {}) {
-  const command = authorizationMode === 'OPERATOR_ATTESTED_AUTHED'
-    ? 'plan-attested'
-    : 'plan-written'
+async function planInput(options, requestPlanIo = {}) {
+  const command = 'plan-attested'
   const testCategories = options['test-category']
   const usesRequestPlan = options.requests !== undefined
   const usesSeedUrls = Array.isArray(options['seed-url'])
@@ -493,12 +405,6 @@ async function planInput(options, authorizationMode, requestPlanIo = {}) {
         testCategory: options['seed-test-category'] ?? testCategories[0],
       }))
   const seedTestCategory = options['seed-test-category'] ?? testCategories[0]
-  const approverInputPresent = [
-    'approver-public-key',
-    'approver-enrolled-by',
-    'approver-enrolled-at',
-    'approver-provenance',
-  ].some((key) => options[key] !== undefined)
   const discoveryOptionsPresent = [
     'discovery-source',
     'synthetic-query',
@@ -533,9 +439,6 @@ async function planInput(options, authorizationMode, requestPlanIo = {}) {
       '--response-observation-profile requires one exact seed and is exclusive with discovery and JSON shape observation',
     )
   }
-  if (approverInputPresent && options['mutation-authorized'] !== true) {
-    throw new Error('approver options require --mutation-authorized')
-  }
   const usesEnvironmentCredential = typeof options['credential-env'] === 'string'
   const usesStdinCredential = options['credential-stdin'] === true
   const usesBrowserCredential = options['credential-browser'] === true
@@ -559,7 +462,6 @@ async function planInput(options, authorizationMode, requestPlanIo = {}) {
   }
   return {
     outputPath: options.scope,
-    authorizationDocumentPath: options['authorization-document'],
     engagementId: options['engagement-id'],
     classification: {
       environment: options.environment,
@@ -570,11 +472,7 @@ async function planInput(options, authorizationMode, requestPlanIo = {}) {
       operatorId: options['operator-id'],
       authorizedBy: options['authorized-by'],
       authorizationReference: options['authorization-reference'],
-      attestAuthorized: authorizationMode === 'OPERATOR_ATTESTED_AUTHED'
-        ? options['attest-authorized'] === true
-        : undefined,
-      documentIssuer: options['document-issuer'],
-      documentIssuedAt: options['document-issued-at'],
+      attestAuthorized: true,
       permissions: {
         activeTesting: true,
         production: options.environment === 'production',
@@ -633,16 +531,6 @@ async function planInput(options, authorizationMode, requestPlanIo = {}) {
       concurrency: optionalInteger(options, 'concurrency'),
     },
     mutationAuthorized: options['mutation-authorized'] === true,
-    approver: approverInputPresent
-      ? {
-          publicKeyPath: options['approver-public-key'],
-          enrollment: {
-            enrolledBy: options['approver-enrolled-by'],
-            enrolledAt: options['approver-enrolled-at'],
-            provenance: options['approver-provenance'],
-          },
-        }
-      : undefined,
     discovery: options['enable-discovery'] === true
       ? {
           enabled: true,
@@ -659,15 +547,11 @@ function publicValidationSummary(verified) {
   const {
     scope,
     authorizationBindingSha256,
-    authorizationDocumentSha256,
     campaignGrantSha256,
   } = verified
-  const written = scope.authorization.mode === 'WRITTEN_AUTHORIZATION_AUTHED'
   const evidence = httpAuthedAuthorizationEvidence(scope)
   return {
-    kind: written
-      ? 'red-team-audit/http-authed-written-validation'
-      : 'red-team-audit/http-authed-attested-validation',
+    kind: 'red-team-audit/http-authed-attested-validation',
     schema_version: scope.schema_version,
     engagement_id: scope.engagement_id,
     authorization_mode: scope.authorization.mode,
@@ -677,12 +561,6 @@ function publicValidationSummary(verified) {
     authorization_assurance: evidence.authorizationAssurance,
     authorization_nonclaim: evidence.authorizationNonclaim,
     authorization_binding_sha256: authorizationBindingSha256,
-    ...(scope.authorization.document_issuer === undefined
-      ? {}
-      : { document_issuer: scope.authorization.document_issuer }),
-    ...(authorizationDocumentSha256 === undefined
-      ? {}
-      : { authorization_document_sha256: authorizationDocumentSha256 }),
     campaign_grant_sha256: campaignGrantSha256,
     target_origin: scope.target.origin,
     authorized_methods: scope.authorization.authorized_scope.methods,
@@ -730,16 +608,17 @@ function renderBrowserPairing(pairing) {
   } catch {
     throw new Error('the Chrome companion returned an invalid loopback origin')
   }
-  return [
+  return terminalSafeLines([
     'Chrome active-tab campaign is waiting for one attachment.',
     `target origin: ${pairing.target_origin}`,
     `campaign grant sha256: ${pairing.campaign_grant_sha256}`,
     `controller port: ${port}`,
     `one-time pairing capability: ${pairing.pairing_code}`,
-    'Open the logged-in target tab, click the Red Team Audit Browser Bridge, verify the origin and grant, then Attach.',
+    'In the logged-in target tab, use your separately supplied protocol-compatible companion to verify the origin and grant, then attach.',
+    'The packaged Red Team Audit browser companion is disabled and cannot perform this step.',
     'Chrome will apply its current session to every sealed action; do not export or paste a cookie.',
     '',
-  ].join('\n')
+  ])
 }
 
 export async function main(
@@ -751,6 +630,7 @@ export async function main(
     credentialStdinReader = readHttpAuthedCredentialFromStdin,
     transport,
     browserTransportFactory,
+    requestCampaignStop = requestHttpAuthedCampaignStop,
     browserPairingWrite = (text) => process.stderr.write(text),
     requestPlanLstat = lstat,
     requestPlanOpen = open,
@@ -761,29 +641,45 @@ export async function main(
     write(HELP)
     return
   }
+  assertLocalFilesystemEndpoint(process.cwd(), 'working directory')
+  assertNoRemoteFilesystemArguments(argv)
   const { positionals, options } = parseArguments(argv)
   const command = assertCommandShape(positionals, options)
-  if (command === 'plan-written' || command === 'plan-attested') {
-    const attested = command === 'plan-attested'
-    const planner = attested
-      ? planHttpAuthedAttestedScope
-      : planHttpAuthedWrittenScope
+  if (command === 'campaign-stop') {
+    const result = await requestCampaignStop({
+      directory: options.ledger,
+      campaignGrantSha256: options['campaign-grant-sha256'],
+      operatorId: options['operator-id'],
+      now: clock,
+    })
+    if (options.json) {
+      write(terminalSafeSerializedJson(stableJson(result)))
+      return
+    }
+    write(terminalSafeLines([
+      `campaign stop: ${result.status}`,
+      `ledger: ${result.ledger}`,
+      `campaign grant sha256: ${result.campaign_grant_sha256}`,
+      '',
+    ]))
+    return
+  }
+  if (command === 'plan-attested') {
     const input = await planInput(
       options,
-      attested ? 'OPERATOR_ATTESTED_AUTHED' : 'WRITTEN_AUTHORIZATION_AUTHED',
       { lstatImpl: requestPlanLstat, openImpl: requestPlanOpen },
     )
-    const result = await planner(input, {
+    const result = await planHttpAuthedAttestedScope(input, {
       env,
       clock,
       credentialInput: options['credential-stdin'] === true ? credentialInput : undefined,
       credentialStdinReader,
     })
     if (options.json) {
-      write(stableJson(result))
+      write(terminalSafeSerializedJson(stableJson(result)))
       return
     }
-    write([
+    write(terminalSafeLines([
       `engagement: ${result.engagement_id}`,
       `target: ${result.target_origin}`,
       `scope: ${result.output_path}`,
@@ -793,29 +689,22 @@ export async function main(
       `authorization assurance: ${result.authorization_assurance}`,
       `authorization nonclaim: ${result.authorization_nonclaim}`,
       `authorization binding sha256: ${result.authorization_binding_sha256}`,
-      ...(result.authorization_document_sha256 === undefined
-        ? []
-        : [`authorization document sha256: ${result.authorization_document_sha256}`]),
       `campaign grant sha256: ${result.campaign_grant_sha256}`,
       '',
-    ].join('\n'))
+    ]))
     return
   }
-  if (command === 'campaign-written' || command === 'campaign-attested') {
+  if (command === 'campaign-attested') {
     if (options['credential-browser'] === true && options['credential-stdin'] === true) {
       throw new Error(`${command} accepts only one explicit credential transport mode`)
     }
-    const campaign = command === 'campaign-attested'
-      ? runHttpAuthedAttestedCampaign
-      : runHttpAuthedWrittenCampaign
-    const result = await campaign({
+    const result = await runHttpAuthedAttestedCampaign({
       scopePath: options.scope,
-      authorizationDocumentPath: options['authorization-document'],
       expectedCampaignGrantSha256: options['campaign-grant-sha256'],
       ledgerDirectory: options.ledger,
       materialsDirectory: options.materials,
       operatorId: options['operator-id'],
-      authorizationConfirmed: options['confirm-authorization-current'] === true,
+      fixedCampaignOnly: true,
       trustedLedgerHead: trustedLedgerHead(options),
       env,
       credentialInput: options['credential-stdin'] === true ? credentialInput : undefined,
@@ -827,10 +716,10 @@ export async function main(
       protectedTransport: transport,
     })
     if (options.json) {
-      write(stableJson(result))
+      write(terminalSafeSerializedJson(stableJson(result)))
       return
     }
-    write([
+    write(terminalSafeLines([
       `completed actions: ${result.actions.completed}`,
       `discovered actions: ${result.actions.discovered}`,
       `failed actions: ${result.actions.failed}`,
@@ -843,56 +732,24 @@ export async function main(
       `authorization binding sha256: ${result.authorization_binding_sha256}`,
       `ledger records: ${result.ledger.record_count}`,
       `ledger head sha256: ${result.ledger.head_sha256}`,
+      `campaign stopped: ${result.ledger.stopped}`,
+      `campaign stop reason: ${result.ledger.stop_reason ?? 'none'}`,
       `campaign grant sha256: ${result.campaign_grant_sha256}`,
       '',
-    ].join('\n'))
+    ]))
     return
   }
-  if (command === 'probe-written') {
-    const result = await runHttpAuthedWrittenProbe({
-      scopePath: options.scope,
-      authorizationDocumentPath: options['authorization-document'],
-      candidatePath: options.candidate,
-      requestBodyPath: options['request-body'],
-      expectedCampaignGrantSha256: options['campaign-grant-sha256'],
-      operatorId: options['operator-id'],
-      authorizationConfirmed: options['confirm-authorization-current'] === true,
-      env,
-      credentialInput: options['credential-stdin'] === true ? credentialInput : undefined,
-      credentialStdinReader,
-      clock,
-      transport,
-    })
-    if (options.json) {
-      write(stableJson(result))
-      return
-    }
-    write([
-      `action: ${result.action.sequence} ${result.action.method}`,
-      `status: ${result.response.status}`,
-      `response bytes discarded: ${result.response.bytes}`,
-      `campaign grant sha256: ${result.campaign_grant_sha256}`,
-      '',
-    ].join('\n'))
-    return
-  }
-  const verified = command === 'validate-attested'
-    ? await readAndVerifyHttpAuthedAuthorization({
-        scopePath: options.scope,
-        requiredMode: 'OPERATOR_ATTESTED_AUTHED',
-        now: clock(),
-      })
-    : await readAndVerifyHttpAuthedWrittenAuthorization({
-        scopePath: options.scope,
-        authorizationDocumentPath: options['authorization-document'],
-        now: clock(),
-      })
+  const verified = await readAndVerifyHttpAuthedAuthorization({
+    scopePath: options.scope,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+    now: clock(),
+  })
   const summary = publicValidationSummary(verified)
   if (options.json) {
-    write(stableJson(summary))
+    write(terminalSafeSerializedJson(stableJson(summary)))
     return
   }
-  write([
+  write(terminalSafeLines([
     `engagement: ${summary.engagement_id}`,
     `authorization: ${summary.authorization_mode}`,
     `independently verified: ${summary.independently_verified}`,
@@ -901,17 +758,14 @@ export async function main(
     `target: ${summary.target_origin}`,
     `planned actions: ${summary.request_count}`,
     `authorization binding sha256: ${summary.authorization_binding_sha256}`,
-    ...(summary.authorization_document_sha256 === undefined
-      ? []
-      : [`authorization document sha256: ${summary.authorization_document_sha256}`]),
     `campaign grant sha256: ${summary.campaign_grant_sha256}`,
     '',
-  ].join('\n'))
+  ]))
 }
 
 if (isMainModule(import.meta.url)) {
   main().catch((error) => {
-    process.stderr.write(`${error.message}\n`)
+    process.stderr.write(`${terminalSafeText(error.message)}\n`)
     process.exitCode = 1
   })
 }

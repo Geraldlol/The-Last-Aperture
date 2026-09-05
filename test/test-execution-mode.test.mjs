@@ -1,10 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePolicy } from '../scripts/lib/policy.mjs'
+import {
+  createRunPlan,
+  writeRunPlanBundle,
+} from '../scripts/lib/run-engine.mjs'
 
 const WORKSPACE = process.cwd()
 
@@ -64,16 +67,21 @@ test('test mode requires write_file roots under a security leaf', () => {
   assert.equal(codes.includes('TEST_MODE_CONTRADICTION'), true)
 })
 
-test('a test RoE plans and yields TEST_EXECUTION', () => {
+test('the internal planning kernel yields TEST_EXECUTION for a test RoE', async () => {
   const out = mkdtempSync(join(tmpdir(), 'rta-te-'))
-  const roePath = join(out, 'roe.json')
   const target = join(WORKSPACE, 'fixtures', 'vulnerable')
-  writeFileSync(roePath, JSON.stringify({ ...roe(), workspace_root: target }))
-  execFileSync(process.execPath, [
-    'scripts/audit.mjs', 'plan', 'fixtures/vulnerable',
-    '--roe', roePath, '--seal-source', '--out', out,
-  ], { stdio: 'pipe' })
-  const bundle = join(out, readdirSync(out).find((name) => name.startsWith('run_')))
+  const policy = normalizePolicy(
+    { ...roe(), workspace_root: target },
+    { workspaceRoot: target, policySource: 'external' },
+  )
+  const plan = await createRunPlan({
+    targetRoot: target,
+    lensDirectory: join(WORKSPACE, 'skills', 'red-team-audit', 'lenses'),
+    policy,
+    sealSource: true,
+  })
+  const { directory: bundle } = await writeRunPlanBundle(plan, out)
   const run = JSON.parse(readFileSync(join(bundle, 'run.json'), 'utf8'))
   assert.equal(run.capability_mode, 'TEST_EXECUTION')
+  assert.equal(run.source_snapshot.kind, 'SOURCE')
 })

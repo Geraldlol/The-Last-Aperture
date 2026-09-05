@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
+  main,
   runRemoteCommand,
   verifyControlBundle,
 } from '../scripts/audit.mjs'
@@ -16,6 +17,7 @@ import {
   stableJson,
   writeRunPlanBundle,
 } from '../scripts/lib/run-engine.mjs'
+import { hashAttemptEvent } from '../scripts/lib/attempts.mjs'
 
 const NOW = new Date('2026-07-30T18:01:00.000Z')
 const SHA_A = 'a'.repeat(64)
@@ -23,6 +25,17 @@ const TRANSFORM = {
   id: 'transform:remote-cli-fixture',
   sha256: 'b'.repeat(64),
 }
+
+test('public run-remote refuses before reading caller-selected bundle or gateway files', async () => {
+  await assert.rejects(
+    () => main(['run-remote', 'missing-bundle', 'missing-gateway-config.json']),
+    (error) => {
+      assert.equal(error.code, 'REMOTE_GATEWAY_ENROLLMENT_REQUIRED')
+      assert.match(error.message, /disabled before bundle or configuration access/i)
+      return true
+    },
+  )
+})
 
 function remotePolicy(root) {
   return normalizePolicy({
@@ -80,6 +93,10 @@ test('run-remote durably binds one signed request and gateway acceptance', async
     await writeFile(
       join(root, 'src', 'app.js'),
       'export const remotelyReviewed = true\n',
+    )
+    await writeFile(
+      join(root, 'src', 'replacement-\uFFFD.js'),
+      'export const replacementNamedFile = true\n',
     )
     await writeFile(
       join(root, 'package.json'),
@@ -230,6 +247,42 @@ test('run-remote durably binds one signed request and gateway acceptance', async
       /rotation require a new run/,
     )
     assert.equal(providerCalls, 2)
+
+    const forged = structuredClone(run)
+    const failedLease = leases[0]
+    const requestArtifact = forged.artifacts[failedLease.request_artifact_key]
+    const requestPath = join(written.directory, requestArtifact.path)
+    const canonicalBytes = await readFile(requestPath)
+    const replacementBytes = Buffer.from('\uFFFD', 'utf8')
+    const replacementOffset = canonicalBytes.indexOf(replacementBytes)
+    assert.notEqual(
+      replacementOffset,
+      -1,
+      'remote request fixture must contain a canonical replacement character',
+    )
+    const malformedBytes = Buffer.concat([
+      canonicalBytes.subarray(0, replacementOffset),
+      Buffer.from([0xff]),
+      canonicalBytes.subarray(replacementOffset + replacementBytes.length),
+    ])
+    const malformedDigest = createHash('sha256').update(malformedBytes).digest('hex')
+    await writeFile(requestPath, malformedBytes)
+    requestArtifact.sha256 = malformedDigest
+    forged.attempt_events.find(
+      ({ attempt_id: attemptId, event }) =>
+        attemptId === failedLease.attempt_id && event === 'LEASED',
+    ).request_artifact_sha256 = malformedDigest
+    let previousEventSha256 = null
+    for (const [index, event] of forged.attempt_events.entries()) {
+      event.sequence = index + 1
+      event.previous_event_sha256 = previousEventSha256
+      event.event_sha256 = hashAttemptEvent(event)
+      previousEventSha256 = event.event_sha256
+    }
+    await assert.rejects(
+      () => verifyControlBundle(written.directory, forged),
+      /remote request envelope JSON is invalid: .*not valid UTF-8/i,
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
     await rm(output, { recursive: true, force: true })

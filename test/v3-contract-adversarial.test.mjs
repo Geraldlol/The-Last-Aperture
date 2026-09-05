@@ -263,6 +263,46 @@ test('an untouched controller-created v7 plan satisfies the run contract', () =>
   )
 })
 
+test('v7 rejects duplicate evidence identities that JSON Schema cannot express', () => {
+  const run = freshRun()
+  run.evidence_bundles.push({
+    evidence_id: 'duplicate-bundle',
+    evidence_class: 'built-artifact',
+    adapter_id: 'artifact',
+    artifact_kind: 'oci-image',
+    coverage_state: 'COVERED',
+    root_sha256: 'a'.repeat(64),
+  })
+  run.evidence_bundles.push(structuredClone(run.evidence_bundles.at(-1)))
+  assert.ok(errorCodes(validateRun(run)).has('DUPLICATE_EVIDENCE_ID'))
+})
+
+test('v7 requires its evidence authority and keeps it transition-immutable', async (t) => {
+  for (const field of [
+    'evidence_declarations',
+    'evidence_bundles',
+    'evidence_coverage',
+  ]) {
+    await t.test(`${field} is required`, () => {
+      const run = freshRun()
+      delete run[field]
+      assert.equal(validateRawRunSchema(run), false)
+      assert.ok(validateRawRunSchema.errors.some(
+        ({ keyword, params }) =>
+          keyword === 'required' && params?.missingProperty === field,
+      ))
+    })
+
+    await t.test(`${field} is immutable`, () => {
+      const previous = freshRun()
+      const next = freshRun()
+      delete next[field]
+      const validation = validateRunTransition(previous, next)
+      assert.ok(errorCodes(validation).has('RUN_PROVENANCE_CHANGED'))
+    })
+  }
+})
+
 test('the raw v3 run schema rejects a malformed database discovery graph', () => {
   const run = freshRun()
   run.database_discovery = { totally: 'invalid' }
@@ -472,6 +512,12 @@ test('a successful shard cannot inflate coverage with another shard path', () =>
     examined_files: [...sidecar.scoped_files],
     findings: [],
     coverage_gaps: [],
+    topic_assessments: sidecar.topic_obligations.map((topic) => ({
+      topic,
+      disposition: 'examined-clean',
+      reason: 'The adversarial fixture assessed its bounded topic obligation.',
+      evidence: ['The fixture provider completed its bounded topic check.'],
+    })),
   }, {
     expectedPacketSha256: RESULT_DIGEST,
     sidecar,

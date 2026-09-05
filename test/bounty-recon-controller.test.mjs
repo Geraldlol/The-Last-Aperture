@@ -20,6 +20,7 @@ function sealedScope(rateLimit = 5) {
       program_handle: 'acme',
       policy_url: 'https://yeswehack.com/programs/acme',
       policy_snapshot_sha256: 'a'.repeat(64),
+      required_user_agent: 'BugBounty-acme',
     },
     authorization: {
       mode: 'PROGRAM_POLICY_SEALED',
@@ -120,6 +121,11 @@ test('runs recon, discovers SANs, probes them, and persists the inventory', asyn
     assert.deepEqual(hosts, ['acme.example', 'api.acme.example'])
     assert.equal(inventory.hosts.find((h) => h.host === 'api.acme.example').probe.status, 200)
     assert.equal(inventory.zone_hints[0].zone, 'm.acme.example')
+    assert.deepEqual(
+      inventory.zone_hints[0].sources,
+      ['tls'],
+      'a SAN-discovered zone hint is attributed to the handshake that produced it',
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -274,10 +280,24 @@ test('the limiter is built from the sealed rate limit, not a caller flag', async
   }
 })
 
-test('refuses to run with no seeds', async () => {
+// A sealed wildcard is now a valid starting point on its own, so the refusal is
+// narrower than it was: recon still declines when there is nothing at all to
+// start from. Stub impls keep this offline -- the guard must fire before any
+// source runs, and a real fetch here would prove the opposite.
+test('refuses to run with neither a seed nor a zone it can enumerate', async () => {
   const dir = await bundle()
+  const stub = { fetchImpl: async () => { throw new Error('no request may be made') }, connectImpl: async () => { throw new Error('no socket may open') } }
   try {
-    await assert.rejects(() => runRecon({ bundlePath: dir, seeds: [], now: NOW }), /--seed/)
+    // tls cannot expand a zone, so with no seed there is no entry point
+    await assert.rejects(
+      () => runRecon({ bundlePath: dir, seeds: [], sources: ['tls'], now: NOW, ...stub }),
+      /--seed/,
+    )
+    // and with no source at all, likewise
+    await assert.rejects(
+      () => runRecon({ bundlePath: dir, seeds: [], sources: [], now: NOW, ...stub }),
+      /--seed/,
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -298,6 +318,227 @@ test('a TLS handshake failure is a gap, and the sweep continues', async () => {
     })
     assert.equal(summary.status, 'PARTIAL')
     assert.equal(summary.gaps, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// --- a sealed wildcard is a grant to enumerate that zone ---
+
+// A program that grants *.zone but not the apex leaves the apex unprobeable, and
+// the apex is the only natural seed for expanding the zone. Asking crt.sh about a
+// zone sends nothing to the target, so the seed gate -- which exists to stop
+// packets reaching out-of-scope hosts -- must not also stop enumeration of a zone
+// we plainly hold. Discovered names are still gated before anything is probed.
+test('ctlog enumerates every sealed wildcard zone, apex seed or not', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bounty-recon-zone-'))
+  try {
+    const scope = sealedScope()
+    scope.scope_rules = {
+      allow: [
+        { rule_id: 'a1', host_kind: 'wildcard', host: 'service.example.test' },
+        { rule_id: 'a2', host_kind: 'wildcard', host: 'secondary.example.test' },
+        { rule_id: 'a3', host_kind: 'exact', host: 'api.acme.example' },
+      ],
+      deny: [],
+    }
+    await writeFile(join(dir, 'scope.json'), JSON.stringify(scope), 'utf8')
+
+    const queried = []
+    const probed = []
+    await runRecon({
+      bundlePath: dir,
+      // The apex is deliberately NOT supplied and is not in scope on its own.
+      seeds: [],
+      sources: ['ctlog'],
+      now: NOW,
+      fetchImpl: async (url) => {
+        const text = String(url)
+        if (text.includes('crt.sh')) {
+          queried.push(text)
+          return new Response(JSON.stringify([{ name_value: 'gatekeeper.service.example.test' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        probed.push(text)
+        return new Response('<html><title>x</title></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      },
+      sleep: async () => {},
+      clock: () => 0,
+    })
+
+    assert.ok(
+      queried.some((u) => u.includes(encodeURIComponent('%.service.example.test'))),
+      'the sealed wildcard zone must be enumerated',
+    )
+    assert.ok(
+      queried.some((u) => u.includes(encodeURIComponent('%.secondary.example.test'))),
+      'every sealed wildcard zone, not just the first',
+    )
+    assert.equal(
+      queried.some((u) => u.includes(encodeURIComponent('%.api.acme.example'))),
+      false,
+      'an exact-host rule is not a zone grant and must not be enumerated',
+    )
+    assert.ok(
+      probed.includes('https://gatekeeper.service.example.test/'),
+      'a discovered in-zone host is probed as normal',
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// The perimeter must not widen: enumeration finds names, the gate still decides.
+test('a name outside the perimeter is never probed even when ctlog returns it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bounty-recon-zone-'))
+  try {
+    const scope = sealedScope()
+    scope.scope_rules = {
+      allow: [{ rule_id: 'a1', host_kind: 'wildcard', host: 'service.example.test' }],
+      deny: [{ rule_id: 'd1', host_kind: 'exact', host: 'secret.service.example.test' }],
+    }
+    await writeFile(join(dir, 'scope.json'), JSON.stringify(scope), 'utf8')
+
+    const probed = []
+    await runRecon({
+      bundlePath: dir,
+      seeds: [],
+      sources: ['ctlog'],
+      now: NOW,
+      fetchImpl: async (url) => {
+        const text = String(url)
+        if (text.includes('crt.sh')) {
+          return new Response(
+            JSON.stringify([
+              { name_value: 'ok.service.example.test' },
+              { name_value: 'secret.service.example.test' },
+              { name_value: 'elsewhere.example.com' },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        probed.push(text)
+        return new Response('', { status: 200, headers: { 'content-type': 'text/plain' } })
+      },
+      sleep: async () => {},
+      clock: () => 0,
+    })
+
+    assert.ok(probed.includes('https://ok.service.example.test/'), 'in-zone name is probed')
+    assert.equal(
+      probed.some((u) => u.includes('secret.service.example.test')),
+      false,
+      'an explicitly denied name is never probed',
+    )
+    assert.equal(
+      probed.some((u) => u.includes('elsewhere.example.com')),
+      false,
+      'a name outside the perimeter is never probed',
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// A zone hint records where the name came from, because the inventory is
+// evidence: a certificate-log observation attributed to a TLS handshake claims a
+// socket that a ctlog-only sweep never opens.
+test('a zone hint discovered from ctlog is attributed to ctlog, not to tls', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bounty-recon-prov-'))
+  try {
+    const scope = sealedScope()
+    scope.scope_rules = {
+      allow: [{ rule_id: 'a1', host_kind: 'wildcard', host: 'service.example.test' }],
+      deny: [],
+    }
+    await writeFile(join(dir, 'scope.json'), JSON.stringify(scope), 'utf8')
+
+    await runRecon({
+      bundlePath: dir,
+      // No seed and no tls source: nothing in this run opens a socket to a target.
+      seeds: [],
+      sources: ['ctlog'],
+      now: NOW,
+      fetchImpl: async (url) => {
+        if (String(url).includes('crt.sh')) {
+          return new Response(
+            JSON.stringify([{ name_value: '*.internal.service.example.test' }]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response('<html><title>x</title></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      },
+      sleep: async () => {},
+      clock: () => 0,
+    })
+
+    const inventory = JSON.parse(
+      await readFile(join(dir, 'surface-inventory.json'), 'utf8'),
+    )
+    const hint = inventory.zone_hints.find(
+      (entry) => entry.zone === 'internal.service.example.test',
+    )
+    assert.ok(hint, 'the wildcard name became a zone hint')
+    assert.deepEqual(
+      hint.sources,
+      ['ctlog'],
+      'a ctlog-discovered zone hint must not claim a TLS handshake that never happened',
+    )
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// A sweep whose scope blocked every probe is the PARTIAL case by definition:
+// nothing was observed. Recording only refusals leaves the summary reading
+// `OBSERVED gaps=0`, which is indistinguishable from a surface that is genuinely
+// empty.
+test('a scope sealing no user-agent marker yields PARTIAL with the gap recorded', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'bounty-recon-nomarker-'))
+  try {
+    const scope = sealedScope()
+    // A bundle sealed before the marker was mandated.
+    delete scope.program.required_user_agent
+    await writeFile(join(dir, 'scope.json'), JSON.stringify(scope), 'utf8')
+
+    const probed = []
+    const summary = await runRecon({
+      bundlePath: dir,
+      seeds: ['acme.example'],
+      sources: ['tls'],
+      now: NOW,
+      fetchImpl: async (url) => {
+        probed.push(String(url))
+        return new Response('', { status: 200 })
+      },
+      connectImpl: async () => ({
+        subjectaltname: 'DNS:acme.example',
+      }),
+      sleep: async () => {},
+      clock: () => 0,
+    })
+
+    assert.deepEqual(probed, [], 'no socket may open without the mandated marker')
+    assert.equal(
+      summary.status,
+      'PARTIAL',
+      'a sweep that probed nothing must not report OBSERVED',
+    )
+    const inventory = JSON.parse(
+      await readFile(join(dir, 'surface-inventory.json'), 'utf8'),
+    )
+    assert.ok(
+      inventory.gaps.some(({ reason }) => reason.includes('user-agent')),
+      'the missing marker is recorded as the gap that stopped the sweep',
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

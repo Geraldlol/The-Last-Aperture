@@ -544,6 +544,10 @@ test('inventory limits use bounded defaults and reject invalid overrides', async
       /maxInventoryFiles must be a non-negative safe integer/,
     )
     await assert.rejects(
+      inventoryRepository(root, { maxInventoryFiles: 100_001 }),
+      /maxInventoryFiles must be at most 100000/,
+    )
+    await assert.rejects(
       inventoryRepository(root, { maxInventoryBytes: Number.POSITIVE_INFINITY }),
       /maxInventoryBytes must be a non-negative safe integer/,
     )

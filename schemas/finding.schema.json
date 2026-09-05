@@ -61,6 +61,15 @@
       "type": "string",
       "pattern": "^CWE-[1-9][0-9]*$"
     },
+    "framework_refs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/frameworkReference"
+      }
+    },
     "evidence": {
       "$ref": "#/$defs/nonEmptyString"
     },
@@ -117,10 +126,17 @@
     },
     "evidence_claim": {
       "enum": [
+        "artifact-signature-invalid",
+        "binary-hardening-missing",
         "drift-from-source",
+        "firmware-trust-gap",
+        "model-integrity-or-robustness-gap",
+        "resilience-policy-misconfiguration",
         "runtime-misconfiguration",
         "secret-present-in-artifact",
         "sensitive-data-at-rest",
+        "smart-contract-deployment-drift",
+        "telemetry-delivery-failure",
         "unexpected-artifact-content",
         "vulnerable-component-present"
       ]
@@ -178,6 +194,10 @@
         "elevated"
       ]
     },
+    "triage_authority": {
+      "description": "Controller-stamped provenance for a provider's triage decision. This release exposes no authenticated triage authority.",
+      "const": "UNAUTHENTICATED_PROVIDER_ASSERTION"
+    },
     "drop_reason": {
       "$ref": "#/$defs/nonEmptyString"
     },
@@ -192,6 +212,9 @@
       "items": {
         "$ref": "#/$defs/candidateId"
       }
+    },
+    "chain": {
+      "$ref": "#/$defs/attackChain"
     },
     "merged_into_candidate_id": {
       "$ref": "#/$defs/candidateId"
@@ -216,6 +239,10 @@
         "UNPROVEN"
       ]
     },
+    "verification_authority": {
+      "description": "Controller-stamped provenance for a provider's proof decision. This release exposes no authenticated semantic-oracle authority.",
+      "const": "UNAUTHENTICATED_PROVIDER_ASSERTION"
+    },
     "disproof_basis": {
       "enum": [
         "falsified-code-premise",
@@ -233,6 +260,9 @@
     },
     "post_result": {
       "$ref": "#/$defs/postResult"
+    },
+    "remediation": {
+      "$ref": "#/$defs/remediation"
     },
     "reason": {
       "$ref": "#/$defs/nonEmptyString"
@@ -425,6 +455,11 @@
           },
           {
             "required": [
+              "remediation"
+            ]
+          },
+          {
+            "required": [
               "reason"
             ]
           },
@@ -527,8 +562,28 @@
         "required": [
           "artifact",
           "command",
-          "pre_result",
-          "post_result"
+          "pre_result"
+        ],
+        "anyOf": [
+          {
+            "properties": {
+              "pre_result": {
+                "properties": {
+                  "control_status": {
+                    "const": "passed"
+                  }
+                },
+                "required": [
+                  "control_status"
+                ]
+              }
+            }
+          },
+          {
+            "required": [
+              "post_result"
+            ]
+          }
         ]
       }
     },
@@ -845,6 +900,136 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
     },
+    "frameworkReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "framework_id",
+        "version",
+        "requirement_id",
+        "relationship",
+        "applicability",
+        "source_url"
+      ],
+      "properties": {
+        "framework_id": {
+          "$ref": "#/$defs/name"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "requirement_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "\\S"
+        },
+        "relationship": {
+          "enum": [
+            "maps-to",
+            "satisfies",
+            "technique",
+            "related-to"
+          ]
+        },
+        "applicability": {
+          "enum": [
+            "applicable",
+            "not-applicable",
+            "not-assessed"
+          ]
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 2048,
+          "pattern": "^https://"
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      }
+    },
+    "attackChain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prerequisites",
+        "blast_radius",
+        "steps"
+      ],
+      "properties": {
+        "prerequisites": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "blast_radius": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "candidate_id",
+              "produces",
+              "consumes",
+              "joint_evidence"
+            ],
+            "properties": {
+              "candidate_id": {
+                "$ref": "#/$defs/candidateId"
+              },
+              "produces": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "\\S"
+              },
+              "consumes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "\\S"
+              },
+              "joint_evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "pattern": "\\S"
+              },
+              "framework_refs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "#/$defs/frameworkReference"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "sourceAnchor": {
       "type": "object",
       "additionalProperties": false,
@@ -1108,6 +1293,12 @@
         "control": {
           "$ref": "#/$defs/nonEmptyString"
         },
+        "control_status": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
         "detail": {
           "$ref": "#/$defs/nonEmptyString"
         }
@@ -1132,6 +1323,27 @@
         },
         "regressions": {
           "$ref": "#/$defs/nonEmptyString"
+        },
+        "detail": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "detail"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "NOT_ATTEMPTED",
+            "FIX_VERIFIED",
+            "FIX_FAILED",
+            "REGRESSION_FAILED"
+          ]
         },
         "detail": {
           "$ref": "#/$defs/nonEmptyString"

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { generateKeyPairSync } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import {
   cp,
   lstat,
@@ -17,8 +17,8 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { artifactKeyToken } from '../scripts/lib/artifact-names.mjs'
-import { publishTransparencyCommand } from '../scripts/audit.mjs'
+import { artifactKeyToken, artifactToken } from '../scripts/lib/artifact-names.mjs'
+import { main, publishTransparencyCommand } from '../scripts/audit.mjs'
 import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 import {
   canonicalAttestationBytes,
@@ -33,8 +33,10 @@ import {
 } from '../scripts/lib/transparency-checkpoint-journal.mjs'
 import {
   createRunPlan,
+  stableJson,
   writeRunPlanBundle,
 } from '../scripts/lib/run-engine.mjs'
+import { normalizePolicy } from '../scripts/lib/policy.mjs'
 import { measureCoverageClosure } from '../scripts/lib/coverage-model.mjs'
 import {
   MAX_BUNDLE_ARTIFACT_BYTES,
@@ -90,6 +92,24 @@ function writeEd25519KeyPair(privateKeyPath, publicKeyPath) {
 }
 
 function successfulProviderResult(next, job, overrides = {}) {
+  const findings = overrides.findings ?? []
+  const topicAssessments = overrides.topic_assessments
+    ?? (job.topic_obligations ?? []).map((topic) => {
+      const topicFindings = findings.filter((finding) => finding.topic === topic)
+      return topicFindings.length > 0
+        ? {
+            topic,
+            disposition: 'finding',
+            reason: 'The CLI fixture reported a finding for this topic.',
+            finding_ids: topicFindings.map(({ candidate_id: candidateId }) => candidateId),
+          }
+        : {
+            topic,
+            disposition: 'examined-clean',
+            reason: 'The CLI fixture assessed this bounded topic.',
+            evidence: ['The fixture provider completed its bounded topic check.'],
+          }
+    })
   return {
     schema_version: '1.0.0',
     run_id: next.run_id,
@@ -102,8 +122,9 @@ function successfulProviderResult(next, job, overrides = {}) {
     },
     state: 'SUCCEEDED',
     examined_files: job.scoped_files,
-    findings: [],
+    findings,
     coverage_gaps: [],
+    topic_assessments: topicAssessments,
     ...overrides,
   }
 }
@@ -146,6 +167,7 @@ test('CLI help exposes only explicit platform commands', () => {
   assert.match(output, /--max-shard-bytes <bytes>/)
   assert.match(output, /--max-closure-rounds <count>/)
   assert.match(output, /--require-source-closure/)
+  assert.match(output, /--completeness-inputs <inputs\.json>/)
   assert.match(output, /--database-conformance <complete-bundle>/)
   assert.match(output, /red-team-audit ingest-batch/)
   assert.match(output, /red-team-audit run-remote/)
@@ -155,6 +177,27 @@ test('CLI help exposes only explicit platform commands', () => {
   assert.match(output, /red-team-audit validate/)
   assert.match(output, /red-team-audit benchmark/)
   assert.match(output, /never executes repository code/i)
+})
+
+test('public transparency publication refuses before reading caller-selected inputs', async () => {
+  await assert.rejects(
+    () => main([
+      'publish',
+      'missing-run',
+      'missing-transparency-config.json',
+      '--root-attestation',
+      'missing-attestation.json',
+      '--root-public-key',
+      'missing-public-key.pem',
+      '--out',
+      'missing-receipt.json',
+    ]),
+    (error) => {
+      assert.equal(error.code, 'TRANSPARENCY_LOG_ENROLLMENT_REQUIRED')
+      assert.match(error.message, /disabled before run, attestation, key, output, or configuration access/i)
+      return true
+    },
+  )
 })
 
 test('CLI rejects unknown, duplicate, valued-flag, and extra arguments', () => {
@@ -391,6 +434,12 @@ test('CLI plan produces a valid fail-closed bundle without running package scrip
       examined_files: firstJob.scoped_files,
       findings: [],
       coverage_gaps: [],
+      topic_assessments: (firstJob.topic_obligations ?? []).map((topic) => ({
+        topic,
+        disposition: 'examined-clean',
+        reason: 'The CLI fixture assessed this bounded topic.',
+        evidence: ['The fixture provider completed its bounded topic check.'],
+      })),
     }))
     const ingest = execFileSync(
       process.execPath,
@@ -420,6 +469,7 @@ test('CLI plan produces a valid fail-closed bundle without running package scrip
 
     const resultArtifact = Object.entries(afterIngest.artifacts)
       .find(([name]) => name.startsWith('result_'))[1]
+    assert.match(resultArtifact.path, /^results\/.+\.[a-f0-9]{64}\.json$/)
     const resultArtifactPath = join(bundle, resultArtifact.path)
     const committedResult = await readFile(resultArtifactPath, 'utf8')
     await writeFile(resultArtifactPath, `${committedResult.trimEnd()} `)
@@ -453,9 +503,12 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
 
     execFileSync(
       process.execPath,
-      [CLI, 'abort', bundle, '--reason', 'terminal attestation test'],
+      [CLI, 'abort', bundle, '--reason', 'terminal attestation � test'],
       { encoding: 'utf8' },
     )
+    const runPath = join(bundle, 'run.json')
+    const attestedRunBytes = await readFile(runPath)
+    const expectedRawDigest = createHash('sha256').update(attestedRunBytes).digest('hex')
     const attested = execFileSync(
       process.execPath,
       [
@@ -469,7 +522,7 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
       ],
       { encoding: 'utf8' },
     )
-    assert.match(attested, /Root SHA-256: [a-f0-9]{64}/)
+    assert.match(attested, new RegExp(`Root SHA-256: ${expectedRawDigest}`))
     assert.match(attested, /Signing key: ed25519:[a-f0-9]{64}/)
 
     const anchored = execFileSync(
@@ -485,7 +538,7 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
       ],
       { encoding: 'utf8' },
     )
-    assert.match(anchored, /Root authenticity: VERIFIED/)
+    assert.match(anchored, /Root signature: VERIFIED WITH SUPPLIED KEY/)
 
     const anchoredReport = execFileSync(
       process.execPath,
@@ -509,7 +562,6 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
     )
     assert.match(unanchored, /Root authenticity: UNANCHORED/)
 
-    const runPath = join(bundle, 'run.json')
     const originalRun = await readFile(runPath, 'utf8')
     await writeFile(runPath, `${originalRun}\n`)
     const replaced = spawnSync(
@@ -530,6 +582,31 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
       replaced.stderr,
       /attestation does not describe the exact loaded run manifest/i,
     )
+
+    const canonicalBytes = Buffer.from(originalRun, 'utf8')
+    const replacementBytes = Buffer.from('�', 'utf8')
+    const replacementOffset = canonicalBytes.indexOf(replacementBytes)
+    assert.ok(replacementOffset >= 0)
+    await writeFile(runPath, Buffer.concat([
+      canonicalBytes.subarray(0, replacementOffset),
+      Buffer.from([0xff]),
+      canonicalBytes.subarray(replacementOffset + replacementBytes.length),
+    ]))
+    const malformed = spawnSync(
+      process.execPath,
+      [
+        CLI,
+        'validate',
+        bundle,
+        '--root-attestation',
+        attestationPath,
+        '--root-public-key',
+        publicKeyPath,
+      ],
+      { encoding: 'utf8' },
+    )
+    assert.equal(malformed.status, 1)
+    assert.match(malformed.stderr, /run manifest is not valid UTF-8/i)
   })
 })
 
@@ -875,7 +952,7 @@ test('CLI publishes and offline-verifies an external transparency inclusion rece
       ],
       { encoding: 'utf8' },
     )
-    assert.match(verified, /Root authenticity: VERIFIED/)
+    assert.match(verified, /Root signature: VERIFIED WITH SUPPLIED KEY/)
     assert.match(
       verified,
       /Transparency inclusion: VERIFIED \(audit-log\.example\/v1, tree 1, leaf 0\)/,
@@ -1479,7 +1556,7 @@ test('CLI rejects a custom output directory inside the audited repository before
   })
 })
 
-test('CLI never writes a sealed exact-byte archive to the default in-target output', async () => {
+test('CLI requires sealed-source output to remain outside the audited repository', async () => {
   await withCliRepository(async ({ root }) => {
     const result = spawnSync(
       process.execPath,
@@ -1489,7 +1566,7 @@ test('CLI never writes a sealed exact-byte archive to the default in-target outp
     assert.equal(result.status, 1)
     assert.match(
       result.stderr,
-      /--seal-source.*sensitive exact-byte archive.*outside the audited repository/is,
+      /--seal-source creates a sensitive exact-byte archive; its output directory must be outside/i,
     )
     await assert.rejects(lstat(join(root, '.audit-runs')), { code: 'ENOENT' })
   })
@@ -1767,6 +1844,137 @@ test('CLI rejects a linked results directory before writing provider evidence', 
   })
 })
 
+test('CLI ingest acquires the run lock before creating immutable result evidence', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const runPath = join(bundle, 'run.json')
+    const originalRun = await readFile(runPath, 'utf8')
+    const next = JSON.parse(execFileSync(
+      process.execPath,
+      [CLI, 'next', bundle],
+      { encoding: 'utf8' },
+    ))
+    const job = next.pending_jobs[0]
+    const resultPath = join(output, 'provider-result-for-lock-race.json')
+    await writeFile(resultPath, JSON.stringify(successfulProviderResult(next, job)))
+    const lockPath = `${runPath}.lock`
+    await writeFile(lockPath, JSON.stringify({
+      pid: process.pid,
+      created_at: new Date().toISOString(),
+      token: 'ingest-race-regression-lock-token',
+    }))
+
+    const blocked = spawnSync(
+      process.execPath,
+      [CLI, 'ingest', bundle, resultPath],
+      { encoding: 'utf8' },
+    )
+    assert.equal(blocked.status, 1)
+    assert.match(blocked.stderr, /run is locked/i)
+    await assert.rejects(lstat(join(bundle, 'results')), { code: 'ENOENT' })
+    assert.equal(await readFile(runPath, 'utf8'), originalRun)
+    await rm(lockPath)
+  })
+})
+
+test('CLI ingest can commit an alternate result after a content-addressed crash orphan', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const next = JSON.parse(execFileSync(
+      process.execPath,
+      [CLI, 'next', bundle],
+      { encoding: 'utf8' },
+    ))
+    const job = next.pending_jobs[0]
+    const orphanResult = successfulProviderResult(next, job, {
+      producer: {
+        name: 'crashed-provider',
+        version: '1.0.0',
+        instance_id: 'crashed-provider:instance-1',
+      },
+    })
+    const orphanContent = stableJson(orphanResult)
+    const orphanDigest = createHash('sha256').update(orphanContent).digest('hex')
+    const orphanRelativePath = (
+      `results/${artifactToken(job.job_id)}.${orphanDigest}.json`
+    )
+    await mkdir(join(bundle, 'results'))
+    await writeFile(join(bundle, orphanRelativePath), orphanContent)
+
+    const acceptedResult = successfulProviderResult(next, job, {
+      producer: {
+        name: 'retry-provider',
+        version: '1.0.0',
+        instance_id: 'retry-provider:instance-1',
+      },
+    })
+    const acceptedPath = join(output, 'alternate-provider-result.json')
+    await writeFile(acceptedPath, stableJson(acceptedResult))
+    const accepted = execFileSync(
+      process.execPath,
+      [CLI, 'ingest', bundle, acceptedPath],
+      { encoding: 'utf8' },
+    )
+    assert.match(accepted, /Accepted/)
+
+    const committedRun = JSON.parse(await readFile(join(bundle, 'run.json'), 'utf8'))
+    const artifact = Object.entries(committedRun.artifacts)
+      .find(([name]) => name.startsWith('result_'))[1]
+    assert.notEqual(artifact.path, orphanRelativePath)
+    assert.equal(
+      committedRun.jobs.find(({ job_id: jobId }) => jobId === job.job_id)
+        .producer.instance_id,
+      'retry-provider:instance-1',
+    )
+    assert.equal((await lstat(join(bundle, orphanRelativePath))).isFile(), true)
+  })
+})
+
+test('CLI ingest compares pre-existing artifacts as raw bytes, not lossy UTF-8 text', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const bundle = await planBundle(root, output)
+    const originalRun = await readFile(join(bundle, 'run.json'), 'utf8')
+    const next = JSON.parse(execFileSync(
+      process.execPath,
+      [CLI, 'next', bundle],
+      { encoding: 'utf8' },
+    ))
+    const job = next.pending_jobs[0]
+    const providerResult = successfulProviderResult(next, job, {
+      producer: {
+        name: 'replacement-�-provider',
+        version: '1.0.0',
+        instance_id: 'replacement-provider:instance-1',
+      },
+    })
+    const canonical = stableJson(providerResult)
+    const canonicalBytes = Buffer.from(canonical, 'utf8')
+    const replacementBytes = Buffer.from('�', 'utf8')
+    const replacementOffset = canonicalBytes.indexOf(replacementBytes)
+    assert.ok(replacementOffset >= 0)
+    const malformedBytes = Buffer.concat([
+      canonicalBytes.subarray(0, replacementOffset),
+      Buffer.from([0xff]),
+      canonicalBytes.subarray(replacementOffset + replacementBytes.length),
+    ])
+    const digest = createHash('sha256').update(canonical).digest('hex')
+    const artifactRelativePath = `results/${artifactToken(job.job_id)}.${digest}.json`
+    await mkdir(join(bundle, 'results'))
+    await writeFile(join(bundle, artifactRelativePath), malformedBytes)
+    const resultPath = join(output, 'provider-result-with-replacement.json')
+    await writeFile(resultPath, canonical)
+
+    const rejected = spawnSync(
+      process.execPath,
+      [CLI, 'ingest', bundle, resultPath],
+      { encoding: 'utf8' },
+    )
+    assert.equal(rejected.status, 1)
+    assert.match(rejected.stderr, /conflicting artifact/i)
+    assert.equal(await readFile(join(bundle, 'run.json'), 'utf8'), originalRun)
+  })
+})
+
 test('CLI unlock removes only a stale parsed-PID lock', async () => {
   await withCliRepository(async ({ root, output }) => {
     const bundle = await planBundle(root, output)
@@ -1866,7 +2074,7 @@ test('CLI benchmark derives its denominator and schema-invalid count', async () 
     )
     assert.equal(result.status, 2)
     const scorecard = JSON.parse(await readFile(scorecardPath, 'utf8'))
-    assert.equal(scorecard.provenance.case_manifest.cases, 64)
+    assert.equal(scorecard.provenance.case_manifest.cases, 84)
     assert.deepEqual(
       {
         run_id: scorecard.provenance.primary_run.run_id,
@@ -2128,10 +2336,52 @@ test('CLI accepts an explicitly supplied external Rules of Engagement file', asy
   })
 })
 
-test('CLI requires sealed source for remote_static planning', async () => {
+test('CLI admits sealed local_dynamic planning without a repeated authorization gate', async () => {
+  await withCliRepository(async ({ root, output }) => {
+    const policyPath = join(output, 'local-dynamic-roe.json')
+    await writeFile(policyPath, JSON.stringify({
+      schema_version: '1.0',
+      policy_id: 'cli-local-dynamic-test',
+      mode: 'local_dynamic',
+      workspace_root: resolve(root),
+      capabilities: {
+        read_file: { enabled: true, roots: ['src'] },
+        write_file: { enabled: false, roots: [] },
+        execute: { enabled: false, commands: [] },
+        network: { enabled: false, destinations: [] },
+      },
+    }))
+
+    const result = spawnSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath],
+      { encoding: 'utf8' },
+    )
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /local_dynamic.*require --seal-source/i)
+    const directories = (await readdir(output, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    assert.equal(directories.length, 0)
+
+    const admitted = spawnSync(
+      process.execPath,
+      [CLI, 'plan', root, '--out', output, '--roe', policyPath, '--seal-source'],
+      { encoding: 'utf8' },
+    )
+    assert.equal(admitted.status, 0, admitted.stderr)
+    assert.doesNotMatch(admitted.stderr, /authorization.*required|confirm.*authorization/i)
+    const [bundle] = (await readdir(output, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+    const run = JSON.parse(await readFile(join(output, bundle.name, 'run.json'), 'utf8'))
+    assert.equal(run.capability_mode, 'LOCAL_DYNAMIC')
+    assert.ok(run.source_snapshot)
+  })
+})
+
+test('CLI admits sealed remote_static planning while unsealed planning stays closed', async () => {
   await withCliRepository(async ({ root, output }) => {
     const policyPath = join(output, 'remote-static-roe.json')
-    await writeFile(policyPath, JSON.stringify({
+    const policyDocument = {
       schema_version: '1.0',
       policy_id: 'cli-remote-static-test',
       mode: 'remote_static',
@@ -2150,7 +2400,8 @@ test('CLI requires sealed source for remote_static planning', async () => {
           }],
         },
       },
-    }))
+    }
+    await writeFile(policyPath, JSON.stringify(policyDocument))
 
     const unsealed = spawnSync(
       process.execPath,
@@ -2174,8 +2425,23 @@ test('CLI requires sealed source for remote_static planning', async () => {
       ],
       { encoding: 'utf8' },
     )
-    assert.equal(sealed.status, 0, sealed.stderr)
-    assert.match(sealed.stdout, /Source snapshot: SEALED/)
+    assert.equal(sealed.status, 0)
+    assert.match(sealed.stdout, /State: PLANNED/)
+
+    const policy = normalizePolicy(policyDocument, {
+      workspaceRoot: root,
+      policySource: 'external',
+    })
+    const plan = await createRunPlan({
+      targetRoot: root,
+      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      policy,
+      sealSource: true,
+    })
+    const written = await writeRunPlanBundle(plan, join(output, 'internal-bundles'))
+    const run = JSON.parse(await readFile(join(written.directory, 'run.json'), 'utf8'))
+    assert.equal(run.capability_mode, 'STATIC')
+    assert.equal(run.source_snapshot.kind, 'SOURCE')
   })
 })
 

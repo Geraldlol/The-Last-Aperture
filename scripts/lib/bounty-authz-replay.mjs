@@ -27,6 +27,37 @@ export function approveRequestTarget({ request, sealedScope }) {
   return { approval: approved[0], refusal: null }
 }
 
+// Space and tab are the only separators an HTTP field value can carry, so they
+// are the only token boundaries worth recognizing -- and naming them explicitly
+// keeps this identical to the Python mirror, where a regex class would not be.
+const isFieldSeparator = (character) => character === ' ' || character === '\t'
+
+// Bounded on both sides, not merely present. A plain substring test silently
+// skips the append whenever the marker occurs inside a larger token -- 'curl'
+// within 'curl/8.4.0' is not the marker -- which sends unidentified traffic
+// under a perimeter claiming to be identified.
+function carriesMarkerToken(captured, marker) {
+  let at = captured.indexOf(marker)
+  while (at !== -1) {
+    const startsToken = at === 0 || isFieldSeparator(captured[at - 1])
+    const end = at + marker.length
+    const endsToken = end === captured.length || isFieldSeparator(captured[end])
+    if (startsToken && endsToken) return true
+    at = captured.indexOf(marker, at + 1)
+  }
+  return false
+}
+
+// Already carrying the marker means a capture taken through our own proxy; a
+// second copy would make the string drift further on every pass. Mirrored byte
+// for byte by compose_user_agent in proxy/bounty_helpers.py, proven against
+// fixtures/bounty/user-agent-cases.json.
+export function composeUserAgent(captured, marker) {
+  if (typeof captured !== 'string' || captured.trim().length === 0) return marker
+  if (carriesMarkerToken(captured, marker)) return captured
+  return `${captured} ${marker}`
+}
+
 export async function replayAsRole({
   request,
   role,
@@ -60,10 +91,27 @@ export async function replayAsRole({
     throw error
   }
 
+  // A captured request carries the browser own User-Agent. The program mandates
+  // an identifying marker so its logs can attribute the traffic, but a bare
+  // marker is not a browser and bot protection answers one with a 403. So the
+  // marker is APPENDED to what the capture carried: the request still looks like
+  // the session it came from, and the marker is plainly there to be read. One
+  // header value, not two headers, so the request stays unambiguous.
+  let captured = null
+  const headers = {}
+  for (const [name, value] of Object.entries(prepared.headers)) {
+    if (name.toLowerCase() === 'user-agent') {
+      captured = value
+      continue
+    }
+    headers[name] = value
+  }
+  headers['User-Agent'] = composeUserAgent(captured, approval.userAgent)
+
   try {
     const response = await fetchImpl(request.url, {
       method: request.method,
-      headers: prepared.headers,
+      headers,
       ...(prepared.body === null || request.method === 'GET' || request.method === 'HEAD'
         ? {}
         : { body: prepared.body }),

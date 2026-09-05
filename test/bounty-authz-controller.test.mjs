@@ -22,6 +22,7 @@ function sealedScope(port) {
     // containing NOW is deterministic forever. Relative dates would only add
     // nondeterminism here.
     validity: { not_before: '2026-08-21T00:00:00.000Z', not_after: '2026-08-22T00:00:00.000Z' },
+    program: { required_user_agent: 'BugBounty-acme' },
     scope_rules: {
       allow: [{ rule_id: 'a1', host_kind: 'ip', host: '127.0.0.1', ports: [port] }],
       deny: [],

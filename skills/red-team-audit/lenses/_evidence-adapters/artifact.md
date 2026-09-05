@@ -1,5 +1,12 @@
 # `artifact` acquisition adapter
 
+> **Release gate (2026-09-03):** Every public artifact command is disabled
+> before reading `--source`. A caller string can name a UNC/WebDAV path, device,
+> pipe, link, sparse file, or compressed bomb; the retained implementation is a
+> test kernel, not current file-read authority. Re-enable only with enrolled
+> local roots, bounded no-follow same-handle hashing, digest/size revalidation,
+> bounded decompression, and a controller-authenticated plan.
+
 Adapter ID: `artifact`
 
 Evidence class: `built-artifact`
@@ -104,9 +111,11 @@ exercised rather than assumed.
 
 ### `ev.built-artifact.oci.sibling-size-mtime-outlier`
 
-**Predicate.** Within one directory, where at least four entries share a size
-and an mtime, an entry deviating in **both**. Both matter: size alone flags
-ordinary content variation, mtime alone flags an ordinary rebuild.
+**Predicate.** Within one layer and directory, a unique largest joint
+`(size, mtime)` group contains at least four entries, and another entry
+deviates from that baseline in **both** values. Both matter: size alone flags
+ordinary content variation, mtime alone flags an ordinary rebuild. Equal-sized
+largest groups are ambiguous and do not establish a baseline.
 
 **Claim.** `unexpected-artifact-content`. **Cite** the outlier's locator.
 
@@ -131,9 +140,13 @@ base64-shaped and decodes to noise.
 ### `ev.built-artifact.oci.secret-in-config-history`
 
 **Predicate.** A `history[].created_by` entry in `payload/config/history.json`
-containing credential-shaped material. The build command is preserved in the
-image config whether or not the file it wrote survives — the whole point being
-that `RUN rm` removes the file and leaves the command.
+contains either a recognized credential format (for example, a private-key
+header or provider-token shape) or a credential-named assignment with a
+concrete non-placeholder value. A bare word such as `password`, an `ARG`
+declaration without a value, an environment reference, and values such as
+`changeme` do not match. The build command is preserved in the image config
+whether or not the file it wrote survives — the whole point being that `RUN
+rm` removes the file and leaves the command.
 
 **Claim.** `secret-present-in-artifact`. **Cite** `config/history[N]`.
 

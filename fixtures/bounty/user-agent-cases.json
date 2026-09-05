@@ -1,0 +1,102 @@
+{
+  "purpose": "Shared offline oracle for User-Agent composition. The Node replay helper (scripts/lib/bounty-authz-replay.mjs) and pure Python conformance helper (proxy/bounty_helpers.py) both append the program-mandated marker to a captured User-Agent. The expected values here prove those non-network helpers agree; no loadable proxy addon ships.",
+  "boundary_rule": "The marker counts as already present only when it appears bounded by a string edge or an HTTP field separator (space or tab) on both sides. A bare substring match would silently skip the append -- marker 'curl' inside 'curl/8.4.0' is not the marker -- and unmarked traffic under a perimeter claiming to be identified is the exact outcome the marker exists to prevent.",
+  "cases": [
+    {
+      "case_id": "absent-header-yields-bare-marker",
+      "captured": null,
+      "marker": "BugBounty-Example",
+      "expect": "BugBounty-Example"
+    },
+    {
+      "case_id": "empty-header-yields-bare-marker",
+      "captured": "",
+      "marker": "BugBounty-Example",
+      "expect": "BugBounty-Example"
+    },
+    {
+      "case_id": "blank-header-yields-bare-marker",
+      "captured": "   ",
+      "marker": "BugBounty-Example",
+      "expect": "BugBounty-Example"
+    },
+    {
+      "case_id": "browser-agent-gets-marker-appended",
+      "captured": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "marker": "BugBounty-Example",
+      "expect": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BugBounty-Example"
+    },
+    {
+      "case_id": "trailing-marker-is-not-duplicated",
+      "captured": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BugBounty-Example",
+      "marker": "BugBounty-Example",
+      "expect": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BugBounty-Example"
+    },
+    {
+      "case_id": "leading-marker-is-not-duplicated",
+      "captured": "BugBounty-Example Mozilla/5.0",
+      "marker": "BugBounty-Example",
+      "expect": "BugBounty-Example Mozilla/5.0"
+    },
+    {
+      "case_id": "interior-marker-is-not-duplicated",
+      "captured": "Mozilla/5.0 BugBounty-Example (Windows NT 10.0)",
+      "marker": "BugBounty-Example",
+      "expect": "Mozilla/5.0 BugBounty-Example (Windows NT 10.0)"
+    },
+    {
+      "case_id": "marker-only-header-is-not-duplicated",
+      "captured": "BugBounty-Example",
+      "marker": "BugBounty-Example",
+      "expect": "BugBounty-Example"
+    },
+    {
+      "case_id": "tab-separated-marker-is-not-duplicated",
+      "captured": "Mozilla/5.0\tBugBounty-Example",
+      "marker": "BugBounty-Example",
+      "expect": "Mozilla/5.0\tBugBounty-Example"
+    },
+    {
+      "case_id": "substring-of-a-product-token-is-not-the-marker",
+      "captured": "curl/8.4.0",
+      "marker": "curl",
+      "expect": "curl/8.4.0 curl"
+    },
+    {
+      "case_id": "single-character-substring-is-not-the-marker",
+      "captured": "Mozilla/5.0",
+      "marker": "M",
+      "expect": "Mozilla/5.0 M"
+    },
+    {
+      "case_id": "single-character-marker-as-its-own-token-is-not-duplicated",
+      "captured": "Mozilla/5.0 M",
+      "marker": "M",
+      "expect": "Mozilla/5.0 M"
+    },
+    {
+      "case_id": "hyphen-attached-substring-is-not-the-marker",
+      "captured": "BugBounty-Example",
+      "marker": "Example",
+      "expect": "BugBounty-Example Example"
+    },
+    {
+      "case_id": "marker-with-an-internal-space-is-not-duplicated",
+      "captured": "Mozilla/5.0 BugBounty Example",
+      "marker": "BugBounty Example",
+      "expect": "Mozilla/5.0 BugBounty Example"
+    },
+    {
+      "case_id": "marker-with-an-internal-space-still-appends-on-a-partial-collision",
+      "captured": "Mozilla/5.0 BugBounty Exampleized",
+      "marker": "BugBounty Example",
+      "expect": "Mozilla/5.0 BugBounty Exampleized BugBounty Example"
+    },
+    {
+      "case_id": "repeated-partial-collision-before-a-real-token",
+      "captured": "Exampleized Example",
+      "marker": "Example",
+      "expect": "Exampleized Example"
+    }
+  ]
+}

@@ -50,6 +50,9 @@ export async function probeHost({
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   assertApproved(approval)
+  if (typeof approval.userAgent !== 'string' || approval.userAgent.length === 0) {
+    throw new Error('approval carries no user agent; the program mandates an identifying marker')
+  }
   if (limiter === null || typeof limiter?.acquire !== 'function') {
     throw new Error('probeHost requires a rate limiter; the sealed limit is the authorization')
   }
@@ -66,7 +69,7 @@ export async function probeHost({
       // target becomes a fresh candidate that must pass the gate on its own.
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { 'User-Agent': 'red-team-audit-bounty-recon/1.0' },
+      headers: { 'User-Agent': approval.userAgent },
     })
     const headers = response.headers
     const contentType = headers?.get?.('content-type') ?? null

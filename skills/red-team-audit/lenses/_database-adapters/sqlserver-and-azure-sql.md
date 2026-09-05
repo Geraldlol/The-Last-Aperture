@@ -324,9 +324,12 @@ SQL and live Azure settings remain named gaps.
 
 ## Proof and conformance recipe
 
-Use the contract matrix against a repository-started ephemeral SQL Server at
-T1 or a user-approved loopback engine at T2. Azure-only behavior that cannot be
-reproduced locally is `NOT_ASSESSED`, not emulated as boxed SQL Server.
+Use the contract matrix against a repository-started ephemeral SQL Server at T1.
+An accepted authenticated operator statement naming the target, scope, and T2
+loopback launch is authority without another prompt. Execute it only through a
+matching implemented controller; otherwise record `UNPROVEN` with the technical
+transport gap. Azure-only behavior that cannot be reproduced locally is
+`NOT_ASSESSED`, not emulated as boxed SQL Server.
 
 1. Record product version, edition, engine edition, compatibility level,
    containment, principals/roles, effective permissions, owners, policy state,

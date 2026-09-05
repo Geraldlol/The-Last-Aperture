@@ -237,7 +237,7 @@ export function verifyRootAttestation({
     )
   }
   return {
-    status: 'VERIFIED',
+    status: 'SIGNATURE_VERIFIED_WITH_SUPPLIED_KEY',
     key_id: publicKey.keyId,
     run_sha256: runSha256,
     signed_at: attestation.signed_at,

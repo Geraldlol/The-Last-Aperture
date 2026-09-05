@@ -6,6 +6,23 @@
 - Amends: ADR 0016 authorization routing, runtime command names, and reporting
   nonclaims. ADR 0016 still governs transport, discovery, mutation, rollback,
   browser-session, evidence, and ledger mechanics.
+- Amended by: ADR 0021, which makes the operator statement the sole authority
+  primitive and retires separate signed/document authority modes and external
+  mutation countersignatures
+
+> **Supersession notice (2026-09-04):** The operator-statement path and its
+> nonclaims remain current. References below to separate written/signed authority
+> modes, pinned approvers, or caller-supplied countersignatures are historical;
+> optional governance bytes are evidence only and controller action permits
+> carry technical integrity and replay state.
+
+> **Release amendment (2026-09-04):** public fixed, already-sealed campaign
+> execution is active through the authenticated controller. It uses a locally
+> append-only, hash-chained ledger for every action, refuses adaptive discovery,
+> and accepts at most 256 sealed actions. The packaged Chrome companion remains
+> disabled; a separately supplied protocol-compatible companion may use the
+> browser bridge. The `plan-attested` invocation is itself the explicit operator
+> authorization statement; no repeat flag or legal-proof file is required.
 
 ## Context
 
@@ -28,7 +45,7 @@ keeps that lower assurance visible, and preserves every existing execution gate.
 
 The released lower-assurance route is selected only through:
 
-- `plan-attested --attest-authorized`
+- `plan-attested`
 - `validate-attested`
 - `campaign-attested`
 
@@ -52,8 +69,10 @@ ledger records bind the mode-specific authorization as
 `authorization_document_sha256` field for this route.
 
 `authorization_binding_sha256` for the attested route is the SHA-256 of the
-domain-separated canonical sealed authorization object. It detects later changes
-to the recorded declaration; it does not prove that the declaration is true.
+domain-separated canonical sealed authorization object. The controller accepts
+the operator's explicit statement as its authorization fact. The digest detects
+later changes and supplies technical integrity; it is not independent proof of
+the operator's underlying legal authority.
 
 ### Classification and authorization scope
 
@@ -64,35 +83,47 @@ sealed scope; they do not upgrade the assurance level. A target containing PHI
 does not permit PHI test payloads: request identifiers and bodies remain synthetic
 non-PHI, and the existing non-persistence boundary remains in force.
 
-The operator must actually possess authorization for every declared action. The
-CLI attestation records that claim; it neither creates permission nor fetches,
-interprets, or verifies a vendor program, disclosure page, contract, email, or
-other authorization source. The controller makes no claim about legal sufficiency
-or whether the operator's declared scope matches external terms.
+The operator remains accountable for underlying authorization. The controller
+does not demand or interpret a vendor program, disclosure page, contract, email,
+or other legal-proof source after the explicit statement. It makes no independent
+claim about legal sufficiency or whether the declared scope matches external terms.
 
-### Execution gates remain unchanged
+### Execution and ledger gates
 
 `campaign-attested` requires the exact sealed scope, matching
-`campaign_grant_sha256`, matching operator id, ordinary action window, and
-`--confirm-authorization-current`. It rereads and revalidates the scope immediately
-before every ordinary dispatch. After `validity.not_after`, it can only resume a
+`campaign_grant_sha256`, matching operator id, ordinary action window, and an
+explicit controller launch approval supplied by the live CLI invocation. It does
+not ask for a repeated legal-attestation flag. It rereads and revalidates the scope
+immediately before every ordinary dispatch. After `validity.not_after`, it can only resume a
 ledger-proven, approval-consumed mutation's rollback and rollback verification
 before `validity.cleanup_not_after`; it cannot enqueue or send new work. That path
 durably records `CLEANUP_SESSION_CONFIRMED`, never a new ordinary
 `CAMPAIGN_SESSION_CONFIRMED`. There is no external revocation signal.
 
-Discovery remains bounded by the sealed origin, path, method, category, synthetic
-substitutions, and data-handling rules. Write-capable or body-bearing probes and
-all mutation actions require explicit mutation permission. Mutations additionally
+The public route accepts only the fixed sealed request list, refuses a scope with
+discovery enabled, and caps that list at 256 actions. The internal discovery
+kernel remains bounded by the sealed origin, path, method, category, synthetic
+substitutions, and data-handling rules but is not exposed by these commands.
+Write-capable or body-bearing probes and all mutation actions require explicit
+mutation permission. Mutations additionally
 retain a pinned approver, fresh one-use countersignature,
 before/after and sibling-context verification, inverse rollback, rollback
-verification, immutable ledger sequencing, and no-retry treatment of ambiguous
-delivery. An approver signature proves possession of the enrolled key. It does not verify the approver's identity or independence; it also does not verify vendor authorization.
+verification, locally append-only hash-chained ledger sequencing, and no-retry
+treatment of ambiguous delivery. Detecting cross-restart rollback or
+valid-prefix truncation requires the operator to retain the last trusted record
+count and head digest outside the ledger directory and supply both on reopen;
+the local chain alone cannot detect whole-ledger rollback to a valid prefix. An
+approver signature proves possession of the enrolled key. It
+does not verify the approver's identity or independence; it also does not verify
+vendor authorization.
 
 The attested route supports the same sealed credential transports as the written
-route. A Chrome active-tab scope keeps the browser-held session in Chrome and
-requires one explicit extension attach per campaign. An exported credential may
-instead use a sealed `env:` reference or redirected `--credential-stdin`.
+route. With a separately supplied protocol-compatible companion, a Chrome
+active-tab scope keeps the browser-held session in Chrome and requires one
+explicit extension attach per campaign. That route relies on browser-managed DNS
+rather than the native transport's all-answer validation and socket IP pinning.
+An exported credential may instead use a sealed `env:` reference or redirected
+`--credential-stdin`.
 
 ### Reporting and nonclaims
 
@@ -117,6 +148,10 @@ Positive: an authorized operator can run a durable, scope-bounded authenticated
 bug-bounty campaign without manufacturing or repeatedly supplying a document that
 the controller cannot authenticate. The selected assurance mode and its limits are
 machine-visible throughout planning, execution, and reporting.
+
+The separate `campaign-stop` command writes a grant/operator-bound out-of-band
+request. A running campaign consumes it as `CAMPAIGN_STOPPED` before another
+action is dispatched; it cannot retract bytes from a request already sent.
 
 Cost: the controller cannot distinguish a truthful attestation from a false one.
 The operator is responsible for retaining the real authorization and staying
