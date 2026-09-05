@@ -27,6 +27,11 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'The reference byte consumer checks transport behavior; it does not analyze security.',
     },
     {
+      id: 'source-pattern-checks', status: 'AVAILABLE_NARROW', commands: ['npm run audit:source-check', 'npm run evaluate:source-check'],
+      description: 'Standalone passive JavaScript checks for two literal Node TLS configuration patterns, with source coordinates and repair guidance.',
+      limitation: 'Observations remain UNPROVEN; no target execution, automatic ingestion, semantic security verdict, TypeScript/JSX support, or independent quality validation.',
+    },
+    {
       id: 'status', status: 'AVAILABLE', commands: ['status'],
       description: 'Read saved progress, coverage gaps, failures, and interrupted attempts.',
       limitation: 'Saved state is not evidence that a target remains unchanged.',

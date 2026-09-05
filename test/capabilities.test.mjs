@@ -32,6 +32,14 @@ test('release declarations distinguish integration, lifecycle, semantics, and un
   assert.match(renderCapabilities(), /Static checks do not inspect a Docker daemon/)
 })
 
+test('passive syntax checking is declared separately from semantic source analysis', () => {
+  const byId = new Map(CAPABILITY_REGISTRY.capabilities.map((item) => [item.id, item]))
+  assert.equal(byId.get('source-pattern-checks')?.status, 'AVAILABLE_NARROW')
+  assert.ok(byId.get('source-pattern-checks').commands.includes('npm run audit:source-check'))
+  assert.match(byId.get('source-pattern-checks').limitation, /UNPROVEN/)
+  assert.equal(byId.get('source-analysis-provider').status, 'UNAVAILABLE')
+})
+
 test('filename-only environment assessment names mixed runtime gaps without claiming deployment evidence', () => {
   const assessment = assessEnvironmentCoverage([
     'server/package.json', 'web/playwright.config.ts', 'python/pyproject.toml',

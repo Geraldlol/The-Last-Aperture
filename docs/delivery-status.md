@@ -1,5 +1,50 @@
 # Assessment improvement delivery status
 
+## Latest passive-check slice (2026-09-05)
+
+The next additive slice introduces a standalone, explicitly scoped JavaScript
+TLS-pattern checker, fixed-text repair guidance, and synthetic evaluation.
+See [passive source checks](passive-source-checks.md). This does not supply the
+still-unavailable semantic provider/oracle or independently validated quality
+measurement. Existing finding repair records and dependency-aware result reuse
+remain open.
+
+The post-merge Linux CI run
+[33972298641](https://github.com/Geraldlol/red-team-audit/actions/runs/33972298641)
+failed despite the earlier local Windows result below. The fixture builder now
+normalizes gzip OS metadata; its 47 focused tests pass on Windows Node 20.20.2
+and Node 24.13.0, including a simulated Unix/Windows-header regression. Actual
+Linux CI confirmation is still pending.
+
+Two Node 20 failures remain visible and unchanged: the optional proxy-ingest
+suite imports unavailable `node:sqlite`, and campaign timeout tests can lose
+their event-loop handles before pending promises settle. The latter is a real
+runtime lifecycle assumption, not 52 independent assertion failures. No
+test-only keepalive, hidden skip, campaign-runtime fix, push, or merge is
+included in this slice. CI must not be described as green.
+
+Verification for this slice:
+
+- 53 distinct source-check, input-reader, CLI, evaluation, and capability tests
+  pass on Windows Node 20.20.2 and Node 24.13.0. Following the final binding
+  review, the 32 affected checker/CLI/evaluation tests were rerun successfully;
+  the unchanged input-reader and registry checks had already passed.
+- The 47 fixture/normalizer/evidence regressions pass on both Node versions.
+- 27 adjacent readiness and release-wiring tests pass on Node 24.
+- Lens lint and generated topic, benchmark, and capability drift checks pass.
+- All 24 synthetic case expectations match, including 8 expected abstentions.
+  The first run exposed a scalar-read classification bug; the checker was
+  corrected without changing the corpus. These are now regression cases,
+  not held-out accuracy evidence.
+- Test-first regressions and the final code review also corrected Unicode
+  path disagreement, loop/destructuring writes, assignment-based namespace
+  escapes, and extra-rule precision accounting. No dependencies were added.
+
+This is focused local verification, not a fresh full-suite or Linux CI pass.
+The prior full-suite result below describes the earlier tree only.
+
+## Preceding assessment-support slice
+
 This pass adds reporting, measurement, and review handoffs across the six
 recommendations. It does **not** complete all six recommendations or add a new
 automated security analyzer. The table distinguishes implemented support from

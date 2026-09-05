@@ -43,7 +43,14 @@ remove it from proof scheduling. Likewise, comparable-coverage absence is
 `claimed-fixed`; the unqualified `fixed` state is reserved for a future
 authenticated semantic-negative oracle.
 
-The latest assessment updates add read-only `status`, `verdict`, `doctor`,
+The latest passive-check slice adds a standalone JavaScript TLS-configuration
+checker with source locations, repair guidance, and a separately authored
+synthetic evaluation corpus. It reads only explicitly named local files and
+does not execute target code or change audit bundles. Observations remain
+`UNPROVEN`; TypeScript/JSX and uncertain analysis are explicit coverage gaps.
+See [passive source checks](docs/passive-source-checks.md) for usage and limits.
+
+The preceding assessment updates add read-only `status`, `verdict`, `doctor`,
 `capabilities`, and repair/retest briefs; packet-bound review templates and
 result preflight; and per-repeat benchmark measurement. These supporting
 workflows do not perform automated semantic analysis or independently verify
