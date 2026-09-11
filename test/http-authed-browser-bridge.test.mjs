@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { request as httpRequest } from 'node:http'
 import { test } from 'node:test'
 
+import { discoverHttpAuthedCandidates } from '../scripts/lib/http-authed-discovery.mjs'
+
 const EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop'
 const EXTENSION_ORIGIN = `chrome-extension://${EXTENSION_ID}`
 const TARGET_ORIGIN = 'https://bounty.example.test'
@@ -54,6 +56,33 @@ function request(overrides = {}) {
     tls: { mode: 'BROWSER_MANAGED' },
     ...overrides,
   }
+}
+
+function loopbackRequest(url, { method = 'GET', headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const pending = httpRequest(url, { method, headers, agent: false }, (response) => {
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+      response.once('error', reject)
+      response.once('end', () => {
+        const payload = Buffer.concat(chunks)
+        resolve({
+          status: response.statusCode,
+          headers: {
+            get(name) {
+              const value = response.headers[String(name).toLowerCase()]
+              return Array.isArray(value) ? value.join(', ') : value ?? null
+            },
+          },
+          async json() { return JSON.parse(payload.toString('utf8')) },
+          async arrayBuffer() { return Buffer.from(payload) },
+        })
+      })
+    })
+    pending.once('error', reject)
+    if (body !== undefined && body !== null) pending.write(body)
+    pending.end()
+  })
 }
 
 test('browser bridge consumes one exact 256-bit pairing capability from its pinned extension', async () => {
@@ -236,15 +265,40 @@ test('browser bridge validates transient RESULT metadata and scrubs response val
     HttpAuthedBrowserBridgeError,
     createHttpAuthedBrowserBridgeSession,
   } = await bridgeApi()
-  const headerSecret = 'SYNTHETIC_BROWSER_HEADER_VALUE'
+  const headerSecret = '</approved/discovered>; rel="next"'
   const bodySecret = Buffer.from('SYNTHETIC_BROWSER_RESPONSE_BODY')
   let observed
+  let discovery
   const { session } = createSession(createHttpAuthedBrowserBridgeSession)
   openSession(session)
   const prepared = session.prepare({
     actionId: 'synthetic-action-result',
     request: request({
-      responseObserver: async (value) => { observed = value },
+      responseObserver: async (value) => {
+        observed = value
+        discovery = discoverHttpAuthedCandidates({
+          policy: {
+            enabled: true,
+            origin: TARGET_ORIGIN,
+            path_prefixes: ['/approved'],
+            sources: ['link_header'],
+            candidate_methods: ['GET'],
+            test_category: 'authz_horizontal',
+            synthetic_query_values: { subject: 'SYNTHETIC_VALUE' },
+            synthetic_path_values: {},
+            max_response_bytes: 65_536,
+            max_candidates: 4,
+            max_depth: 4,
+          },
+          sourceAction: {
+            url: `${TARGET_ORIGIN}/approved/seed?subject=SYNTHETIC_VALUE`,
+            method: 'GET',
+            test_category: 'authz_horizontal',
+          },
+          headers: value.headers,
+          bodyChunks: value.bodyChunks,
+        })
+      },
     }),
   })
   const bound = {
@@ -262,14 +316,15 @@ test('browser bridge validates transient RESULT metadata and scrubs response val
   const validResult = {
     ...bound,
     type: 'RESULT',
-    outcome: 'RESPONSE',
+    outcome: 'OBSERVED',
+    response_truncated: false,
     response: {
       status: 200,
       response_bytes: bodySecret.length,
-      response_header_names: ['content-type', 'set-cookie'],
+      response_header_names: ['content-type', 'link', 'set-cookie'],
       headers: [
         { name: 'content-type', value_base64: Buffer.from('application/json').toString('base64') },
-        { name: 'x-synthetic-secret', value_base64: Buffer.from(headerSecret).toString('base64') },
+        { name: 'link', value_base64: Buffer.from(headerSecret).toString('base64') },
       ],
       body_base64: bodySecret.toString('base64'),
     },
@@ -282,6 +337,25 @@ test('browser bridge validates transient RESULT metadata and scrubs response val
       response: {
         ...validResult.response,
         response_bytes: request().maxResponseBytes + 1,
+      },
+    },
+    {
+      ...validResult,
+      response: {
+        ...validResult.response,
+        headers: [
+          { name: 'x-synthetic-secret', value_base64: Buffer.from(headerSecret).toString('base64') },
+        ],
+      },
+    },
+    {
+      ...validResult,
+      response: {
+        ...validResult.response,
+        headers: [{
+          name: 'location',
+          value_base64: Buffer.from('/approved/other').toString('base64'),
+        }],
       },
     },
     { ...validResult, unexpected: true },
@@ -297,16 +371,135 @@ test('browser bridge validates transient RESULT metadata and scrubs response val
   assert.deepEqual(result, {
     status: 200,
     responseBytes: bodySecret.length,
-    responseHeaderNames: ['content-type', 'set-cookie'],
+    responseHeaderNames: ['content-type', 'link', 'set-cookie'],
   })
   assert.equal(session.snapshot().state, 'OPEN')
   assert.equal(JSON.stringify(result).includes(headerSecret), false)
   assert.equal(JSON.stringify(result).includes(bodySecret.toString()), false)
   assert.deepEqual(observed.headers, [
     { name: 'content-type', value: 'application/json' },
-    { name: 'x-synthetic-secret', value: headerSecret },
+    { name: 'link', value: headerSecret },
   ])
   assert.deepEqual(Buffer.concat(observed.bodyChunks), bodySecret)
+  assert.deepEqual(discovery.candidates, [{
+    kind: 'probe',
+    test_category: 'authz_horizontal',
+    method: 'GET',
+    url: `${TARGET_ORIGIN}/approved/discovered`,
+    expected_effect: 'none',
+  }])
+})
+
+test('browser bridge rejects bounded or incomplete observations without invoking discovery', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+  } = await bridgeApi()
+
+  for (const scenario of [
+    {
+      outcome: 'RESPONSE_BOUNDED',
+      response_truncated: true,
+      code: 'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_BOUNDED',
+    },
+    {
+      outcome: 'OBSERVATION_INCOMPLETE',
+      response_truncated: false,
+      code: 'HTTP_AUTHED_BROWSER_BRIDGE_OBSERVATION_INCOMPLETE',
+    },
+  ]) {
+    let observerCalls = 0
+    const { session } = createSession(createHttpAuthedBrowserBridgeSession)
+    openSession(session)
+    const prepared = session.prepare({
+      actionId: `synthetic-action-${scenario.outcome.toLowerCase()}`,
+      request: request({
+        responseObserver: async () => { observerCalls += 1 },
+      }),
+    })
+    const bound = {
+      protocol: prepared.protocol,
+      schema_version: prepared.schema_version,
+      campaign_id: prepared.campaign_id,
+      action_id: prepared.action_id,
+      action_nonce: prepared.action_nonce,
+      action_sha256: prepared.action_sha256,
+      document_nonce: prepared.document_nonce,
+    }
+    session.acceptReady({ ...bound, type: 'READY' })
+    await session.commit({ beforeSend: async () => {} })
+    await assert.rejects(
+      session.acceptResult({
+        ...bound,
+        type: 'RESULT',
+        outcome: scenario.outcome,
+        response_truncated: scenario.response_truncated,
+        response: {
+          status: 200,
+          response_bytes: 3,
+          response_header_names: ['content-type'],
+          headers: [{
+            name: 'content-type',
+            value_base64: Buffer.from('application/json').toString('base64'),
+          }],
+          body_base64: Buffer.from('abc').toString('base64'),
+        },
+      }),
+      (error) => error instanceof HttpAuthedBrowserBridgeError
+        && error.code === scenario.code
+        && error.request_may_have_been_sent === true,
+    )
+    assert.equal(observerCalls, 0)
+    assert.equal(session.snapshot().state, 'FAILED')
+    assert.equal(session.snapshot().request_may_have_been_sent, true)
+    session.close('synthetic partial observation')
+    assert.equal(session.snapshot().state, 'CLOSED')
+    assert.equal(session.snapshot().request_may_have_been_sent, true)
+  }
+})
+
+test('a transport timeout after COMMIT closes the session instead of permitting another action', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+    createHttpAuthedBrowserBridgeTransport,
+  } = await bridgeApi()
+  const timers = []
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    setTimer(callback) {
+      timers.push(callback)
+      return callback
+    },
+    clearTimer() {},
+  })
+  openSession(session)
+  const transport = createHttpAuthedBrowserBridgeTransport({ session })
+  const pending = transport({
+    ...request(),
+    beforeSend: async () => {},
+  })
+  void pending.catch(() => {})
+  const prepared = session.takePrepared()
+  session.acceptReady({
+    protocol: prepared.protocol,
+    schema_version: prepared.schema_version,
+    type: 'READY',
+    campaign_id: prepared.campaign_id,
+    action_id: prepared.action_id,
+    action_nonce: prepared.action_nonce,
+    action_sha256: prepared.action_sha256,
+    document_nonce: prepared.document_nonce,
+  })
+  await session.commit()
+  timers[0]()
+  await assert.rejects(
+    pending,
+    (error) => error instanceof HttpAuthedBrowserBridgeError
+      && error.code === 'HTTP_AUTHED_BROWSER_BRIDGE_TIMEOUT'
+      && error.request_may_have_been_sent === true,
+  )
+  assert.equal(session.snapshot().state, 'CLOSED')
+  assert.equal(session.snapshot().request_may_have_been_sent, true)
 })
 
 test('loopback bridge rotates one-use pairing into a continuous session transport', async (t) => {
@@ -344,7 +537,7 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     pending.end()
   })
   assert.equal(mismatchedHostStatus, 403)
-  const previewResponse = await fetch(`${pairing.bridge_origin}/v1/preview`, {
+  const previewResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/preview`, {
     headers: {
       ...commonHeaders,
       [HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER]: pairing.pairing_code,
@@ -357,7 +550,7 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
   assert.equal(preview.campaign_grant_sha256, campaignGrantSha256)
 
   const attach = bridge.waitForAttach()
-  const openResponse = await fetch(`${pairing.bridge_origin}/v1/open`, {
+  const openResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/open`, {
     method: 'POST',
     headers: {
       ...commonHeaders,
@@ -388,7 +581,7 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     ...commonHeaders,
     [HTTP_AUTHED_BROWSER_BRIDGE_SESSION_HEADER]: opened.session_capability,
   }
-  const preparePreflight = await fetch(`${pairing.bridge_origin}/v1/prepare`, {
+  const preparePreflight = await loopbackRequest(`${pairing.bridge_origin}/v1/prepare`, {
     method: 'OPTIONS',
     headers: {
       ...commonHeaders,
@@ -397,11 +590,12 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     },
   })
   assert.equal(preparePreflight.status, 204)
-  const refusedPrepare = await fetch(`${pairing.bridge_origin}/v1/prepare`, {
+  const refusedPrepare = await loopbackRequest(`${pairing.bridge_origin}/v1/prepare`, {
     headers: authenticatedHeaders,
   })
   assert.equal(refusedPrepare.status, 405)
-  const prepareResponse = await fetch(`${pairing.bridge_origin}/v1/prepare`, {
+  await refusedPrepare.arrayBuffer()
+  const prepareResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/prepare`, {
     method: 'POST',
     headers: authenticatedHeaders,
   })
@@ -417,7 +611,7 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     document_nonce: prepared.document_nonce,
   }
 
-  const readyResponse = await fetch(`${pairing.bridge_origin}/v1/ready`, {
+  const readyResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/ready`, {
     method: 'POST',
     headers: { ...authenticatedHeaders, 'content-type': 'application/json' },
     body: JSON.stringify({ ...bound, type: 'READY' }),
@@ -426,13 +620,14 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
   assert.equal((await readyResponse.json()).type, 'COMMIT')
   assert.equal(beforeSendCalls, 1)
 
-  const resultResponse = await fetch(`${pairing.bridge_origin}/v1/result`, {
+  const resultResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/result`, {
     method: 'POST',
     headers: { ...authenticatedHeaders, 'content-type': 'application/json' },
     body: JSON.stringify({
       ...bound,
       type: 'RESULT',
-      outcome: 'RESPONSE',
+      outcome: 'OBSERVED',
+      response_truncated: false,
       response: {
         status: 204,
         response_bytes: 0,
@@ -443,6 +638,7 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     }),
   })
   assert.equal(resultResponse.status, 200)
+  await resultResponse.arrayBuffer()
   assert.deepEqual(await transportResult, {
     status: 204,
     responseBytes: 0,
@@ -484,7 +680,8 @@ test('closing during transient result observation cannot resurrect the session',
   const result = session.acceptResult({
     ...bound,
     type: 'RESULT',
-    outcome: 'RESPONSE',
+    outcome: 'OBSERVED',
+    response_truncated: false,
     response: {
       status: 200,
       response_bytes: 1,

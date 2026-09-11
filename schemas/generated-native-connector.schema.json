@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/generated-native-connector.schema.json",
+  "title": "The Last Aperture generated native connector descriptor",
+  "description": "The immutable runtime descriptor for a generated, reviewable connector bound to one validated observed interaction contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "protocol",
+    "status",
+    "runtime_mode",
+    "source_contract",
+    "subjects",
+    "auth_flows",
+    "endpoints"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/generated-native-connector" },
+    "protocol": { "const": "native-interaction-connector-v1" },
+    "status": { "const": "GENERATED_REVIEWABLE" },
+    "runtime_mode": { "const": "CONTRACT_BOUND" },
+    "source_contract": { "$ref": "#/$defs/sourceContract" },
+    "subjects": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/subjects" },
+    "auth_flows": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/authFlow" }
+    },
+    "endpoints": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/endpoint" }
+    }
+  },
+  "$defs": {
+    "sourceContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_id", "sha256", "schema_version", "protocol", "generated_at", "basis"],
+      "properties": {
+        "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "schema_version": { "const": "1.0.0" },
+        "protocol": { "const": "native-interaction-contract-v1" },
+        "generated_at": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/timestamp" },
+        "basis": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/basis" }
+      }
+    }
+  }
+}

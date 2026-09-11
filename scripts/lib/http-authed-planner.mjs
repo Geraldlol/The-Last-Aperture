@@ -22,6 +22,7 @@ const DEFAULT_LIMITS = Object.freeze({
   max_response_bytes: 65_536,
   min_interval_ms: 1_000,
   concurrency: 1,
+  max_actions: 10_000,
 })
 
 const EVIDENCE_HANDLING = Object.freeze({
@@ -318,6 +319,11 @@ function buildDiscovery(discovery, { targetOrigin, pathPrefixes, methods, catego
     synthetic_query_values: options.syntheticQueryValues ?? {},
     synthetic_path_values: options.syntheticPathValues ?? {},
     max_response_bytes: options.maxResponseBytes ?? limits.max_response_bytes,
+    // The total sealed action budget is the default expansion budget too. This
+    // avoids a second hidden product ceiling while preserving a finite,
+    // operator-reviewable campaign boundary.
+    max_depth: options.maxDepth ?? limits.max_actions,
+    max_candidates: options.maxCandidates ?? limits.max_actions,
   }
 }
 

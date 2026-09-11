@@ -1,0 +1,473 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json",
+  "title": "The Last Aperture native interaction contract",
+  "description": "A draft, value-free connector contract derived from sanitized observations. It is not an executable client, authorization to replay traffic, or a security verdict. Runtime validation additionally checks digest-derived identities, graph references, canonical path templates, origin membership, and side-effect consistency.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "protocol",
+    "contract_id",
+    "generated_at",
+    "basis",
+    "subjects",
+    "auth_flows",
+    "endpoints",
+    "redaction",
+    "status",
+    "generated_client_status",
+    "security_verdict",
+    "gaps"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/native-interaction-contract" },
+    "protocol": { "const": "native-interaction-contract-v1" },
+    "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
+    "generated_at": { "$ref": "#/$defs/timestamp" },
+    "basis": { "$ref": "#/$defs/basis" },
+    "subjects": { "$ref": "#/$defs/subjects" },
+    "auth_flows": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/authFlow" }
+    },
+    "endpoints": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/endpoint" }
+    },
+    "redaction": { "$ref": "#/$defs/redaction" },
+    "status": { "const": "DRAFT_OBSERVED" },
+    "generated_client_status": { "const": "CONTRACT_ONLY" },
+    "security_verdict": { "const": "NOT_ASSESSED" },
+    "gaps": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/gap" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "plainText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "origin": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 2048,
+      "pattern": "^https?://[^/?#@]+(?::[0-9]+)?$"
+    },
+    "pathLiteral": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$" },
+    "pathTemplate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^/[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+    },
+    "method": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]{1,32}$" },
+    "contentType": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+    },
+    "carrier": {
+      "type": "string",
+      "pattern": "^(?:body:[A-Za-z0-9_$@.:[\\]-]{1,1024}|cookie:[A-Za-z0-9_$@.:[\\]-]{1,128}|header:[!#$%&'*+.^_`|~0-9a-z-]{1,128})$"
+    },
+    "outputCarrier": {
+      "type": "string",
+      "pattern": "^(?:(?:body:[A-Za-z0-9_$@.:[\\]-]{1,1024}|cookie:[A-Za-z0-9_$@.:[\\]-]{1,128}|header:[!#$%&'*+.^_`|~0-9a-z-]{1,128})|destination:(?:location_header|response_body_field))$"
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reverse_evidence_sha256", "web_session_evidence_sha256"],
+      "properties": {
+        "reverse_evidence_sha256": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "web_session_evidence_sha256": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "subjects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_sha256", "origins", "path_literals"],
+      "properties": {
+        "artifact_sha256": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "origins": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/origin" }
+        },
+        "path_literals": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/pathLiteral" }
+        }
+      }
+    },
+    "valueType": {
+      "enum": ["array", "boolean", "integer", "null", "number", "object", "string", "unknown"]
+    },
+    "semanticClass": { "enum": ["OTHER_ACTION", "READ_ACTION", "WRITE_ACTION"] },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "semantic_classes", "sensitive", "types"],
+      "properties": {
+        "name": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 128 }
+          ]
+        },
+        "path": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 1024 }
+          ]
+        },
+        "semantic_classes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/semanticClass" }
+        },
+        "sensitive": { "type": "boolean" },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/valueType" }
+        }
+      }
+    },
+    "destination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_path", "origin", "path_template", "query_parameters", "source"],
+      "properties": {
+        "field_path": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/plainText" },
+                { "type": "string", "maxLength": 1024 }
+              ]
+            }
+          ]
+        },
+        "origin": { "$ref": "#/$defs/origin" },
+        "path_template": { "$ref": "#/$defs/pathTemplate" },
+        "query_parameters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "source": { "enum": ["LOCATION_HEADER", "RESPONSE_BODY_FIELD"] }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "properties": { "source": { "const": "LOCATION_HEADER" } }, "required": ["source"] },
+          "then": { "type": "object", "properties": { "field_path": { "type": "null" } } }
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_types", "fields", "header_names", "path_action_classes", "query_parameters"],
+      "properties": {
+        "content_types": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/contentType" }
+        },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+        "header_names": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$"
+          }
+        },
+        "path_action_classes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "enum": ["NONE", "OTHER_ACTION", "READ_ACTION", "WRITE_ACTION"] }
+        },
+        "query_parameters": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_types", "fields", "statuses"],
+      "properties": {
+        "content_types": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/contentType" }
+        },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+        "statuses": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 999 }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_carriers", "request_cookie_names", "response_carriers", "response_cookie_names"],
+      "properties": {
+        "request_carriers": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/carrier" }
+        },
+        "request_cookie_names": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/plainText" },
+              { "type": "string", "maxLength": 1024 }
+            ]
+          }
+        },
+        "response_carriers": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/carrier" }
+        },
+        "response_cookie_names": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/plainText" },
+              { "type": "string", "maxLength": 1024 }
+            ]
+          }
+        }
+      }
+    },
+    "sideEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["basis", "classification"],
+      "properties": {
+        "basis": { "enum": ["AUTH_FLOW", "HTTP_METHOD_ONLY", "SEMANTIC_ACTION_CLASS", "UNCLASSIFIED"] },
+        "classification": { "enum": ["READ_CANDIDATE", "UNKNOWN", "WRITE_CANDIDATE"] }
+      }
+    },
+    "exchangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "action_basis", "credential_carriers"],
+      "properties": {
+        "action": { "enum": ["APPLICATION_REQUEST", "AUTH_REQUEST", "AUTHENTICATED_REQUEST", "CREDENTIAL_SUBMIT", "SESSION_TERMINATION", "TOKEN_EXCHANGE"] },
+        "action_basis": { "enum": ["INFERRED_PATH", "OBSERVED_CARRIERS", "OBSERVED_SHAPE", "UNCLASSIFIED"] },
+        "credential_carriers": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/carrier" }
+        }
+      }
+    },
+    "exchangeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credential_carriers", "destinations", "status"],
+      "properties": {
+        "credential_carriers": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/carrier" }
+        },
+        "destinations": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/destination" }
+        },
+        "status": { "type": "integer", "minimum": 0, "maximum": 999 }
+      }
+    },
+    "exchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_id", "evidence_ref", "request", "response", "sequence"],
+      "properties": {
+        "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
+        "evidence_ref": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" },
+        "request": { "$ref": "#/$defs/exchangeRequest" },
+        "response": { "$ref": "#/$defs/exchangeResponse" },
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth", "discovered_via", "endpoint_id", "evidence_refs", "exchanges", "method", "observations", "origin", "pagination", "path_template", "protocol_role", "redirects", "request", "response", "retry", "side_effect", "write_verification"],
+      "properties": {
+        "auth": { "$ref": "#/$defs/auth" },
+        "discovered_via": { "const": ["WEB_HAR"] },
+        "endpoint_id": { "type": "string", "pattern": "^endpoint:[a-f0-9]{32}$" },
+        "evidence_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" }
+        },
+        "exchanges": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/exchange" }
+        },
+        "method": { "$ref": "#/$defs/method" },
+        "observations": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "origin": { "$ref": "#/$defs/origin" },
+        "pagination": { "enum": ["CURSOR_PARAMETER_OBSERVED", "NOT_OBSERVED", "OFFSET_OR_PAGE_PARAMETERS_OBSERVED"] },
+        "path_template": { "$ref": "#/$defs/pathTemplate" },
+        "protocol_role": { "enum": ["APPLICATION", "AUTH"] },
+        "redirects": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/destination" }
+        },
+        "request": { "$ref": "#/$defs/request" },
+        "response": { "$ref": "#/$defs/response" },
+        "retry": { "enum": ["NOT_OBSERVED", "RETRY_SEQUENCE_OBSERVED"] },
+        "side_effect": { "$ref": "#/$defs/sideEffect" },
+        "write_verification": { "enum": ["FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED", "NOT_APPLICABLE", "NOT_OBSERVED"] }
+      }
+    },
+    "authStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination", "destination_candidates", "destination_correlation", "endpoint_id", "evidence_ref", "inputs", "next_observation_id", "outputs", "redirect_endpoint_id", "request_action", "request_action_basis", "response_status", "response_transitions", "sequence"],
+      "properties": {
+        "request_action": { "enum": ["APPLICATION_REQUEST", "AUTH_REQUEST", "AUTHENTICATED_REQUEST", "CREDENTIAL_SUBMIT", "SESSION_TERMINATION", "TOKEN_EXCHANGE"] },
+        "request_action_basis": { "enum": ["INFERRED_PATH", "OBSERVED_CARRIERS", "OBSERVED_SHAPE", "UNCLASSIFIED"] },
+        "response_transitions": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["AUTH_CHALLENGE_OBSERVED", "CREDENTIAL_CARRIER_OBSERVED", "REDIRECT_DESTINATION_OBSERVED"] }
+        },
+        "destination": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/destination" }
+          ]
+        },
+        "destination_candidates": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/destination" }
+        },
+        "destination_correlation": { "enum": ["AMBIGUOUS", "NOT_OBSERVED", "OBSERVED_NOT_LINKED", "UNIQUE_WITHIN_3_STEPS"] },
+        "endpoint_id": { "type": "string", "pattern": "^endpoint:[a-f0-9]{32}$" },
+        "evidence_ref": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" },
+        "inputs": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/carrier" }
+        },
+        "next_observation_id": {
+          "type": ["string", "null"],
+          "pattern": "^webobs:[a-f0-9]{32}$"
+        },
+        "outputs": {
+          "type": "array",
+          "maxItems": 1024,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/outputCarrier" }
+        },
+        "redirect_endpoint_id": {
+          "type": ["string", "null"],
+          "pattern": "^endpoint:[a-f0-9]{32}$"
+        },
+        "response_status": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "sequence": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "authFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_id", "flow_id", "origins", "steps"],
+      "properties": {
+        "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
+        "flow_id": { "type": "string", "pattern": "^authflow:[a-f0-9]{32}$" },
+        "origins": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/origin" }
+        },
+        "steps": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/authStep" }
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bodies_removed", "credentials_removed", "protocol_values_removed", "value_like_names_masked"],
+      "properties": {
+        "bodies_removed": { "const": true },
+        "credentials_removed": { "const": true },
+        "protocol_values_removed": { "const": true },
+        "value_like_names_masked": { "const": true }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" },
+        "message": { "$ref": "#/$defs/plainText" }
+      }
+    }
+  }
+}

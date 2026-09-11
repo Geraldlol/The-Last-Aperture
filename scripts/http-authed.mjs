@@ -45,9 +45,9 @@ Boundary:
   fact for the named target and scope without another flag or legal-proof artifact.
   It does not independently prove the operator's underlying legal authority.
   Invoking a live command is the operator's campaign launch directive; no repeated
-  legal-attestation flag is required. Public campaign execution is restricted to
-  the fixed sealed request list and refuses response-derived discovery. The runtime
-  revalidates scope and authorization before each send and uses a locally append-only,
+  legal-attestation flag is required. Campaign execution supports sealed adaptive
+  response-derived discovery inside the declared origin, path, method, and test-category
+  perimeter. The runtime revalidates scope and authorization before each send and uses a locally append-only,
   hash-chained campaign ledger. Across restarts, rollback or valid-prefix truncation
   detection requires the separately retained trusted record count and head digest to
   be supplied with --trusted-ledger-record-count and --trusted-ledger-head-sha256.
@@ -59,9 +59,10 @@ Boundary:
   request URLs, request/response bodies, or header values.
   --credential-stdin reads one opaque value from redirected stdin, strips one pipe
   line ending, refuses terminal or multiline input, and never persists or prints it.
-  The packaged browser companion is release-disabled and exposes no attach
-  controls. --credential-browser can execute only with a separately supplied
-  protocol-compatible companion; that route uses browser-managed DNS rather than
+  The packaged Chrome companion pairs through an operator-entered loopback capability
+  and attaches only to the active tab whose origin matches the sealed target.
+  --credential-browser uses that browser-held session without exporting cookies or
+  authorization values; this route uses browser-managed DNS rather than
   the native transport's all-answer validation and socket IP pinning.
   JSON response shape observation is disabled unless --observe-json-shape is sealed
   at plan time with repeatable --json-shape-key values. It retains only allowed key
@@ -88,7 +89,10 @@ Planner options:
   --synthetic-query NAME=SYNTHETIC_VALUE, and --synthetic-path NAME=SYNTHETIC_VALUE.
   Include --mutation-authorized in the explicit plan command to authorize the
   exact sealed mutation and rollback sequence. Optional transport controls are --tls-spki-sha256,
-  --request-timeout-ms, --max-response-bytes, --min-interval-ms, and --concurrency.
+  --request-timeout-ms, --max-response-bytes, --min-interval-ms, --concurrency,
+  and --max-actions. Discovery also accepts --discovery-max-depth and
+  --discovery-max-candidates; these are sealed operational budgets rather than
+  public-tier feature gates.
 `
 
 const OPEN_READ_ONLY_NO_FOLLOW = fsConstants.O_RDONLY
@@ -193,6 +197,9 @@ const COMMANDS = {
       'max-response-bytes',
       'min-interval-ms',
       'concurrency',
+      'max-actions',
+      'discovery-max-depth',
+      'discovery-max-candidates',
       'json',
     ],
   },
@@ -529,6 +536,7 @@ async function planInput(options, requestPlanIo = {}) {
       max_response_bytes: optionalInteger(options, 'max-response-bytes'),
       min_interval_ms: optionalInteger(options, 'min-interval-ms'),
       concurrency: optionalInteger(options, 'concurrency'),
+      max_actions: optionalInteger(options, 'max-actions'),
     },
     mutationAuthorized: options['mutation-authorized'] === true,
     discovery: options['enable-discovery'] === true
@@ -538,6 +546,8 @@ async function planInput(options, requestPlanIo = {}) {
           testCategory: seedTestCategory,
           syntheticQueryValues: keyValueMap(options['synthetic-query'], 'synthetic-query'),
           syntheticPathValues: keyValueMap(options['synthetic-path'], 'synthetic-path'),
+          maxDepth: optionalInteger(options, 'discovery-max-depth'),
+          maxCandidates: optionalInteger(options, 'discovery-max-candidates'),
         }
       : undefined,
   }
@@ -614,8 +624,7 @@ function renderBrowserPairing(pairing) {
     `campaign grant sha256: ${pairing.campaign_grant_sha256}`,
     `controller port: ${port}`,
     `one-time pairing capability: ${pairing.pairing_code}`,
-    'In the logged-in target tab, use your separately supplied protocol-compatible companion to verify the origin and grant, then attach.',
-    'The packaged browser companion for The Last Aperture is disabled and cannot perform this step.',
+    'In the logged-in target tab, open The Last Aperture Browser Bridge, enter the controller port and one-time capability, review the origin and grant, then attach.',
     'Chrome will apply its current session to every sealed action; do not export or paste a cookie.',
     '',
   ])
@@ -704,7 +713,7 @@ export async function main(
       ledgerDirectory: options.ledger,
       materialsDirectory: options.materials,
       operatorId: options['operator-id'],
-      fixedCampaignOnly: true,
+      fixedCampaignOnly: false,
       trustedLedgerHead: trustedLedgerHead(options),
       env,
       credentialInput: options['credential-stdin'] === true ? credentialInput : undefined,

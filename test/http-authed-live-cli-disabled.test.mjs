@@ -78,7 +78,7 @@ test('campaign-stop writes a grant-bound stop request without target transport',
   assert.equal(JSON.parse(output).status, 'STOP_REQUESTED')
 })
 
-test('public help exposes fixed controller-governed live campaigns', () => {
+test('public help exposes adaptive controller-governed live campaigns', () => {
   const help = spawnSync(process.execPath, ['scripts/http-authed.mjs', '--help'], {
     encoding: 'utf8',
     shell: false,
@@ -90,7 +90,7 @@ test('public help exposes fixed controller-governed live campaigns', () => {
   assert.doesNotMatch(help.stdout, /campaign-written/i)
   assert.match(help.stdout, /http-authed campaign-stop/)
   assert.match(help.stdout, /invoking a live command is the operator's campaign launch directive/i)
-  assert.match(help.stdout, /fixed sealed request list/i)
+  assert.match(help.stdout, /sealed adaptive[\s\S]*response-derived discovery/i)
   assert.match(help.stdout, /single-action campaign[\s\S]*campaign ledger/i)
   assert.match(help.stdout, /standalone probes are not public/i)
 })

@@ -84,6 +84,13 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   const PROTOCOL = 'red-team-audit/http-authed-browser-bridge'
   const FETCH_FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK'])
   const HEADER_ALLOWLIST = new Set(['accept', 'content-type'])
+  const OBSERVABLE_RESPONSE_HEADERS = new Set([
+    'allow',
+    'content-encoding',
+    'content-type',
+    'link',
+    'location',
+  ])
   const MAX_BODY_BYTES = 16_777_216
   const MAX_RESPONSE_BYTES = 1_048_576
 
@@ -196,12 +203,15 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     const retained = new Set([
       'allow',
       'cache-control',
+      'content-encoding',
       'content-length',
       'content-type',
       'etag',
       'last-modified',
+      'link',
       'location',
       'retry-after',
+      'set-cookie',
       'www-authenticate',
     ])
     for (const [name] of headers) names.add(retained.has(name.toLowerCase()) ? name.toLowerCase() : 'other')
@@ -213,6 +223,7 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     let totalBytes = 0
     for (const [name, value] of headers) {
       const normalizedName = name.toLowerCase()
+      if (!OBSERVABLE_RESPONSE_HEADERS.has(normalizedName)) continue
       const valueBytes = encoder.encode(value)
       totalBytes += valueBytes.byteLength
       if (
@@ -281,12 +292,15 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     throw error
   }
   const timeoutMs = command.timeout_ms ?? 15_000
+  const deadlineEpochMs = command.deadline_epoch_ms
   const maxResponseBytes = command.max_response_bytes ?? MAX_RESPONSE_BYTES
   const observeResponse = command.observe_response ?? true
   if (
     !Number.isInteger(timeoutMs)
     || timeoutMs < 100
     || timeoutMs > 60_000
+    || !Number.isSafeInteger(deadlineEpochMs)
+    || deadlineEpochMs < 0
     || !Number.isInteger(maxResponseBytes)
     || maxResponseBytes < 0
     || maxResponseBytes > MAX_RESPONSE_BYTES
@@ -296,12 +310,37 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     invalid()
   }
 
+  const currentPreparedBinding = suppliedRuntime.preparedActionBindingSha256
+    ?? bridgeState?.prepared_action_binding_sha256
+  if (currentPreparedBinding !== command.action_binding_sha256) {
+    bodyBytes?.fill(0)
+    throw failure(
+      'HTTP_AUTHED_BROWSER_OPERATION_CANCELLED',
+      'the prepared action was cancelled before dispatch',
+    )
+  }
+  const clockMilliseconds = suppliedRuntime.clockMilliseconds ?? Date.now
+  if (typeof clockMilliseconds !== 'function') {
+    bodyBytes?.fill(0)
+    invalid()
+  }
+  const deadlineRemainingMs = Math.floor(deadlineEpochMs - clockMilliseconds())
+  if (!Number.isFinite(deadlineRemainingMs) || deadlineRemainingMs < 100) {
+    bodyBytes?.fill(0)
+    throw failure(
+      'HTTP_AUTHED_BROWSER_ACTION_EXPIRED',
+      'the committed action expired before dispatch',
+    )
+  }
   if (isObject(bridgeState)) bridgeState.prepared_action_binding_sha256 = null
   const fetchImpl = suppliedRuntime.fetchImpl ?? globalThis.fetch.bind(globalThis)
   if (typeof fetchImpl !== 'function') invalid()
   const abortController = new AbortController()
   if (isObject(bridgeState)) bridgeState.abort_controller = abortController
-  const timeout = globalThis.setTimeout(() => abortController.abort(), timeoutMs)
+  const timeout = globalThis.setTimeout(
+    () => abortController.abort(),
+    Math.min(timeoutMs, deadlineRemainingMs),
+  )
   const started = globalThis.performance?.now?.() ?? Date.now()
   let response
   try {

@@ -9,12 +9,19 @@
 - Amended by: ADR 0021, which makes the operator statement the sole authority
   primitive and retires separate signed/document authority modes and external
   mutation countersignatures
+- Amended by: ADR 0027, which enables public adaptive discovery, removes the
+  256-action public-only ceiling, and ships the active Chrome companion
 
 > **Supersession notice (2026-09-04):** The operator-statement path and its
 > nonclaims remain current. References below to separate written/signed authority
 > modes, pinned approvers, or caller-supplied countersignatures are historical;
 > optional governance bytes are evidence only and controller action permits
 > carry technical integrity and replay state.
+
+> **Operational amendment (2026-09-11):** Fixed-only public campaign wording,
+> the 256-action ceiling, response-discovery refusal, and disabled-companion
+> wording below are historical. ADR 0027 exposes the implemented adaptive and
+> browser routes while preserving per-action controller checks.
 
 > **Release amendment (2026-09-04):** public fixed, already-sealed campaign
 > execution is active through the authenticated controller. It uses a locally

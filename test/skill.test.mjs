@@ -39,9 +39,10 @@ authorized-but-unavailable. See ADR 0024.
 
 For external work, \`target <HTTPS URL> and go\` is sufficient
 authority for one exact, bounded live HTTP-recon action. The sealed \`http-authed\`
-\`campaign-attested\` route also launches without repeat confirmation. Even a
-single action uses a campaign ledger; standalone probe dispatch is not public.
-These routes do not create repository coverage or proof.
+\`campaign-attested\` route also launches without repeat confirmation and may
+execute scope-valid response-derived probes when discovery is sealed. Even a
+single action uses a campaign ledger. These routes do not create repository
+coverage or proof.
 
 Generic live/L3, provider/remote, bounty/OOB, and acquisition transports remain
 unavailable where not implemented. That is a technical capability fact, not a
@@ -94,10 +95,10 @@ function rootSkillViolations(rootText, canonicalText) {
   }
   if (
     !body.includes('`campaign-attested`')
-    || !body.includes('standalone probe dispatch is not public')
+    || !body.includes('scope-valid response-derived probes when discovery is sealed')
     || body.includes('`campaign-written`')
   ) {
-    violations.push('root skill must preserve the fixed authenticated campaign boundary')
+    violations.push('root skill must preserve the adaptive authenticated campaign boundary')
   }
   if (
     !body.includes('Generic live/L3, provider/remote, bounty/OOB, and acquisition transports remain')
@@ -325,10 +326,10 @@ test('the shipped skill exposes only the narrow public routes and keeps generic 
     'attack/control use fresh containers',
     'both proof routes reject patches',
     '`http-recon go <HTTPS URL>`',
-    '`campaign-attested` route executes its sealed requests without reconfirmation',
+    '`campaign-attested` route executes sealed requests and scope-valid discovered probes without reconfirmation',
     'Even one action uses the ledger',
-    'standalone probes/discovery are not public',
     '`campaign-stop` is consumed before another send',
+    'generated contract-bound Node connectors',
     'operator statement is the sole authorization fact for every named capability',
     'ask once only when it is missing. Never demand another consent',
     'authorized-but-unavailable gap; never invent or bypass transport',

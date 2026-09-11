@@ -125,11 +125,13 @@ This rail remains absolute for every lens recipe and T0-T3 proof. The separate
 `http-recon-v1` and `http-authed-v1` controllers documented in
 `docs/http-recon-protocol.md` and ADRs 0016/0017 are not lens recipes or proof tiers.
 Their contracts admit operator-authorized, controller-sealed external actions
-through separate execution routes and create no repository coverage or closure. Public execution is
-active only for one exact bounded `http-recon-v1` action and fixed sealed
-`http-authed-v1` campaigns. Standalone authenticated probes and
-discovery-derived actions remain unavailable. A remote response cannot raise a
-repository finding's proof tier.
+through separate execution routes and create no repository coverage or closure.
+Public execution is active for one exact bounded `http-recon-v1` action and
+sealed `http-authed-v1` campaigns. An authenticated campaign may adapt from
+bounded response-derived candidates when its sealed discovery policy enables
+that behavior; every admitted candidate is rechecked against the same origin,
+path, method, category, authorization, action-budget, ledger, and stop state.
+A remote response cannot raise a repository finding's proof tier.
 
 Public T1 has no connectivity, including loopback. Public T2 also uses
 `--network=none`; its sole socket scope is literal loopback between the one
@@ -177,7 +179,7 @@ evidence. It is instrumentation, not isolation.
 
 `salesforce-platform`'s guest-access recipe originally instructed the auditor to send unauthenticated requests to a live Experience Cloud site. That reaches a remote host and violates rail 1 outright. It was rewritten as a computation over the checkout: resolve the guest profile by its license, compute its effective object and field permissions from the profile plus any permission set assigned to it, intersect that with the Apex classes it can call, read each object's sharing model, and assert the reachable set is a subset of a committed allowlist of objects the site is *intended* to publish. That runs offline, and it is **T1**.
 
-**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site happens outside these proof recipes. The same operator statement authorizes named external work, but execution belongs to a matching controller: one exact bounded credential-free action through `http-recon-v1`, or fixed sealed authenticated actions through the public `http-authed-v1` campaign routes. Standalone authenticated probes and response-derived discovery are not public. Neither route changes finding proof tiers.
+**"Use a scratch org" is not an exemption.** Neither is "it's a sandbox", "it's an org I own", or "it's a test tenant". Every one of those re-introduces the same violation under a friendlier name: the request still leaves the machine and still arrives at a host the repository does not start. Probing a running site happens outside these proof recipes. The same operator statement authorizes named external work, but execution belongs to a matching controller: one exact bounded credential-free action through `http-recon-v1`, or sealed authenticated actions and policy-bounded adaptive discovery through the public `http-authed-v1` campaign routes. Neither route changes finding proof tiers.
 
 **T2 and hosted work are route distinctions, not separate authority.** The
 narrow loopback route executes only its named local service. A hosted endpoint

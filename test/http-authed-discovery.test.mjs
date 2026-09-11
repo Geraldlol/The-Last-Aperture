@@ -88,11 +88,58 @@ test('Link and Location references become synthetic-safe candidate drafts', () =
     rejected_count: 0,
     rejected_by_code: {},
   })
+  assert.deepEqual(result.location_candidate_indexes, [2])
   for (const candidate of result.candidates) {
     assert.equal('sequence' in candidate, false)
     assert.notEqual(candidate.kind, 'mutate')
   }
   assert.doesNotMatch(JSON.stringify(result), /real-record-id|real-page-value/)
+})
+
+test('Location provenance survives same-response Link deduplication in either header order', () => {
+  for (const headers of [
+    [
+      { name: 'link', value: '</approved/same>; rel="next"' },
+      { name: 'location', value: '/approved/same' },
+    ],
+    [
+      { name: 'location', value: '/approved/same' },
+      { name: 'link', value: '</approved/same>; rel="next"' },
+    ],
+  ]) {
+    const result = discoverHttpAuthedCandidates({
+      policy: sealedPolicy(),
+      sourceAction: sourceAction(),
+      headers,
+      bodyChunks: [],
+    })
+
+    assert.equal(result.candidates.length, 1)
+    assert.equal(result.candidates[0].url, 'https://peerstar-test.example.test/approved/same')
+    assert.equal(result.accepted_location_count, 1)
+    assert.deepEqual(result.location_candidate_indexes, [0])
+    assert.equal(result.summary.duplicate_count, 1)
+  }
+})
+
+test('Location reports its own per-response candidate limit rejection', () => {
+  const result = discoverHttpAuthedCandidates({
+    policy: sealedPolicy({ max_candidates: 1 }),
+    sourceAction: sourceAction(),
+    headers: [
+      { name: 'link', value: '</approved/unrelated>; rel="next"' },
+      { name: 'location', value: '/approved/redirect' },
+    ],
+    bodyChunks: [],
+  })
+
+  assert.deepEqual(result.candidates.map(({ url }) => url), [
+    'https://peerstar-test.example.test/approved/unrelated',
+  ])
+  assert.equal(result.accepted_location_count, 0)
+  assert.deepEqual(result.location_candidate_indexes, [])
+  assert.equal(result.location_candidate_limit_reached, true)
+  assert.deepEqual(result.summary.rejected_by_code, { CANDIDATE_LIMIT_REACHED: 1 })
 })
 
 test('Allow methods are intersected with the sealed policy and never create mutations', () => {
@@ -193,14 +240,14 @@ test('bounded HTML parsing handles chunk boundaries, ignores script/comment text
   )
 })
 
-test('HTML discovery has no fixed candidate-count ceiling', () => {
+test('HTML discovery exceeds the former public ceiling within its sealed budget', () => {
   const count = 3_000
   const html = Array.from(
     { length: count },
     (_unused, index) => `<a href="/approved/route-${index}">route</a>`,
   ).join('')
   const result = discoverHttpAuthedCandidates({
-    policy: sealedPolicy(),
+    policy: sealedPolicy({ max_candidates: count }),
     sourceAction: sourceAction(),
     headers: [{ name: 'content-type', value: 'text/html' }],
     bodyChunks: [Buffer.from(html)],
@@ -210,6 +257,25 @@ test('HTML discovery has no fixed candidate-count ceiling', () => {
   assert.equal(result.summary.accepted_count, count)
   assert.equal(result.summary.rejected_count, 0)
   assert.equal(result.candidates.at(-1).url.endsWith('/approved/route-2999'), true)
+})
+
+test('discovery applies the operator-sealed per-response candidate budget', () => {
+  const result = discoverHttpAuthedCandidates({
+    policy: sealedPolicy({ max_candidates: 2 }),
+    sourceAction: sourceAction(),
+    headers: [{
+      name: 'link',
+      value: '</approved/one>; rel="next", </approved/two>; rel="next", </approved/three>; rel="next"',
+    }],
+    bodyChunks: [],
+  })
+
+  assert.deepEqual(result.candidates.map(({ url }) => url), [
+    'https://peerstar-test.example.test/approved/one',
+    'https://peerstar-test.example.test/approved/two',
+  ])
+  assert.deepEqual(result.summary.rejected_by_code, { CANDIDATE_LIMIT_REACHED: 1 })
+  assert.equal(result.summary.rejected_count, 1)
 })
 
 test('oversized, transformed, and non-HTML bodies produce count-only gaps without partial body discovery', () => {

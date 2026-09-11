@@ -174,7 +174,7 @@ test('human readiness output includes recorded environment gaps without implying
   report.root_authenticity = 'UNANCHORED'
   const rendered = renderReadiness(report)
   assert.match(rendered, /python: source review AVAILABLE; execution UNAVAILABLE/)
-  assert.match(rendered, /browser: source review AVAILABLE; execution UNAVAILABLE/)
+  assert.match(rendered, /browser: source review AVAILABLE; execution AVAILABLE_NARROW/)
   assert.match(rendered, /database-stack: source review AVAILABLE; execution UNAVAILABLE/)
   assert.match(rendered, /deployment evidence: NOT_ASSESSED/)
   assert.match(rendered, /root authenticity: UNANCHORED/)

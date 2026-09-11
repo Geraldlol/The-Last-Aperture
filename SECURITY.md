@@ -16,13 +16,67 @@ details of an unfixed vulnerability in a public issue.
 ## Supported security boundary
 
 **Current release status:** sealed repository T1 proof, narrow Node/npm
-loopback T2 proof, bounded HTTP-recon, and fixed authenticated-campaign commands
-are active. A `go <exact-https-url>` invocation is the operator's launch
-directive for one sealed recon action. Fixed authenticated campaigns execute
-only their sealed request list and use the durable campaign ledger. Generic live
+loopback T2 proof, bounded HTTP-recon, adaptive authenticated campaigns, and the
+narrow reverse-engineering CLI are active. A `go <exact-https-url>` invocation is the operator's launch
+directive for one sealed recon action. Authenticated campaigns execute sealed
+requests and scope-valid discovered probes through the durable campaign ledger. Generic live
 adversarial/L3, other T2/service shapes, bounty/OOB, provider/remote,
 acquisition, and database execution routes remain technically unavailable as
 described below.
+
+The reverse CLI has separate evidence paths. Ghidra performs fixed
+headless static export on a copied local artifact and emits bounded function,
+supported network API, reference/call-site, sanitized static endpoint, and
+authentication-hint metadata. Frida v1 spawns one exact operator-named local-lab
+executable, module, and symbol with a metadata-only agent. Frida v2 accepts a
+strict typed plan for multiple hooks, local or device attachment, declared
+argument/return capture, and raw/base64, SHA-256, or metadata retention. HAR
+import is offline and
+accepts only explicitly named origins; protocol build turns sanitized web and
+native evidence into a `DRAFT_OBSERVED` interaction contract. `protocol
+generate` then validates that contract offline and emits a deterministic,
+digest-bound Node connector labeled `GENERATED_REVIEWABLE`.
+It records `READ_CANDIDATE`, `WRITE_CANDIDATE`, or `UNKNOWN` side-effect
+assessments, same-capture bounded redirect correlation, and at most
+`FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED` for a later same-template read. None of
+these outputs enters an audit bundle, proves application behavior, or creates a
+security verdict.
+
+Raw HAR files can contain credentials, cookies, identifiers, response bodies,
+and PHI. Keep them local and short-lived. The importer persists no query,
+header, cookie, or body values. It conservatively masks path segments unless
+they are built-in route words or explicitly declared with `--path-literal`.
+Stable field, header, and cookie names remain because they define the protocol;
+obvious value-shaped names are masked. Names can still be sensitive in unusual
+schemas, so use synthetic non-PHI sessions and review sanitized output before
+sharing it.
+
+Ghidra and Frida are separately installed analyst tools and are trusted runtime
+dependencies for these routes. Native Ghidra launchers run directly; Windows
+`.bat` and `.cmd` launchers use the bundled fixed bridge and kill-on-close Job
+Object supervision. Frida local spawn is a host process, not a containment
+boundary, and existing-process or device attachment crosses into that runtime's
+environment. V2 accepts only its declared target, resolver, hook, capture, and
+resource plan through the bundled agent. It does not accept caller scripts, raw
+Frida arguments, target arguments, remote-server tokens, or automatic platform
+security changes. Raw typed captures can contain credentials or application
+data and must be handled as sensitive material. Attach evidence is `PARTIAL`
+because a local artifact copy cannot prove which bytes the existing runtime
+loaded. Tool absence or unsupported launch shape is an explicit gap.
+The generated connector performs contract-bound HTTP at runtime: callers select
+an endpoint ID and can supply path, query, header, and body values. It rejects
+undeclared endpoint IDs, origins, methods, fields, redirects, and retry routes;
+isolates response cookies per origin in memory; and never writes values returned
+by its credential-provider callback. Declared response-body credential fields
+are redacted from ordinary results and reach consuming code only through the
+optional transient credential receiver. Writes and `UNKNOWN` operations are
+never automatically retried. Every post-invocation failure carries
+`request_may_have_been_sent: true`; callers must treat a write or `UNKNOWN`
+operation with that flag as an ambiguous delivery. Package files and source-contract identity are
+digest-bound in `manifest.json`; a caller must retain the returned manifest
+digest outside the package and supply it to `protocol verify` to detect a
+coordinated rewrite. Connector generation and verification perform no network
+I/O.
 
 At agent/controller ingress, the authenticated operator statement naming target
 and scope is the sole authorization fact for every named capability, including T2/service
@@ -149,21 +203,42 @@ same bytes; offline validation needs none.
 
 `--credential-browser` seals
 `{ mode: CHROME_ACTIVE_TAB_SESSION, extension_id, origin }` and starts the public
-loopback bridge. The packaged companion 0.12.1 grants no host, tab, scripting, or
-background permission and cannot attach; execution therefore requires a
-separately supplied protocol-compatible companion. Browser dispatch enforces
-the exact origin and rejects redirects, but uses the browser network stack and
-does not provide native all-answer DNS validation or socket IP pinning.
-Previously loaded 0.12.0 copies must be removed or explicitly reloaded and
-verified as 0.12.1; updating files on disk alone does not revoke an already
-registered extension worker.
+loopback bridge. The packaged companion 0.13.0 uses `activeTab` and `scripting`
+after an operator gesture, `storage` for extension-owned ephemeral recovery
+state, and requests only optional IPv4 loopback host access. It has no persistent
+target-host, cookie, debugger, tabs, or web-request permission. Recovery state is
+kept in `chrome.storage.session` with trusted-extension-context access and omits
+pairing and controller-session capabilities, target credentials, requests, and
+responses. A restarted worker attempts to abort its page-side request and
+requires a fresh pairing; it never sends a reusable capability to an old port or
+replays an in-flight action. The operator enters a one-time pairing capability,
+reviews the exact target/grant, and attaches the matching active tab. Browser
+dispatch enforces the exact origin and rejects redirects, but uses the browser
+network stack and does not provide native all-answer DNS validation or socket IP
+pinning.
+
+Browser fetch reuses only ambient browser-managed authentication: same-origin
+cookies, HTTP authentication, and client certificates. The extension does not
+read those request credential values or page `localStorage`/`sessionStorage`.
+It executes the fetch and its protocol state in Chrome's extension-isolated
+world rather than the target page's JavaScript world.
+It does not recover bearer tokens added to `Authorization` by application
+JavaScript, so sites that depend only on that pattern require a separate
+reviewed, contract-bound adapter. Response bodies and only `Allow`,
+`Content-Encoding`, `Content-Type`, `Link`, and `Location` response-header values
+cross the loopback bridge for transient discovery. A permitted response body or
+URL-valued header can itself contain sensitive application data; use synthetic
+non-PHI sessions. The controller process and other local processes remain inside
+the host trust boundary. The bridge deliberately refuses automatic restart
+resume because an old numeric port does not authenticate the original process.
 
 The authenticated controller admits predeclared canonical uppercase application
 methods. Native transport refuses `CONNECT` and protocol upgrades; browser
 transport also refuses `TRACE` and `TRACK`. Write-capable or body-bearing probes
 require explicit mutation permission. The retained internal discovery kernel can
 derive only scope-valid `GET`, `HEAD`, or `OPTIONS` probes and cannot construct a
-mutation, but public campaign commands do not expose response-derived discovery.
+mutation. Public campaign commands execute those candidates when discovery is
+enabled in the sealed scope, revalidating every candidate before dispatch.
 Declared mutations require before/after JSON observations, a one-use Ed25519
 technical dispatch receipt, an inverse rollback, and rollback verification. The
 receipt binds integrity, attribution, and replay state under the selected
@@ -178,8 +253,9 @@ valid-prefix truncation requires the operator to retain the last trusted record
 count and head digest outside that directory and supply both when reopening it;
 the local chain alone cannot detect whole-ledger rollback to a valid prefix.
 `campaign-stop` writes a grant/operator-bound marker which the runner consumes
-as `CAMPAIGN_STOPPED` before another dispatch. The public fixed
-lane admits at most 256 sealed actions and no response-derived discovery.
+as `CAMPAIGN_STOPPED` before another dispatch. Campaigns accept the request list
+that fits the validated scope document and can extend it only through the sealed,
+bounded discovery policy.
 `validity.not_after` is the exclusive deadline for new work. A later
 `validity.cleanup_not_after` authorizes
 only rollback and rollback verification for a ledger-proven, receipt-consumed
@@ -386,10 +462,9 @@ when the repository may be modified by a hostile local process.
 - Keep authenticated scope, campaign ledger, and synthetic bodies outside the
   target and repository. Controller-issued permits and their consumption records
   remain in the ledger. Optional governance evidence belongs outside the target
-  and cannot grant authority. The packaged
-  browser companion is release-disabled. A separately supplied compatible
-  companion may execute only through the sealed campaign and locally
-  append-only, hash-chained ledger. Cross-restart rollback/truncation detection
+  and cannot grant authority. The packaged browser companion executes only
+  through the sealed campaign and locally append-only, hash-chained ledger after
+  one-time loopback pairing to the matching active tab. Cross-restart rollback/truncation detection
   requires a supplied trusted retained head. Its browser-managed DNS assurance
   is weaker than native all-answer validation and socket IP pinning. Never place
   PHI in scope labels, URLs, identifiers, or bodies.

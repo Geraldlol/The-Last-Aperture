@@ -208,6 +208,7 @@ test('plan-attested creates and validates a generic offline campaign without per
     max_response_bytes: 65536,
     min_interval_ms: 1000,
     concurrency: 1,
+    max_actions: 10000,
   })
   assert.deepEqual(verified.scope.evidence_handling, {
     persist_request_bodies: false,
@@ -654,6 +655,9 @@ test('plan-attested maps CLI limit overrides into the sealed contract fields', a
     '--max-response-bytes', '32768',
     '--min-interval-ms', '250',
     '--concurrency', '2',
+    '--max-actions', '250000',
+    '--discovery-max-depth', '32',
+    '--discovery-max-candidates', '50000',
   )
   await main(args, {
     clock: () => NOW,
@@ -670,7 +674,10 @@ test('plan-attested maps CLI limit overrides into the sealed contract fields', a
     max_response_bytes: 32768,
     min_interval_ms: 250,
     concurrency: 2,
+    max_actions: 250000,
   })
+  assert.equal(verified.scope.discovery.max_depth, 32)
+  assert.equal(verified.scope.discovery.max_candidates, 50000)
 })
 
 test('plan-attested reports a safe actionable contract reason without echoing input bytes', async (t) => {

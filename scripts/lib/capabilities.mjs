@@ -78,8 +78,28 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     },
     {
       id: 'authenticated-http', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested', 'http-authed campaign-stop'],
-      description: 'Fixed sealed authenticated HTTP requests through the existing campaign controller.',
-      limitation: 'No generic live probing or automatic scope expansion is provided.',
+      description: 'Adaptive sealed authenticated HTTP discovery and actions through the durable campaign controller.',
+      limitation: 'Every request remains bound to the campaign authority, scope policy, action limits, retained receipt, and stop/cleanup state.',
+    },
+    {
+      id: 'ghidra-static-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse ghidra analyze'],
+      description: 'Fixed Ghidra headless static export for one copied native artifact with bounded function, network API/reference/call-site, sanitized static endpoint, and authentication-hint metadata.',
+      limitation: 'Native launchers run directly; Windows .bat and .cmd launchers run through the bundled fixed Job Object bridge. Static observations do not execute the target or establish program semantics.',
+    },
+    {
+      id: 'frida-local-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse frida trace'],
+      description: 'Fixed Frida local spawn and enter/leave trace for one exact module and symbol, with an opaque module-relative symbol offset.',
+      limitation: 'This v1 host process route is not a sandbox and records no arguments, return values, memory, or protocol values.',
+    },
+    {
+      id: 'frida-typed-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse frida trace-plan'],
+      description: 'Typed multi-hook Frida call tracing for bounded local spawn, local PID/name attach, USB PID/name/application attach, and explicit-device attach plans.',
+      limitation: 'Only the bundled typed-capture agent and exact plan selectors are accepted. Declared raw captures can contain sensitive values. Attach evidence remains PARTIAL because a supplied local artifact copy cannot prove the attached runtime loaded identical bytes.',
+    },
+    {
+      id: 'web-protocol-reconstruction', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse web import-har', 'last-aperture-reverse protocol build', 'last-aperture-reverse protocol generate', 'last-aperture-reverse protocol verify'],
+      description: 'Import an authorized HAR offline, compile its observed endpoint and auth shapes, and generate a deterministic self-contained Node connector with contract-bound endpoint IDs, origins, methods, redirects, retries, credential carriers, and per-origin cookie jars.',
+      limitation: 'Generation and verification perform no network I/O. The generated runtime is labeled GENERATED_REVIEWABLE and accepts only behaviors represented by its validated observed contract; verification requires the externally retained manifest digest.',
     },
     {
       id: 'semantic-oracle', status: 'UNAVAILABLE', commands: [],
@@ -87,9 +107,9 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Process exit differences and cleanup receipts alone cannot establish a vulnerability or a verified fix.',
     },
     {
-      id: 'browser-execution', status: 'UNAVAILABLE', commands: [],
-      description: 'Browser-driven application testing.',
-      limitation: 'Browser configuration can be reviewed as source; a public browser execution route is not shipped.',
+      id: 'browser-execution', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested'],
+      description: 'Selected-tab authenticated request execution through the active browser companion bridge.',
+      limitation: 'The bridge executes authorized actions in the operator-selected tab; it does not automate navigation or login and does not capture general browser sessions.',
     },
     {
       id: 'database-stack-execution', status: 'UNAVAILABLE', commands: [],
@@ -124,7 +144,7 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     { id: 'jvm', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public JVM proof execution profile.' },
     { id: 'go', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public Go proof execution profile.' },
     { id: 'rust-native', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public Rust or native proof execution profile.' },
-    { id: 'browser', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Browser source and test configuration do not establish browser execution coverage.' },
+    { id: 'browser', source_review: 'AVAILABLE', execution_support: 'AVAILABLE_NARROW', limitation: 'Execution is limited to authorized selected-tab actions through the authenticated browser bridge; navigation, login automation, and general browser capture are not provided.' },
     { id: 'database-stack', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Database or composition indicators require source review; multi-service execution is unavailable.' },
     { id: 'deployment-configuration', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Configuration can be reviewed but does not establish deployed state or active acquisition support.' },
   ],

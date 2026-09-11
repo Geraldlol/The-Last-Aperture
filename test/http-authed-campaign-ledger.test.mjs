@@ -251,6 +251,46 @@ test('discovered candidate identities are ledger-private while same-process dedu
   assert.equal(firstRecordText.includes(sentinel), false)
 })
 
+test('candidate budget resolution admits a private duplicate before rejecting a new action', async (t) => {
+  const directory = await directoryFor(t, 'private-candidate-budget')
+  const ledger = await openLedger(directory)
+  const firstCandidate = candidate({
+    url: 'https://synthetic.example.test/discovered/first',
+  })
+
+  const first = await ledger.enqueueCandidate({
+    candidateDraft: firstCandidate,
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const duplicate = await ledger.enqueueCandidate({
+    candidateDraft: firstCandidate,
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const rejected = await ledger.enqueueCandidate({
+    candidateDraft: candidate({
+      url: 'https://synthetic.example.test/discovered/second',
+    }),
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const privateIdentityCount = ledger._discoveredCandidateIdentities.size
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(first.created, true)
+  assert.equal(duplicate.created, false)
+  assert.equal(duplicate.actionId, first.actionId)
+  assert.deepEqual(rejected, {
+    created: false,
+    limitReached: true,
+    headSha256: first.headSha256,
+  })
+  assert.equal(privateIdentityCount, 1)
+  assert.equal(snapshot.next_action_sequence, 2)
+})
+
 test('concurrent candidate enqueue is serialized and content-deduplicated', async (t) => {
   const directory = await directoryFor(t, 'concurrent-enqueue')
   const ledger = await openLedger(directory)

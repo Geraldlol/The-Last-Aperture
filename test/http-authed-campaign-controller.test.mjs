@@ -133,6 +133,463 @@ test('campaign uses sealed authority without repeat authorization and replays no
   assert.equal(replay.actions.already_terminal, 1)
 })
 
+test('campaign follows an accepted same-origin Location from a settled redirect', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 4
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-discovery-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return path.endsWith('node-0')
+        ? {
+            response: { status: 302, bytes: 0, header_names: ['location'] },
+            discoveryInput: {
+              headers: [{ name: 'location', value: '/approved/node-1' }],
+              bodyChunks: [],
+            },
+          }
+        : { response: { status: 200, bytes: 0, header_names: [] }, discoveryInput: { headers: [], bodyChunks: [] } }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(snapshot.stopped, false)
+})
+
+test('redirect continuation survives an unrelated candidate exhausting the total action budget', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 2
+  scope.discovery.sources = ['link_header', 'location_header']
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-mixed-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return path.endsWith('node-0')
+        ? {
+            response: { status: 302, bytes: 0, header_names: ['link', 'location'] },
+            discoveryInput: {
+              headers: [
+                { name: 'location', value: '/approved/node-1' },
+                { name: 'link', value: '</approved/unrelated>; rel="next"' },
+              ],
+              bodyChunks: [],
+            },
+          }
+        : { response: { status: 200, bytes: 0, header_names: [] }, discoveryInput: { headers: [], bodyChunks: [] } }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(result.actions.rejected, 1)
+  assert.equal(snapshot.stopped, false)
+})
+
+test('a Location rejected by the per-response candidate budget stops as LIMIT_REACHED', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 3
+  scope.discovery.sources = ['link_header', 'location_header']
+  scope.discovery.max_candidates = 1
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-candidate-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      paths.push(new URL(action.url).pathname)
+      return {
+        response: { status: 302, bytes: 0, header_names: ['link', 'location'] },
+        discoveryInput: {
+          headers: [
+            { name: 'link', value: '</approved/unrelated>; rel="next"' },
+            { name: 'location', value: '/approved/redirect' },
+          ],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0'])
+  assert.equal(result.actions.completed, 1)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(result.actions.rejected, 1)
+  assert.equal(snapshot.stopped, true)
+  assert.equal(snapshot.stop_reason, 'LIMIT_REACHED')
+})
+
+test('a Location deduplicated against a Link remains a live redirect continuation', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 3
+  scope.discovery.sources = ['link_header', 'location_header']
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-local-dedup-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return path.endsWith('node-0')
+        ? {
+            response: { status: 302, bytes: 0, header_names: ['link', 'location'] },
+            discoveryInput: {
+              headers: [
+                { name: 'link', value: '</approved/node-1>; rel="next"' },
+                { name: 'location', value: '/approved/node-1' },
+              ],
+              bodyChunks: [],
+            },
+          }
+        : { response: { status: 200, bytes: 0, header_names: [] }, discoveryInput: { headers: [], bodyChunks: [] } }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(result.actions.duplicates, 1)
+  assert.equal(snapshot.stopped, false)
+})
+
+test('a Location already queued by the sealed plan remains live at the total action budget', async (t) => {
+  const scope = campaignScope()
+  scope.requests.push({
+    ...scope.requests[0],
+    sequence: 2,
+    url: `${scope.target.origin}/approved/node-1`,
+  })
+  scope.limits.max_actions = 2
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-queued-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return path.endsWith('node-0')
+        ? {
+            response: { status: 302, bytes: 0, header_names: ['location'] },
+            discoveryInput: {
+              headers: [{ name: 'location', value: '/approved/node-1' }],
+              bodyChunks: [],
+            },
+          }
+        : { response: { status: 200, bytes: 0, header_names: [] }, discoveryInput: { headers: [], bodyChunks: [] } }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.discovered, 0)
+  assert.equal(result.actions.duplicates, 1)
+  assert.equal(result.actions.rejected, 0)
+  assert.equal(snapshot.stopped, false)
+})
+
+test('same-open resume reuses a durable private discovered candidate at the total action budget', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 2
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-resume-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  await ledger.enqueueCandidate({
+    candidateDraft: {
+      kind: 'probe',
+      test_category: 'api_security',
+      method: 'GET',
+      url: `${scope.target.origin}/approved/node-1`,
+      expected_effect: 'none',
+    },
+    provenance: 'DISCOVERED',
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return path.endsWith('node-0')
+        ? {
+            response: { status: 302, bytes: 0, header_names: ['location'] },
+            discoveryInput: {
+              headers: [{ name: 'location', value: '/approved/node-1' }],
+              bodyChunks: [],
+            },
+          }
+        : { response: { status: 200, bytes: 0, header_names: [] }, discoveryInput: { headers: [], bodyChunks: [] } }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.discovered, 0)
+  assert.equal(result.actions.duplicates, 1)
+  assert.equal(result.actions.rejected, 0)
+  assert.equal(snapshot.next_action_sequence, 3)
+  assert.equal(snapshot.stopped, false)
+})
+
+test('redirect cycle through a terminal candidate preserves the unexpected redirect stop', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 4
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-cycle-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const paths = []
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      const path = new URL(action.url).pathname
+      paths.push(path)
+      return {
+        response: { status: 302, bytes: 0, header_names: ['location'] },
+        discoveryInput: {
+          headers: [{
+            name: 'location',
+            value: path.endsWith('node-0') ? '/approved/node-1' : '/approved/node-0',
+          }],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.deepEqual(paths, ['/approved/node-0', '/approved/node-1'])
+  assert.equal(result.actions.completed, 2)
+  assert.equal(result.actions.duplicates, 1)
+  assert.equal(result.actions.already_terminal, 1)
+  assert.equal(snapshot.stopped, true)
+  assert.equal(snapshot.stop_reason, 'UNEXPECTED_REDIRECT')
+})
+
+test('campaign stops at the sealed discovery depth without dispatching beyond it', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 10
+  scope.discovery.max_depth = 1
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-depth-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  let sends = 0
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      const current = Number(/node-(\d+)$/.exec(new URL(action.url).pathname)?.[1])
+      return {
+        response: { status: 302, bytes: 0, header_names: ['location'] },
+        discoveryInput: {
+          headers: [{ name: 'location', value: `/approved/node-${current + 1}` }],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(sends, 2)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(result.actions.rejected, 1)
+  assert.equal(snapshot.stop_reason, 'LIMIT_REACHED')
+})
+
+test('campaign stops at the sealed total action budget', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 2
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-action-budget-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  let sends = 0
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ action, beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      const current = Number(/node-(\d+)$/.exec(new URL(action.url).pathname)?.[1])
+      return {
+        response: { status: 302, bytes: 0, header_names: ['location'] },
+        discoveryInput: {
+          headers: [{ name: 'location', value: `/approved/node-${current + 1}` }],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(sends, 2)
+  assert.equal(result.actions.discovered, 1)
+  assert.equal(result.actions.rejected, 1)
+  assert.equal(snapshot.stop_reason, 'LIMIT_REACHED')
+})
+
 test('an ambiguous probe delivery stops the campaign before the next action', async (t) => {
   const scope = campaignScope()
   delete scope.discovery

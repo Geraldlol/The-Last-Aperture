@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/frida-trace-plan.schema.json",
+  "title": "The Last Aperture typed Frida trace plan",
+  "description": "A strict native-call-trace-v2 plan. It selects only supported local, USB, or explicit-device attach modes and cannot carry raw Frida arguments, scripts, evaluated code, remote hosts, or tokens.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "profile_id", "artifact", "target", "hooks", "limits"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "red-team-audit/frida-trace-plan" },
+    "profile_id": { "const": "native-call-trace-v2" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "target": { "$ref": "#/$defs/target" },
+    "hooks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/hook" }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_seconds", "max_events", "max_capture_records", "max_capture_bytes_total", "max_frame_capture_bytes"],
+      "properties": {
+        "duration_seconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "max_events": { "type": "integer", "minimum": 1, "maximum": 9000 },
+        "max_capture_records": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "max_capture_bytes_total": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "max_frame_capture_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 }
+      }
+    }
+  },
+  "$defs": {
+    "plainText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!-)(?!\\s)(?!.*\\s$)[^\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]+$"
+    },
+    "absoluteLocalPath": {
+      "allOf": [
+        { "$ref": "#/$defs/plainText" },
+        { "type": "string", "maxLength": 4096, "pattern": "^(?:[A-Za-z]:[\\\\/]|/)" },
+        { "not": { "type": "string", "pattern": "^(?:\\\\\\\\|//)" } }
+      ]
+    },
+    "relativeArtifactPath": {
+      "allOf": [
+        { "$ref": "#/$defs/plainText" },
+        { "type": "string", "maxLength": 2048 },
+        { "not": { "type": "string", "pattern": "^(?:[A-Za-z]:|[/\\\\])" } },
+        { "not": { "type": "string", "pattern": "(?:^|[/\\\\])(?:\\.|\\.\\.)(?:[/\\\\]|$)" } },
+        { "not": { "type": "string", "pattern": "[/\\\\](?:[/\\\\]|$)" } },
+        { "not": { "type": "string", "pattern": ":" } }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lab_root", "path", "kind"],
+      "properties": {
+        "lab_root": { "$ref": "#/$defs/absoluteLocalPath" },
+        "path": { "$ref": "#/$defs/relativeArtifactPath" },
+        "kind": { "enum": ["native-executable", "shared-library", "application-package"] }
+      }
+    },
+    "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+    "name": {
+      "allOf": [
+        { "$ref": "#/$defs/plainText" },
+        { "type": "string", "maxLength": 512 }
+      ]
+    },
+    "appIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "local-spawn" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "pid"],
+          "properties": { "mode": { "const": "local-pid" }, "pid": { "$ref": "#/$defs/pid" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "name"],
+          "properties": { "mode": { "const": "local-name" }, "name": { "$ref": "#/$defs/name" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "pid"],
+          "properties": { "mode": { "const": "usb-pid" }, "pid": { "$ref": "#/$defs/pid" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "name"],
+          "properties": { "mode": { "const": "usb-name" }, "name": { "$ref": "#/$defs/name" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "app_identifier"],
+          "properties": {
+            "mode": { "const": "usb-app-identifier" },
+            "app_identifier": { "$ref": "#/$defs/appIdentifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "device_id", "pid"],
+          "properties": {
+            "mode": { "const": "device-pid" },
+            "device_id": { "$ref": "#/$defs/deviceId" },
+            "pid": { "$ref": "#/$defs/pid" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "device_id", "name"],
+          "properties": {
+            "mode": { "const": "device-name" },
+            "device_id": { "$ref": "#/$defs/deviceId" },
+            "name": { "$ref": "#/$defs/name" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "device_id", "app_identifier"],
+          "properties": {
+            "mode": { "const": "device-app-identifier" },
+            "device_id": { "$ref": "#/$defs/deviceId" },
+            "app_identifier": { "$ref": "#/$defs/appIdentifier" }
+          }
+        }
+      ]
+    },
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook_id", "resolver", "capture"],
+      "properties": {
+        "hook_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$" },
+        "resolver": { "$ref": "#/$defs/resolver" },
+        "capture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arguments", "return_value"],
+          "properties": {
+            "arguments": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/argumentCapture" } },
+            "return_value": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/returnCapture" }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "moduleName": { "allOf": [{ "$ref": "#/$defs/plainText" }, { "type": "string", "maxLength": 256 }] },
+    "symbolName": { "allOf": [{ "$ref": "#/$defs/plainText" }, { "type": "string", "maxLength": 512 }] },
+    "address": { "type": "string", "pattern": "^0x(?:0|[1-9a-f][0-9a-f]{0,15})$" },
+    "nonzeroAddress": { "type": "string", "pattern": "^0x[1-9a-f][0-9a-f]{0,15}$" },
+    "resolver": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "module_name", "export_name"],
+          "properties": {
+            "kind": { "const": "export" }, "module_name": { "$ref": "#/$defs/moduleName" },
+            "export_name": { "$ref": "#/$defs/symbolName" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "module_name", "offset"],
+          "properties": {
+            "kind": { "const": "module-offset" }, "module_name": { "$ref": "#/$defs/moduleName" },
+            "offset": { "$ref": "#/$defs/address" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "address"],
+          "properties": { "kind": { "const": "absolute" }, "address": { "$ref": "#/$defs/nonzeroAddress" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "module_name", "symbol_name"],
+          "properties": {
+            "kind": { "const": "debug-symbol" }, "module_name": { "$ref": "#/$defs/moduleName" },
+            "symbol_name": { "$ref": "#/$defs/symbolName" }
+          }
+        }
+      ]
+    },
+    "captureId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$" },
+    "scalarCodec": { "enum": ["pointer", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "bool"] },
+    "memoryCodec": { "enum": ["utf8", "utf16", "bytes"] },
+    "retention": { "enum": ["raw", "sha256", "metadata"] },
+    "captureLength": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "bytes"],
+          "properties": { "kind": { "const": "fixed" }, "bytes": { "type": "integer", "minimum": 1, "maximum": 65536 } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "index", "max_bytes"],
+          "properties": {
+            "kind": { "const": "argument" }, "index": { "type": "integer", "minimum": 0, "maximum": 31 },
+            "max_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 }
+          }
+        }
+      ]
+    },
+    "argumentCapture": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["capture_id", "index", "codec", "retention"],
+          "properties": {
+            "capture_id": { "$ref": "#/$defs/captureId" }, "index": { "type": "integer", "minimum": 0, "maximum": 31 },
+            "codec": { "$ref": "#/$defs/scalarCodec" }, "retention": { "$ref": "#/$defs/retention" },
+            "phase": { "enum": ["enter", "leave"] }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["capture_id", "index", "codec", "retention", "length"],
+          "properties": {
+            "capture_id": { "$ref": "#/$defs/captureId" }, "index": { "type": "integer", "minimum": 0, "maximum": 31 },
+            "codec": { "$ref": "#/$defs/memoryCodec" }, "retention": { "$ref": "#/$defs/retention" },
+            "phase": { "enum": ["enter", "leave"] },
+            "length": { "$ref": "#/$defs/captureLength" }
+          }
+        }
+      ]
+    },
+    "returnCapture": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["capture_id", "codec", "retention"],
+          "properties": {
+            "capture_id": { "$ref": "#/$defs/captureId" }, "codec": { "$ref": "#/$defs/scalarCodec" },
+            "retention": { "$ref": "#/$defs/retention" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["capture_id", "codec", "retention", "length"],
+          "properties": {
+            "capture_id": { "$ref": "#/$defs/captureId" }, "codec": { "$ref": "#/$defs/memoryCodec" },
+            "retention": { "$ref": "#/$defs/retention" }, "length": { "$ref": "#/$defs/captureLength" }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "target": { "type": "object", "properties": { "mode": { "const": "local-spawn" } }, "required": ["mode"] } },
+        "required": ["target"]
+      },
+      "then": {
+        "properties": { "artifact": { "type": "object", "properties": { "kind": { "const": "native-executable" } } } }
+      }
+    }
+  ]
+}

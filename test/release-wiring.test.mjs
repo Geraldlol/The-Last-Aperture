@@ -196,12 +196,13 @@ test('CI runs the digest-pinned multi-engine database conformance gate', () => {
   assert.doesNotMatch(databaseJob, /continue-on-error:\s*true/)
 })
 
-test('the disabled Chrome companion has an explicit revocation version and no host authority', () => {
+test('the Chrome companion has selected-tab, ephemeral recovery, and optional loopback authority', () => {
   const manifest = JSON.parse(readFileSync('browser/http-authed-chrome/manifest.json', 'utf8'))
-  assert.equal(manifest.version, '0.12.1')
-  assert.deepEqual(manifest.permissions, [])
+  assert.equal(manifest.version, '0.13.0')
+  assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage'])
   assert.deepEqual(manifest.host_permissions, [])
-  assert.equal(Object.hasOwn(manifest, 'background'), false)
+  assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*'])
+  assert.equal(manifest.background.service_worker, 'service-worker.js')
 })
 
 test('the database Docker gate refuses to skip without its trusted runtime', () => {
@@ -524,7 +525,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     /plan-written|validate-written|campaign-written|probe-written|authorization-document|approver-public-key|countersignature/i,
   )
   assert.match(help.stdout, /standalone probes are not public/i)
-  assert.match(help.stdout, /fixed sealed request list/i)
+  assert.match(help.stdout, /sealed adaptive[\s\S]*response-derived discovery/i)
   assert.match(help.stdout, /http-authed campaign-stop/i)
   assert.match(
     help.stdout,
@@ -548,8 +549,8 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(help.stdout, /--credential-stdin/)
   assert.match(help.stdout, /--credential-browser/)
   assert.match(help.stdout, /--browser-extension-id/)
-  assert.match(help.stdout, /packaged browser companion is release-disabled/i)
-  assert.match(help.stdout, /separately supplied.*protocol-compatible companion/is)
+  assert.match(help.stdout, /packaged Chrome companion pairs[\s\S]*active tab/i)
+  assert.match(help.stdout, /without exporting cookies or[\s\S]*authorization values/i)
   assert.match(help.stdout, /browser-managed DNS/i)
   assert.match(help.stdout, /--requests/)
   assert.match(help.stdout, /--cleanup-not-after defaults to --not-after/i)
@@ -607,12 +608,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(skill, /Four target-I\/O paths are public/i)
   assert.match(
     skill,
-    /Fixed sealed authenticated HTTP work[\s\S]*campaign-attested[\s\S]*route executes its sealed requests without reconfirmation/i,
+    /Adaptive authenticated HTTP work[\s\S]*campaign-attested[\s\S]*scope-valid discovered[\s\S]*without reconfirmation/i,
   )
-  assert.match(
-    skill,
-    /standalone\s+probes(?:(?:\s+and\s+response-derived\s+discovery)|\/discovery)?\s+are\s+not\s+public/i,
-  )
+  assert.match(skill, /campaign-stop[\s\S]*consumed before another send/i)
   assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
   assert.match(skill, /Other T2\/service shapes[\s\S]*generic live\/L3[\s\S]*remain\s+technically unavailable/i)
   assert.match(skill, /not an authorization denial[\s\S]*authorized-but-unavailable/i)
@@ -633,8 +631,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(readme, /authorization_binding_sha256/)
   assert.match(readme, /independently_verified: false/)
   assert.match(readme, /declared authorizer and reference are audit fields, not proof/i)
-  assert.match(readme, /manifest is a release-disabled placeholder/i)
-  assert.match(readme, /no host, tab, scripting,\s+or background authority/i)
+  assert.match(readme, /Version 0\.13\.0[\s\S]*activeTab[\s\S]*scripting/i)
+  assert.match(readme, /storage[^\n]*extension-owned ephemeral recovery marker/i)
+  assert.match(readme, /no\s+persistent target-host, cookie, debugger, tabs, or web-request access/i)
   assert.match(readme, /--credential-stdin/)
   assert.doesNotMatch(readme, /automatically prepares and executes/i)
   assert.match(readme, /--requests C:\\trusted\\requests\.json/)
@@ -646,9 +645,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const security = readFileSync('SECURITY.md', 'utf8')
   assert.match(security, /--credential-stdin/)
   assert.match(security, /--credential-browser/)
-  assert.match(security, /separately supplied protocol-compatible companion/i)
+  assert.match(security, /one-time pairing capability/i)
   assert.match(security, /browser-managed DNS/i)
-  assert.doesNotMatch(security, /uses only `activeTab`/)
+  assert.match(security, /activeTab[\s\S]*scripting/i)
   assert.match(security, /OPERATOR_ATTESTED_AUTHED/)
   assert.match(security, /authorization_binding_sha256/)
   assert.match(
@@ -661,7 +660,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   )
   assert.match(security, /validity\.cleanup_not_after/)
   assert.match(security, /CLEANUP_SESSION_CONFIRMED/)
-  assert.match(security, /exact origin and rejects redirects/i)
+  assert.match(security, /exact origin\s+and rejects redirects/i)
   const rootSkill = readFileSync('SKILL.md', 'utf8')
   assert.match(rootSkill, /one exact, bounded live HTTP-recon action/i)
   assert.match(rootSkill, /single action uses a campaign ledger/i)

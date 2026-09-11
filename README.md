@@ -1,8 +1,8 @@
 # The Last Aperture
 
 The Last Aperture is an evidence-first, agent-assisted source audit platform with
-separate controllers for bounded HTTPS observation and operator-attested or
-document-bound authenticated campaigns. Its
+separate controllers for bounded HTTPS observation, authenticated campaigns,
+and authorized reverse engineering. Its
 security lenses supply domain judgment; a deterministic Node.js control plane
 owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
@@ -33,12 +33,20 @@ it enters the run, but its factual accuracy still depends on proof and review.
 
 > **Current boundary:** repository T1 and the narrow Node/npm loopback T2 route
 > are active through sealed, network-none Docker workers. One exact bounded
-> operator-directed HTTP-recon action and fixed, already-sealed authenticated
-> HTTP campaigns are also active through their protocol controllers. Generic
+> operator-directed HTTP-recon action and adaptive sealed authenticated HTTP
+> campaigns are also active through their protocol controllers. The packaged
+> Chrome bridge can execute campaign actions in an operator-selected logged-in
+> tab without exporting browser-managed request credentials. Generic
 > live/L3, other T2/service shapes, provider, remote, bounty/OOB, acquisition,
 > database, transparency, and evidence-bundle import remain technically unavailable. Static repository inventory, source
 > sealing, offline planning/validation, and manual result ingestion are
 > available.
+
+The reverse-engineering route adds Ghidra static export, typed Frida call
+tracing, offline value-redacted HAR import with masked paths, draft native
+interaction contracts, and deterministic contract-bound Node connectors. It
+keeps reverse observations outside audit bundles and never promotes them into
+security verdicts. See [reverse engineering and protocol reconstruction](docs/reverse-engineering.md).
 
 Manual provider decisions are not semantic authority in this release. The
 controller stamps triage and proof decisions as unauthenticated; reports render
@@ -76,8 +84,8 @@ authorized-reconnaissance and v0.10 repository-audit foundation:
   scope, including body-bearing and write methods. Native transport refuses
   `CONNECT` and protocol upgrades; browser transport also refuses `TRACE`/`TRACK`.
 - A locally append-only, hash-chained external campaign ledger with monotonic
-  sequencing, no redirect or automatic retry, a 256-action public
-  fixed-campaign ceiling, and immediate pre-send authorization revalidation.
+  sequencing, bounded response-derived discovery, no transport redirect or
+  automatic retry, and immediate pre-send authorization revalidation.
   Cross-restart rollback or valid-prefix truncation detection requires a
   separately retained trusted record count and head digest.
 - Declared mutations with credential preflight, before/after JSON observation,
@@ -275,6 +283,74 @@ npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --require-so
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
+
+### Reverse engineering and internal web protocols
+
+The reverse CLI turns authorized local artifacts and browser sessions into
+bounded observations. Export a HAR from a synthetic, authorized browser
+session, name every in-scope origin, and import it locally:
+
+```powershell
+npm.cmd run audit:reverse -- web import-har `
+  --har C:\lab\session.har `
+  --origin https://portal.example `
+  --path-literal patients `
+  --out C:\lab\session-evidence.json
+
+npm.cmd run audit:reverse -- protocol build `
+  --web-evidence C:\lab\session-evidence.json `
+  --out C:\lab\native-interaction-contract.json
+
+npm.cmd run audit:reverse -- protocol generate `
+  --contract C:\lab\native-interaction-contract.json `
+  --out C:\lab\portal-connector `
+  --name @peerstar/portal-native
+
+npm.cmd run audit:reverse -- protocol verify `
+  --package C:\lab\portal-connector `
+  --manifest-sha256 <digest-returned-by-generate>
+```
+
+The importer keeps methods, stable parameter and field names, type shapes,
+endpoint templates, redirect sequence, status codes, cookie names, and
+credential-carrier names. It removes query, header, cookie, and body values,
+masks unknown path segments and obvious value-shaped names, and retains an
+application route literal only when it is built in or explicitly reviewed
+through `--path-literal`. The resulting contract models
+separate auth request/response transitions, endpoint schemas, pagination,
+observed retries, unique correlation within three same-capture observations,
+and `READ_CANDIDATE`,
+`WRITE_CANDIDATE`, or `UNKNOWN` side-effect assessments. A later same-template
+read may be recorded only as `FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED`. The
+contract remains `DRAFT_OBSERVED` as its provenance statement. `protocol
+generate` validates that contract and emits a deterministic, self-contained
+Node package labeled `GENERATED_REVIEWABLE`. The package can invoke only its
+contract endpoint IDs, origins, methods, request shapes, redirects, and observed
+retry routes. Automatic retry additionally requires a `READ_CANDIDATE`; writes
+and unknown operations run once. It supports typed path values, observed query,
+header, cookie, and body shapes, per-origin in-memory cookie jars, response-body
+timeouts, an asynchronous credential provider, and an optional transient
+receiver for credential fields returned in response bodies. Those fields are
+redacted from ordinary result data and never written to disk. Errors raised
+after transport invocation carry `request_may_have_been_sent: true`, so a write
+or unknown operation with that flag must not be replayed automatically. A `2xx`
+response or a later read does not prove a write succeeded. Keep the generator result's
+manifest digest outside the package when coordinated package modification is in
+scope, and pass it to `protocol verify` before packaging or use.
+
+Ghidra reads a copied artifact without executing it and emits bounded function,
+network API, reference/call-site, sanitized static endpoint, and
+authentication-hint metadata. Native launchers run directly; Windows `.bat`
+and `.cmd` launchers use the bundled fixed bridge under kill-on-close Job Object
+supervision. Frida v1 preserves the minimal one-symbol local-spawn trace. A
+strict v2 plan adds multiple hooks, local or device attachment, four resolver
+forms, and typed entry/exit argument and return capture with raw/base64,
+SHA-256, or metadata retention. Attached-runtime evidence remains `PARTIAL`
+when the supplied artifact copy cannot prove the bytes already loaded. Neither
+reverse route captures a browser or logs in. The separate offline generator
+emits the runnable connector package. Full command syntax, capture handling,
+and runtime details are in the
+[reverse engineering guide](docs/reverse-engineering.md).
 
 ### Authorized repository T1 proof
 
@@ -480,11 +556,12 @@ with the authorization model in
 
 ### Authorized authenticated HTTP campaign
 
-> **Current release status:** fixed, sealed authenticated campaign execution is
+> **Current release status:** sealed authenticated campaign execution is
 > active. Probe actions run only inside one-action or multi-action campaigns;
 > standalone probe dispatch is not public. Invoking a live campaign is the
 > operator's launch directive, so no second current-authorization flag is
-> required. Adaptive response-derived discovery remains outside this public lane.
+> required. Discovery-enabled scopes can derive and execute additional probes
+> inside their declared origin, path, method, and test-category perimeter.
 
 This path is separate from both repository proof and `http-recon-v1`. The
 operator target/scope statement at agent/controller ingress is its sole
@@ -532,16 +609,37 @@ The plan and validation expose `authorization_binding_sha256`,
 separate evidence, but their digest, issuer, or signature cannot grant a
 different mode, target, action, or limit.
 
-Do not load the companion under `browser/http-authed-chrome`. The packaged
-0.12.1 manifest is a release-disabled placeholder with no host, tab, scripting,
-or background authority, and its popup contains no attach controls. The public
-`--credential-browser` bridge can execute only if the operator separately
-supplies a compatible companion. That browser path enforces exact origin and no
-redirect, but uses the browser's DNS/network stack rather than native all-answer
-DNS validation and socket IP pinning; treat that as a distinct assurance level.
-Anyone who previously loaded version 0.12.0 must remove it from Chrome or reload
-the unpacked directory and verify version 0.12.1; replacing repository files does
-not terminate an already registered service worker by itself.
+Load `browser/http-authed-chrome` as an unpacked extension and copy the extension
+ID shown by Chrome into `--browser-extension-id` when planning. Version 0.13.0
+uses `activeTab` and `scripting` only after the operator selects the target tab,
+`storage` for an extension-owned ephemeral recovery marker, plus an optional
+user-granted `http://127.0.0.1/*` permission for controller pairing. It has no
+persistent target-host, cookie, debugger, tabs, or web-request access. The
+recovery marker is kept in `chrome.storage.session`, restricted to trusted
+extension contexts, and contains no pairing capability, controller session
+capability, target credential, request, or response value.
+When the campaign prints a controller port and one-time pairing capability, open
+the extension in the logged-in target tab, preview the exact origin and campaign
+grant, and attach. Fetch applies ambient browser-managed credentials such as
+same-origin cookies, HTTP authentication, and client certificates without
+exporting those request credential values. It runs in Chrome's extension-isolated
+world so target-page JavaScript cannot replace its fetch implementation or
+protocol state. Response bodies and only the
+discovery allowlist of response-header values (`Allow`, `Content-Encoding`,
+`Content-Type`, `Link`, and `Location`) cross the loopback bridge transiently;
+they are not written to the campaign ledger. Browser dispatch uses the browser's
+DNS/network stack rather than native all-answer DNS validation and socket IP
+pinning.
+
+The bridge does not inspect page `localStorage`/`sessionStorage`, patch request
+libraries, or recover a bearer token that application JavaScript adds to
+`Authorization`. A site that relies only on such a token is outside this browser
+adapter and will return its ordinary unauthenticated response. A reviewed,
+contract-bound page adapter is required for that session shape. If the Manifest
+V3 worker restarts, it attempts to abort any surviving injected request, clears
+its recovery marker, and requires a fresh controller pairing; it never resumes
+from an old loopback port because the current protocol cannot mutually
+reauthenticate that controller without exposing a reusable capability.
 
 Probe-only plans need no mutation permit. For write-capable probes or declared
 reversible mutations, the controller uses the sealed campaign authority and
@@ -600,18 +698,18 @@ mode and can send only the sealed rollback and rollback-verification requests.
 It writes `CLEANUP_SESSION_CONFIRMED` before cleanup dispatch, does not write a
 new ordinary session confirmation, and never queues or sends new work.
 
-The packaged browser companion is not runnable in this release. A separately
-installed protocol-compatible companion may use the public loopback bridge;
-its actions still pass through the same campaign ledger and sealed action list.
+The packaged browser companion uses the public loopback bridge; every action
+still passes through the same campaign ledger, candidate validation, and sealed
+scope.
 
 Sealed `env:NAME` and redirected `--credential-stdin` remain explicit fallbacks
 for exported credentials. Stdin is read once per process and must match the
 binding at live execution; it does not provide automatic rotation. Never put an
 exported credential in chat, argv, or a file. Validation needs no credential.
 
-Use synthetic non-PHI test data even when the target data class is PHI. Public
-campaign execution sends only the sealed request list (at most 256 actions) and
-does not admit response-derived discovery. See
+Use synthetic non-PHI test data even when the target data class is PHI. A
+discovery-enabled campaign may enqueue only the bounded read probes produced by
+its sealed discovery policy. See
 [`ADR 0016`](docs/adr/0016-authenticated-mutation-actions.md),
 [`ADR 0017`](docs/adr/0017-operator-attested-authenticated-campaigns.md), and
 [`schemas/http-authed-scope.schema.json`](schemas/http-authed-scope.schema.json).

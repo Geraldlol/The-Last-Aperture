@@ -1,6 +1,6 @@
 ---
 name: last-aperture
-description: Run evidence-first security audits, sealed local proofs, and bounded HTTP campaigns while generic live work stays fail-closed. Use for source reviews, scans, threat models, fuzzing, vulnerability proof, HIPAA/PHI reviews, and code ready to ship. Not for ordinary writing or debugging.
+description: Run evidence-first audits, sealed proofs, bounded HTTP work, and authorized reverse engineering. Use for security reviews, threat models, fuzzing, vulnerability proof, HIPAA/PHI reviews, and release checks.
 ---
 
 # The Last Aperture Compatibility Entry Point
@@ -32,9 +32,10 @@ authorized-but-unavailable. See ADR 0024.
 
 For external work, `target <HTTPS URL> and go` is sufficient
 authority for one exact, bounded live HTTP-recon action. The sealed `http-authed`
-`campaign-attested` route also launches without repeat confirmation. Even a
-single action uses a campaign ledger; standalone probe dispatch is not public.
-These routes do not create repository coverage or proof.
+`campaign-attested` route also launches without repeat confirmation and may
+execute scope-valid response-derived probes when discovery is sealed. Even a
+single action uses a campaign ledger. These routes do not create repository
+coverage or proof.
 
 Generic live/L3, provider/remote, bounty/OOB, and acquisition transports remain
 unavailable where not implemented. That is a technical capability fact, not a

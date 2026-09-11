@@ -24,7 +24,10 @@ test('release declarations distinguish integration, lifecycle, semantics, and un
   assert.equal(byId.get('t2-service-proof').status, 'AVAILABLE_NARROW')
   assert.match(byId.get('t2-service-proof').limitation, /UNPROVEN.*semantic oracle/)
   assert.equal(byId.get('semantic-oracle').status, 'UNAVAILABLE')
-  for (const id of ['browser-execution', 'database-stack-execution', 'multi-runtime-execution', 'deployed-evidence-acquisition', 'generic-live']) {
+  assert.equal(byId.get('browser-execution').status, 'AVAILABLE_NARROW')
+  assert.deepEqual(byId.get('browser-execution').commands, ['http-authed campaign-attested'])
+  assert.match(byId.get('browser-execution').limitation, /selected tab.*does not automate navigation or login/i)
+  for (const id of ['database-stack-execution', 'multi-runtime-execution', 'deployed-evidence-acquisition', 'generic-live']) {
     assert.equal(byId.get(id).status, 'UNAVAILABLE')
     assert.deepEqual(byId.get(id).commands, [])
   }
@@ -50,7 +53,8 @@ test('filename-only environment assessment names mixed runtime gaps without clai
   assert.equal(assessment.deployment_evidence, 'NOT_ASSESSED')
   assert.equal(assessment.detected_profiles.length, 9)
   for (const item of assessment.detected_profiles) {
-    assert.equal(item.execution_support, item.profile_id === 'node-npm' ? 'AVAILABLE_NARROW' : 'UNAVAILABLE')
+    const expected = ['node-npm', 'browser'].includes(item.profile_id) ? 'AVAILABLE_NARROW' : 'UNAVAILABLE'
+    assert.equal(item.execution_support, expected)
   }
   assert.match(assessment.limitations.join(' '), /Source configuration does not establish deployed state/)
 })

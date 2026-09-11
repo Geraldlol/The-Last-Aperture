@@ -1521,7 +1521,7 @@ export class HttpAuthedCampaignLedger {
     this._discoveredCandidateIdentities.clear()
   }
 
-  _candidateIdentity(candidateDraft, { provenance } = {}) {
+  _candidateIdentity(candidateDraft, { provenance, createPrivateIdentity = true } = {}) {
     const deterministicIdentity = httpAuthedCandidateIdentity({
       campaignGrantSha256: this.campaignGrantSha256,
       candidateDraft,
@@ -1542,6 +1542,7 @@ export class HttpAuthedCampaignLedger {
     if (provenance !== 'DISCOVERED') {
       return deterministicIdentity
     }
+    if (!createPrivateIdentity) return null
     const privateIdentity = privateDiscoveredCandidateIdentity({
       campaignGrantSha256: this.campaignGrantSha256,
       candidate: deterministicIdentity.candidate,
@@ -1855,15 +1856,23 @@ export class HttpAuthedCampaignLedger {
     })
   }
 
-  async enqueueCandidate({ candidateDraft, provenance }) {
+  async enqueueCandidate({ candidateDraft, provenance, maxActions }) {
     return this._runExclusive(async () => {
       this._assertOpen()
       if (!PROVENANCE.has(provenance)) {
         throw ledgerError('HTTP_AUTHED_LEDGER_PROVENANCE_INVALID', 'candidate provenance is invalid')
       }
-      const identity = this._candidateIdentity(candidateDraft, { provenance })
-      const existingId = this._projection.candidates.get(identity.candidateSha256)
-      if (existingId !== undefined) {
+      const actionLimit = maxActions === undefined
+        ? undefined
+        : integer(maxActions, 'maxActions', 1, 1_000_000)
+      let identity = this._candidateIdentity(candidateDraft, {
+        provenance,
+        createPrivateIdentity: false,
+      })
+      const existingId = identity === null
+        ? undefined
+        : this._projection.candidates.get(identity.candidateSha256)
+      if (existingId !== undefined && identity !== null) {
         const existing = this._projection.actions.get(existingId)
         return {
           created: false,
@@ -1874,6 +1883,17 @@ export class HttpAuthedCampaignLedger {
           headSha256: this._projection.headSha256,
         }
       }
+      if (
+        actionLimit !== undefined
+        && this._projection.nextActionSequence - 1 >= actionLimit
+      ) {
+        return {
+          created: false,
+          limitReached: true,
+          headSha256: this._projection.headSha256,
+        }
+      }
+      identity ??= this._candidateIdentity(candidateDraft, { provenance })
       const actionSequence = this._projection.nextActionSequence
       await this._append({
         type: 'CANDIDATE_ENQUEUED',

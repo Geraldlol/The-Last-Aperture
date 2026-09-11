@@ -28,12 +28,12 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   'content-type',
   'user-agent',
 ])
-const FORBIDDEN_RESPONSE_VALUE_HEADERS = new Set([
-  'authorization',
-  'cookie',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'set-cookie',
+const OBSERVED_RESPONSE_VALUE_HEADERS = new Set([
+  'allow',
+  'content-encoding',
+  'content-type',
+  'link',
+  'location',
 ])
 
 export class HttpAuthedBrowserBridgeError extends Error {
@@ -476,6 +476,7 @@ function validateObservedHeaders(value) {
   }
   let totalBytes = 0
   const result = []
+  const seen = new Set()
   for (const item of value) {
     if (
       !item
@@ -484,7 +485,8 @@ function validateObservedHeaders(value) {
       || typeof item.name !== 'string'
       || !HTTP_FIELD_NAME.test(item.name)
       || item.name !== item.name.toLowerCase()
-      || FORBIDDEN_RESPONSE_VALUE_HEADERS.has(item.name)
+      || !OBSERVED_RESPONSE_VALUE_HEADERS.has(item.name)
+      || seen.has(item.name)
       || typeof item.value_base64 !== 'string'
       || item.value_base64.length > Math.ceil(MAX_HEADER_VALUE_BYTES / 3) * 4 + 4
       || (
@@ -500,6 +502,7 @@ function validateObservedHeaders(value) {
         { requestMayHaveBeenSent: true },
       )
     }
+    seen.add(item.name)
     const encoded = item.value_base64
     const bytes = Buffer.from(encoded, 'base64')
     try {
@@ -949,8 +952,19 @@ export function createHttpAuthedBrowserBridgeSession({
         'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_UNEXPECTED',
         'browser bridge RESULT message is out of sequence',
       )
-      assertBinding(envelope, state.current, 'RESULT', ['outcome', 'response'])
-      if (envelope.outcome !== 'RESPONSE') {
+      assertBinding(
+        envelope,
+        state.current,
+        'RESULT',
+        ['outcome', 'response_truncated', 'response'],
+      )
+      const complete = envelope.outcome === 'OBSERVED'
+        && envelope.response_truncated === false
+      const bounded = envelope.outcome === 'RESPONSE_BOUNDED'
+        && envelope.response_truncated === true
+      const incomplete = envelope.outcome === 'OBSERVATION_INCOMPLETE'
+        && envelope.response_truncated === false
+      if (!complete && !bounded && !incomplete) {
         throw bridgeError(
           'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_INVALID',
           'browser bridge result outcome is invalid',
@@ -985,6 +999,7 @@ export function createHttpAuthedBrowserBridgeSession({
       if (
         !Array.isArray(response.response_header_names)
         || response.response_header_names.length > 256
+        || new Set(response.response_header_names).size !== response.response_header_names.length
         || response.response_header_names.some((name) => (
           typeof name !== 'string'
           || name !== name.toLowerCase()
@@ -1007,6 +1022,13 @@ export function createHttpAuthedBrowserBridgeSession({
         )
       }
       const observedHeaders = validateObservedHeaders(response.headers)
+      if (observedHeaders.some(({ name }) => !response.response_header_names.includes(name))) {
+        throw bridgeError(
+          'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_INVALID',
+          'browser bridge response values do not match observed header-name metadata',
+          { requestMayHaveBeenSent: true },
+        )
+      }
       const activeAction = state.current
       const observer = activeAction.responseObserver
       if (observer === undefined && observedHeaders.length !== 0) {
@@ -1026,6 +1048,23 @@ export function createHttpAuthedBrowserBridgeSession({
         status: response.status,
         responseBytes: response.response_bytes,
         responseHeaderNames: headerNames,
+      }
+      if (!complete) {
+        body?.fill(0)
+        const error = bridgeError(
+          bounded
+            ? 'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_BOUNDED'
+            : 'HTTP_AUTHED_BROWSER_BRIDGE_OBSERVATION_INCOMPLETE',
+          bounded
+            ? 'browser bridge response exceeded its observation limit'
+            : 'browser bridge response observation ended before completion',
+          { requestMayHaveBeenSent: true },
+        )
+        const current = cleanCurrent(state)
+        state.state = 'FAILED'
+        state.requestMayHaveBeenSent = true
+        rejectWaiter(current, error)
+        throw error
       }
       let observerFailed = false
       try {
@@ -1076,7 +1115,8 @@ export function createHttpAuthedBrowserBridgeSession({
           request_may_have_been_sent: state.requestMayHaveBeenSent,
         }
       }
-      const requestMayHaveBeenSent = state.state === 'COMMIT'
+      const requestMayHaveBeenSent = state.requestMayHaveBeenSent === true
+        || state.state === 'COMMIT'
         || state.current?.requestMayHaveBeenSent === true
       const error = bridgeError(
         'HTTP_AUTHED_BROWSER_BRIDGE_CLOSED',
@@ -1171,7 +1211,17 @@ export function createHttpAuthedBrowserBridgeTransport({
         { requestMayHaveBeenSent },
       )
       const current = cleanCurrent(state)
-      state.state = state.state === 'CLOSED' ? 'CLOSED' : 'OPEN'
+      if (requestMayHaveBeenSent) {
+        state.pairingSecret?.fill(0)
+        state.pairingSecret = null
+        state.sessionSecret?.fill(0)
+        state.sessionSecret = null
+        state.tabId = null
+        state.documentNonce = null
+        state.state = 'CLOSED'
+      } else {
+        state.state = state.state === 'CLOSED' ? 'CLOSED' : 'OPEN'
+      }
       state.requestMayHaveBeenSent = requestMayHaveBeenSent
       rejectWaiter(current, error)
     }, request.timeoutMs)
