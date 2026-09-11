@@ -30,9 +30,9 @@ supported network API, reference/call-site, sanitized static endpoint, and
 authentication-hint metadata. Frida v1 spawns one exact operator-named local-lab
 executable, module, and symbol with a metadata-only agent. Frida v2 accepts a
 strict typed plan for multiple hooks, local or device attachment, declared
-argument/return capture, and raw/base64, SHA-256, or metadata retention. HAR
-import is offline and
-accepts only explicitly named origins; protocol build turns sanitized web and
+argument/return capture, and raw/base64, SHA-256, or metadata retention. HAR and
+Burp HTTP-items XML import are offline and accept only explicitly named origins;
+protocol build turns sanitized web and
 native evidence into a `DRAFT_OBSERVED` interaction contract. `protocol
 generate` then validates that contract offline and emits a deterministic,
 digest-bound Node connector labeled `GENERATED_REVIEWABLE`.
@@ -42,19 +42,33 @@ assessments, same-capture bounded redirect correlation, and at most
 these outputs enters an audit bundle, proves application behavior, or creates a
 security verdict.
 
-Raw HAR files can contain credentials, cookies, identifiers, response bodies,
-and PHI. Keep them local and short-lived. The importer persists no query,
-header, cookie, or body values. It conservatively masks path segments unless
-they are built-in route words or explicitly declared with `--path-literal`.
+Raw HAR and Burp XML files can contain credentials, cookies, identifiers,
+response bodies, and PHI. Keep them local and short-lived. The importers persist
+no query, header, cookie, or body values. They conservatively mask path segments
+unless they are built-in route words or explicitly declared with
+`--path-literal`.
 Stable field, header, and cookie names remain because they define the protocol;
 obvious value-shaped names are masked. Names can still be sensitive in unusual
 schemas, so use synthetic non-PHI sessions and review sanitized output before
-sharing it.
+sharing it. The Burp XML parser refuses document declarations/entities,
+unexpected nesting, inconsistent URL/request metadata, malformed HTTP messages,
+and oversized documents, messages, headers, nodes, fields, or item counts.
+
+The optional Montoya extension reads only existing Burp Proxy history and uses
+the final request representation. It applies an exact origin, path prefix,
+reviewed route literals, and item limit before writing a new deterministic,
+value-free HAR. It does not invoke Scanner, dispatch traffic, or modify traffic.
+Its build uses a caller-supplied local Montoya API JAR, downloads nothing, and
+does not bundle Burp API classes. Burp, its project, its Proxy history, the API
+JAR, the JDK, and the chosen output directory remain trusted host-side inputs.
+The sanitized output can still reveal structural names and requires review.
 
 Ghidra and Frida are separately installed analyst tools and are trusted runtime
-dependencies for these routes. Native Ghidra launchers run directly; Windows
-`.bat` and `.cmd` launchers use the bundled fixed bridge and kill-on-close Job
-Object supervision. Frida local spawn is a host process, not a containment
+dependencies for these routes. Native Ghidra launchers run directly. Windows
+`.bat` and `.cmd` launchers require `javac.exe` and `jar.exe` from the selected
+JDK; the controller compiles its bundled fixed compatibility agent only inside
+owned scratch, then uses the fixed bridge and kill-on-close Job Object
+supervision. Frida local spawn is a host process, not a containment
 boundary, and existing-process or device attachment crosses into that runtime's
 environment. V2 accepts only its declared target, resolver, hook, capture, and
 resource plan through the bundled agent. It does not accept caller scripts, raw
@@ -83,8 +97,12 @@ and scope is the sole authorization fact for every named capability, including T
 boots, controller-referenced credentials, and named external services. If
 target/scope is supplied, proceed; ask once only when it is missing. Do not
 require another consent, RoE, ownership, or legal check. The operator remains
-accountable. A missing transport is a technical unavailable result, not an
-authorization denial; never invent one. See ADR 0023.
+accountable. Ordinary language is sufficient and remains effective across
+Codex/Claude handoffs for the same objective. Agents may compose available
+controllers with standard browser, process, network, Burp, Ghidra, and Frida
+tools while retaining the same target, time, credential, evidence, cleanup, and
+stop bindings. Technical unavailability means the required runtime, API,
+material, or reachable transport is actually absent. See ADR 0023.
 Former active-controller `--attest-authorized` and
 `--confirm-authorization-current` spellings are rejected rather than treated as
 authority. The release-disabled acquisition prototype still documents its own
@@ -217,14 +235,29 @@ dispatch enforces the exact origin and rejects redirects, but uses the browser
 network stack and does not provide native all-answer DNS validation or socket IP
 pinning.
 
-Browser fetch reuses only ambient browser-managed authentication: same-origin
-cookies, HTTP authentication, and client certificates. The extension does not
-read those request credential values or page `localStorage`/`sessionStorage`.
-It executes the fetch and its protocol state in Chrome's extension-isolated
-world rather than the target page's JavaScript world.
-It does not recover bearer tokens added to `Authorization` by application
-JavaScript, so sites that depend only on that pattern require a separate
-reviewed, contract-bound adapter. Response bodies and only `Allow`,
+Chrome Manifest V3 worker fetch can omit `Origin`. The listener accepts that
+originless request only when `x-last-aperture-extension` matches the configured
+extension ID and Fetch Metadata is exactly `Sec-Fetch-Site: none`,
+`Sec-Fetch-Mode: cors`, and `Sec-Fetch-Dest: empty`; all other originless shapes
+are rejected.
+
+Browser fetch reuses ambient browser-managed authentication: same-origin
+cookies, HTTP authentication, and client certificates. By default the extension
+does not read those request credential values or page
+`localStorage`/`sessionStorage`. A scope may seal one declarative page-session
+adapter for an application-managed string. The descriptor permits one exact
+Web Storage area/key, `RAW` or strict `JSON_POINTER` string extraction, one
+lower-case non-cookie request-header carrier, exact HTTPS origin/method/path
+prefix constraints, an exact validity interval, and an 8 KiB-or-smaller value
+limit. It accepts no executable selector, transformation, wildcard, page script,
+or caller-provided request logic.
+
+The descriptor and digest pass through the controller and extension worker;
+the value does not. Each isolated dispatch reacquires the current value, checks
+its type and bound, applies it to the declared header for a matching request,
+and discards it after fetch. Missing, malformed, oversized, expired, drifted,
+or out-of-constraint values fail before transport. The value never enters the
+worker, loopback controller, ledger, retained evidence, or logs. Response bodies and only `Allow`,
 `Content-Encoding`, `Content-Type`, `Link`, and `Location` response-header values
 cross the loopback bridge for transient discovery. A permitted response body or
 URL-valued header can itself contain sensitive application data; use synthetic

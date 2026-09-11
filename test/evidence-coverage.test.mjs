@@ -105,7 +105,7 @@ test('a supplied bundle carries its own coverage state into the matrix', () => {
     lenses: LENSES,
     activatedLenses: ['cloud-and-iac'],
     bundles: [{
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       artifact_kind: 'oci-image',
       coverage_state: 'PARTIAL',
@@ -114,7 +114,7 @@ test('a supplied bundle carries its own coverage state into the matrix', () => {
   })
   const artifact = cell(coverage, 'cloud-and-iac', 'container-image-content', 'built-artifact')
   assert.equal(artifact.state, 'PARTIAL')
-  assert.match(artifact.reason, /peerstar-api-image/)
+  assert.match(artifact.reason, /sample-api-image/)
 })
 
 test('missing controller analysis state cannot produce non-source COVERED', () => {
@@ -170,7 +170,7 @@ test('an artifact kind no activated lens declares is INVENTORY_ONLY, never silen
     lenses: LENSES,
     activatedLenses: ['cloud-and-iac'],
     bundles: [{
-      evidence_id: 'peerstar-mobile',
+      evidence_id: 'sample-mobile',
       evidence_class: 'built-artifact',
       artifact_kind: 'apk',
       coverage_state: 'COVERED',
@@ -309,7 +309,7 @@ test('positive-only controller analysis stays PARTIAL after delivery', () => {
     lenses: LENSES,
     activatedLenses: ['cloud-and-iac'],
     bundles: [{
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       artifact_kind: 'oci-image',
       adapter_id: 'artifact',
@@ -321,7 +321,7 @@ test('positive-only controller analysis stays PARTIAL after delivery', () => {
   })
 
   assert.deepEqual(coverage.bundle_coverage, [{
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     evidence_class: 'built-artifact',
     artifact_kind: 'oci-image',
     root_sha256: 'a'.repeat(64),

@@ -4,7 +4,7 @@ Job-result contract version: 1.0.0
 
 Observed packet and sealed-run version: 2.0.0
 
-Platform release: 0.12.0
+Platform release: 0.13.0
 
 The provider boundary lets a model, local agent, or deterministic tool
 contribute reasoning without gaining control of scope, stage order, severity

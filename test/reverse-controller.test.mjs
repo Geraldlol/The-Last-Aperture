@@ -10,10 +10,13 @@ import { test } from 'node:test'
 import {
   analyzeGhidraArtifact,
   buildProtocolContractFile,
+  importBurpFile,
   importHarFile,
   traceFridaArtifact,
 } from '../scripts/lib/reverse-controller.mjs'
+import { compareCanonicalStrings } from '../scripts/lib/canonical-order.mjs'
 import { GHIDRA_GENERIC_PATH_SEGMENTS } from '../scripts/lib/reverse-contracts.mjs'
+import { stableJson } from '../scripts/lib/run-engine.mjs'
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'last-aperture-reverse-'))
@@ -34,7 +37,7 @@ function har() {
     time: 5,
     request: {
       method: 'POST',
-      url: 'https://portal.example/CheckLogin?connection=secret',
+      url: 'https://portal.example/auth/login?connection=secret',
       headers: [{ name: 'Authorization', value: 'Bearer secret' }],
       cookies: [{ name: 'SessionCookie', value: 'secret' }],
       postData: {
@@ -44,11 +47,36 @@ function har() {
     },
     response: {
       status: 200,
-      headers: [{ name: 'Set-Cookie', value: 'cbh=secret' }],
-      cookies: [{ name: 'cbh', value: 'secret' }],
+      headers: [{ name: 'Set-Cookie', value: 'SessionToken=secret' }],
+      cookies: [{ name: 'SessionToken', value: 'secret' }],
       content: { mimeType: 'application/json', size: 15, text: '{"Status":"OK"}' },
     },
   }] } }
+}
+
+function burpXml() {
+  const request = Buffer.from([
+    'POST /auth/login?connection=secret HTTP/1.1',
+    'Host: portal.example',
+    'Authorization: Bearer secret',
+    'Content-Type: application/x-www-form-urlencoded',
+    '',
+    'password=secret',
+  ].join('\r\n')).toString('base64')
+  const response = Buffer.from([
+    'HTTP/1.1 200 OK',
+    'Set-Cookie: SessionToken=secret; Secure',
+    'Content-Type: application/json',
+    '',
+    '{"Status":"OK"}',
+  ].join('\r\n')).toString('base64')
+  return `<?xml version="1.0" encoding="UTF-8"?><items burpVersion="2026.8"><item>
+    <url>https://portal.example/auth/login?connection=secret</url>
+    <host>portal.example</host><port>443</port><protocol>https</protocol>
+    <method>POST</method><path>/auth/login?connection=secret</path>
+    <request base64="true">${request}</request><status>200</status>
+    <response base64="true">${response}</response>
+  </item></items>`
 }
 
 function ghidraExport(executableSha256, pathTemplate = '/api/session/{integer}') {
@@ -117,7 +145,6 @@ test('imports a bounded HAR to exclusive redacted web evidence', async () => {
     const result = await importHarFile({
       harPath,
       targetOrigins: ['https://portal.example'],
-      pathLiterals: ['CheckLogin'],
       outPath,
     })
     const text = await readFile(outPath, 'utf8')
@@ -125,7 +152,7 @@ test('imports a bounded HAR to exclusive redacted web evidence', async () => {
     assert.equal(result.status, 'SUCCEEDED')
     assert.equal(result.output_path, outPath)
     assert.equal(evidence.kind, 'red-team-audit/web-session-evidence')
-    assert.equal(evidence.entries[0].request.path_template, '/CheckLogin')
+    assert.equal(evidence.entries[0].request.path_template, '/auth/login')
     assert.equal(text.includes('Bearer secret'), false)
     assert.equal(text.includes('connection=secret'), false)
     assert.equal(text.includes('"secret"'), false)
@@ -133,6 +160,30 @@ test('imports a bounded HAR to exclusive redacted web evidence', async () => {
       importHarFile({ harPath, targetOrigins: ['https://portal.example'], outPath }),
       /exist|overwrite|exclusive/i,
     )
+  } finally {
+    await rm(files.root, { recursive: true, force: true })
+  }
+})
+
+test('imports bounded Burp HTTP-items XML to the shared redacted evidence contract', async () => {
+  const files = await fixture()
+  try {
+    const burpPath = join(files.root, 'items.xml')
+    const outPath = join(files.root, 'burp-web-evidence.json')
+    await writeFile(burpPath, burpXml(), 'utf8')
+    const result = await importBurpFile({
+      burpPath,
+      targetOrigins: ['https://portal.example'],
+      outPath,
+    })
+    const text = await readFile(outPath, 'utf8')
+    const evidence = JSON.parse(text)
+    assert.equal(result.status, 'SUCCEEDED')
+    assert.equal(evidence.source.kind, 'BURP_XML')
+    assert.equal(evidence.entries[0].request.path_template, '/auth/login')
+    for (const value of ['Bearer secret', 'connection=secret', 'password=secret']) {
+      assert.equal(text.includes(value), false)
+    }
   } finally {
     await rm(files.root, { recursive: true, force: true })
   }
@@ -326,6 +377,7 @@ test('Ghidra orchestration stages a copy, emits strict evidence, and removes scr
       },
     })
     const evidence = JSON.parse(await readFile(join(outPath, 'evidence.json'), 'utf8'))
+    const intent = JSON.parse(await readFile(join(outPath, 'intent.json'), 'utf8'))
     assert.equal(result.status, 'SUCCEEDED')
     assert.equal(evidence.status, 'SUCCEEDED')
     assert.equal(evidence.target_execution, 'NOT_PERFORMED')
@@ -335,9 +387,33 @@ test('Ghidra orchestration stages a copy, emits strict evidence, and removes scr
     assert.equal(evidence.observations.some(({ type }) => type === 'static-endpoint'), true)
     assert.equal(evidence.observations.some(({ type }) => type === 'auth-hint'), true)
     assert.equal(evidence.observations.some(({ type }) => type === 'function'), true)
+    assert.equal(intent.tool_invocation_sha256, evidence.tool.invocation_sha256)
+    assert.equal(
+      evidence.tool.invocation_sha256,
+      createHash('sha256').update(stableJson({
+        profile_id: evidence.profile_id,
+        args: invocation.args,
+        components: evidence.tool.components,
+      }, 0)).digest('hex'),
+    )
+    assert.deepEqual(
+      evidence.tool.components.map(({ role }) => role),
+      ['fixed-exporter', 'ghidra-launcher'],
+    )
+    assert.deepEqual(
+      evidence.tool.components.map(({ role }) => role),
+      evidence.tool.components.map(({ role }) => role).sort(compareCanonicalStrings),
+    )
+    for (const component of evidence.tool.components) {
+      assert.match(component.sha256, /^[a-f0-9]{64}$/u)
+      assert.equal(component.size_bytes > 0, true)
+    }
     assert.equal(invocation.args.includes('-readOnly'), true)
     assert.equal(invocation.args.includes('-deleteProject'), true)
-    await assert.rejects(readFile(join(outPath, '.work', 'target.exe')))
+    assert.equal(Object.hasOwn(invocation, 'windowsCompatibilityAgent'), false)
+    assert.equal(invocation.args[0], join(outPath, 'work', 'project'))
+    assert.equal(invocation.args[0].split(/[\\/]/u).some((part) => part.startsWith('.')), false)
+    await assert.rejects(readFile(join(outPath, 'work', 'target.exe')))
     assert.equal(await readFile(files.binaryPath, 'utf8'), 'fixed native fixture')
   } finally {
     await rm(files.root, { recursive: true, force: true })
@@ -390,7 +466,7 @@ test('Ghidra export verification admits only the exporter generic route segments
     )
 
     for (const segment of [
-      'check', 'checkdatacenter', 'checklogin', 'clients', 'home', 'sessionstart', 'start',
+      'workspacealpha', 'workspacebeta', 'workspacegamma', 'workspacedelta', 'workspaceepsilon', 'workspacezeta',
     ]) {
       const rejected = await analyzePath(`/api/${segment}/{integer}`, `rejected-ghidra-${segment}`)
       assert.equal(rejected.result.status, 'FAILED')
@@ -433,7 +509,7 @@ test('Ghidra orchestration preserves scratch when process termination is unconfi
     assert.equal(result.status, 'FAILED')
     assert.deepEqual(evidence.cleanup, { attempted: false, verified: false })
     assert.equal(evidence.gaps.some(({ code }) => code === 'GHIDRA_TERMINATION_UNCONFIRMED'), true)
-    assert.equal(await readFile(join(outPath, '.work', 'target.exe'), 'utf8'), 'fixed native fixture')
+    assert.equal(await readFile(join(outPath, 'work', 'target.exe'), 'utf8'), 'fixed native fixture')
   } finally {
     await rm(files.root, { recursive: true, force: true })
   }
@@ -517,7 +593,7 @@ test('Ghidra orchestration never removes a replacement at the owned scratch path
   const files = await fixture()
   try {
     const outPath = join(files.root, 'ghidra-replaced-work')
-    const displacedPath = join(outPath, '.work-displaced')
+    const displacedPath = join(outPath, 'work-displaced')
     const result = await analyzeGhidraArtifact({
       labRoot: files.labRoot,
       binary: 'bin/demo.exe',
@@ -547,7 +623,7 @@ test('Ghidra orchestration never removes a replacement at the owned scratch path
     assert.deepEqual(evidence.cleanup, { attempted: true, verified: false })
     assert.equal(evidence.gaps.some(({ code }) => code === 'WORK_IDENTITY_CHANGED'), true)
     assert.equal(evidence.gaps.some(({ code }) => code === 'CLEANUP_UNVERIFIED'), true)
-    assert.equal(await readFile(join(outPath, '.work', 'replacement-marker.txt'), 'utf8'), 'preserve me')
+    assert.equal(await readFile(join(outPath, 'work', 'replacement-marker.txt'), 'utf8'), 'preserve me')
     assert.equal(await readFile(join(displacedPath, 'target.exe'), 'utf8'), 'fixed native fixture')
   } finally {
     await rm(files.root, { recursive: true, force: true })
@@ -586,7 +662,7 @@ test('Ghidra orchestration discards observations when the launcher changes durin
     assert.equal(result.status, 'FAILED')
     assert.deepEqual(evidence.observations, [])
     assert.equal(evidence.gaps.some(({ code }) => code === 'TOOL_CHANGED'), true)
-    await assert.rejects(readFile(join(outPath, '.work', 'target.exe')))
+    await assert.rejects(readFile(join(outPath, 'work', 'target.exe')))
   } finally {
     await rm(files.root, { recursive: true, force: true })
   }

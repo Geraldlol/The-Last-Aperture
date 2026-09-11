@@ -9,7 +9,7 @@ function stageOne(overrides = {}) {
     topic: 'container-image-content',
     title: 'Deleted build secret is still readable in the layer below the whiteout',
     claimed_impact_severity: 'High',
-    location: ['peerstar-api-image:layer/02/secret.txt'],
+    location: ['sample-api-image:layer/02/secret.txt'],
     evidence: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI',
     attack: 'docker save the image, extract layer 02, read secret.txt',
     impact: 'Recovers a deployment credential the Dockerfile claims to have removed',
@@ -18,7 +18,7 @@ function stageOne(overrides = {}) {
     proof_plan: 'Extract layer 02 from the sealed bundle and read the quoted bytes',
     evidence_claim: 'secret-present-in-artifact',
     evidence_context: {
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       target_identity: 'sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c',
@@ -53,7 +53,7 @@ test('the two location forms are disjoint', () => {
   // A repository path can never be read as an evidence id.
   assert.equal(validateFinding(stageOne({ location: ['src/app.ts:12'] })).valid, false)
   // A bare line number can never be read as a locator.
-  assert.equal(validateFinding(stageOne({ location: ['peerstar-api-image:88'] })).valid, false)
+  assert.equal(validateFinding(stageOne({ location: ['sample-api-image:88'] })).valid, false)
 })
 
 test('an evidence-qualified location without evidence_context is malformed', () => {
@@ -96,7 +96,7 @@ test('a source-class evidence_context is refused; source needs no bundle', () =>
 
 test('mixing repository and evidence locations in one record is refused', () => {
   const validation = validateFinding(stageOne({
-    location: ['peerstar-api-image:layer/02/secret.txt', 'Dockerfile:14'],
+    location: ['sample-api-image:layer/02/secret.txt', 'Dockerfile:14'],
   }))
   assert.equal(validation.valid, false)
   assert.ok(validation.errors.some((e) => e.code === 'MIXED_LOCATION_CLASSES'))

@@ -36,147 +36,79 @@ function assertMatches(path, text, pattern, concept) {
   assert.match(text, pattern, `${path} must preserve ${concept}`)
 }
 
-test('current governing surfaces ask once only for missing target or scope', () => {
-  const ingressSurfaces = [
-    SURFACE_PATHS.rootSkill,
-    SURFACE_PATHS.canonicalSkill,
-    SURFACE_PATHS.harness,
-    SURFACE_PATHS.readme,
-    SURFACE_PATHS.security,
-    SURFACE_PATHS.adr21,
-    SURFACE_PATHS.adr23,
-  ]
-
-  for (const path of ingressSurfaces) {
+test('current skill entry points accept one ordinary-language target statement', () => {
+  for (const path of [SURFACE_PATHS.rootSkill, SURFACE_PATHS.canonicalSkill]) {
     const text = prose(path)
-    assertMatches(path, text, /operator statement/i, 'operator-statement ingress')
-    assertMatches(
-      path,
-      text,
-      /sole authorization (?:fact|primitive|source)/i,
-      'the operator statement as the sole authorization source',
-    )
-    assertMatches(
-      path,
-      text,
-      /(?:target\/scope|target and scope|target or scope)/i,
-      'a target-and-scope envelope',
-    )
-    assertMatches(
-      path,
-      text,
-      /(?:target\/scope is (?:already )?(?:supplied|present), proceed|if it is already present, the agent proceeds)/i,
-      'proceeding when target and scope are present',
-    )
-    assertMatches(
-      path,
-      text,
-      /(?:ask once only when it is missing|target or scope is missing, the agent asks the operator once)/i,
-      'one question only when target or scope is missing',
-    )
-    assertMatches(
-      path,
-      text,
-      /(?:never (?:re-ask|demand another|require another)|do not require another|no additional authorization|without another prompt)/i,
-      'no repeated authorization decision',
-    )
+    assertMatches(path, text, /natural-language (?:operator )?statement naming the target/i, 'ordinary-language target ingress')
+    assertMatches(path, text, /start immediately/i, 'immediate execution after ingress')
+    assertMatches(path, text, /Ask once only[^.]*missing/i, 'one question only for missing scope facts')
+    assertMatches(path, text, /per-action confirmation/i, 'no per-action confirmation')
+    assertMatches(path, text, /Codex\/Claude handoffs/i, 'authority carried across model handoffs')
   }
 
-  for (const path of [
+  assertMatches(
+    SURFACE_PATHS.rootSkill,
+    prose(SURFACE_PATHS.rootSkill),
+    /authorization is sufficient for the entire named objective/i,
+    'one statement for the entire named objective',
+  )
+  assertMatches(
     SURFACE_PATHS.canonicalSkill,
-    SURFACE_PATHS.readme,
-    SURFACE_PATHS.security,
-    SURFACE_PATHS.adr21,
-    SURFACE_PATHS.adr23,
-  ]) {
-    assertMatches(
-      path,
-      prose(path),
-      /operator (?:is|remains) accountable/i,
-      'operator accountability without product-side legal adjudication',
-    )
+    prose(SURFACE_PATHS.canonicalSkill),
+    /sole authorization step/i,
+    'one authorization step',
+  )
+  for (const path of [SURFACE_PATHS.readme, SURFACE_PATHS.security, SURFACE_PATHS.adr21, SURFACE_PATHS.adr23]) {
+    assertMatches(path, prose(path), /sole authorization (?:fact|primitive)/i, 'one authorization source')
+  }
+  for (const path of [SURFACE_PATHS.readme, SURFACE_PATHS.security, SURFACE_PATHS.adr21, SURFACE_PATHS.adr23]) {
+    assertMatches(path, prose(path), /operator (?:is|remains) accountable/i, 'operator accountability')
   }
 })
 
-test('the same named authority covers T2, service boots, credentials, and external services', () => {
-  for (const path of Object.values(SURFACE_PATHS)) {
-    const text = prose(path)
-    assertMatches(path, text, /sole authorization (?:fact|primitive|source)/i, 'one authorization source')
-    assertMatches(path, text, /\bT2\b/i, 'named T2 authority')
-    assertMatches(path, text, /service boots?/i, 'named service-boot authority')
-    assertMatches(
-      path,
-      text,
-      /(?:controller-referenced(?: live)?|live) credentials/i,
-      'named credential use',
-    )
-    assertMatches(path, text, /(?:named )?external (?:services|systems)/i, 'named external-service authority')
-  }
-
-  for (const path of [
-    SURFACE_PATHS.rootSkill,
-    SURFACE_PATHS.canonicalSkill,
-    SURFACE_PATHS.readme,
-    SURFACE_PATHS.adr21,
-    SURFACE_PATHS.adr22,
+test('the accepted statement covers autonomous target-neutral methods', () => {
+  const root = prose(SURFACE_PATHS.rootSkill)
+  const canonical = prose(SURFACE_PATHS.canonicalSkill)
+  for (const [path, text] of [
+    [SURFACE_PATHS.rootSkill, root],
+    [SURFACE_PATHS.canonicalSkill, canonical],
   ]) {
-    assertMatches(path, prose(path), /T1-only statement (?:stays|remains) narrow/i, 'narrow T1-only scope')
+    assertMatches(path, text, /browser[\s\S]*Burp[\s\S]*Ghidra[\s\S]*Frida/i, 'target-neutral browser and reverse tooling')
+    assertMatches(path, text, /\bT1\b[\s\S]*\bT2\b/i, 'implemented proof routes')
+  }
+  assertMatches(SURFACE_PATHS.canonicalSkill, canonical, /Choose tactics autonomously/i, 'autonomous tactic selection')
+  assertMatches(
+    SURFACE_PATHS.canonicalSkill,
+    canonical,
+    /covers the methods needed for the objective[\s\S]*fuzzing, proof, and connectors/i,
+    'method coverage inherited from the objective',
+  )
+  for (const path of [SURFACE_PATHS.readme, SURFACE_PATHS.security]) {
+    assertMatches(path, prose(path), /browser[\s\S]*Burp[\s\S]*Ghidra[\s\S]*Frida/i, 'shipped target-neutral tooling')
   }
 })
 
-test('missing transports preserve authority as a technical unavailable result without re-prompting', () => {
-  const documents = Object.fromEntries(
-    Object.entries(SURFACE_PATHS).map(([name, path]) => [name, prose(path)]),
-  )
-
-  assertMatches(
-    SURFACE_PATHS.canonicalSkill,
-    documents.canonicalSkill,
-    /technically unavailable[^.]*\. This is not an authorization denial[^.]*authorized-but-unavailable gap/i,
-    'authorized-but-technically-unavailable route handling',
-  )
-  assertMatches(
-    SURFACE_PATHS.rootSkill,
-    documents.rootSkill,
-    /Other service boots, live credentials, and external systems need their own routes; record them authorized-but-unavailable[\s\S]*technical capability fact, not a second authorization boundary/i,
-    'route availability as distinct from authority',
-  )
+test('a missing wrapper is a technical gap rather than another authorization prompt', () => {
+  const root = prose(SURFACE_PATHS.rootSkill)
+  const canonical = prose(SURFACE_PATHS.canonicalSkill)
+  assertMatches(SURFACE_PATHS.rootSkill, root, /missing dedicated wrapper[\s\S]{0,80}(?:does not create|is not) another authorization gate/i, 'no wrapper-specific authorization gate')
+  assertMatches(SURFACE_PATHS.rootSkill, root, /technical gap/i, 'technical unavailability reporting')
+  assertMatches(SURFACE_PATHS.canonicalSkill, canonical, /Active target I\/O needs[\s\S]{0,100}matching dispatch route/i, 'target-bound dispatch requirement')
+  assertMatches(SURFACE_PATHS.canonicalSkill, canonical, /without[\s\S]{0,100}per-action confirmation/i, 'no route-specific authorization prompt')
   assertMatches(
     SURFACE_PATHS.harness,
-    documents.harness,
-    /Other T2 shapes, live credentials, and external services need separate controllers; otherwise retain authority and emit an authorized-but-unavailable gap/i,
-    'unsupported T2 remains authorized without an invented controller',
+    prose(SURFACE_PATHS.harness),
+    /retain authority and emit an authorized-but-unavailable gap/i,
+    'authority retained when a controller is absent',
   )
-  assertMatches(
-    SURFACE_PATHS.readme,
-    documents.readme,
-    /narrow loopback T2 is enabled only[\s\S]{0,80}through `run-service-proof`[\s\S]{0,500}Other T2 shapes retain their authority but remain unavailable without a matching route/i,
-    'implemented narrow T2 and retained authority for unsupported T2 shapes',
-  )
-  assertMatches(
-    SURFACE_PATHS.security,
-    documents.security,
-    /missing transport is a technical unavailable result, not an authorization denial; never invent one/i,
-    'a missing transport as a technical result',
-  )
-  assertMatches(
-    SURFACE_PATHS.adr21,
-    documents.adr21,
-    /no matching route, authority is retained and execution is reported authorized-but-unavailable without another prompt/i,
-    'retained authority without another prompt',
-  )
-  assertMatches(
-    SURFACE_PATHS.adr22,
-    documents.adr22,
-    /statement named T2, service boots, controller-referenced credentials, or external services, retain that authority and report the missing matching route as an authorized-but-unavailable gap/i,
-    'broader authority retained outside the T1 route',
-  )
-  assertMatches(
-    SURFACE_PATHS.adr23,
-    documents.adr23,
-    /required controller, transport, credential material, or platform capability is absent[^.]*authorized-but-unavailable[\s\S]*Never ask the operator to authorize the same thing again/i,
-    'authorized-but-unavailable execution without reauthorization',
-  )
+  for (const path of [SURFACE_PATHS.readme, SURFACE_PATHS.security]) {
+    assertMatches(path, prose(path), /technically unavailable/i, 'explicit technical unavailability')
+  }
+  for (const path of [SURFACE_PATHS.adr21, SURFACE_PATHS.adr22, SURFACE_PATHS.adr23]) {
+    const text = prose(path)
+    assertMatches(path, text, /authorized-but-unavailable|reported? (?:it )?unavailable/i, 'unavailable route result')
+    assertMatches(path, text, /without (?:another|a second) (?:permission )?(?:prompt|confirmation)|without re-asking|never ask the operator to authorize the same thing again/i, 'no repeat authorization')
+  }
 })
 
 test('the sealed public T1 route remains network denied alongside narrow network-none T2', () => {
@@ -189,7 +121,7 @@ test('the sealed public T1 route remains network denied alongside narrow network
   assertMatches(
     SURFACE_PATHS.rootSkill,
     prose(SURFACE_PATHS.rootSkill),
-    /Public T1 uses `test`, sealed source, and `run-proof`[\s\S]{0,180}Public T2 uses `LOCAL_DYNAMIC`, sealed source, v3, and `run-service-proof`/i,
+    /T1 uses `test`, sealed source, and `run-proof`[\s\S]{0,180}T2 uses `LOCAL_DYNAMIC`, sealed source, v3, and `run-service-proof`/i,
     'delegation to the sealed T1 worker',
   )
   assertMatches(
@@ -219,42 +151,41 @@ test('the sealed public T1 route remains network denied alongside narrow network
   )
 })
 
-test('only newly added scope needs a predecessor-bound successor statement', () => {
+test('only a new target, added scope, or effect needs a successor statement', () => {
+  for (const path of [SURFACE_PATHS.rootSkill, SURFACE_PATHS.canonicalSkill]) {
+    const text = prose(path)
+    assertMatches(path, text, /(?:Only a )?new target, added scope, or unlisted publish\/deploy effect needs a successor/i, 'successor scope boundary')
+    assertMatches(path, text, /unchanged scope never needs recertification/i, 'unchanged authority continuity')
+  }
   assertMatches(
     SURFACE_PATHS.canonicalSkill,
     prose(SURFACE_PATHS.canonicalSkill),
-    /New scope needs an inert request and explicit statement creating a predecessor-bound successor; authority never carries over/i,
-    'a predecessor-bound successor for new scope',
-  )
-  assertMatches(
-    SURFACE_PATHS.rootSkill,
-    prose(SURFACE_PATHS.rootSkill),
-    /cannot widen a target[\s\S]*Follow the canonical skill's Break Their Bones and scope-expansion rules/i,
-    'non-widening delegation to canonical scope expansion',
-  )
-  assertMatches(
-    SURFACE_PATHS.readme,
-    prose(SURFACE_PATHS.readme),
-    /accepts that statement as its authorization fact without requesting an external legal-proof artifact or later recertification/i,
-    'no recertification of unchanged authority',
+    /New target scope needs an explicit predecessor-bound successor statement/i,
+    'predecessor-bound scope expansion',
   )
   assertMatches(
     SURFACE_PATHS.security,
     prose(SURFACE_PATHS.security),
-    /existing operator statement is sufficient if it already names the authenticated target and work; only a scope addition needs a successor statement/i,
-    'a successor only for a scope addition',
+    /only a scope addition needs a successor statement/i,
+    'successor only for added scope',
   )
   assertMatches(
     SURFACE_PATHS.adr21,
     prose(SURFACE_PATHS.adr21),
-    /new operator statement[\s\S]*predecessor-bound successor scope[\s\S]*existing campaign authority never carries across automatically/i,
-    'predecessor-bound scope expansion',
+    /predecessor-bound successor scope/i,
+    'predecessor-bound recorded successor',
   )
   assertMatches(
     SURFACE_PATHS.adr23,
     prose(SURFACE_PATHS.adr23),
     /successor statement may add it without recertifying unchanged authority/i,
-    'unchanged authority surviving a scope addition',
+    'unchanged authority continuity across a scope addition',
+  )
+  assertMatches(
+    SURFACE_PATHS.readme,
+    prose(SURFACE_PATHS.readme),
+    /without requesting an external legal-proof artifact or later recertification/i,
+    'no later recertification of the accepted scope',
   )
 })
 

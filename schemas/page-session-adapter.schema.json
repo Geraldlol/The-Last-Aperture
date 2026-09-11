@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/page-session-adapter.schema.json",
+  "title": "The Last Aperture page-managed session adapter",
+  "description": "A target-neutral, declarative recipe for applying one bounded web-storage value to one declared request header inside an attached same-origin browser document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "adapter_id",
+    "source",
+    "carrier",
+    "target_constraints",
+    "validity",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/page-session-adapter" },
+    "adapter_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "area", "key", "extraction"],
+      "properties": {
+        "type": { "const": "WEB_STORAGE" },
+        "area": { "enum": ["LOCAL", "SESSION"] },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+        },
+        "extraction": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode"],
+              "properties": { "mode": { "const": "RAW" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "pointer"],
+              "properties": {
+                "mode": { "const": "JSON_POINTER" },
+                "pointer": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^(?:/(?:[^~/\\u0000-\\u001f\\u007f]|~[01])*)+$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "carrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name"],
+      "properties": {
+        "type": { "const": "REQUEST_HEADER" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]+$"
+        },
+        "prefix": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        }
+      }
+    },
+    "target_constraints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["origin", "method", "path_prefix"],
+        "properties": {
+          "origin": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 512,
+            "pattern": "^https://[^\\u0000-\\u0020\\u007f/*?{}]+$"
+          },
+          "method": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]+$"
+          },
+          "path_prefix": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^/[^\\u0000-\\u0020\\u007f*?{}#]*$"
+          }
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["not_before", "not_after"],
+      "properties": {
+        "not_before": { "$ref": "#/$defs/timestamp" },
+        "not_after": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_value_bytes"],
+      "properties": {
+        "max_value_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8192
+        }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}

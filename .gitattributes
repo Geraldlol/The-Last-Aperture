@@ -3,6 +3,10 @@
 # CRLF flipping every line is pure review noise.
 * text=auto eol=lf
 
+# JAR manifest main sections end with a blank line by format.
+integrations/burp-montoya/MANIFEST.MF whitespace=-blank-at-eof
+scripts/ghidra/GhidraBundleLocationAgent.mf whitespace=-blank-at-eof
+
 # Fixtures are read as source code by the audit pipeline. Keep them LF
 # regardless of platform so a proof recipe's line numbers stay stable.
 fixtures/** text eol=lf

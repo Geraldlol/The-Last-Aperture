@@ -33,7 +33,8 @@ function emit(value) {
   })}`)
 }
 
-function loadConfiguration() {
+function loadConfiguration(parametersValue) {
+  const parameters = parametersValue
   if (!exactKeys(parameters, [
     'profileId',
     'moduleName',
@@ -58,58 +59,69 @@ function loadConfiguration() {
   return parameters
 }
 
-const configuration = loadConfiguration()
-const mainModule = Process.mainModule
-const selectedModule = configuration.moduleName === '<main>'
-  || configuration.moduleName === mainModule.name
-  ? mainModule
-  : Process.getModuleByName(configuration.moduleName)
-const targetAddress = selectedModule.findExportByName(configuration.symbolName)
+let configuration = null
 
-if (targetAddress === null) throw new Error('requested exported symbol is unavailable')
-const moduleEnd = selectedModule.base.add(selectedModule.size)
-if (
-  targetAddress.compare(selectedModule.base) < 0
-  || targetAddress.compare(moduleEnd) >= 0
-) throw new Error('requested exported symbol is outside the selected module')
+function initialize(parametersValue) {
+  if (configuration !== null) throw new Error('fixed profile was already initialized')
+  configuration = loadConfiguration(parametersValue)
+  const mainModule = Process.mainModule
+  const selectedModule = configuration.moduleName === '<main>'
+    || configuration.moduleName === mainModule.name
+    ? mainModule
+    : Process.getModuleByName(configuration.moduleName)
+  const targetAddress = selectedModule.findExportByName(configuration.symbolName)
 
-let emittedEvents = 0
-let truncated = false
+  if (targetAddress === null) throw new Error('requested exported symbol is unavailable')
+  const moduleEnd = selectedModule.base.add(selectedModule.size)
+  if (
+    targetAddress.compare(selectedModule.base) < 0
+    || targetAddress.compare(moduleEnd) >= 0
+  ) throw new Error('requested exported symbol is outside the selected module')
 
-function emitTraceEvent(kind, invocation) {
-  if (emittedEvents >= configuration.maxEvents) {
-    truncated = true
-    return
+  let emittedEvents = 0
+  let truncated = false
+
+  function emitTraceEvent(kind, invocation) {
+    if (emittedEvents >= configuration.maxEvents) {
+      truncated = true
+      return
+    }
+    emittedEvents += 1
+    emit({
+      event: kind,
+      sequence: emittedEvents,
+      thread_id: invocation.threadId,
+    })
   }
-  emittedEvents += 1
+
   emit({
-    event: kind,
-    sequence: emittedEvents,
-    thread_id: invocation.threadId,
+    event: 'ready',
+    module_name: configuration.moduleName,
+    symbol_name: configuration.symbolName,
+    module_relative_offset: targetAddress.sub(selectedModule.base).toString(),
   })
+
+  const listener = Interceptor.attach(targetAddress, {
+    onEnter() {
+      emitTraceEvent('enter', this)
+    },
+    onLeave() {
+      emitTraceEvent('leave', this)
+    },
+  })
+
+  setTimeout(() => {
+    listener.detach()
+    emit({
+      event: 'complete',
+      events_emitted: emittedEvents,
+      truncated,
+    })
+  }, configuration.durationSeconds * 1000)
 }
 
-emit({
-  event: 'ready',
-  module_name: configuration.moduleName,
-  symbol_name: configuration.symbolName,
-  module_relative_offset: targetAddress.sub(selectedModule.base).toString(),
-})
-
-const listener = Interceptor.attach(targetAddress, {
-  onEnter() {
-    emitTraceEvent('enter', this)
+rpc.exports = {
+  init(_stage, parametersValue) {
+    initialize(parametersValue)
   },
-  onLeave() {
-    emitTraceEvent('leave', this)
-  },
-})
-
-setTimeout(() => {
-  listener.detach()
-  emit({
-    event: 'complete',
-    events_emitted: emittedEvents,
-    truncated,
-  })
-}, configuration.durationSeconds * 1000)
+}

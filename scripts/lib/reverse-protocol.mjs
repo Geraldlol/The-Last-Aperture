@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 
 import { assertValidReverseEvidence, digestReverseEvidence } from './reverse-contracts.mjs'
+import { legacyV1AuthPath } from './reverse-v1-compat-semantics.mjs'
 import { assertValidWebSessionEvidence, digestWebSessionEvidence, webPathTemplate } from './reverse-web-har.mjs'
 import { stableJson } from './run-engine.mjs'
 
@@ -11,9 +12,7 @@ const HASH = /^[a-f0-9]{64}$/u
 const ID = /^[a-z]+:[a-f0-9]{32}$/u
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u
 const WRITE_METHODS = new Set(['DELETE', 'PATCH', 'POST', 'PUT'])
-const AUTH_PATH = /(?:^|\/)(?:auth|callback|checkdatacenter|checklogin|login|logon|oauth|session|signin|signout|sso|token)(?:\/|$)/iu
-const LOGIN_PATH = /(?:^|\/)(?:checklogin|login|logon|signin)(?:\/|$)/iu
-const DATACENTER_PATH = /(?:^|\/)checkdatacenter(?:\/|$)/iu
+const AUTH_PATH = /(?:^|\/)(?:auth|callback|login|logon|oauth|session|signin|signout|sso|token)(?:\/|$)/iu
 const LOGOUT_PATH = /(?:^|\/)(?:logout|signout)(?:\/|$)/iu
 const PAGINATION_PAGE = new Set(['limit', 'offset', 'page', 'pagesize', 'page_size', 'skip', 'take'])
 const PAGINATION_CURSOR = new Set(['after', 'before', 'cursor', 'next', 'page_token'])
@@ -27,6 +26,8 @@ const FIELD_NAME = /^[A-Za-z0-9_$@.:[\]-]{1,128}$/u
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u
 const SENSITIVE_NAME = /(?:api[_-]?key|auth|bearer|client[_-]?secret|connection|credential|csrf|jwt|login|pass(?:word|wd)?|secret|session|ssn|token|user(?:name)?|xsrf)/iu
 const SEMANTIC_NAME = /^(?:action|command|event|method|mode|op|operation|submit|task|view)$/iu
+const ENDPOINT_PROVENANCE = new Set(['BURP_XML', 'WEB_HAR'])
+const NATIVE_SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0'])
 const MAX_AGGREGATE_WEB_ENTRIES = 20_000
 const MAX_AGGREGATE_REVERSE_OBSERVATIONS = 20_000
 const MAX_AGGREGATE_FIELDS = 100_000
@@ -162,7 +163,7 @@ function classifyAuthRequest(entry) {
   if (LOGOUT_PATH.test(entry.request.path_template)) return ['SESSION_TERMINATION', 'INFERRED_PATH']
   if (entry.request.body.fields.some((field) => /pass(?:word|wd)?/iu.test(field.name))) return ['CREDENTIAL_SUBMIT', 'OBSERVED_SHAPE']
   if (/token/iu.test(entry.request.path_template)) return ['TOKEN_EXCHANGE', 'INFERRED_PATH']
-  if (LOGIN_PATH.test(entry.request.path_template) || DATACENTER_PATH.test(entry.request.path_template) || AUTH_PATH.test(entry.request.path_template)) return ['AUTH_REQUEST', 'INFERRED_PATH']
+  if (AUTH_PATH.test(entry.request.path_template)) return ['AUTH_REQUEST', 'INFERRED_PATH']
   if (entry.request.credential_carriers.length > 0) return ['AUTHENTICATED_REQUEST', 'OBSERVED_CARRIERS']
   return ['APPLICATION_REQUEST', 'UNCLASSIFIED']
 }
@@ -213,6 +214,7 @@ function aggregateEndpoints(entries) {
       responseCookies: new Set(),
       redirects: new Map(),
       evidenceRefs: [],
+      discoveredVia: new Set(),
       exchanges: [],
       pagination: 'NOT_OBSERVED',
       sequences: [],
@@ -244,6 +246,7 @@ function aggregateEndpoints(entries) {
       query_parameters: queryAsFields(destination.query_parameters),
     })
     current.evidenceRefs.push(entry.observation_id)
+    current.discoveredVia.add(entry.source_provenance)
     const observedSideEffect = sideEffect(entry)
     if (
       observedSideEffect.classification === 'WRITE_CANDIDATE'
@@ -332,7 +335,7 @@ function finishEndpoints(map, entries) {
       pagination: item.pagination,
       retry,
       write_verification: verification,
-      discovered_via: ['WEB_HAR'],
+      discovered_via: [...item.discoveredVia].sort(lexical),
       evidence_refs: unique(item.evidenceRefs),
       exchanges: [...item.exchanges].sort(compareExchanges),
     }
@@ -367,6 +370,7 @@ function exchangeForEntry(entry) {
   return {
     evidence_ref: entry.observation_id,
     capture_id: entry.capture_id,
+    provenance: entry.source_provenance,
     sequence: entry.sequence,
     request: {
       action,
@@ -497,7 +501,11 @@ export function buildNativeInteractionContract({ webSessionEvidence = [], revers
   if (new Set(reverseEvidence.map(digestReverseEvidence)).size !== reverseEvidence.length) fail('reverse evidence inputs must be distinct')
   canonicalTime(generatedAt)
   aggregateFieldCount(webSessionEvidence)
-  const allEntries = webSessionEvidence.flatMap((capture) => capture.entries.map((entry) => ({ ...entry, capture_id: capture.capture_id })))
+  const allEntries = webSessionEvidence.flatMap((capture) => capture.entries.map((entry) => ({
+    ...entry,
+    capture_id: capture.capture_id,
+    source_provenance: capture.source.kind === 'BURP_XML' ? 'BURP_XML' : 'WEB_HAR',
+  })))
   if (new Set(allEntries.map(({ observation_id: id }) => id)).size !== allEntries.length) fail('web session observations must be distinct across captures')
   const endpointMap = aggregateEndpoints(allEntries)
   const endpoints = finishEndpoints(endpointMap, allEntries)
@@ -527,7 +535,7 @@ export function buildNativeInteractionContract({ webSessionEvidence = [], revers
   if (flows.some((flow) => flow.steps.some((step) => step.destination_correlation === 'AMBIGUOUS'))) gaps.push({ code: 'MULTIPLE_RESPONSE_DESTINATIONS_REQUIRE_REVIEW', message: 'At least one response exposed multiple destinations without one unique forward match; no transition link was inferred for that step.' })
   if (flows.some((flow) => flow.steps.some((step) => step.destination_candidates.some((destination) => pathHasTemplateSegment(destination.path_template))))) gaps.push({ code: 'REDACTED_DESTINATION_CORRELATION_UNPROVEN', message: 'At least one response destination contains a redacted path segment, so no transition link is inferred from path-template equality.' })
   const contract = {
-    schema_version: '1.0.0',
+    schema_version: '1.1.0',
     kind: NATIVE_INTERACTION_CONTRACT_KIND,
     protocol: NATIVE_INTERACTION_CONTRACT_PROTOCOL,
     contract_id: `interaction:${'0'.repeat(32)}`,
@@ -589,9 +597,12 @@ function webPathTemplateForContract(path, pathLiterals) {
   return webPathTemplate(path, { pathLiterals })
 }
 
-function assertExchange(exchange, pathLiterals) {
-  exact(exchange, ['capture_id', 'evidence_ref', 'request', 'response', 'sequence'], 'native endpoint exchange')
+function assertExchange(exchange, pathLiterals, schemaVersion) {
+  const legacy = schemaVersion === '1.0.0'
+  const fields = ['capture_id', 'evidence_ref', 'request', 'response', 'sequence']
+  exact(exchange, legacy ? fields : [...fields, 'provenance'], 'native endpoint exchange')
   if (!/^web:[a-f0-9]{32}$/u.test(exchange.capture_id ?? '') || !/^webobs:[a-f0-9]{32}$/u.test(exchange.evidence_ref ?? '')) fail('native endpoint exchange identity is invalid')
+  if (!legacy && !ENDPOINT_PROVENANCE.has(exchange.provenance)) fail('native endpoint exchange provenance is invalid')
   if (!Number.isSafeInteger(exchange.sequence) || exchange.sequence < 1 || exchange.sequence > 10_000) fail('native endpoint exchange sequence is invalid')
   exact(exchange.request, ['action', 'action_basis', 'credential_carriers'], 'native endpoint exchange request')
   if (!REQUEST_ACTIONS.has(exchange.request.action) || !REQUEST_ACTION_BASES.has(exchange.request.action_basis)) fail('native endpoint exchange request action is invalid')
@@ -606,12 +617,12 @@ function assertExchange(exchange, pathLiterals) {
   if (!exchange.response.destinations.every((destination, index) => index === 0 || lexical(destinationKey(exchange.response.destinations[index - 1]), destinationKey(destination)) < 0)) fail('native endpoint exchange response destinations are not canonical or distinct')
 }
 
-function expectedExchangeRequestAction(endpoint, exchange) {
+function expectedExchangeRequestAction(endpoint, exchange, schemaVersion) {
   const carriers = exchange.request.credential_carriers
   if (LOGOUT_PATH.test(endpoint.path_template)) return ['SESSION_TERMINATION', 'INFERRED_PATH']
   if (carriers.some((carrier) => carrier.startsWith('body:') && /pass(?:word|wd)?/iu.test(carrier.slice('body:'.length)))) return ['CREDENTIAL_SUBMIT', 'OBSERVED_SHAPE']
   if (/token/iu.test(endpoint.path_template)) return ['TOKEN_EXCHANGE', 'INFERRED_PATH']
-  if (LOGIN_PATH.test(endpoint.path_template) || DATACENTER_PATH.test(endpoint.path_template) || AUTH_PATH.test(endpoint.path_template)) return ['AUTH_REQUEST', 'INFERRED_PATH']
+  if ((schemaVersion === '1.0.0' ? legacyV1AuthPath(endpoint.path_template) : AUTH_PATH.test(endpoint.path_template))) return ['AUTH_REQUEST', 'INFERRED_PATH']
   if (carriers.length > 0) return ['AUTHENTICATED_REQUEST', 'OBSERVED_CARRIERS']
   return ['APPLICATION_REQUEST', 'UNCLASSIFIED']
 }
@@ -627,8 +638,10 @@ function aggregateExchangeDestinations(exchanges) {
   })).sort((left, right) => lexical(`${left.source}${left.field_path ?? ''}${left.origin}${left.path_template}`, `${right.source}${right.field_path ?? ''}${right.origin}${right.path_template}`))
 }
 
-function assertEndpoint(endpoint, pathLiterals) {
-  exact(endpoint, ['auth', 'discovered_via', 'endpoint_id', 'evidence_refs', 'exchanges', 'method', 'observations', 'origin', 'pagination', 'path_template', 'protocol_role', 'redirects', 'request', 'response', 'retry', 'side_effect', 'write_verification'], 'native endpoint')
+function assertEndpoint(endpoint, pathLiterals, schemaVersion) {
+  const legacy = schemaVersion === '1.0.0'
+  const fields = ['auth', 'endpoint_id', 'evidence_refs', 'exchanges', 'method', 'observations', 'origin', 'pagination', 'path_template', 'protocol_role', 'redirects', 'request', 'response', 'retry', 'side_effect', 'write_verification']
+  exact(endpoint, [...fields, 'discovered_via'], 'native endpoint')
   if (!/^endpoint:[a-f0-9]{32}$/u.test(endpoint.endpoint_id ?? '')) fail('native endpoint id is invalid')
   assertOrigin(endpoint.origin)
   if (webPathTemplateForContract(endpoint.path_template, pathLiterals) !== endpoint.path_template) fail('native endpoint path is not canonical')
@@ -670,16 +683,18 @@ function assertEndpoint(endpoint, pathLiterals) {
   if (!['CURSOR_PARAMETER_OBSERVED', 'NOT_OBSERVED', 'OFFSET_OR_PAGE_PARAMETERS_OBSERVED'].includes(endpoint.pagination)) fail('native endpoint pagination is invalid')
   if (!['NOT_OBSERVED', 'RETRY_SEQUENCE_OBSERVED'].includes(endpoint.retry)) fail('native endpoint retry is invalid')
   if (!['FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED', 'NOT_APPLICABLE', 'NOT_OBSERVED'].includes(endpoint.write_verification)) fail('native endpoint write verification is invalid')
-  if (!Array.isArray(endpoint.discovered_via) || endpoint.discovered_via.length !== 1 || endpoint.discovered_via[0] !== 'WEB_HAR') fail('native endpoint provenance is invalid')
+  if (!canonicalList(endpoint.discovered_via, (value) => ENDPOINT_PROVENANCE.has(value)) || endpoint.discovered_via.length < 1 || endpoint.discovered_via.length > ENDPOINT_PROVENANCE.size) fail('native endpoint provenance is invalid')
+  if (legacy && (endpoint.discovered_via.length !== 1 || endpoint.discovered_via[0] !== 'WEB_HAR')) fail('native interaction contract 1.0.0 supports HAR provenance only')
   if (!Array.isArray(endpoint.evidence_refs) || new Set(endpoint.evidence_refs).size !== endpoint.evidence_refs.length || endpoint.evidence_refs.some((value) => !/^webobs:[a-f0-9]{32}$/u.test(value))) fail('native endpoint evidence references are invalid')
   if (!canonicalList(endpoint.evidence_refs) || endpoint.observations !== endpoint.evidence_refs.length) fail('native endpoint observation references are inconsistent')
   if (!Array.isArray(endpoint.exchanges) || endpoint.exchanges.length < 1 || endpoint.exchanges.length > MAX_ENDPOINT_EXCHANGES) fail('native endpoint exchanges are invalid')
-  endpoint.exchanges.forEach((exchange) => assertExchange(exchange, pathLiterals))
+  endpoint.exchanges.forEach((exchange) => assertExchange(exchange, pathLiterals, schemaVersion))
   if (!endpoint.exchanges.every((exchange, index) => index === 0 || compareExchanges(endpoint.exchanges[index - 1], exchange) < 0)) fail('native endpoint exchanges are not canonical or distinct')
   if (new Set(endpoint.exchanges.map((exchange) => exchange.evidence_ref)).size !== endpoint.exchanges.length || new Set(endpoint.exchanges.map((exchange) => `${exchange.capture_id}\n${exchange.sequence}`)).size !== endpoint.exchanges.length) fail('native endpoint exchange identities are not distinct')
   if (stableJson(endpoint.evidence_refs, 0) !== stableJson(unique(endpoint.exchanges.map((exchange) => exchange.evidence_ref)), 0) || endpoint.observations !== endpoint.exchanges.length) fail('native endpoint exchanges do not match observation references')
+  if (!legacy && stableJson(endpoint.discovered_via, 0) !== stableJson(unique(endpoint.exchanges.map((exchange) => exchange.provenance)), 0)) fail('native endpoint provenance does not match its exchanges')
   for (const exchange of endpoint.exchanges) {
-    const [expectedAction, expectedBasis] = expectedExchangeRequestAction(endpoint, exchange)
+    const [expectedAction, expectedBasis] = expectedExchangeRequestAction(endpoint, exchange, schemaVersion)
     if (exchange.request.action !== expectedAction || exchange.request.action_basis !== expectedBasis) fail('native endpoint exchange request action does not match its exact observation')
   }
   if (stableJson(endpoint.auth.request_carriers, 0) !== stableJson(unique(endpoint.exchanges.flatMap((exchange) => exchange.request.credential_carriers)), 0)) fail('native endpoint request carriers do not match its exchanges')
@@ -687,7 +702,7 @@ function assertEndpoint(endpoint, pathLiterals) {
   const exchangeStatuses = [...new Set(endpoint.exchanges.map((exchange) => exchange.response.status))].sort((left, right) => left - right)
   if (stableJson(endpoint.response.statuses, 0) !== stableJson(exchangeStatuses, 0)) fail('native endpoint response statuses do not match its exchanges')
   if (stableJson(endpoint.redirects, 0) !== stableJson(aggregateExchangeDestinations(endpoint.exchanges), 0)) fail('native endpoint redirects do not match its exchanges')
-  const expectedRole = AUTH_PATH.test(endpoint.path_template) ? 'AUTH' : 'APPLICATION'
+  const expectedRole = (legacy ? legacyV1AuthPath(endpoint.path_template) : AUTH_PATH.test(endpoint.path_template)) ? 'AUTH' : 'APPLICATION'
   if (endpoint.protocol_role !== expectedRole) fail('native endpoint protocol role does not match its path')
   const semanticClasses = [...endpoint.request.fields, ...endpoint.request.query_parameters].flatMap((field) => field.semantic_classes)
   const hasWriteClass = endpoint.request.path_action_classes.includes('WRITE_ACTION') || semanticClasses.includes('WRITE_ACTION')
@@ -762,7 +777,7 @@ function assertAuthFlow(flow, pathLiterals) {
 
 export function assertValidNativeInteractionContract(value) {
   exact(value, ['auth_flows', 'basis', 'contract_id', 'endpoints', 'gaps', 'generated_at', 'generated_client_status', 'kind', 'protocol', 'redaction', 'schema_version', 'security_verdict', 'status', 'subjects'], 'native interaction contract')
-  if (value.schema_version !== '1.0.0' || value.kind !== NATIVE_INTERACTION_CONTRACT_KIND || value.protocol !== NATIVE_INTERACTION_CONTRACT_PROTOCOL || !/^interaction:[a-f0-9]{32}$/u.test(value.contract_id ?? '')) fail('native interaction contract identity is invalid')
+  if (!NATIVE_SCHEMA_VERSIONS.has(value.schema_version) || value.kind !== NATIVE_INTERACTION_CONTRACT_KIND || value.protocol !== NATIVE_INTERACTION_CONTRACT_PROTOCOL || !/^interaction:[a-f0-9]{32}$/u.test(value.contract_id ?? '')) fail('native interaction contract identity is invalid')
   canonicalTime(value.generated_at)
   exact(value.basis, ['reverse_evidence_sha256', 'web_session_evidence_sha256'], 'native interaction basis')
   assertHashList(value.basis.web_session_evidence_sha256, 'web session evidence digests', 32)
@@ -777,7 +792,7 @@ export function assertValidNativeInteractionContract(value) {
   if (!value.auth_flows.every((flow, index) => index === 0 || lexical(value.auth_flows[index - 1].flow_id, flow.flow_id) < 0)) fail('auth flows are not canonical or distinct')
   if (new Set(value.auth_flows.map(({ capture_id: id }) => id)).size !== value.auth_flows.length) fail('auth flow captures must be distinct')
   if (!Array.isArray(value.endpoints) || value.endpoints.length > 10_000) fail('native interaction endpoints are invalid')
-  value.endpoints.forEach((endpoint) => assertEndpoint(endpoint, value.subjects.path_literals))
+  value.endpoints.forEach((endpoint) => assertEndpoint(endpoint, value.subjects.path_literals, value.schema_version))
   if (new Set(value.endpoints.map((endpoint) => endpoint.endpoint_id)).size !== value.endpoints.length) fail('native interaction endpoint ids must be unique')
   if (value.endpoints.some((endpoint) => !value.subjects.origins.includes(endpoint.origin))) fail('native endpoint origin is outside the contract subjects')
   if (value.endpoints.some((endpoint) => endpoint.redirects.some((redirect) => !value.subjects.origins.includes(redirect.origin)))) fail('native endpoint redirect is outside the contract subjects')

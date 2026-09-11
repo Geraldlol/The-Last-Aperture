@@ -50,8 +50,16 @@ Authorization and execution availability are orthogonal:
 - If the statement includes it but the required controller, transport,
   credential material, or platform capability is absent, return an explicit
   authorized-but-unavailable result such as `*_UNAVAILABLE` or `UNPROVEN`.
-  Never ask the operator to authorize the same thing again, and never improvise
-  a missing route.
+  Never ask the operator to authorize the same thing again, and never claim a
+  capability that is actually absent.
+
+The absence of a single all-purpose controller does not make a capability
+absent when the agent can compose available standard tools while enforcing the
+same target, time, credential, evidence, cleanup, and stop bindings. Browser and
+HTTP tooling, Burp, Ghidra, Frida, and generated connectors may therefore be
+orchestrated under the original attestation. Technical unavailability means the
+required runtime, API, material, or reachable transport is actually absent; it
+does not mean a product-specific wrapper was not written.
 
 Route and preflight controls enforce the accepted envelope; they are not
 competing authority sources. They may still fail for target drift, expiry,
@@ -80,9 +88,11 @@ authority.
 
 ## Consequences
 
-The user states target, scope, and authority once. Agents and controllers
-preserve that direction across route selection and report missing implementation
-honestly instead of turning it into consent friction. Narrow statements remain
+The user states target, scope, and authority once in ordinary language. Agents
+and controllers preserve that direction across route selection and report
+missing implementation honestly instead of turning it into consent friction.
+Codex/Claude handoffs retain the same accepted statement when its target and
+scope remain visible. Narrow statements remain
 narrow, while an explicit full-authority statement for a named target is not
 silently reduced to T1 merely because T1 is the first available worker.
 

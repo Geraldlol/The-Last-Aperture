@@ -8,10 +8,6 @@ import {
   createHttpReconRequestHeaderDescriptor,
   resolveHttpReconRequestHeaders,
 } from './http-recon-request-headers.mjs'
-import {
-  createHttpReconResponseObservationDescriptor,
-  resolveHttpReconResponseObservation,
-} from './http-recon-response-observations.mjs'
 
 const ATTESTED_SCOPE_SCHEMA_URL = new URL(
   '../../schemas/http-recon-attested-scope.schema.json',
@@ -201,23 +197,6 @@ function assertAttestedScopeSemantics(
       )
     }
   }
-  if (scope.requests[0].response_observation !== undefined) {
-    try {
-      resolveHttpReconResponseObservation({
-        descriptor: scope.requests[0].response_observation,
-        method: scope.requests[0].method,
-        url: scope.requests[0].url,
-        maxResponseBytes: scope.limits.max_response_bytes,
-      })
-    } catch (cause) {
-      throw contractError(
-        'HTTP_RECON_RESPONSE_OBSERVATION_DESCRIPTOR_INVALID',
-        'operator-attested response-observation descriptor is invalid',
-        [],
-        { cause },
-      )
-    }
-  }
   if (requestUrl.origin !== targetOrigin.origin) {
     throw contractError(
       'HTTP_RECON_ACTION_ORIGIN_MISMATCH',
@@ -292,7 +271,6 @@ export function createOperatorAttestedHttpReconScope({
   method = 'HEAD',
   safeToGet = false,
   requestHeaderProfile,
-  responseObservationProfile,
   operatorId,
   authorizedBy,
   authorizationReference,
@@ -322,22 +300,10 @@ export function createOperatorAttestedHttpReconScope({
             method: normalizedMethod,
           }),
         }),
-    ...(responseObservationProfile === undefined
-      ? {}
-      : {
-          response_observation: createHttpReconResponseObservationDescriptor({
-            profile: responseObservationProfile,
-            method: normalizedMethod,
-            url: parsedTarget.href,
-            maxResponseBytes: OPERATOR_ATTESTED_LIMITS.max_response_bytes,
-          }),
-        }),
     ...(normalizedMethod === 'GET' ? { safe_to_get: safeToGet } : {}),
   }
   const scope = {
-    schema_version: responseObservationProfile === undefined
-      ? (requestHeaderProfile === undefined ? '1.0.0' : '1.1.0')
-      : '1.2.0',
+    schema_version: requestHeaderProfile === undefined ? '1.0.0' : '1.1.0',
     kind: 'red-team-audit/http-recon-attested-scope',
     engagement_id: engagementId,
     environment,
@@ -394,9 +360,6 @@ export function buildOperatorAttestedHttpReconPlan(scope) {
     ...(request.request_headers === undefined
       ? {}
       : { request_headers: structuredClone(request.request_headers) }),
-    ...(request.response_observation === undefined
-      ? {}
-      : { response_observation: structuredClone(request.response_observation) }),
     safe_to_get: request.method === 'GET',
   }
   const actions = [{

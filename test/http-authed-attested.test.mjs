@@ -145,7 +145,7 @@ async function attestedMutationPlannerInput(files) {
       },
       credential: { ref: 'env:ATTESTED_MUTATION_CREDENTIAL', kind: 'cookie' },
       target: {
-        origin: 'https://peerstar-test.example.test',
+        origin: 'https://app.example.test',
         ownership: 'third_party_owned',
         tls: { mode: 'PKIX_HOSTNAME' },
       },
@@ -155,7 +155,7 @@ async function attestedMutationPlannerInput(files) {
         testCategories: ['api_security'],
       },
       liveness: {
-        credentialPreflightUrl: 'https://peerstar-test.example.test/whoami',
+        credentialPreflightUrl: 'https://app.example.test/whoami',
       },
       seedRequests: [action],
       validity: {
@@ -661,7 +661,7 @@ test('campaign runtime rejects the retired authorization mode before credentials
       scopePath: files.scopePath,
       expectedCampaignGrantSha256: 'a'.repeat(64),
       ledgerDirectory: files.ledgerDirectory,
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
       clock: () => NOW,
       env: {},
       credentialInput: Symbol('sealed campaign stdin credential'),

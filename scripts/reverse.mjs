@@ -3,6 +3,7 @@
 import {
   analyzeGhidraArtifact as defaultAnalyzeGhidraArtifact,
   buildProtocolContractFile as defaultBuildProtocolContractFile,
+  importBurpFile as defaultImportBurpFile,
   importHarFile as defaultImportHarFile,
   traceFridaArtifact as defaultTraceFridaArtifact,
   traceFridaPlanFile as defaultTraceFridaPlanFile,
@@ -19,6 +20,7 @@ export const REVERSE_HELP = `The Last Aperture reverse engineering ${PLATFORM_VE
 
 Usage:
   last-aperture-reverse web import-har --har <absolute.har> --origin <canonical-origin> [--origin <canonical-origin> ...] [--path-literal <segment> ...] --out <absolute-new.json> [--json]
+  last-aperture-reverse web import-burp --burp <absolute-items.xml> --origin <canonical-origin> [--origin <canonical-origin> ...] [--path-literal <segment> ...] --out <absolute-new.json> [--json]
   last-aperture-reverse protocol build --web-evidence <absolute.json> [--web-evidence <absolute.json> ...] [--reverse-evidence <absolute.json> ...] --out <absolute-new.json> [--json]
   last-aperture-reverse protocol generate --contract <absolute.json> --out <absolute-new-directory> [--name <npm-package-name>] [--json]
   last-aperture-reverse protocol verify --package <absolute-generated-directory> --manifest-sha256 <externally-retained-sha256> [--json]
@@ -29,7 +31,8 @@ Usage:
 The reverse routes accept local artifacts and captures. Frida v1 executes one
 named local-lab executable; the typed v2 plan also supports bounded local, USB,
 and explicit-device attachment. The routes never accept raw tool arguments,
-caller scripts, remote host/token configuration, or evaluated code. HAR values are removed;
+caller scripts, remote host/token configuration, or evaluated code. HAR and Burp
+HTTP-items values are removed;
 --path-literal declares a route segment safe to retain in the protocol shape.
 Protocol generation is offline and emits a contract-bound Node connector;
 protocol verify checks it against the externally retained manifest digest.
@@ -125,6 +128,7 @@ function renderResult(result, asJson, stdout) {
 }
 
 export async function runReverseCli(argv, {
+  importBurpFile = defaultImportBurpFile,
   importHarFile = defaultImportHarFile,
   buildProtocolContractFile = defaultBuildProtocolContractFile,
   generateNativeConnectorPackage = defaultGenerateNativeConnectorPackage,
@@ -150,6 +154,14 @@ export async function runReverseCli(argv, {
       assertRoute(parsed, 'web', 'import-har', ['har', 'origin', 'path-literal', 'out'])
       result = await importHarFile({
         harPath: requireScalar(parsed.options, 'har'),
+        targetOrigins: requireList(parsed.options, 'origin'),
+        pathLiterals: optionalList(parsed.options, 'path-literal'),
+        outPath: requireScalar(parsed.options, 'out'),
+      })
+    } else if (command === 'web' && action === 'import-burp') {
+      assertRoute(parsed, 'web', 'import-burp', ['burp', 'origin', 'path-literal', 'out'])
+      result = await importBurpFile({
+        burpPath: requireScalar(parsed.options, 'burp'),
         targetOrigins: requireList(parsed.options, 'origin'),
         pathLiterals: optionalList(parsed.options, 'path-literal'),
         outPath: requireScalar(parsed.options, 'out'),

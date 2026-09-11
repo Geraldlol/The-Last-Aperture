@@ -102,6 +102,37 @@ test('reverse evidence is strict, canonical, and digest stable', () => {
   assert.equal(digestReverseEvidence(structuredClone(value)), digestReverseEvidence(value))
 })
 
+test('reverse evidence admits bounded content-addressed tool components', () => {
+  const components = [
+    { role: 'ghidra-launcher', name: 'Ghidra headless launcher', sha256: '1'.repeat(64), size_bytes: 4096 },
+    { role: 'java-compiler', name: 'javac.exe', sha256: '2'.repeat(64), size_bytes: 8192 },
+    { role: 'java-archive-builder', name: 'jar.exe', sha256: '3'.repeat(64), size_bytes: 8192 },
+    { role: 'windows-compatibility-agent', name: 'last-aperture-ghidra-agent.jar', sha256: '4'.repeat(64), size_bytes: 16384 },
+  ]
+  const value = evidence({ schema_version: '1.1.0', tool: { ...evidence().tool, components } })
+  assert.equal(assertValidReverseEvidence(value), value)
+  assert.throws(
+    () => assertValidReverseEvidence(evidence({ tool: { ...evidence().tool, components } })),
+    /1\.0\.0.*component/i,
+  )
+  assert.throws(
+    () => assertValidReverseEvidence(evidence({ schema_version: '1.1.0' })),
+    /1\.1\.0.*component/i,
+  )
+  assert.throws(
+    () => assertValidReverseEvidence(evidence({ schema_version: '1.1.0',
+      tool: { ...evidence().tool, components: [...components, { ...components[0] }] },
+    })),
+    /component role/i,
+  )
+  assert.throws(
+    () => assertValidReverseEvidence(evidence({ schema_version: '1.1.0',
+      tool: { ...evidence().tool, components: [{ ...components[0], path: 'C:\\private\\javac.exe' }] },
+    })),
+    /component.*field/i,
+  )
+})
+
 test('engine, profile, execution, and artifact kind stay coupled', () => {
   assert.throws(() => assertValidReverseEvidence(evidence({ profile_id: 'native-call-trace-v1' })), /profile/i)
   assert.throws(() => assertValidReverseEvidence(evidence({ target_execution: 'LOCAL_LAB_SPAWN' })), /execution/i)
@@ -177,7 +208,7 @@ test('Ghidra endpoint evidence admits only the exporter generic route segments',
   assert.equal(assertValidReverseEvidence(generic), generic)
 
   for (const segment of [
-    'check', 'checkdatacenter', 'checklogin', 'clients', 'home', 'sessionstart', 'start',
+    'workspacealpha', 'workspacebeta', 'workspacegamma', 'workspacedelta', 'workspaceepsilon', 'workspacezeta',
   ]) {
     const applicationSpecific = evidence()
     applicationSpecific.observations.find(({ type }) => type === 'static-endpoint').path_template = (

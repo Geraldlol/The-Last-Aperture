@@ -616,14 +616,14 @@ test('operator-attested mode needs no repeat authorization, authority files, or 
 
 test('operator-attested diagnostic header profile is sealed, dispatched, and value-redacted', async (t) => {
   const value = await attestedFixture(t, {
-    targetUrl: 'https://target.example/api/TabAccess/GetAll',
+    targetUrl: 'https://target.example/diagnostics/headers',
     method: 'GET',
     safeToGet: true,
-    requestHeaderProfile: 'x-original-url-order-programs-v1',
+    requestHeaderProfile: 'x-forwarded-for-loopback-v1',
   })
   assert.equal(value.planned.run.schema_version, '1.1.0')
   const action = value.planned.run.actions[0]
-  assert.equal(action.request_headers.profile, 'x-original-url-order-programs-v1')
+  assert.equal(action.request_headers.profile, 'x-forwarded-for-loopback-v1')
 
   const probeImpl = async (options) => {
     assert.deepEqual(options.requestHeaderProfile, action.request_headers)
@@ -663,10 +663,10 @@ test('operator-attested diagnostic header profile is sealed, dispatched, and val
 
   const runText = await readFile(join(value.out, 'run.json'), 'utf8')
   const eventText = await readFile(join(value.out, 'events.jsonl'), 'utf8')
-  assert.match(runText, /x-original-url-order-programs-v1/)
-  assert.match(eventText, /x-original-url-order-programs-v1/)
-  assert.doesNotMatch(runText, /\/api\/Order\/GetPrograms/)
-  assert.doesNotMatch(eventText, /\/api\/Order\/GetPrograms/)
+  assert.match(runText, /x-forwarded-for-loopback-v1/)
+  assert.match(eventText, /x-forwarded-for-loopback-v1/)
+  assert.doesNotMatch(runText, /127\.0\.0\.1/)
+  assert.doesNotMatch(eventText, /127\.0\.0\.1/)
 
   await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
   const validation = await validateHttpReconBundle({ bundle: value.out, now: value.clock.now })

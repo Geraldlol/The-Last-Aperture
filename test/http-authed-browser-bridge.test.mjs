@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http'
 import { test } from 'node:test'
 
 import { discoverHttpAuthedCandidates } from '../scripts/lib/http-authed-discovery.mjs'
+import { pageSessionAdapterSha256 } from '../scripts/lib/page-session-adapter.mjs'
 
 const EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop'
 const EXTENSION_ORIGIN = `chrome-extension://${EXTENSION_ID}`
@@ -55,6 +56,31 @@ function request(overrides = {}) {
     maxResponseBytes: 65_536,
     tls: { mode: 'BROWSER_MANAGED' },
     ...overrides,
+  }
+}
+
+function pageSessionAdapter() {
+  return {
+    schema_version: '1.0.0',
+    kind: 'last-aperture/page-session-adapter',
+    adapter_id: 'synthetic-page-session',
+    source: {
+      type: 'WEB_STORAGE',
+      area: 'LOCAL',
+      key: 'application.session',
+      extraction: { mode: 'RAW' },
+    },
+    carrier: { type: 'REQUEST_HEADER', name: 'authorization', prefix: 'Bearer ' },
+    target_constraints: [{
+      origin: TARGET_ORIGIN,
+      method: 'GET',
+      path_prefix: '/approved',
+    }],
+    validity: {
+      not_before: '2026-01-01T00:00:00.000Z',
+      not_after: '2027-01-01T00:00:00.000Z',
+    },
+    limits: { max_value_bytes: 4096 },
   }
 }
 
@@ -185,6 +211,55 @@ test('browser bridge prepares only one exact-origin action and refuses credentia
     (error) => error instanceof HttpAuthedBrowserBridgeError,
   )
   assert.equal(session.snapshot().state, 'PREPARE')
+})
+
+test('browser bridge binds a declarative page session adapter into every action message', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+  } = await bridgeApi()
+  const adapter = pageSessionAdapter()
+  const adapterSha256 = pageSessionAdapterSha256(adapter)
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    pageSessionAdapter: adapter,
+  })
+  openSession(session)
+  const prepared = session.prepare({
+    actionId: 'synthetic-adapter-action',
+    request: request(),
+  })
+  assert.deepEqual(prepared.session_adapter, adapter)
+  assert.equal(prepared.session_adapter_sha256, adapterSha256)
+  assert.doesNotMatch(JSON.stringify(prepared), /SYNTHETIC_PAGE_TOKEN/)
+
+  const ready = {
+    protocol: prepared.protocol,
+    schema_version: prepared.schema_version,
+    type: 'READY',
+    campaign_id: prepared.campaign_id,
+    action_id: prepared.action_id,
+    action_nonce: prepared.action_nonce,
+    action_sha256: prepared.action_sha256,
+    document_nonce: prepared.document_nonce,
+    session_adapter_sha256: adapterSha256,
+  }
+  assert.equal(session.acceptReady(ready).session_adapter_sha256, adapterSha256)
+  const committed = await session.commit({ beforeSend: async () => {} })
+  assert.equal(committed.session_adapter_sha256, adapterSha256)
+  session.close()
+
+  const refused = createSession(createHttpAuthedBrowserBridgeSession, {
+    pageSessionAdapter: adapter,
+  }).session
+  openSession(refused)
+  assert.throws(
+    () => refused.prepare({
+      actionId: 'synthetic-outside-adapter',
+      request: request({ url: `${TARGET_ORIGIN}/outside` }),
+    }),
+    (error) => error instanceof HttpAuthedBrowserBridgeError
+      && error.code === 'HTTP_AUTHED_BROWSER_BRIDGE_SESSION_ADAPTER_REFUSED',
+  )
 })
 
 test('browser bridge close is safe before commit and conservative after commit', async () => {
@@ -504,6 +579,7 @@ test('a transport timeout after COMMIT closes the session instead of permitting 
 
 test('loopback bridge rotates one-use pairing into a continuous session transport', async (t) => {
   const {
+    HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
     HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER,
     HTTP_AUTHED_BROWSER_BRIDGE_SESSION_HEADER,
     createHttpAuthedBrowserBridgeServer,
@@ -521,7 +597,10 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
   assert.equal(pairing.campaign_grant_sha256, campaignGrantSha256)
   assert.equal(pairing.target_origin, TARGET_ORIGIN)
 
-  const commonHeaders = { origin: EXTENSION_ORIGIN }
+  const commonHeaders = {
+    origin: EXTENSION_ORIGIN,
+    [HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER]: EXTENSION_ID,
+  }
   const mismatchedHostStatus = await new Promise((resolve, reject) => {
     const pending = httpRequest(`${pairing.bridge_origin}/v1/preview`, {
       headers: {
@@ -537,6 +616,25 @@ test('loopback bridge rotates one-use pairing into a continuous session transpor
     pending.end()
   })
   assert.equal(mismatchedHostStatus, 403)
+  const unboundOriginlessResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/preview`, {
+    headers: {
+      [HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER]: EXTENSION_ID,
+      [HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER]: pairing.pairing_code,
+    },
+  })
+  assert.equal(unboundOriginlessResponse.status, 403)
+  await unboundOriginlessResponse.arrayBuffer()
+  const chromeExtensionResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/preview`, {
+    headers: {
+      [HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER]: EXTENSION_ID,
+      [HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER]: pairing.pairing_code,
+      'sec-fetch-site': 'none',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-dest': 'empty',
+    },
+  })
+  assert.equal(chromeExtensionResponse.status, 200)
+  await chromeExtensionResponse.arrayBuffer()
   const previewResponse = await loopbackRequest(`${pairing.bridge_origin}/v1/preview`, {
     headers: {
       ...commonHeaders,

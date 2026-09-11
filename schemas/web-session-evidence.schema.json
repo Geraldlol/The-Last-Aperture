@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/web-session-evidence.schema.json",
   "title": "The Last Aperture sanitized web session evidence",
-  "description": "Value-free protocol-shape evidence imported from one bounded, explicitly scoped HAR capture. Runtime validation additionally enforces canonical origins, path templates, ordering, and the 64 MiB document limit.",
+  "description": "Value-free protocol-shape evidence imported from one bounded, explicitly scoped web capture. Runtime validation additionally enforces canonical origins, path templates, ordering, source provenance, and the 64 MiB document limit.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +22,7 @@
     "applied_to_audit_bundle"
   ],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
+    "schema_version": { "enum": ["1.0.0", "1.1.0"] },
     "kind": { "const": "red-team-audit/web-session-evidence" },
     "protocol": { "const": "web-session-evidence-v1" },
     "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
@@ -56,6 +56,36 @@
     "security_verdict": { "const": "NOT_ASSESSED" },
     "applied_to_audit_bundle": { "const": false }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.0.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": { "kind": { "const": "HAR" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": { "kind": { "enum": ["BURP_XML", "HAR"] } }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {
       "type": "string",
@@ -313,7 +343,7 @@
       "additionalProperties": false,
       "required": ["kind", "sha256"],
       "properties": {
-        "kind": { "const": "HAR" },
+        "kind": { "enum": ["BURP_XML", "HAR"] },
         "sha256": { "$ref": "#/$defs/sha256" }
       }
     },

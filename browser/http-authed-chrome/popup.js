@@ -1,4 +1,12 @@
 const LOOPBACK_PERMISSION = 'http://127.0.0.1/*'
+const keepAlivePort = chrome.runtime.connect({ name: 'last-aperture-popup' })
+const keepAliveTimer = setInterval(() => {
+  keepAlivePort.postMessage({ type: 'KEEPALIVE' })
+}, 20_000)
+window.addEventListener('pagehide', () => {
+  clearInterval(keepAliveTimer)
+  keepAlivePort.disconnect()
+}, { once: true })
 
 const elements = {
   form: document.querySelector('#pairing-form'),

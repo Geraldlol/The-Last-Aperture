@@ -6,30 +6,6 @@ const PROFILE_DEFINITIONS = Object.freeze({
     method: 'GET',
     headers: Object.freeze({ origin: 'https://red-team-audit.invalid' }),
   }),
-  'x-original-url-order-programs-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-original-url': '/api/Order/GetPrograms' }),
-  }),
-  'x-rewrite-url-order-programs-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-rewrite-url': '/api/Order/GetPrograms' }),
-  }),
-  'x-original-url-tabaccess-getall-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-original-url': '/api/TabAccess/GetAll' }),
-  }),
-  'x-rewrite-url-tabaccess-getall-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-rewrite-url': '/api/TabAccess/GetAll' }),
-  }),
-  'x-original-url-admin-securitymatrix-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-original-url': '/api/admin/GetSecurityMatrix' }),
-  }),
-  'x-rewrite-url-admin-securitymatrix-v1': Object.freeze({
-    method: 'GET',
-    headers: Object.freeze({ 'x-rewrite-url': '/api/admin/GetSecurityMatrix' }),
-  }),
   'x-forwarded-for-loopback-v1': Object.freeze({
     method: 'GET',
     headers: Object.freeze({ 'x-forwarded-for': '127.0.0.1' }),

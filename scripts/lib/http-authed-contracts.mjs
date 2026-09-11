@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url'
 import { isAbsolute, resolve } from 'node:path'
 import Ajv2020 from 'ajv/dist/2020.js'
 import { stableJson } from './run-engine.mjs'
-import { resolveHttpReconResponseObservation } from './http-recon-response-observations.mjs'
+import {
+  assertPageSessionAdapterCompatibleWithScope,
+  pageSessionAdapterSchema,
+} from './page-session-adapter.mjs'
 
 const SCOPE_SCHEMA_URL = new URL(
   '../../schemas/http-authed-scope.schema.json',
@@ -35,6 +38,7 @@ const ajv = new Ajv2020({
   strictTypes: false,
   validateFormats: false,
 })
+ajv.addSchema(pageSessionAdapterSchema)
 ajv.addSchema(httpAuthedScopeSchema)
 const validateScopeSchema = ajv.getSchema(httpAuthedScopeSchema.$id)
 const validateActionSchema = ajv.compile({
@@ -195,55 +199,6 @@ function requiresMutationPermission(action) {
     )
 }
 
-function assertBoundedResponseObservation(scope, action, label) {
-  if (action.response_observation === undefined) return
-  if (
-    scope.schema_version !== '1.3.0'
-    || scope.response_observation !== undefined
-    || scope.discovery !== undefined
-    || scope.requests.length !== 1
-    || action.kind !== 'probe'
-    || action.method !== 'GET'
-    || action.request_body !== undefined
-  ) {
-    throw contractError(
-      'HTTP_AUTHED_RESPONSE_OBSERVATION_SCOPE_INVALID',
-      `${label} bounded response observation requires one exact bodyless GET probe`,
-    )
-  }
-  try {
-    resolveHttpReconResponseObservation({
-      descriptor: action.response_observation,
-      method: action.method,
-      url: action.url,
-      maxResponseBytes: scope.limits.max_response_bytes,
-    })
-  } catch (cause) {
-    throw contractError(
-      'HTTP_AUTHED_RESPONSE_OBSERVATION_SCOPE_INVALID',
-      `${label} bounded response observation does not match its controller-owned profile`,
-      [],
-      { cause },
-    )
-  }
-}
-
-function assertCandidateResponseObservation(scope, action) {
-  const sealed = scope.requests.find((request) => request.response_observation !== undefined)
-  if (sealed === undefined && action.response_observation === undefined) return
-  if (
-    sealed === undefined
-    || action.response_observation === undefined
-    || canonicalJson(action) !== canonicalJson(sealed)
-  ) {
-    throw contractError(
-      'HTTP_AUTHED_RESPONSE_OBSERVATION_CANDIDATE_MISMATCH',
-      'runtime response-observation candidate does not match the one exact sealed action',
-    )
-  }
-  assertBoundedResponseObservation(scope, action, 'runtime candidate')
-}
-
 function assertDeclaredRequestScope(scope, request, label) {
   const authorizedScope = scope.authorization.authorized_scope
   assertCanonicalPathValue(request.url, `${label} URL`)
@@ -348,6 +303,21 @@ function assertScopeSemantics(scope) {
         'the Chrome active-tab transport cannot authorize CONNECT, TRACE, or TRACK',
       )
     }
+    if (scope.credential.session_adapter !== undefined) {
+      try {
+        assertPageSessionAdapterCompatibleWithScope(
+          scope.credential.session_adapter,
+          scope,
+        )
+      } catch (cause) {
+        throw contractError(
+          'HTTP_AUTHED_PAGE_SESSION_ADAPTER_INVALID',
+          'the page session adapter does not cover the sealed browser-session scope',
+          [],
+          { cause },
+        )
+      }
+    }
   }
 
   if (scope.discovery !== undefined) {
@@ -435,7 +405,6 @@ function assertScopeSemantics(scope) {
     )
     scope.requests.forEach((action, index) => {
       assertDeclaredRequestScope(scope, action, `requests[${index}]`)
-      assertBoundedResponseObservation(scope, action, `requests[${index}]`)
       if (action.kind === 'mutate') {
         assertMutationSemantics(action, `requests[${index}]`)
         assertDeclaredRequestScope(scope, action.before_read, `requests[${index}].before_read`)
@@ -550,7 +519,6 @@ function assertHttpAuthedCandidateWithinScope({ scope, action }) {
     )
   }
   assertSchema(validateActionSchema, action, 'http-authed runtime candidate')
-  assertCandidateResponseObservation(scope, action)
   const originUrl = new URL(scope.target.origin)
   assertUnderOrigin(action.url, originUrl, 'runtime candidate url')
   assertDeclaredRequestScope(scope, action, 'runtime candidate')

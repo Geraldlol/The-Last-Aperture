@@ -5,7 +5,7 @@ import {
   coverageSupportsResolution,
 } from '../scripts/lib/lifecycle.mjs'
 
-const EVIDENCE_LOCATION = 'peerstar-api-image:layer/02/secret.txt'
+const EVIDENCE_LOCATION = 'sample-api-image:layer/02/secret.txt'
 const SOURCE_LOCATION = 'Dockerfile'
 
 function artifactFinding() {
@@ -24,7 +24,7 @@ function artifactFinding() {
     proof_plan: 'Extract the sealed image layer and read the cited bytes.',
     evidence_claim: 'secret-present-in-artifact',
     evidence_context: {
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       target_identity: `sha256:${'9'.repeat(64)}`,
@@ -38,7 +38,7 @@ function artifactFinding() {
 
 function artifactBundle(overrides = {}) {
   return {
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     evidence_class: 'built-artifact',
     adapter_id: 'artifact',
     artifact_kind: 'oci-image',
@@ -57,7 +57,7 @@ function evidenceCoverage(state, bundleCount) {
       evidence_class: 'built-artifact',
       state,
       reason: state === 'COVERED'
-        ? 'peerstar-api-image was assessed'
+        ? 'sample-api-image was assessed'
         : 'no built-artifact evidence was acquired for this run',
     }],
     summary: {

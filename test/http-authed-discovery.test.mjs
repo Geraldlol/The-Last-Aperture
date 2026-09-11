@@ -8,7 +8,7 @@ import {
 function sealedPolicy(overrides = {}) {
   return {
     enabled: true,
-    origin: 'https://peerstar-test.example.test',
+    origin: 'https://app.example.test',
     path_prefixes: ['/approved'],
     sources: [
       'link_header',
@@ -35,7 +35,7 @@ function sourceAction(overrides = {}) {
   return {
     kind: 'probe',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/approved/start',
+    url: 'https://app.example.test/approved/start',
     test_category: 'api_security',
     expected_effect: 'none',
     ...overrides,
@@ -53,7 +53,7 @@ test('Link and Location references become synthetic-safe candidate drafts', () =
       },
       {
         name: 'location',
-        value: 'https://peerstar-test.example.test/approved/created?page=real-page-value',
+        value: 'https://app.example.test/approved/created?page=real-page-value',
       },
     ],
     bodyChunks: [],
@@ -64,21 +64,21 @@ test('Link and Location references become synthetic-safe candidate drafts', () =
       kind: 'probe',
       test_category: 'api_security',
       method: 'GET',
-      url: 'https://peerstar-test.example.test/approved/next?subject=SYNTHETIC_SUBJECT_001',
+      url: 'https://app.example.test/approved/next?subject=SYNTHETIC_SUBJECT_001',
       expected_effect: 'none',
     },
     {
       kind: 'probe',
       test_category: 'api_security',
       method: 'GET',
-      url: 'https://peerstar-test.example.test/approved/help',
+      url: 'https://app.example.test/approved/help',
       expected_effect: 'none',
     },
     {
       kind: 'probe',
       test_category: 'api_security',
       method: 'GET',
-      url: 'https://peerstar-test.example.test/approved/created?page=SYNTHETIC_PAGE_001',
+      url: 'https://app.example.test/approved/created?page=SYNTHETIC_PAGE_001',
       expected_effect: 'none',
     },
   ])
@@ -115,7 +115,7 @@ test('Location provenance survives same-response Link deduplication in either he
     })
 
     assert.equal(result.candidates.length, 1)
-    assert.equal(result.candidates[0].url, 'https://peerstar-test.example.test/approved/same')
+    assert.equal(result.candidates[0].url, 'https://app.example.test/approved/same')
     assert.equal(result.accepted_location_count, 1)
     assert.deepEqual(result.location_candidate_indexes, [0])
     assert.equal(result.summary.duplicate_count, 1)
@@ -134,7 +134,7 @@ test('Location reports its own per-response candidate limit rejection', () => {
   })
 
   assert.deepEqual(result.candidates.map(({ url }) => url), [
-    'https://peerstar-test.example.test/approved/unrelated',
+    'https://app.example.test/approved/unrelated',
   ])
   assert.equal(result.accepted_location_count, 0)
   assert.deepEqual(result.location_candidate_indexes, [])
@@ -146,7 +146,7 @@ test('Allow methods are intersected with the sealed policy and never create muta
   const result = discoverHttpAuthedCandidates({
     policy: sealedPolicy(),
     sourceAction: sourceAction({
-      url: 'https://peerstar-test.example.test/approved/resource?subject=live-value',
+      url: 'https://app.example.test/approved/resource?subject=live-value',
     }),
     headers: [{ name: 'allow', value: 'GET, PROPFIND, DELETE, lowercase, B@D' }],
     bodyChunks: [],
@@ -226,9 +226,9 @@ test('bounded HTML parsing handles chunk boundaries, ignores script/comment text
   assert.deepEqual(
     result.candidates.map(({ url }) => url),
     [
-      'https://peerstar-test.example.test/approved/two',
-      'https://peerstar-test.example.test/approved/one?subject=SYNTHETIC_SUBJECT_001',
-      'https://peerstar-test.example.test/approved/three?page=SYNTHETIC_PAGE_001',
+      'https://app.example.test/approved/two',
+      'https://app.example.test/approved/one?subject=SYNTHETIC_SUBJECT_001',
+      'https://app.example.test/approved/three?page=SYNTHETIC_PAGE_001',
     ],
   )
   assert.equal(result.summary.accepted_count, 3)
@@ -271,8 +271,8 @@ test('discovery applies the operator-sealed per-response candidate budget', () =
   })
 
   assert.deepEqual(result.candidates.map(({ url }) => url), [
-    'https://peerstar-test.example.test/approved/one',
-    'https://peerstar-test.example.test/approved/two',
+    'https://app.example.test/approved/one',
+    'https://app.example.test/approved/two',
   ])
   assert.deepEqual(result.summary.rejected_by_code, { CANDIDATE_LIMIT_REACHED: 1 })
   assert.equal(result.summary.rejected_count, 1)
@@ -352,7 +352,7 @@ test('disabled sources are ignored and policy-controlled category cannot come fr
     kind: 'probe',
     test_category: 'api_security',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/approved/accepted',
+    url: 'https://app.example.test/approved/accepted',
     expected_effect: 'none',
   }])
   assert.deepEqual(result.summary, {
@@ -381,14 +381,14 @@ test('HTML forms discover only GET actions and never infer a mutation', () => {
       kind: 'probe',
       test_category: 'api_security',
       method: 'GET',
-      url: 'https://peerstar-test.example.test/approved/search?subject=SYNTHETIC_SUBJECT_001',
+      url: 'https://app.example.test/approved/search?subject=SYNTHETIC_SUBJECT_001',
       expected_effect: 'none',
     },
     {
       kind: 'probe',
       test_category: 'api_security',
       method: 'GET',
-      url: 'https://peerstar-test.example.test/approved/default-get',
+      url: 'https://app.example.test/approved/default-get',
       expected_effect: 'none',
     },
   ])
@@ -420,11 +420,11 @@ test('JSON discovery traverses only recognized link fields and ignores examples 
   })
 
   assert.deepEqual(result.candidates.map(({ url }) => url), [
-    'https://peerstar-test.example.test/approved/root-link',
-    'https://peerstar-test.example.test/approved/record?subject=SYNTHETIC_SUBJECT_001',
-    'https://peerstar-test.example.test/approved/page?page=SYNTHETIC_PAGE_001',
-    'https://peerstar-test.example.test/approved/from-url',
-    'https://peerstar-test.example.test/approved/from-link',
+    'https://app.example.test/approved/root-link',
+    'https://app.example.test/approved/record?subject=SYNTHETIC_SUBJECT_001',
+    'https://app.example.test/approved/page?page=SYNTHETIC_PAGE_001',
+    'https://app.example.test/approved/from-url',
+    'https://app.example.test/approved/from-link',
   ])
   assert.deepEqual(result.summary, {
     accepted_count: 5,
@@ -471,12 +471,12 @@ test('OpenAPI discovery substitutes every path parameter and intersects sealed m
       {
         kind: 'probe',
         method: 'GET',
-        url: 'https://peerstar-test.example.test/approved/patients/SYNTHETIC_PATIENT_001',
+        url: 'https://app.example.test/approved/patients/SYNTHETIC_PATIENT_001',
       },
       {
         kind: 'probe',
         method: 'GET',
-        url: 'https://peerstar-test.example.test/approved/encounters/SYNTHETIC_ENCOUNTER_001',
+        url: 'https://app.example.test/approved/encounters/SYNTHETIC_ENCOUNTER_001',
       },
     ],
   )
@@ -500,7 +500,7 @@ test('sitemap XML loc entries remain scope-bound and use synthetic query substit
     headers: [{ name: 'content-type', value: 'application/sitemap+xml' }],
     bodyChunks: [
       Buffer.from('<?xml version="1.0"?><urlset>'),
-      Buffer.from('<url><loc>https://peerstar-test.example.test/approved/one</loc></url>'),
+      Buffer.from('<url><loc>https://app.example.test/approved/one</loc></url>'),
       Buffer.from('<url><loc>/approved/two?subject=discarded&amp;page=also-discarded</loc></url>'),
       Buffer.from('<!-- <loc>/approved/COMMENT_SECRET_IGNORED</loc> -->'),
       Buffer.from('<url><loc>https://other.example.test/approved/OFF_ORIGIN_XML_SECRET</loc></url>'),
@@ -509,8 +509,8 @@ test('sitemap XML loc entries remain scope-bound and use synthetic query substit
   })
 
   assert.deepEqual(result.candidates.map(({ url }) => url), [
-    'https://peerstar-test.example.test/approved/one',
-    'https://peerstar-test.example.test/approved/two?subject=SYNTHETIC_SUBJECT_001&page=SYNTHETIC_PAGE_001',
+    'https://app.example.test/approved/one',
+    'https://app.example.test/approved/two?subject=SYNTHETIC_SUBJECT_001&page=SYNTHETIC_PAGE_001',
   ])
   assert.deepEqual(result.summary.rejected_by_code, { OFF_ORIGIN: 1 })
   assert.doesNotMatch(
@@ -534,7 +534,7 @@ test('body parser selection is content-type gated and does not cross-interpret f
   })
 
   assert.deepEqual(result.candidates.map(({ url }) => url), [
-    'https://peerstar-test.example.test/approved/json-only',
+    'https://app.example.test/approved/json-only',
   ])
   assert.deepEqual(result.summary.rejected_by_code, {})
   assert.doesNotMatch(JSON.stringify(result), /HTML_SECRET|XML_SECRET/)

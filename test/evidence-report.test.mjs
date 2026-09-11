@@ -75,7 +75,7 @@ test('an unreached class is stated as a blind spot, not omitted', () => {
 test('an acquired class with bounded coverage avoids the not-acquired notice', () => {
   const covered = run({
     evidence_bundles: [{
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       artifact_kind: 'oci-image',
@@ -84,7 +84,7 @@ test('an acquired class with bounded coverage avoids the not-acquired notice', (
     }],
     evidence_coverage: {
       bundle_coverage: [{
-        evidence_id: 'peerstar-api-image',
+        evidence_id: 'sample-api-image',
         evidence_class: 'built-artifact',
         artifact_kind: 'oci-image',
         root_sha256: 'c'.repeat(64),
@@ -97,7 +97,7 @@ test('an acquired class with bounded coverage avoids the not-acquired notice', (
         topic: 'container-image-content',
         evidence_class: 'built-artifact',
         state: 'PARTIAL',
-        reason: 'peerstar-api-image (cccccccccccc)',
+        reason: 'sample-api-image (cccccccccccc)',
       }],
       summary: {
         cell_count: 1,
@@ -110,7 +110,7 @@ test('an acquired class with bounded coverage avoids the not-acquired notice', (
     },
   })
   const report = renderMarkdownReport(covered)
-  assert.match(report, /peerstar-api-image/)
+  assert.match(report, /sample-api-image/)
   assert.equal(/was not acquired/.test(report), false)
 })
 
@@ -133,8 +133,8 @@ test('a precedence conflict is printed, never silently reconciled', () => {
         title: 'Build secret is readable below the whiteout',
         claimed_impact_severity: 'High',
         effective_severity: 'High',
-        location: ['peerstar-api-image:layer/02/secret.txt'],
-        evidence_context: { evidence_class: 'built-artifact', evidence_id: 'peerstar-api-image' },
+        location: ['sample-api-image:layer/02/secret.txt'],
+        evidence_context: { evidence_class: 'built-artifact', evidence_id: 'sample-api-image' },
       },
     ],
   })
@@ -178,9 +178,9 @@ test('SARIF for a fully covered run raises no notification', () => {
 })
 
 test('SARIF preserves evidence locators literally when source-path URIs need encoding', () => {
-  const locator = 'peerstar-api-image:layer/naïve#part%20?.txt:42'
+  const locator = 'sample-api-image:layer/naïve#part%20?.txt:42'
   const evidenceContext = {
-    evidence_id: 'peerstar-api-image', evidence_class: 'built-artifact',
+    evidence_id: 'sample-api-image', evidence_class: 'built-artifact',
     adapter_id: 'artifact', target_identity: 'sha256:' + 'a'.repeat(64),
   }
   const sarif = renderSarif(run({ findings: [{
@@ -193,7 +193,7 @@ test('SARIF preserves evidence locators literally when source-path URIs need enc
   const result = sarif.runs[0].results[0]
   assert.deepEqual(result.locations, [])
   assert.deepEqual(result.properties.evidence_locations, [{
-    evidence_id: 'peerstar-api-image', locator: 'layer/naïve#part%20?.txt:42',
+    evidence_id: 'sample-api-image', locator: 'layer/naïve#part%20?.txt:42',
   }])
   assert.deepEqual(result.properties.evidence_context, evidenceContext)
 })

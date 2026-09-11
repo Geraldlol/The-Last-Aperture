@@ -71,7 +71,7 @@ test('supplying an unindexable bundle cannot manufacture covered audit evidence'
     profile: {
       schema: 'evidence-bundle-v1',
       evidence_context: {
-        evidence_id: 'peerstar-api-image',
+        evidence_id: 'sample-api-image',
         evidence_class: 'built-artifact',
         adapter_id: 'artifact',
         target_identity: 'sha256:9f2c',
@@ -96,7 +96,7 @@ test('supplying an unindexable bundle cannot manufacture covered audit evidence'
   const plan = await createRunPlan({
     targetRoot: await repositoryWithADockerfile(),
     evidenceBundles: [{
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       evidence_context: bundle.profile.evidence_context,
@@ -124,7 +124,7 @@ test('supplying an unindexable bundle cannot manufacture covered audit evidence'
 test('OCI detector coverage is lens/topic-aware and never whole-topic clearance', async () => {
   const directory = join(await mkdtemp(join(tmpdir(), 'rta-ev-')), 'ev')
   const request = await artifactAdapter.plan({
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     source_path: 'test/fixtures/evidence/vulnerable-image.tar',
     target_class: 'LAB',
     phi_scope: 'none',
@@ -133,7 +133,7 @@ test('OCI detector coverage is lens/topic-aware and never whole-topic clearance'
   const plan = await createRunPlan({
     targetRoot: await repositoryWithADockerfile(),
     evidenceBundles: [{
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       artifact_kind: 'oci-image',

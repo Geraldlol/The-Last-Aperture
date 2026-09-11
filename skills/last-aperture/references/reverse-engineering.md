@@ -1,9 +1,9 @@
 # Reverse engineering and protocol reconstruction
 
-Use `npm.cmd run audit:reverse -- ...` only for the artifact, executable, HAR,
-origins, and workflow named by the operator. The existing operator statement is
-the authorization fact; do not ask again. A missing tool or unsupported launch
-shape is a technical gap, not an authorization denial.
+Use `npm.cmd run audit:reverse -- ...` only for the artifact, executable,
+HAR/Burp capture, origins, and workflow named by the operator. The existing
+operator statement is the authorization fact; do not ask again. A missing tool
+or unsupported launch shape is a technical gap, not an authorization denial.
 
 ## Routes
 
@@ -45,6 +45,16 @@ shape is a technical gap, not an authorization denial.
 - `web import-har` reads one bounded local HAR offline. Require every retained
   HTTP(S) origin through `--origin`. Unknown path segments are masked; use
   `--path-literal` only for an operator-reviewed structural route segment.
+- `web import-burp` reads one bounded Burp Save Items XML file offline and feeds
+  its exact raw HTTP request/response messages through the same value-redacted
+  web evidence projection. XML declarations/entities, malformed or inconsistent
+  messages, and resource-bound violations are refused. The source retains
+  `BURP_XML` provenance.
+- The optional `integrations/burp-montoya` extension reads existing Proxy history
+  with `finalRequest()` and emits a create-only sanitized HAR under one exact
+  origin, path prefix, route-literal set, and item limit. It uses no Scanner,
+  traffic dispatch, or traffic modification API. Import its `WEB_HAR` output
+  with `web import-har`.
 - `protocol build` digest-links sanitized web evidence and optional Ghidra or
   Frida evidence into `native-interaction-contract-v1`.
 - `protocol generate` validates that contract offline and writes a new,
@@ -60,8 +70,9 @@ cleanup uncertainty as failure or an explicit gap.
 
 ## Web protocol evidence
 
-A raw HAR can hold live credentials and PHI. Keep it local and ephemeral. The
-sanitized evidence retains methods, explicitly scoped origins, path templates,
+A raw HAR or Burp XML capture can hold live credentials and PHI. Keep it local
+and ephemeral. The sanitized evidence retains methods, explicitly scoped
+origins, path templates,
 query and body field names, coarse types, content types, header and cookie
 names, status codes, sequence, redirect metadata, response-body destination
 field paths, byte buckets, and timing. It removes query, header, cookie, and
@@ -119,6 +130,11 @@ predicates, a post-read when available, and rollback evidence for mutations.
 The `http-authed campaign-attested` browser-held session route can validate
 sealed actions and admit policy-bounded response-derived candidates inside the
 same origin, path, method, category, substitution, and action budgets.
+For one application-managed Web Storage string, planning may seal a declarative
+page-session adapter with an exact area/key, raw or strict JSON Pointer
+extraction, lower-case request-header carrier, target constraints, validity, and
+value-size bound. The value is reacquired and applied inside the isolated fetch;
+it never crosses the extension worker, controller, ledger, evidence, or logs.
 Generated connectors receive credentials only from their caller at runtime.
 
 All reverse outputs use `security_verdict: NOT_ASSESSED` and remain outside the

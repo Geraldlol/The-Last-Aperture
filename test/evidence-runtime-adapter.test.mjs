@@ -26,7 +26,7 @@ async function adapterWithStub(body) {
 
 const REQUEST = {
   evidence_id: 'prod-api-pod',
-  context: 'peerstar-prod',
+  context: 'reference-production',
   namespace: 'clinical',
   pod: 'api-0',
   container: 'api',

@@ -98,7 +98,7 @@ through prose, for the same reason `store_context` exists.
 `evidence_context` has this shape:
 
 ```yaml
-evidence_id: peerstar-api-image
+evidence_id: sample-api-image
 evidence_class: built-artifact
 adapter_id: artifact
 target_identity: sha256:9f2c...
@@ -158,8 +158,8 @@ evidence-qualified form:
 ```text
 <evidence_id>:<class-specific-locator>
 
-peerstar-api-image:layer/02/var/lib/db/sbom/zsh-5.9r7.spdx.json
-peerstar-api-image:config/history[8]
+sample-api-image:layer/02/var/lib/db/sbom/zsh-5.9r7.spdx.json
+sample-api-image:config/history[8]
 prod-cluster:v1/Namespace/sidecars/Pod/sidecars/spec.volumes[0]
 ```
 

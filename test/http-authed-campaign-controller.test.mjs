@@ -108,7 +108,7 @@ test('campaign uses sealed authority without repeat authorization and replays no
   assert.equal(result.actions.completed, 71)
   assert.equal(result.actions.discovered, 70)
   assert.deepEqual(seenSequences, Array.from({ length: 71 }, (_, index) => index + 1))
-  assert.doesNotMatch(JSON.stringify(result), /peerstar-test|approved|node-/i)
+  assert.doesNotMatch(JSON.stringify(result), /app\.example\.test|approved|node-/i)
 
   const reopened = await openHttpAuthedCampaignLedger({
     directory: ledgerDirectory,

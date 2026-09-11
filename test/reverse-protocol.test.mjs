@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
+
+import Ajv2020 from 'ajv/dist/2020.js'
 
 import {
   assertValidNativeInteractionContract,
@@ -12,6 +15,13 @@ import { importWebHarEvidence } from '../scripts/lib/reverse-web-har.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
 
 const HASH = 'b'.repeat(64)
+const NATIVE_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/native-interaction-contract.schema.json', import.meta.url), 'utf8'))
+const validateNativeSchema = new Ajv2020({
+  strict: true,
+  strictTuples: false,
+  allErrors: true,
+  allowUnionTypes: true,
+}).compile(NATIVE_SCHEMA)
 
 function rebindContractId(contract) {
   const { contract_id: ignored, ...material } = contract
@@ -36,7 +46,7 @@ function webEvidence() {
   const har = { log: { entries: [
     entry({
       method: 'POST',
-      url: 'https://portal.example/CheckLogin',
+      url: 'https://portal.example/auth/login',
       requestHeaders: [{ name: 'Content-Type', value: 'application/x-www-form-urlencoded' }],
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [
         { name: 'UserName', value: 'alice' },
@@ -45,25 +55,25 @@ function webEvidence() {
       status: 200,
       responseHeaders: [{ name: 'Set-Cookie', value: 'SessionCookie=secret' }],
       responseCookies: [{ name: 'SessionCookie', value: 'secret' }],
-      content: { mimeType: 'application/json', size: 30, text: '{"Status":"OK","WebsiteURL":"https://portal.example/Home"}' },
+      content: { mimeType: 'application/json', size: 30, text: '{"status":"ok","nextUrl":"https://portal.example/home"}' },
     }),
     entry({
       method: 'POST',
-      url: 'https://portal.example/SessionStart',
+      url: 'https://portal.example/session/start',
       requestHeaders: [{ name: 'Cookie', value: 'SessionCookie=secret' }],
       requestCookies: [{ name: 'SessionCookie', value: 'secret' }],
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'SessionId', value: 'secret' }] },
       status: 302,
       responseHeaders: [
         { name: 'Location', value: 'https://portal.example/api/clients/42' },
-        { name: 'Set-Cookie', value: 'cbh=secret' },
+        { name: 'Set-Cookie', value: 'SessionToken=secret' },
       ],
-      responseCookies: [{ name: 'cbh', value: 'secret' }],
+      responseCookies: [{ name: 'SessionToken', value: 'secret' }],
     }),
     entry({
       method: 'PUT',
       url: 'https://portal.example/api/clients/42',
-      requestCookies: [{ name: 'cbh', value: 'secret' }],
+      requestCookies: [{ name: 'SessionToken', value: 'secret' }],
       requestHeaders: [{ name: 'Content-Type', value: 'application/json' }],
       postData: { mimeType: 'application/json', text: '{"status":"active","client_id":42}' },
       status: 204,
@@ -72,7 +82,7 @@ function webEvidence() {
     entry({
       method: 'GET',
       url: 'https://portal.example/api/clients/42?page=1&limit=25',
-      requestCookies: [{ name: 'cbh', value: 'secret' }],
+      requestCookies: [{ name: 'SessionToken', value: 'secret' }],
       status: 200,
       content: { mimeType: 'application/json', size: 40, text: '{"status":"active","client_id":42}' },
     }),
@@ -80,11 +90,11 @@ function webEvidence() {
   return importWebHarEvidence(har, {
     sourceSha256: HASH,
     targetOrigins: ['https://portal.example'],
-    pathLiterals: ['CheckLogin', 'Home', 'SessionStart', 'clients'],
+    pathLiterals: ['clients', 'home', 'start'],
   })
 }
 
-test('builds a Credible-style native interaction contract from redacted web evidence', () => {
+test('builds a target-neutral native interaction contract from redacted web evidence', () => {
   const evidence = webEvidence()
   const contract = buildNativeInteractionContract({
     webSessionEvidence: [evidence],
@@ -93,6 +103,8 @@ test('builds a Credible-style native interaction contract from redacted web evid
   })
 
   assert.equal(assertValidNativeInteractionContract(contract), contract)
+  assert.equal(contract.schema_version, '1.1.0')
+  assert.equal(validateNativeSchema(contract), true)
   assert.equal(contract.status, 'DRAFT_OBSERVED')
   assert.equal(contract.generated_client_status, 'CONTRACT_ONLY')
   assert.equal(contract.security_verdict, 'NOT_ASSESSED')
@@ -101,7 +113,7 @@ test('builds a Credible-style native interaction contract from redacted web evid
   assert.equal(contract.auth_flows.length, 1)
   assert.deepEqual(contract.auth_flows[0].steps.map(({ request_action: action }) => action), [
     'CREDENTIAL_SUBMIT',
-    'AUTHENTICATED_REQUEST',
+    'AUTH_REQUEST',
     'AUTHENTICATED_REQUEST',
     'AUTHENTICATED_REQUEST',
   ])
@@ -119,7 +131,7 @@ test('builds a Credible-style native interaction contract from redacted web evid
   assert.deepEqual(write.exchanges[0].request, {
     action: 'AUTHENTICATED_REQUEST',
     action_basis: 'OBSERVED_CARRIERS',
-    credential_carriers: ['cookie:cbh'],
+    credential_carriers: ['cookie:SessionToken'],
   })
   assert.deepEqual(write.exchanges[0].response, {
     status: 204,
@@ -131,11 +143,11 @@ test('builds a Credible-style native interaction contract from redacted web evid
   assert.equal(read.pagination, 'OFFSET_OR_PAGE_PARAMETERS_OBSERVED')
   assert.deepEqual(read.side_effect, { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' })
   assert.deepEqual(read.request.query_parameters.map(({ name }) => name), ['limit', 'page'])
-  assert.deepEqual(read.auth.request_cookie_names, ['cbh'])
+  assert.deepEqual(read.auth.request_cookie_names, ['SessionToken'])
 
-  const login = contract.endpoints.find(({ path_template: path }) => path === '/CheckLogin')
+  const login = contract.endpoints.find(({ path_template: path }) => path === '/auth/login')
   assert.equal(login.redirects[0].source, 'RESPONSE_BODY_FIELD')
-  assert.equal(login.redirects[0].field_path, 'WebsiteURL')
+  assert.equal(login.redirects[0].field_path, 'nextUrl')
   assert.equal(login.exchanges[0].evidence_ref, contract.auth_flows[0].steps[0].evidence_ref)
   assert.equal(login.exchanges[0].capture_id, contract.auth_flows[0].capture_id)
   assert.equal(login.exchanges[0].sequence, contract.auth_flows[0].steps[0].sequence)
@@ -147,6 +159,140 @@ test('builds a Credible-style native interaction contract from redacted web evid
   }
   assert.match(digestNativeInteractionContract(contract), /^[a-f0-9]{64}$/)
   assert.equal(contract.redaction.value_like_names_masked, true)
+})
+
+test('released native contract 1.0.0 fixture retains exact HAR provenance shape', () => {
+  const current = buildNativeInteractionContract({
+    webSessionEvidence: [webEvidence()],
+    reverseEvidence: [],
+    generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  assert.equal(current.schema_version, '1.1.0')
+  assert.equal(validateNativeSchema(current), true)
+
+  const legacy = JSON.parse(readFileSync(new URL(
+    './fixtures/compat/0.12/native-interaction-contract-1.0.0.json',
+    import.meta.url,
+  ), 'utf8'))
+  const before = stableJson(legacy, 0)
+  assert.equal(assertValidNativeInteractionContract(legacy), legacy)
+  assert.equal(stableJson(legacy, 0), before)
+  assert.equal(validateNativeSchema(legacy), true)
+  assert.deepEqual(legacy.endpoints[0].discovered_via, ['WEB_HAR'])
+  assert.equal(Object.hasOwn(legacy.endpoints[0].exchanges[0], 'provenance'), false)
+
+  const missingLegacyProvenance = structuredClone(legacy)
+  delete missingLegacyProvenance.endpoints[0].discovered_via
+  rebindContractId(missingLegacyProvenance)
+  assert.throws(
+    () => assertValidNativeInteractionContract(missingLegacyProvenance),
+    /provenance|missing/i,
+  )
+  assert.equal(validateNativeSchema(missingLegacyProvenance), false)
+
+  const widenedLegacyExchange = structuredClone(legacy)
+  widenedLegacyExchange.endpoints[0].exchanges[0].provenance = 'WEB_HAR'
+  rebindContractId(widenedLegacyExchange)
+  assert.throws(
+    () => assertValidNativeInteractionContract(widenedLegacyExchange),
+    /missing|unknown/i,
+  )
+  assert.equal(validateNativeSchema(widenedLegacyExchange), false)
+
+  for (const remove of [
+    (contract) => { delete contract.endpoints[0].discovered_via },
+    (contract) => { delete contract.endpoints[0].exchanges[0].provenance },
+  ]) {
+    const incomplete = structuredClone(current)
+    remove(incomplete)
+    rebindContractId(incomplete)
+    assert.throws(() => assertValidNativeInteractionContract(incomplete), /provenance|missing/i)
+    assert.equal(validateNativeSchema(incomplete), false)
+  }
+})
+
+test('released 1.0 contracts retain historical route-derived auth semantics without changing current classification', () => {
+  const legacy = JSON.parse(readFileSync(new URL(
+    './fixtures/compat/0.12/native-interaction-contract-1.0.0-retired-auth-semantics.json',
+    import.meta.url,
+  ), 'utf8'))
+  const before = stableJson(legacy, 0)
+
+  assert.equal(assertValidNativeInteractionContract(legacy), legacy)
+  assert.equal(stableJson(legacy, 0), before)
+  assert.equal(validateNativeSchema(legacy), true, JSON.stringify(validateNativeSchema.errors))
+  assert.match(digestNativeInteractionContract(legacy), /^[a-f0-9]{64}$/u)
+  assert.equal(legacy.endpoints[0].protocol_role, 'AUTH')
+  assert.deepEqual(legacy.endpoints[0].side_effect, { basis: 'AUTH_FLOW', classification: 'UNKNOWN' })
+  assert.deepEqual(legacy.endpoints[0].exchanges[0].request, {
+    action: 'AUTH_REQUEST',
+    action_basis: 'INFERRED_PATH',
+    credential_carriers: ['body:UserName'],
+  })
+
+  const genericizedLegacyAuth = structuredClone(legacy)
+  const genericPath = '/workspacealpha'
+  const endpoint = genericizedLegacyAuth.endpoints[0]
+  endpoint.path_template = genericPath
+  genericizedLegacyAuth.subjects.path_literals = ['workspacealpha']
+  endpoint.endpoint_id = `endpoint:${createHash('sha256').update(`${endpoint.origin}\n${endpoint.method}\n${genericPath}`).digest('hex').slice(0, 32)}`
+  genericizedLegacyAuth.auth_flows[0].steps[0].endpoint_id = endpoint.endpoint_id
+  rebindContractId(genericizedLegacyAuth)
+  assert.throws(
+    () => assertValidNativeInteractionContract(genericizedLegacyAuth),
+    /request action|protocol role|side effect/i,
+  )
+
+  const brokenGraph = structuredClone(legacy)
+  brokenGraph.auth_flows[0].steps[0].request_action = 'APPLICATION_REQUEST'
+  brokenGraph.auth_flows[0].steps[0].request_action_basis = 'UNCLASSIFIED'
+  rebindContractId(brokenGraph)
+  assert.throws(
+    () => assertValidNativeInteractionContract(brokenGraph),
+    /request action|auth flow request metadata/i,
+  )
+
+  const generic = JSON.parse(readFileSync(new URL(
+    './fixtures/compat/0.12/native-interaction-contract-1.0.0.json',
+    import.meta.url,
+  ), 'utf8'))
+  const semanticForgeries = [
+    (contract) => {
+      contract.endpoints[0].exchanges[0].request.action = 'AUTH_REQUEST'
+      contract.endpoints[0].exchanges[0].request.action_basis = 'INFERRED_PATH'
+    },
+    (contract) => {
+      contract.endpoints[0].protocol_role = 'AUTH'
+      contract.endpoints[0].side_effect = { basis: 'AUTH_FLOW', classification: 'UNKNOWN' }
+    },
+    (contract) => {
+      contract.endpoints[0].protocol_role = 'AUTH'
+      contract.endpoints[0].side_effect = { basis: 'AUTH_FLOW', classification: 'UNKNOWN' }
+      contract.endpoints[0].exchanges[0].request.action = 'AUTH_REQUEST'
+      contract.endpoints[0].exchanges[0].request.action_basis = 'INFERRED_PATH'
+    },
+  ]
+  for (const forge of semanticForgeries) {
+    const changed = structuredClone(generic)
+    forge(changed)
+    rebindContractId(changed)
+    assert.throws(
+      () => assertValidNativeInteractionContract(changed),
+      /request action|protocol role|side effect/i,
+    )
+  }
+
+  const current = structuredClone(legacy)
+  current.schema_version = '1.1.0'
+  for (const endpoint of current.endpoints) {
+    for (const exchange of endpoint.exchanges) exchange.provenance = 'WEB_HAR'
+  }
+  rebindContractId(current)
+  assert.equal(validateNativeSchema(current), true, JSON.stringify(validateNativeSchema.errors))
+  assert.throws(
+    () => assertValidNativeInteractionContract(current),
+    /request action|protocol role|side effect/i,
+  )
 })
 
 test('contract records linked native evidence without upgrading unsupported observations', () => {
@@ -215,7 +361,7 @@ test('strict contract rejects value-bearing fields and unsupported claims', () =
   for (const mutate of [
     (value) => { value.endpoints[0].endpoint_id = `endpoint:${'0'.repeat(32)}` },
     (value) => { value.endpoints[0].method = 'AliceSecret' },
-    (value) => { value.endpoints[0].path_template = '/patients/Alice-Smith' },
+    (value) => { value.endpoints[0].path_template = '/resources/Alice-Smith' },
     (value) => { value.auth_flows[0].steps[0].inputs = ['actual-secret-value'] },
   ]) {
     const changed = structuredClone(contract)
@@ -254,21 +400,21 @@ test('side effects are classified independently of the HTTP verb without retaini
   assert.equal(canonicalNativeInteractionContract(contract).includes('delete'), false)
 })
 
-test('Credible CheckDataCenter is retained as an authentication request without its values', () => {
+test('a standard auth callback is classified without retaining its values', () => {
   const evidence = importWebHarEvidence({ log: { entries: [entry({
     method: 'POST',
-    url: 'https://portal.example/CheckDataCenter',
+    url: 'https://portal.example/auth/callback',
     postData: {
       mimeType: 'application/x-www-form-urlencoded',
       params: [{ name: 'UserName', value: 'alice' }],
     },
     status: 200,
-  })] } }, { sourceSha256: '4'.repeat(64), targetOrigins: ['https://portal.example'], pathLiterals: ['CheckDataCenter'] })
+  })] } }, { sourceSha256: '4'.repeat(64), targetOrigins: ['https://portal.example'] })
   const contract = buildNativeInteractionContract({
     webSessionEvidence: [evidence], reverseEvidence: [],
     generatedAt: '2026-09-11T12:01:00.000Z',
   })
-  assert.equal(contract.endpoints[0].path_template, '/CheckDataCenter')
+  assert.equal(contract.endpoints[0].path_template, '/auth/callback')
   assert.equal(contract.endpoints[0].protocol_role, 'AUTH')
   assert.equal(contract.auth_flows[0].steps[0].request_action, 'AUTH_REQUEST')
   assert.equal(canonicalNativeInteractionContract(contract).includes('alice'), false)
@@ -329,16 +475,16 @@ test('ordinary cookies do not create credential carriers or authentication flows
 test('correlates a unique response-provided auth destination within three later observations', () => {
   const evidence = importWebHarEvidence({ log: { entries: [
     entry({
-      method: 'POST', url: 'https://portal.example/CheckLogin', status: 200,
+      method: 'POST', url: 'https://portal.example/auth/login', status: 200,
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'Password', value: 'secret' }] },
-      content: { mimeType: 'application/json', size: 80, text: '{"DocsURL":"/docs","WebsiteURL":"/Home"}' },
+      content: { mimeType: 'application/json', size: 80, text: '{"docsUrl":"/docs","nextUrl":"/home"}' },
     }),
     entry({ method: 'GET', url: 'https://portal.example/ping', status: 200 }),
     entry({ method: 'GET', url: 'https://portal.example/assets', status: 200 }),
-    entry({ method: 'GET', url: 'https://portal.example/Home', status: 200 }),
+    entry({ method: 'GET', url: 'https://portal.example/home', status: 200 }),
   ] } }, {
     sourceSha256: '8'.repeat(64), targetOrigins: ['https://portal.example'],
-    pathLiterals: ['CheckLogin', 'Home', 'assets', 'docs', 'ping'],
+    pathLiterals: ['assets', 'docs', 'home', 'ping'],
   })
   const contract = buildNativeInteractionContract({
     webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',
@@ -346,14 +492,14 @@ test('correlates a unique response-provided auth destination within three later 
   const login = contract.auth_flows[0].steps[0]
   assert.equal(login.destination_candidates.length, 2)
   assert.equal(login.destination_correlation, 'UNIQUE_WITHIN_3_STEPS')
-  assert.equal(login.destination.field_path, 'WebsiteURL')
+  assert.equal(login.destination.field_path, 'nextUrl')
   assert.equal(login.next_observation_id, contract.auth_flows[0].steps[3].evidence_ref)
 })
 
 test('validator rejects forged auth metadata even when the content-bound id is recomputed', () => {
   const mutations = [
     (value) => { value.auth_flows[0].steps[0].response_status = 418 },
-    (value) => { value.auth_flows[0].steps[0].inputs = ['cookie:cbh'] },
+    (value) => { value.auth_flows[0].steps[0].inputs = ['cookie:SessionToken'] },
     (value) => { value.auth_flows[0].steps[0].next_observation_id = value.auth_flows[0].steps.at(-1).evidence_ref },
     (value) => {
       value.endpoints[0].response.fields[0].name = 'test@example.com'
@@ -373,26 +519,26 @@ test('validator rejects forged auth metadata even when the content-bound id is r
 test('auth steps bind to one exact endpoint exchange instead of aggregate endpoint facets', () => {
   const evidence = importWebHarEvidence({ log: { entries: [
     entry({
-      method: 'POST', url: 'https://portal.example/CheckLogin', status: 401,
+      method: 'POST', url: 'https://portal.example/auth/login', status: 401,
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'Password', value: 'first' }] },
     }),
     entry({
-      method: 'POST', url: 'https://portal.example/CheckLogin', status: 200,
+      method: 'POST', url: 'https://portal.example/auth/login', status: 200,
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'Password', value: 'second' }] },
       responseHeaders: [{ name: 'Set-Cookie', value: 'SessionCookie=secret' }],
       responseCookies: [{ name: 'SessionCookie', value: 'secret' }],
-      content: { mimeType: 'application/json', size: 40, text: '{"WebsiteURL":"/Home"}' },
+      content: { mimeType: 'application/json', size: 40, text: '{"nextUrl":"/home"}' },
     }),
-    entry({ method: 'GET', url: 'https://portal.example/Home', status: 200 }),
+    entry({ method: 'GET', url: 'https://portal.example/home', status: 200 }),
   ] } }, {
     sourceSha256: '9'.repeat(64),
     targetOrigins: ['https://portal.example'],
-    pathLiterals: ['CheckLogin', 'Home'],
+    pathLiterals: ['home'],
   })
   const original = buildNativeInteractionContract({
     webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',
   })
-  const login = original.endpoints.find(({ path_template: path }) => path === '/CheckLogin')
+  const login = original.endpoints.find(({ path_template: path }) => path === '/auth/login')
   assert.equal(login.exchanges.length, 2)
   assert.deepEqual(login.response.statuses, [200, 401])
   assert.deepEqual(login.auth.response_carriers, ['cookie:SessionCookie'])
@@ -401,9 +547,9 @@ test('auth steps bind to one exact endpoint exchange instead of aggregate endpoi
     (contract) => { contract.auth_flows[0].steps[0].response_status = 200 },
     (contract) => { contract.auth_flows[0].steps[0].outputs = ['cookie:SessionCookie'] },
     (contract) => { contract.auth_flows[0].steps[0].sequence = 2 },
-    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/CheckLogin').exchanges[0].response.status = 200 },
-    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/CheckLogin').exchanges[0].request.action = 'AUTH_REQUEST' },
-    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/CheckLogin').exchanges[0].unexpected = true },
+    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/auth/login').exchanges[0].response.status = 200 },
+    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/auth/login').exchanges[0].request.action = 'AUTH_REQUEST' },
+    (contract) => { contract.endpoints.find(({ path_template: path }) => path === '/auth/login').exchanges[0].unexpected = true },
   ]
   for (const mutate of mutations) {
     const changed = structuredClone(original)
@@ -416,15 +562,15 @@ test('auth steps bind to one exact endpoint exchange instead of aggregate endpoi
 test('redacted destination path templates never correlate different concrete paths', () => {
   const evidence = importWebHarEvidence({ log: { entries: [
     entry({
-      method: 'POST', url: 'https://portal.example/CheckLogin', status: 200,
+      method: 'POST', url: 'https://portal.example/auth/login', status: 200,
       postData: { mimeType: 'application/x-www-form-urlencoded', params: [{ name: 'Password', value: 'secret' }] },
-      content: { mimeType: 'application/json', size: 50, text: '{"WebsiteURL":"/tenant/Alice"}' },
+      content: { mimeType: 'application/json', size: 50, text: '{"nextUrl":"/tenant/Alice"}' },
     }),
     entry({ method: 'GET', url: 'https://portal.example/tenant/Bob', status: 200 }),
   ] } }, {
     sourceSha256: 'a'.repeat(64),
     targetOrigins: ['https://portal.example'],
-    pathLiterals: ['CheckLogin', 'tenant'],
+    pathLiterals: ['tenant'],
   })
   const contract = buildNativeInteractionContract({
     webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',

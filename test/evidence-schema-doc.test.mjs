@@ -37,7 +37,7 @@ test('the Stage 1 table declares evidence_context and evidence_claim', () => {
 
 test('the location section documents the evidence-qualified form', () => {
   const text = doc()
-  assert.match(text, /peerstar-api-image:layer\/02\//)
+  assert.match(text, /sample-api-image:layer\/02\//)
   assert.match(text, /prod-cluster:v1\/Namespace\//)
 })
 

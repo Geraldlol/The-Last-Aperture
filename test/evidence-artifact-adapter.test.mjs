@@ -12,7 +12,7 @@ const FIXTURE = 'test/fixtures/evidence/vulnerable-image.tar'
 const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
 
 const REQUEST = {
-  evidence_id: 'peerstar-api-image',
+  evidence_id: 'sample-api-image',
   source_path: FIXTURE,
   target_class: 'LAB',
   phi_scope: 'none',

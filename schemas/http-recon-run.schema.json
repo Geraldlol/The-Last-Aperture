@@ -26,7 +26,7 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": ["1.0.0", "1.1.0", "1.2.0"]
+      "enum": ["1.0.0", "1.1.0"]
     },
     "kind": {
       "const": "red-team-audit/http-recon-run"
@@ -107,19 +107,11 @@
     {
       "if": {
         "properties": {
-          "actions": { "contains": { "required": ["response_observation"] } }
+          "actions": { "contains": { "required": ["request_headers"] } }
         }
       },
-      "then": { "properties": { "schema_version": { "const": "1.2.0" } } },
-      "else": {
-        "if": {
-          "properties": {
-            "actions": { "contains": { "required": ["request_headers"] } }
-          }
-        },
-        "then": { "properties": { "schema_version": { "const": "1.1.0" } } },
-        "else": { "properties": { "schema_version": { "const": "1.0.0" } } }
-      }
+      "then": { "properties": { "schema_version": { "const": "1.1.0" } } },
+      "else": { "properties": { "schema_version": { "const": "1.0.0" } } }
     }
   ],
   "$defs": {
@@ -376,13 +368,7 @@
             "forwarded-loopback-https-v1",
             "x-forwarded-for-loopback-v1",
             "x-http-method-override-get-v1",
-            "x-original-url-admin-securitymatrix-v1",
-            "x-original-url-order-programs-v1",
-            "x-original-url-tabaccess-getall-v1",
-            "x-real-ip-loopback-v1",
-            "x-rewrite-url-admin-securitymatrix-v1",
-            "x-rewrite-url-order-programs-v1",
-            "x-rewrite-url-tabaccess-getall-v1"
+            "x-real-ip-loopback-v1"
           ]
         },
         "names": {
@@ -396,27 +382,11 @@
               "origin",
               "x-forwarded-for",
               "x-http-method-override",
-              "x-original-url",
-              "x-real-ip",
-              "x-rewrite-url"
+              "x-real-ip"
             ]
           }
         },
         "header_set_sha256": { "$ref": "#/$defs/sha256" }
-      }
-    },
-    "responseObservation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["profile", "profile_binding_sha256"],
-      "properties": {
-        "profile": {
-          "enum": [
-            "credible-bundle-src-v1",
-            "credible-cross-origin-js-ast-v1"
-          ]
-        },
-        "profile_binding_sha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "action": {
@@ -458,9 +428,6 @@
         },
         "request_headers": {
           "$ref": "#/$defs/requestHeaders"
-        },
-        "response_observation": {
-          "$ref": "#/$defs/responseObservation"
         },
         "safe_to_get": {
           "type": "boolean"
@@ -547,16 +514,6 @@
               "safe_to_get": {
                 "const": false
               }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": ["response_observation"]
-          },
-          "then": {
-            "properties": {
-              "method": { "const": "GET" }
             }
           }
         }

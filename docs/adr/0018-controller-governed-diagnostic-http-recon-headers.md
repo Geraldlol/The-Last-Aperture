@@ -7,7 +7,7 @@ Date: 2026-08-18
 Amended by: ADR 0021 retires the separate signed authorization mode; the
 controller-owned diagnostic-header profile boundary remains current.
 
-> **Current 0.12.0 execution status: active through the bounded controller.**
+> **Current 0.13.0 execution status: active through the bounded controller.**
 > A `go` or lower-level `run` may select only the finite controller-owned header
 > profiles defined here. Raw caller-selected header names and values remain
 > outside the public interface.

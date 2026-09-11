@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 
 import Ajv2020 from 'ajv/dist/2020.js'
@@ -43,7 +43,7 @@ function observedDocuments() {
           time: 10,
           request: {
             method: 'POST',
-            url: 'https://portal.example/CheckLogin',
+            url: 'https://portal.example/auth/login',
             headers: [{ name: 'Content-Type', value: 'application/x-www-form-urlencoded' }],
             cookies: [],
             postData: {
@@ -61,7 +61,7 @@ function observedDocuments() {
             content: {
               mimeType: 'application/json',
               size: 64,
-              text: '{"Status":"OK","WebsiteURL":"https://portal.example/Home"}',
+              text: '{"status":"ok","nextUrl":"https://portal.example/home"}',
             },
           },
         },
@@ -88,16 +88,21 @@ test('reverse engineering ships its consumer contracts and public entry points t
     'scripts/lib/reverse-ghidra.mjs',
     'scripts/lib/reverse-frida.mjs',
     'scripts/lib/reverse-frida-v2.mjs',
+    'scripts/lib/reverse-web-burp.mjs',
     'scripts/lib/reverse-web-har.mjs',
     'scripts/lib/reverse-protocol.mjs',
     'scripts/lib/reverse-connector-generator.mjs',
     'scripts/templates/native-connector-runtime.mjs',
     'scripts/ghidra/LastApertureExport.java',
+    'scripts/ghidra/GhidraBundleLocationAgent.java.source',
+    'scripts/ghidra/GhidraBundleLocationAgent.mf',
     'scripts/frida/native-call-trace-v1.js',
     'scripts/frida/native-call-trace-v2.js',
+    'scripts/lib/page-session-adapter.mjs',
     'scripts/windows/job-supervisor.ps1',
     'scripts/windows/launch-ghidra-fixed.cmd',
     WEB_SCHEMA_PATH,
+    'schemas/page-session-adapter.schema.json',
     'schemas/frida-trace-plan.schema.json',
     CONTRACT_SCHEMA_PATH,
     'schemas/generated-native-connector.schema.json',
@@ -105,6 +110,13 @@ test('reverse engineering ships its consumer contracts and public entry points t
     REVERSE_SCHEMA_PATH,
     'docs/reverse-engineering.md',
     'docs/adr/0026-reverse-engineering-and-protocol-reconstruction.md',
+    'browser/http-authed-chrome/README.md',
+    'integrations/burp-montoya/README.md',
+    'integrations/burp-montoya/MANIFEST.MF',
+    'integrations/burp-montoya/build.ps1',
+    'integrations/burp-montoya/verify.ps1',
+    'integrations/burp-montoya/src/main/java/dev/lastaperture/burp/LastApertureBurpExtension.java',
+    'integrations/burp-montoya/test/extension.test.mjs',
     'skills/last-aperture/references/reverse-engineering.md',
   ]) {
     assert.equal(existsSync(path), true, `${path} must ship`)
@@ -113,8 +125,14 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.bin['last-aperture-reverse'], './scripts/reverse.mjs')
+  assert.equal(packageDocument.version, '0.13.0')
+  assert.ok(packageDocument.files.includes('integrations/'))
+  assert.ok(packageDocument.files.includes('!docs/superpowers/'))
+  assert.ok(packageDocument.files.includes('!**/.gradle/'))
+  assert.ok(packageDocument.files.includes('!scripts/audit.mjs.bak_diag'))
   assert.equal(packageDocument.scripts['audit:reverse'], 'node scripts/reverse.mjs')
-  assert.equal(packageDocument.scripts['test:reverse'], 'node --test test/reverse-*.test.mjs')
+  assert.match(packageDocument.scripts['test:reverse'], /page-session-adapter\.test\.mjs/)
+  assert.match(packageDocument.scripts['test:reverse'], /burp-montoya\/test\/extension\.test\.mjs/)
 
   const help = spawnSync(process.execPath, ['scripts/reverse.mjs', '--help'], {
     encoding: 'utf8',
@@ -122,11 +140,72 @@ test('reverse engineering ships its consumer contracts and public entry points t
     windowsHide: true,
   })
   assert.equal(help.status, 0, help.stderr)
-  for (const route of ['web import-har', 'protocol build', 'protocol generate', 'protocol verify', 'ghidra analyze', 'frida trace', 'frida trace-plan']) {
+  for (const route of ['web import-har', 'web import-burp', 'protocol build', 'protocol generate', 'protocol verify', 'ghidra analyze', 'frida trace', 'frida trace-plan']) {
     assert.match(help.stdout, new RegExp(route.replace(' ', '\\s+')))
   }
   assert.match(help.stdout, /accept local artifacts and captures/i)
   assert.match(help.stdout, /never accept raw tool arguments/i)
+})
+
+test('release pack excludes local and nested build artifacts and retains compatibility fixtures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-pack-'))
+  try {
+    const configuredNpm = process.env.npm_execpath
+    const windowsNpm = join(
+      dirname(process.execPath),
+      'node_modules',
+      'npm',
+      'bin',
+      'npm-cli.js',
+    )
+    const npmCli = typeof configuredNpm === 'string' && existsSync(configuredNpm)
+      ? configuredNpm
+      : (process.platform === 'win32' ? windowsNpm : null)
+    const packArguments = ['pack', '--dry-run', '--json', '--cache', join(root, 'npm-cache')]
+    const packed = spawnSync(
+      npmCli === null ? 'npm' : process.execPath,
+      npmCli === null ? packArguments : [npmCli, ...packArguments],
+      {
+        encoding: 'utf8',
+        shell: false,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    )
+    assert.equal(packed.error, undefined, packed.error?.stack)
+    assert.equal(packed.status, 0, packed.stderr)
+    const report = JSON.parse(packed.stdout)
+    assert.equal(Array.isArray(report), true)
+    assert.equal(report.length, 1)
+    const paths = report[0].files.map((item) => item.path.replaceAll('\\', '/'))
+    for (const forbidden of [
+      /^docs\/superpowers(?:\/|$)/u,
+      /(?:^|\/)\.gradle(?:\/|$)/u,
+      /(?:^|\/)\.audit-runs(?:\/|$)/u,
+      /(?:^|\/)scratchpad(?:\/|$)/u,
+      /(?:^|\/)_tmp_[^/]*$/u,
+      /(?:^|\/)validate_tmp\.mjs$/u,
+      /\.bak_diag$/u,
+    ]) {
+      assert.equal(paths.some((path) => forbidden.test(path)), false, forbidden.source)
+    }
+    for (const required of [
+      'SECURITY.md',
+      'browser/http-authed-chrome/README.md',
+      'integrations/burp-montoya/README.md',
+      'schemas/page-session-adapter.schema.json',
+      'scripts/ghidra/GhidraBundleLocationAgent.java.source',
+      'scripts/lib/reverse-v1-compat-semantics.mjs',
+      'scripts/lib/reverse-web-burp.mjs',
+      'test/fixtures/compat/0.12/native-interaction-contract-1.0.0-retired-auth-semantics.json',
+      'test/fixtures/compat/0.12/web-session-evidence-1.0.0-expanded-cookie-carrier.json',
+      'test/fixtures/compat/0.12/web-session-evidence-1.0.0-retired-cookie-carrier.json',
+    ]) {
+      assert.equal(paths.includes(required), true, `${required} must be packed`)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('reverse capabilities and the canonical skill expose only the implemented narrow routes', () => {
@@ -136,19 +215,23 @@ test('reverse capabilities and the canonical skill expose only the implemented n
   assert.deepEqual(byId.get('frida-typed-reverse')?.commands, ['last-aperture-reverse frida trace-plan'])
   assert.deepEqual(byId.get('web-protocol-reconstruction')?.commands, [
     'last-aperture-reverse web import-har',
+    'last-aperture-reverse web import-burp',
     'last-aperture-reverse protocol build',
     'last-aperture-reverse protocol generate',
     'last-aperture-reverse protocol verify',
   ])
-  for (const id of ['ghidra-static-reverse', 'frida-local-reverse', 'frida-typed-reverse', 'web-protocol-reconstruction']) {
+  assert.deepEqual(byId.get('burp-proxy-history-export')?.commands, ['integrations/burp-montoya/build.ps1'])
+  for (const id of ['ghidra-static-reverse', 'frida-local-reverse', 'frida-typed-reverse', 'web-protocol-reconstruction', 'burp-proxy-history-export']) {
     assert.equal(byId.get(id)?.status, 'AVAILABLE_NARROW')
   }
   assert.match(byId.get('web-protocol-reconstruction').limitation, /GENERATED_REVIEWABLE/i)
   assert.match(byId.get('web-protocol-reconstruction').limitation, /externally retained manifest digest/i)
   assert.equal(byId.get('browser-execution')?.status, 'AVAILABLE_NARROW')
+  assert.match(byId.get('browser-execution').description, /Web Storage session-to-header adapter/i)
   assert.match(byId.get('frida-typed-reverse').limitation, /PARTIAL.*local artifact copy/i)
 
   const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 8000)
   assert.match(skill, /references\/reverse-engineering\.md/)
   const reference = readFileSync('skills/last-aperture/references/reverse-engineering.md', 'utf8')
   assert.match(reference, /DRAFT_OBSERVED/)

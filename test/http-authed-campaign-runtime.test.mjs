@@ -146,12 +146,12 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
 
   assert.equal(calls.length, 2)
   assert.equal(result.actions.completed, 2)
-  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.12')
+  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.13')
   assert.equal(result.actions.discovered, 1)
   assert.equal(result.ledger.terminal_actions, 2)
   assert.doesNotMatch(
     JSON.stringify(result),
-    /peerstar-test|approved|TRANSIENT_RUNTIME_BODY_SENTINEL|synthetic-runtime-credential/i,
+    /generic-test|approved|TRANSIENT_RUNTIME_BODY_SENTINEL|synthetic-runtime-credential/i,
   )
 
   const replay = await runHttpAuthedAttestedCampaign({
@@ -408,7 +408,24 @@ test('browser campaign opens its stop ledger before attach and closes its bridge
     mode: 'CHROME_ACTIVE_TAB_SESSION',
     extension_id: 'abcdefghijklmnopabcdefghijklmnop',
     origin: scope.target.origin,
+    session_adapter: {
+      schema_version: '1.0.0',
+      kind: 'last-aperture/page-session-adapter',
+      adapter_id: 'synthetic-runtime-session',
+      source: {
+        type: 'WEB_STORAGE', area: 'LOCAL', key: 'application.session',
+        extraction: { mode: 'RAW' },
+      },
+      carrier: { type: 'REQUEST_HEADER', name: 'authorization', prefix: 'Bearer ' },
+      target_constraints: [{ origin: scope.target.origin, method: 'GET', path_prefix: '/' }],
+      validity: {
+        not_before: scope.validity.not_before,
+        not_after: scope.validity.not_after,
+      },
+      limits: { max_value_bytes: 4096 },
+    },
   }
+  scope.schema_version = '1.4.0'
   scope.authorization.permissions.mutation = false
   scope.requests = [{
     kind: 'probe',
@@ -441,6 +458,7 @@ test('browser campaign opens its stop ledger before attach and closes its bridge
       assert.equal(configuration.extensionId, scope.credential.extension_id)
       assert.equal(configuration.targetOrigin, scope.target.origin)
       assert.equal(configuration.campaignGrantSha256, verified.campaignGrantSha256)
+      assert.deepEqual(configuration.pageSessionAdapter, scope.credential.session_adapter)
       return {
         pairing: { port: 43123, capability: 'x'.repeat(43) },
         waitForAttach: async () => {

@@ -37,10 +37,14 @@ import {
   assertValidFridaTracePlan,
 } from './reverse-frida.mjs'
 import {
+  GHIDRA_WINDOWS_AGENT_MANIFEST_PATH,
+  GHIDRA_WINDOWS_AGENT_SOURCE_PATH,
   assertSupportedGhidraLauncher,
   buildGhidraArguments,
+  prepareWindowsGhidraCompatibilityAgent,
   runGhidraHeadless,
 } from './reverse-ghidra.mjs'
+import { isWindowsBatchLauncher } from './reverse-process.mjs'
 import {
   buildNativeInteractionContract,
   canonicalNativeInteractionContract,
@@ -51,7 +55,9 @@ import {
   digestWebSessionEvidence,
   importWebHarEvidence,
 } from './reverse-web-har.mjs'
+import { importBurpHttpItemsEvidence } from './reverse-web-burp.mjs'
 import { assertLocalFilesystemEndpoint } from './filesystem-endpoint.mjs'
+import { compareCanonicalStrings } from './canonical-order.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const MAX_JSON_INPUT_BYTES = 64 * 1024 * 1024
@@ -394,6 +400,28 @@ function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function toolComponent(role, name, hash) {
+  return {
+    role,
+    name,
+    sha256: hash.sha256,
+    size_bytes: hash.size,
+  }
+}
+
+function mergeToolComponents(...groups) {
+  const byRole = new Map()
+  for (const component of groups.flat()) {
+    if (byRole.has(component.role)) {
+      fail('REVERSE_TOOL_PROVENANCE_INVALID', `duplicate fixed tool component role: ${component.role}`)
+    }
+    byRole.set(component.role, component)
+  }
+  return [...byRole.values()].sort((left, right) => (
+    compareCanonicalStrings(left.role, right.role)
+  ))
+}
+
 function canonicalTimestamp(value) {
   const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) fail('REVERSE_CLOCK_INVALID', 'controller clock returned an invalid date')
@@ -447,8 +475,8 @@ async function copyArtifact(source, destination, expected) {
   }
 }
 
-async function assertOwnedWorkIdentity(outputDirectory, workDirectory, identity) {
-  const expected = resolve(outputDirectory, '.work')
+async function assertOwnedWorkIdentity(outputDirectory, workDirectory, identity, workName = '.work') {
+  const expected = resolve(outputDirectory, workName)
   if (!equalPath(expected, workDirectory) || !inside(outputDirectory, workDirectory)) {
     fail('REVERSE_CLEANUP_REFUSED', 'controller refused to clean an unowned working directory')
   }
@@ -471,9 +499,9 @@ async function assertOwnedWorkIdentity(outputDirectory, workDirectory, identity)
   return metadata
 }
 
-async function cleanupOwnedWork(outputDirectory, workDirectory, identity) {
+async function cleanupOwnedWork(outputDirectory, workDirectory, identity, workName = '.work') {
   try {
-    await assertOwnedWorkIdentity(outputDirectory, workDirectory, identity)
+    await assertOwnedWorkIdentity(outputDirectory, workDirectory, identity, workName)
     await rm(workDirectory, { recursive: true, force: false })
     try {
       await lstat(workDirectory)
@@ -886,6 +914,29 @@ export async function importHarFile({ harPath, targetOrigins, pathLiterals = [],
   }
 }
 
+export async function importBurpFile({ burpPath, targetOrigins, pathLiterals = [], outPath } = {}) {
+  if (!Array.isArray(targetOrigins) || targetOrigins.length < 1 || targetOrigins.length > 32) {
+    fail('REVERSE_ORIGINS_INVALID', 'web Burp XML import requires one to 32 target origins')
+  }
+  const inputPath = localAbsolutePath(burpPath, 'Burp XML input')
+  const outputPath = await assertOutputAbsent(outPath, 'web evidence output')
+  if (equalPath(inputPath, outputPath)) fail('REVERSE_OUTPUT_INVALID', 'web evidence output must differ from the Burp XML input')
+  const bytes = await readStableFile(inputPath, MAX_JSON_INPUT_BYTES)
+  const evidence = importBurpHttpItemsEvidence(bytes, {
+    sourceSha256: sha256(bytes),
+    targetOrigins,
+    pathLiterals,
+  })
+  await exclusiveWrite(outputPath, canonicalWebSessionEvidence(evidence))
+  return {
+    status: 'SUCCEEDED',
+    output_path: outputPath,
+    digest: digestWebSessionEvidence(evidence),
+    entries: evidence.entries.length,
+    skipped: evidence.skipped,
+  }
+}
+
 function distinctAbsolutePaths(values, label, minimum, maximum) {
   if (!Array.isArray(values) || values.length < minimum || values.length > maximum) {
     fail('REVERSE_EVIDENCE_INPUT_INVALID', `${label} requires ${minimum} through ${maximum} files`)
@@ -978,19 +1029,44 @@ export async function analyzeGhidraArtifact({
   const artifact = await resolveArtifact(labRootValue, binary)
   const ghidraPath = await verifyTool(ghidraPathValue, 'Ghidra launcher')
   assertSupportedGhidraLauncher(ghidraPath)
+  const usesWindowsCompatibilityAgent = process.platform === 'win32'
+    && isWindowsBatchLauncher(ghidraPath)
   const scriptDirectory = await checkedDirectory(dirname(GHIDRA_EXPORTER_PATH))
   await checkedExistingPath(GHIDRA_EXPORTER_PATH, 'tool', { maximumBytes: 1024 * 1024 })
+  if (usesWindowsCompatibilityAgent) {
+    await checkedExistingPath(GHIDRA_WINDOWS_AGENT_SOURCE_PATH, 'tool', { maximumBytes: 256 * 1024 })
+    await checkedExistingPath(GHIDRA_WINDOWS_AGENT_MANIFEST_PATH, 'tool', { maximumBytes: 16 * 1024 })
+  }
   const outputPath = await outputDirectoryCandidate(outPath, artifact.labRoot)
   const before = await hashStableFile(artifact.path)
   const launcherHash = await hashStableFile(ghidraPath)
   const exporterHash = await hashStableFile(GHIDRA_EXPORTER_PATH, 1024 * 1024)
+  const agentSourceHash = usesWindowsCompatibilityAgent
+    ? await hashStableFile(GHIDRA_WINDOWS_AGENT_SOURCE_PATH, 256 * 1024)
+    : undefined
+  const agentManifestHash = usesWindowsCompatibilityAgent
+    ? await hashStableFile(GHIDRA_WINDOWS_AGENT_MANIFEST_PATH, 16 * 1024)
+    : undefined
   const fixedToolFiles = [
     { path: ghidraPath, maximumBytes: MAX_ARTIFACT_BYTES, expected: launcherHash },
     { path: GHIDRA_EXPORTER_PATH, maximumBytes: 1024 * 1024, expected: exporterHash },
+    ...(usesWindowsCompatibilityAgent ? [
+      { path: GHIDRA_WINDOWS_AGENT_SOURCE_PATH, maximumBytes: 256 * 1024, expected: agentSourceHash },
+      { path: GHIDRA_WINDOWS_AGENT_MANIFEST_PATH, maximumBytes: 16 * 1024, expected: agentManifestHash },
+    ] : []),
+  ]
+  const baseToolComponents = [
+    toolComponent('ghidra-launcher', 'Ghidra headless launcher', launcherHash),
+    toolComponent('fixed-exporter', 'LastApertureExport.java', exporterHash),
+    ...(usesWindowsCompatibilityAgent ? [
+      toolComponent('windows-agent-source', 'GhidraBundleLocationAgent.java.source', agentSourceHash),
+      toolComponent('windows-agent-manifest', 'GhidraBundleLocationAgent.mf', agentManifestHash),
+    ] : []),
   ]
   const runId = newRunId()
   const startedAt = canonicalTimestamp(now())
-  const workPath = join(outputPath, '.work')
+  // Ghidra rejects a project path when any path component begins with '.'.
+  const workPath = join(outputPath, 'work')
   const projectPath = join(workPath, 'project')
   const stagedPath = join(workPath, `target${extname(artifact.path)}`)
   const exportPath = join(workPath, 'ghidra-export.json')
@@ -1007,21 +1083,45 @@ export async function analyzeGhidraArtifact({
     timeoutSeconds: GHIDRA_ANALYSIS_SECONDS,
     maxCpu: 1,
   })
-  const invocationSha256 = sha256(stableJson({
-    profile_id: GHIDRA_REVERSE_PROFILE,
-    args,
-    launcher_sha256: launcherHash.sha256,
-    exporter_sha256: exporterHash.sha256,
-  }, 0))
   const limits = {
     timeout_ms: GHIDRA_TIMEOUT_MS,
     max_output_bytes: MAX_OUTPUT_BYTES,
     max_observations: MAX_OBSERVATIONS,
   }
   let workIdentity
+  let invocationSha256
+  let toolComponents = mergeToolComponents(baseToolComponents)
+  let windowsCompatibilityAgent
+  let runnerTimeoutMs = GHIDRA_TIMEOUT_MS
+  let runnerOutputBytes = MAX_OUTPUT_BYTES
+  const preparationDeadline = Date.now() + GHIDRA_TIMEOUT_MS
   await initializeOutputDirectory(outputPath, async () => {
     await mkdir(workPath, { recursive: false, mode: 0o700 })
     await mkdir(projectPath, { recursive: false, mode: 0o700 })
+    workIdentity = await assertOwnedWorkIdentity(outputPath, workPath, undefined, 'work')
+    if (usesWindowsCompatibilityAgent && runGhidra === runGhidraHeadless) {
+      windowsCompatibilityAgent = await prepareWindowsGhidraCompatibilityAgent({
+        cwd: workPath,
+        deadline: preparationDeadline,
+        outputBudget: MAX_OUTPUT_BYTES,
+      })
+      runnerTimeoutMs = preparationDeadline - Date.now()
+      runnerOutputBytes = windowsCompatibilityAgent.remainingOutput
+      if (runnerTimeoutMs < 1 || runnerOutputBytes < 1) {
+        fail('GHIDRA_LIMIT_EXHAUSTED', 'the fixed Ghidra preparation exhausted its limits before intent sealing')
+      }
+      fixedToolFiles.push(...windowsCompatibilityAgent.files.map((file) => ({
+        path: file.path,
+        maximumBytes: MAX_ARTIFACT_BYTES,
+        expected: file.expected,
+      })))
+      toolComponents = mergeToolComponents(baseToolComponents, windowsCompatibilityAgent.provenance)
+    }
+    invocationSha256 = sha256(stableJson({
+      profile_id: GHIDRA_REVERSE_PROFILE,
+      args,
+      components: toolComponents,
+    }, 0))
     await exclusiveWrite(join(outputPath, 'intent.json'), stableJson(reverseIntent({
       runId,
       engine: 'ghidra',
@@ -1031,20 +1131,25 @@ export async function analyzeGhidraArtifact({
       startedAt,
       limits,
     })))
-    workIdentity = await assertOwnedWorkIdentity(outputPath, workPath)
+    workIdentity = await assertOwnedWorkIdentity(outputPath, workPath, workIdentity, 'work')
   })
 
   let status = 'FAILED'
   let observations = []
   const gaps = [
     fixedGap('STATIC_ANALYSIS_ONLY', 'Ghidra observations describe the staged artifact without executing it or proving application behavior.'),
-    fixedGap('TOOL_VERSION_UNRECORDED', 'The launcher and exporter bytes are digest-bound, but this profile does not execute a separate version probe; tool.version remains null.'),
+    fixedGap(
+      'TOOL_VERSION_UNRECORDED',
+      usesWindowsCompatibilityAgent
+        ? 'The launcher, exporter, and active compatibility-agent toolchain bytes are digest-bound, but this profile does not execute a separate version probe; tool.version remains null.'
+        : 'The launcher and exporter bytes are digest-bound, but this profile does not execute a separate version probe; tool.version remains null.',
+    ),
   ]
   let processResult
   let toolInvocationStarted = false
   try {
     await copyArtifact(artifact.path, stagedPath, before)
-    await assertOwnedWorkIdentity(outputPath, workPath, workIdentity)
+    await assertOwnedWorkIdentity(outputPath, workPath, workIdentity, 'work')
     await assertToolFilesUnchanged(fixedToolFiles)
     toolInvocationStarted = true
     let runnerError
@@ -1053,15 +1158,21 @@ export async function analyzeGhidraArtifact({
         launcherPath: ghidraPath,
         args,
         cwd: workPath,
-        timeoutMs: GHIDRA_TIMEOUT_MS,
-        maxOutputBytes: MAX_OUTPUT_BYTES,
+        timeoutMs: runnerTimeoutMs,
+        maxOutputBytes: runnerOutputBytes,
+        ...(windowsCompatibilityAgent === undefined ? {} : { windowsCompatibilityAgent }),
       })
     } catch (error) {
       runnerError = error
     }
     await assertToolFilesUnchanged(fixedToolFiles)
-    await assertOwnedWorkIdentity(outputPath, workPath, workIdentity)
+    await assertOwnedWorkIdentity(outputPath, workPath, workIdentity, 'work')
     if (runnerError) throw runnerError
+    if (windowsCompatibilityAgent !== undefined
+      && stableJson(processResult?.tool_components ?? null, 0)
+        !== stableJson(windowsCompatibilityAgent.provenance, 0)) {
+      fail('REVERSE_TOOL_PROVENANCE_INVALID', 'the Ghidra runner did not return its sealed compatibility-agent provenance')
+    }
     const logState = await inspectGhidraLogs([logPath, scriptLogPath], MAX_OUTPUT_BYTES)
     processResult = {
       ...processResult,
@@ -1096,9 +1207,9 @@ export async function analyzeGhidraArtifact({
     }
   } catch (error) {
     if (error?.code === 'REVERSE_TOOL_CHANGED') {
-      gaps.push(fixedGap('TOOL_CHANGED', 'The Ghidra launcher or bundled exporter changed around execution, so all observations were discarded.'))
+      gaps.push(fixedGap('TOOL_CHANGED', 'A digest-bound Ghidra launcher, exporter, build tool, or compatibility agent changed around execution, so all observations were discarded.'))
     } else if (error?.code === 'REVERSE_TOOL_RECHECK_FAILED') {
-      gaps.push(fixedGap('TOOL_RECHECK_FAILED', 'The Ghidra launcher or bundled exporter could not be revalidated around execution, so all observations were discarded.'))
+      gaps.push(fixedGap('TOOL_RECHECK_FAILED', 'A digest-bound Ghidra launcher, exporter, build tool, or compatibility agent could not be revalidated around execution, so all observations were discarded.'))
     } else if (error?.code === 'REVERSE_WORK_IDENTITY_CHANGED') {
       gaps.push(fixedGap('WORK_IDENTITY_CHANGED', 'The controller-owned Ghidra working directory was absent or replaced, so all observations were discarded and cleanup could not be verified.'))
     } else {
@@ -1131,14 +1242,14 @@ export async function analyzeGhidraArtifact({
   }
   const terminationSafe = !toolInvocationStarted || processResult?.termination_confirmed === true
   const cleanupVerified = terminationSafe
-    ? await cleanupOwnedWork(outputPath, workPath, workIdentity)
+    ? await cleanupOwnedWork(outputPath, workPath, workIdentity, 'work')
     : false
   if (!cleanupVerified) {
     if (status === 'SUCCEEDED') status = 'PARTIAL'
     gaps.push(fixedGap('CLEANUP_UNVERIFIED', 'The controller could not verify removal of its staged artifact and Ghidra scratch project.'))
   }
   const evidence = {
-    schema_version: '1.0.0',
+    schema_version: '1.1.0',
     kind: 'red-team-audit/reverse-evidence',
     protocol: 'reverse-evidence-v1',
     run_id: runId,
@@ -1147,7 +1258,12 @@ export async function analyzeGhidraArtifact({
     started_at: startedAt,
     finished_at: canonicalTimestamp(now()),
     artifact: { kind: artifactKind, path: artifact.relativePath, sha256: before.sha256, size_bytes: before.size },
-    tool: { name: 'Ghidra', version: null, invocation_sha256: invocationSha256 },
+    tool: {
+      name: 'Ghidra',
+      version: null,
+      invocation_sha256: invocationSha256,
+      components: toolComponents,
+    },
     limits,
     status,
     target_execution: 'NOT_PERFORMED',

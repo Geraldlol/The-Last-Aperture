@@ -563,6 +563,10 @@ test('published v2 plan schema and bundled agent match the strict runtime profil
   assert.equal(validate(plan({ mode: 'remote-host', host: 'example.test' })), false)
 
   const source = await readFile(AGENT, 'utf8')
+  assert.match(source, /rpc\.exports\s*=\s*\{/)
+  assert.match(source, /init\(_stage, parametersValue\)/)
+  assert.match(source, /loadConfiguration\(parametersValue\)/)
+  assert.doesNotMatch(source, /loadConfiguration\(\)/)
   assert.match(source, /configuration\.hooks/)
   assert.match(source, /Interceptor\.attach/)
   assert.match(source, /hookId/)

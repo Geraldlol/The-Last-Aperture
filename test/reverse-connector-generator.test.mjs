@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -17,6 +18,12 @@ import {
 } from '../scripts/lib/reverse-connector-generator.mjs'
 import { buildNativeInteractionContract } from '../scripts/lib/reverse-protocol.mjs'
 import { importWebHarEvidence } from '../scripts/lib/reverse-web-har.mjs'
+import { stableJson } from '../scripts/lib/run-engine.mjs'
+
+function rebindContractId(contract) {
+  const { contract_id: ignored, ...material } = contract
+  contract.contract_id = `interaction:${createHash('sha256').update(stableJson(material, 0)).digest('hex').slice(0, 32)}`
+}
 
 function entry({ method, url, requestHeaders = [], requestCookies = [], postData, status, responseHeaders = [], responseCookies = [], content }) {
   return {
@@ -137,8 +144,8 @@ test('generator emits a deterministic, schema-valid, digest-bound connector with
   globalThis.fetch = async () => { throw new Error('generation attempted network I/O') }
   let firstResult
   try {
-    firstResult = await generateNativeConnectorPackage({ contractPath, outPath: first, packageName: '@peerstar/portal-native' })
-    await generateNativeConnectorPackage({ contractPath, outPath: second, packageName: '@peerstar/portal-native' })
+    firstResult = await generateNativeConnectorPackage({ contractPath, outPath: first, packageName: '@example/portal-native' })
+    await generateNativeConnectorPackage({ contractPath, outPath: second, packageName: '@example/portal-native' })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -161,6 +168,7 @@ test('generator emits a deterministic, schema-valid, digest-bound connector with
   const descriptor = JSON.parse(await readFile(join(first, 'connector.json'), 'utf8'))
   assert.equal(descriptor.status, 'GENERATED_REVIEWABLE')
   assert.equal(descriptor.source_contract.contract_id, contract.contract_id)
+  assert.equal(descriptor.source_contract.schema_version, '1.1.0')
   assert.equal(JSON.stringify(descriptor).includes('CONTRACT_ONLY'), false)
 
   for (const path of ['README.md', 'connector.json', 'index.mjs', 'manifest.json', 'package.json']) {
@@ -174,10 +182,86 @@ test('generator emits a deterministic, schema-valid, digest-bound connector with
   assert.equal(validateDescriptor(descriptor), true, ajv.errorsText(validateDescriptor.errors))
   assert.equal(validateManifest(manifest), true, ajv.errorsText(validateManifest.errors))
 
+  const incompleteCurrent = structuredClone(descriptor)
+  delete incompleteCurrent.endpoints[0].discovered_via
+  delete incompleteCurrent.endpoints[0].exchanges[0].provenance
+  assert.equal(validateDescriptor(incompleteCurrent), false)
+
+  const legacyDescriptor = structuredClone(descriptor)
+  legacyDescriptor.source_contract.schema_version = '1.0.0'
+  for (const endpoint of legacyDescriptor.endpoints) {
+    for (const exchange of endpoint.exchanges) delete exchange.provenance
+    assert.deepEqual(endpoint.discovered_via, ['WEB_HAR'])
+  }
+  assert.equal(validateDescriptor(legacyDescriptor), true, ajv.errorsText(validateDescriptor.errors))
+
   await assert.rejects(
     generateNativeConnectorPackage({ contractPath, outPath: first }),
     (error) => error?.code === 'CONNECTOR_OUTPUT_EXISTS',
   )
+})
+
+test('generator accepts and imports an authentic 1.0 contract with historical auth classification', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-legacy-connector-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const contract = JSON.parse(readFileSync(new URL(
+    './fixtures/compat/0.12/native-interaction-contract-1.0.0-retired-auth-semantics.json',
+    import.meta.url,
+  ), 'utf8'))
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'generated')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+
+  const generated = await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'legacy-auth-connector',
+  })
+  assert.equal(generated.status, 'SUCCEEDED')
+  assert.equal(generated.contract_id, contract.contract_id)
+
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=legacy-auth`)
+  assert.equal(runtime.metadata.source_contract.schema_version, '1.0.0')
+  assert.equal(runtime.metadata.source_contract.contract_id, contract.contract_id)
+  assert.equal(runtime.metadata.endpoints[0].protocol_role, 'AUTH')
+  assert.equal(runtime.authFlows[0].steps[0].request_action, 'AUTH_REQUEST')
+  assert.deepEqual(runtime.endpointIds, [contract.endpoints[0].endpoint_id])
+
+  const generic = JSON.parse(readFileSync(new URL(
+    './fixtures/compat/0.12/native-interaction-contract-1.0.0.json',
+    import.meta.url,
+  ), 'utf8'))
+  const semanticForgeries = [
+    (changed) => {
+      changed.endpoints[0].exchanges[0].request.action = 'AUTH_REQUEST'
+      changed.endpoints[0].exchanges[0].request.action_basis = 'INFERRED_PATH'
+    },
+    (changed) => {
+      changed.endpoints[0].protocol_role = 'AUTH'
+      changed.endpoints[0].side_effect = { basis: 'AUTH_FLOW', classification: 'UNKNOWN' }
+    },
+    (changed) => {
+      changed.endpoints[0].protocol_role = 'AUTH'
+      changed.endpoints[0].side_effect = { basis: 'AUTH_FLOW', classification: 'UNKNOWN' }
+      changed.endpoints[0].exchanges[0].request.action = 'AUTH_REQUEST'
+      changed.endpoints[0].exchanges[0].request.action_basis = 'INFERRED_PATH'
+    },
+  ]
+  for (const [index, forge] of semanticForgeries.entries()) {
+    const changed = structuredClone(generic)
+    forge(changed)
+    rebindContractId(changed)
+    const changedPath = join(root, `forged-${index}.json`)
+    await writeFile(changedPath, JSON.stringify(changed), 'utf8')
+    await assert.rejects(
+      generateNativeConnectorPackage({
+        contractPath: changedPath,
+        outPath: join(root, `forged-${index}`),
+        packageName: `forged-${index}`,
+      }),
+      (error) => error?.code === 'CONNECTOR_CONTRACT_INVALID',
+    )
+  }
 })
 
 test('generated connector executes only contract endpoints with auth metadata, volatile credentials, cookies, redirects, and observed retries', async (t) => {

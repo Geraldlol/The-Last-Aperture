@@ -15,7 +15,7 @@ let acquiredEvidenceContext
 async function acquiredImage() {
   const out = join(await mkdtemp(join(tmpdir(), 'rta-e2e-')), 'ev')
   const planned = await adapter.plan({
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     source_path: 'test/fixtures/evidence/vulnerable-image.tar',
     target_class: 'LAB',
     phi_scope: 'none',
@@ -23,7 +23,7 @@ async function acquiredImage() {
   const written = await adapter.run(planned, { out })
   acquiredEvidenceContext = structuredClone(written.profile.evidence_context)
   return {
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     evidence_class: 'built-artifact',
     adapter_id: 'artifact',
     artifact_kind: 'oci-image',
@@ -54,7 +54,7 @@ function whiteoutFinding(overrides = {}) {
     topic: 'dockerfile-and-image-content',
     title: 'A file named as a whiteout carries content in the upper layer',
     claimed_impact_severity: 'High',
-    location: ['peerstar-api-image:layer/01/.wh.audit-log.txt'],
+    location: ['sample-api-image:layer/01/.wh.audit-log.txt'],
     evidence: 'not actually a whiteout',
     attack: 'Extract layer 01 and read the entry the whiteout convention hides',
     impact: 'Content the image presents as deleted is readable',
@@ -158,14 +158,14 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   })
 
   // Acquired and attached.
-  assert.equal(run.evidence_bundles[0].evidence_id, 'peerstar-api-image')
+  assert.equal(run.evidence_bundles[0].evidence_id, 'sample-api-image')
   assert.equal(run.evidence_bundles[0].coverage_state, 'COVERED')
 
   // Handed to a lens that declared it can read it.
   const job = run.jobs.find((entry) =>
     entry.lens === 'cloud-and-iac' && (entry.evidence_ids ?? []).length > 0)
   assert.ok(job, 'cloud-and-iac must receive the image')
-  assert.deepEqual(job.evidence_ids, ['peerstar-api-image'])
+  assert.deepEqual(job.evidence_ids, ['sample-api-image'])
 
   // The controller's detectors support this one topic without pretending a
   // finite positive-match rule set proves the whole artifact clean.
@@ -196,7 +196,7 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   const reportRun = { ...run, findings: [finding] }
   const report = renderMarkdownReport(reportRun)
   const section = report.slice(report.indexOf('### Evidence-class coverage'))
-  assert.match(section, /peerstar-api-image/)
+  assert.match(section, /sample-api-image/)
   assert.match(section, /deployed-state.*NOT_ASSESSED|NOT_ASSESSED.*deployed-state/s)
 
   // The finding itself must remain traceable to acquired evidence in both
@@ -205,9 +205,9 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
     report.indexOf('### High'),
     report.indexOf('## Coverage'),
   )
-  assert.match(findingSection, /Evidence locator: `peerstar-api-image:layer\/01\/\.wh\.audit-log\.txt`/)
+  assert.match(findingSection, /Evidence locator: `sample-api-image:layer\/01\/\.wh\.audit-log\.txt`/)
   assert.match(findingSection, /Evidence claim: `unexpected-artifact-content`/)
-  assert.match(findingSection, /Evidence source: `peerstar-api-image` \/ `built-artifact`/)
+  assert.match(findingSection, /Evidence source: `sample-api-image` \/ `built-artifact`/)
   assert.match(findingSection, /Evidence adapter: `artifact`/)
   assert.match(findingSection, /Acquisition mode: `offline-export`/)
   const fixtureDigest = createHash('sha256')
@@ -220,7 +220,7 @@ test('the whole chain holds: acquire, attach, activate, cite, report', async () 
   const sarifResult = renderSarif(reportRun).runs[0].results[0]
   assert.deepEqual(sarifResult.locations, [])
   assert.deepEqual(sarifResult.properties.evidence_locations, [{
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     locator: 'layer/01/.wh.audit-log.txt',
   }])
   assert.equal(sarifResult.properties.evidence_claim, 'unexpected-artifact-content')
@@ -242,7 +242,7 @@ test('the sealed packet a provider receives carries the evidence, not just the r
   // is the entire point of having acquired it.
   assert.ok(Array.isArray(sidecar.evidence), 'the sealed packet must carry the evidence')
   const [evidence] = sidecar.evidence
-  assert.equal(evidence.evidence_context.evidence_id, 'peerstar-api-image')
+  assert.equal(evidence.evidence_context.evidence_id, 'sample-api-image')
   assert.equal(evidence.entry_index_unreadable, false)
   assert.equal(evidence.truncated_entry_count, 0)
   assert.deepEqual(evidence.may_conclude, [

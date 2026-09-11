@@ -25,8 +25,8 @@ import { terminalSafeSerializedJson, terminalSafeText } from './lib/terminal-tex
 const HELP = `last-aperture authorized HTTP reconnaissance ${PLATFORM_VERSION}
 
 Usage:
-  http-recon go <exact-https-url> [--out <bundle>] [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--response-observation-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]
-  http-recon plan --target-url <exact-https-url> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --out <bundle> [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--response-observation-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]
+  http-recon go <exact-https-url> [--out <bundle>] [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]
+  http-recon plan --target-url <exact-https-url> --operator-id <id> --authorized-by <name-or-role> --authorization-reference <reference> --out <bundle> [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]
   http-recon next <bundle> [--json]
   http-recon run <bundle> <action-id> --operator-id <id> --rationale <text> [--json]
   http-recon stop <bundle> --operator-id <id> --reason <text> [--json]
@@ -36,8 +36,8 @@ Usage:
 
 Boundary:
   The plan command seals one exact operator-attested HTTPS HEAD, GET, or OPTIONS
-  action. Planning may seal one controller-owned diagnostic request-header profile
-  or narrow response-observation profile; arbitrary names and values remain refused.
+  action. Planning may seal one controller-owned diagnostic request-header profile;
+  arbitrary names and values remain refused.
   No command accepts a target, URL, method, TLS policy, profile, credential, or
   payload after planning.
 
@@ -87,7 +87,6 @@ const VALUE_OPTIONS = new Set([
   'tls-spki-sha256',
   'method',
   'request-header-profile',
-  'response-observation-profile',
   'authorized-by',
   'authorization-reference',
   'environment',
@@ -112,7 +111,6 @@ const COMMANDS = {
       'method',
       'safe-to-get',
       'request-header-profile',
-      'response-observation-profile',
       'tls-spki-sha256',
       'json',
     ],
@@ -131,7 +129,6 @@ const COMMANDS = {
       'method',
       'safe-to-get',
       'request-header-profile',
-      'response-observation-profile',
       'tls-spki-sha256',
       'json',
     ],
@@ -221,7 +218,6 @@ function operatorAttestedPlanInput(options, directedAt) {
     method: options.method ?? 'HEAD',
     safeToGet: options['safe-to-get'] === true,
     requestHeaderProfile: options['request-header-profile'],
-    responseObservationProfile: options['response-observation-profile'],
     operatorId: options['operator-id'],
     authorizedBy: options['authorized-by'],
     authorizationReference: options['authorization-reference'],
@@ -281,7 +277,6 @@ export async function main(
       method: options.method ?? 'HEAD',
       safeToGet: options['safe-to-get'] === true,
       requestHeaderProfile: options['request-header-profile'],
-      responseObservationProfile: options['response-observation-profile'],
       environment: options.environment ?? 'production',
       out: options.out,
       operatorAuthorization: {

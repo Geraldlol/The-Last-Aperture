@@ -15,9 +15,6 @@ import {
 import {
   createHttpReconRequestHeaderDescriptor,
 } from '../scripts/lib/http-recon-request-headers.mjs'
-import {
-  createHttpReconResponseObservationDescriptor,
-} from '../scripts/lib/http-recon-response-observations.mjs'
 
 const HOSTNAME = 'reference-log.example.test'
 const URL_VALUE = `https://${HOSTNAME}/authorized`
@@ -30,17 +27,6 @@ const CERTIFICATE_OBJECT = CERTIFICATE.toLegacyObject()
 const TLS_PIN = createHash('sha256')
   .update(CERTIFICATE.publicKey.export({ type: 'spki', format: 'der' }))
   .digest('hex')
-const CREDIBLE_URL = 'https://www.cbh3.crediblebh.com/secure/index.aspx'
-const CREDIBLE_CERTIFICATE_OBJECT = {
-  ...CERTIFICATE_OBJECT,
-  subject: { CN: 'www.cbh3.crediblebh.com' },
-}
-const CREDIBLE_CROSS_ORIGIN_URL =
-  'https://assets.cbh3.crediblebh.com/js/cross-origin-messaging.js'
-const CREDIBLE_ASSETS_CERTIFICATE_OBJECT = {
-  ...CERTIFICATE_OBJECT,
-  subject: { CN: 'assets.cbh3.crediblebh.com' },
-}
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -265,7 +251,7 @@ test('probe uses one pinned, bodyless HTTPS request and retains no body', async 
     'accept-encoding': 'identity',
     'cache-control': 'no-store',
     connection: 'close',
-    'user-agent': 'red-team-audit-http-recon/0.12',
+    'user-agent': 'red-team-audit-http-recon/0.13',
     host: HOSTNAME,
   })
   assert.deepEqual(harness.request.endArguments, [])
@@ -303,7 +289,7 @@ test('probe uses one pinned, bodyless HTTPS request and retains no body', async 
 test('probe expands one sealed diagnostic header profile without exposing its value to evidence', async () => {
   const harness = createHarness()
   const descriptor = createHttpReconRequestHeaderDescriptor({
-    profile: 'x-original-url-order-programs-v1',
+    profile: 'x-forwarded-for-loopback-v1',
     method: 'GET',
   })
   let beforeSend
@@ -312,9 +298,9 @@ test('probe expands one sealed diagnostic header profile without exposing its va
     beforeSend: async (context) => { beforeSend = context },
   }))
 
-  assert.equal(harness.requestOptions.headers['x-original-url'], '/api/Order/GetPrograms')
+  assert.equal(harness.requestOptions.headers['x-forwarded-for'], '127.0.0.1')
   assert.deepEqual(beforeSend.request_headers, descriptor)
-  assert.equal(JSON.stringify(beforeSend).includes('/api/Order/GetPrograms'), false)
+  assert.equal(JSON.stringify(beforeSend).includes('127.0.0.1'), false)
   assert.deepEqual(harness.request.endArguments, [])
 })
 
@@ -690,114 +676,18 @@ test('transformed responses are rejected without decompression', async () => {
   assert.equal(harness.response.destroyed, true)
 })
 
-test('sealed bundle-src profile emits only sanitized paths and never retains HTML', async () => {
-  const body = Buffer.from(`<!doctype html>
-    <script nonce="never-persist" src="/assets/bundle-20260513_1516.js"></script>
-    <script>const secret = 'never-persist';</script>`, 'utf8')
-  const harness = createHarness({
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-    chunks: [body.subarray(0, 19), body.subarray(19)],
-    certificate: CREDIBLE_CERTIFICATE_OBJECT,
-  })
-  const responseObservationProfile = createHttpReconResponseObservationDescriptor({
-    profile: 'credible-bundle-src-v1',
-    method: 'GET',
-    url: CREDIBLE_URL,
-    maxResponseBytes: 1024,
-  })
-
-  const result = await probeHttps(baseOptions(harness, {
-    url: CREDIBLE_URL,
-    maxResponseBytes: 1024,
-    responseObservationProfile,
-  }))
-
-  assert.deepEqual(result.response_observation, {
-    ...responseObservationProfile,
-    bundle_paths: ['/assets/bundle-20260513_1516.js'],
-  })
-  assert.equal(result.body.bytes, null)
-  assert.equal(result.body.retained, false)
-  assert.doesNotMatch(JSON.stringify(result), /never-persist|nonce|const secret/iu)
-})
-
-test('digest-pinned cross-origin AST profile rejects a changed artifact without retaining it', async () => {
-  const changedBody = Buffer.alloc(10_332, 0x61)
-  const harness = createHarness({
-    headers: { 'content-type': 'application/javascript' },
-    chunks: [changedBody.subarray(0, 4096), changedBody.subarray(4096)],
-    certificate: CREDIBLE_ASSETS_CERTIFICATE_OBJECT,
-  })
-  const responseObservationProfile = createHttpReconResponseObservationDescriptor({
-    profile: 'credible-cross-origin-js-ast-v1',
-    method: 'GET',
-    url: CREDIBLE_CROSS_ORIGIN_URL,
-    maxResponseBytes: 1024 * 1024,
-  })
-
+test('transport rejects undeclared target-specific response adapters before I/O', async () => {
+  const harness = createHarness()
   await assert.rejects(
     probeHttps(baseOptions(harness, {
-      url: CREDIBLE_CROSS_ORIGIN_URL,
-      maxResponseBytes: 1024 * 1024,
-      responseObservationProfile,
+      responseObservationProfile: {
+        profile: 'target-specific-parser-v1',
+      },
     })),
     (error) => {
-      assert.ok(error instanceof HttpReconStopCondition)
-      assert.equal(error.condition, 'RESPONSE_OBSERVATION_REJECTED')
-      assert.equal(error.result.response_observation, null)
-      assert.equal(error.result.body.size, changedBody.length)
-      assert.equal(error.result.body.sha256, digest(changedBody))
-      assert.equal(error.result.body.retained, false)
-      assert.equal(error.result.body.bytes, null)
-      assert.doesNotMatch(JSON.stringify(error.result), /a{32}/u)
+      assert.equal(error.code, 'HTTP_RECON_INVALID_REQUEST')
       return true
     },
   )
-})
-
-test('bundle-src profile turns non-HTML and truncated responses into bounded stop evidence', async (t) => {
-  const cases = [
-    {
-      name: 'non-HTML',
-      headers: { 'content-type': 'application/json' },
-      chunks: [Buffer.from('{"secret":"never-persist"}')],
-      maxResponseBytes: 1024,
-    },
-    {
-      name: 'truncated HTML',
-      headers: { 'content-type': 'text/html; charset=utf-8' },
-      chunks: [Buffer.from('<script src="/assets/bundle-20260513_1516.js"></script>')],
-      maxResponseBytes: 8,
-    },
-  ]
-  for (const current of cases) {
-    await t.test(current.name, async () => {
-      const harness = createHarness({
-        headers: current.headers,
-        chunks: current.chunks,
-        certificate: CREDIBLE_CERTIFICATE_OBJECT,
-      })
-      const responseObservationProfile = createHttpReconResponseObservationDescriptor({
-        profile: 'credible-bundle-src-v1',
-        method: 'GET',
-        url: CREDIBLE_URL,
-        maxResponseBytes: current.maxResponseBytes,
-      })
-      await assert.rejects(
-        probeHttps(baseOptions(harness, {
-          url: CREDIBLE_URL,
-          maxResponseBytes: current.maxResponseBytes,
-          responseObservationProfile,
-        })),
-        (error) => {
-          assert.ok(error instanceof HttpReconStopCondition)
-          assert.equal(error.condition, 'RESPONSE_OBSERVATION_REJECTED')
-          assert.equal(error.result.response_observation, null)
-          assert.equal(error.result.body.retained, false)
-          assert.doesNotMatch(JSON.stringify(error.result), /never-persist|20260513/iu)
-          return true
-        },
-      )
-    })
-  }
+  assert.equal(harness.httpsCalls, 0)
 })

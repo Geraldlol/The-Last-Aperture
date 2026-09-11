@@ -8,6 +8,7 @@ import { main } from '../scripts/http-authed.mjs'
 import {
   readAndVerifyHttpAuthedAuthorization,
   sha256Hex,
+  validateHttpAuthedScope,
 } from '../scripts/lib/http-authed-contracts.mjs'
 
 const NOW = new Date('2026-08-17T10:00:00.000Z')
@@ -162,6 +163,12 @@ test('plan-attested creates and validates a generic offline campaign without per
   const plannedScope = JSON.parse(scopeText)
   assert.equal(plannedScope.schema_version, '1.0.0')
   assert.equal(plannedScope.response_observation, undefined)
+  const targetSpecificExtension = structuredClone(plannedScope)
+  targetSpecificExtension.requests[0].response_observation = {
+    profile: 'target-specific-parser-v1',
+    profile_binding_sha256: '0'.repeat(64),
+  }
+  assert.equal(validateHttpAuthedScope(targetSpecificExtension).valid, false)
   assert.equal(scopeText.includes(CREDENTIAL), false)
   assert.equal(output.includes(CREDENTIAL), false)
 
@@ -422,6 +429,64 @@ test('plan-attested seals a Chrome-held active-tab session without exporting a c
   assert.equal(scopeText.includes('binding_sha256'), false)
   assert.equal(scopeText.includes('cookie'), false)
   assert.equal(output.includes('cookie'), false)
+  await readAndVerifyHttpAuthedAuthorization({
+    scopePath: files.scopePath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+    now: NOW,
+  })
+})
+
+test('plan-attested seals a target-neutral page session adapter from a local JSON file', async (t) => {
+  const files = await fixture(t)
+  const adapterPath = join(files.directory, 'page-session-adapter.json')
+  const adapter = {
+    schema_version: '1.0.0',
+    kind: 'last-aperture/page-session-adapter',
+    adapter_id: 'synthetic-page-session',
+    source: {
+      type: 'WEB_STORAGE',
+      area: 'LOCAL',
+      key: 'application.session',
+      extraction: { mode: 'RAW' },
+    },
+    carrier: { type: 'REQUEST_HEADER', name: 'authorization', prefix: 'Bearer ' },
+    target_constraints: [{
+      origin: 'https://bounty.example.test',
+      method: 'GET',
+      path_prefix: '/',
+    }],
+    validity: {
+      not_before: '2026-08-17T09:00:00.000Z',
+      not_after: '2026-08-18T09:00:00.000Z',
+    },
+    limits: { max_value_bytes: 4096 },
+  }
+  await writeFile(adapterPath, `${JSON.stringify(adapter)}\n`, { flag: 'wx' })
+  const args = planAttestedArguments(files)
+  const credentialOption = args.indexOf('--credential-env')
+  args.splice(
+    credentialOption,
+    4,
+    '--credential-browser',
+    '--browser-extension-id', 'abcdefghijklmnopabcdefghijklmnop',
+    '--page-session-adapter', adapterPath,
+  )
+
+  await main(args, {
+    clock: () => NOW,
+    env: {},
+    write: () => {},
+  })
+
+  const scope = JSON.parse(await readFile(files.scopePath, 'utf8'))
+  assert.equal(scope.schema_version, '1.4.0')
+  assert.deepEqual(scope.credential.session_adapter, adapter)
+  assert.equal(validateHttpAuthedScope(scope).valid, true)
+  assert.equal(validateHttpAuthedScope({ ...scope, schema_version: '1.0.0' }).valid, false)
+  const withoutAdapter = structuredClone(scope)
+  delete withoutAdapter.credential.session_adapter
+  assert.equal(validateHttpAuthedScope(withoutAdapter).valid, false)
+  assert.equal(JSON.stringify(scope).includes('SYNTHETIC_PAGE_TOKEN'), false)
   await readAndVerifyHttpAuthedAuthorization({
     scopePath: files.scopePath,
     requiredMode: 'OPERATOR_ATTESTED_AUTHED',

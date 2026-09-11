@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
+import Ajv2020 from 'ajv/dist/2020.js'
+
 import {
   assertValidWebSessionEvidence,
   canonicalWebSessionEvidence,
@@ -11,8 +13,14 @@ import {
 } from '../scripts/lib/reverse-web-har.mjs'
 
 const SOURCE_HASH = 'a'.repeat(64)
-const CREDIBLE_PATH_LITERALS = ['check', 'clients', 'start']
+const STRUCTURAL_PATH_LITERALS = ['check', 'clients', 'start']
 const WEB_SESSION_SCHEMA = JSON.parse(readFileSync(new URL('../schemas/web-session-evidence.schema.json', import.meta.url), 'utf8'))
+const validateWebSessionSchema = new Ajv2020({
+  strict: true,
+  strictTuples: false,
+  allErrors: true,
+  allowUnionTypes: true,
+}).compile(WEB_SESSION_SCHEMA)
 
 function harEntry({
   startedDateTime,
@@ -46,7 +54,7 @@ function harEntry({
   }
 }
 
-function credibleStyleHar() {
+function genericApplicationHar() {
   return {
     log: {
       creator: { name: 'Chrome', version: '140.0.0' },
@@ -54,7 +62,7 @@ function credibleStyleHar() {
         harEntry({
           startedDateTime: '2026-09-11T10:00:00.000Z',
           method: 'POST',
-          url: 'https://app.example/auth/check?tenant=Peerstar&returnUrl=%2Fhome',
+          url: 'https://app.example/auth/check?tenant=ExampleTenant&returnUrl=%2Fhome',
           requestHeaders: [
             { name: 'Content-Type', value: 'application/x-www-form-urlencoded' },
             { name: 'X-CSRF-Token', value: 'csrf-secret' },
@@ -88,18 +96,18 @@ function credibleStyleHar() {
           status: 302,
           responseHeaders: [
             { name: 'Location', value: 'https://app.example/api/v1/clients/123?view=full' },
-            { name: 'Set-Cookie', value: 'cbh=cookie-secret; Secure' },
+            { name: 'Set-Cookie', value: 'SessionToken=cookie-secret; Secure' },
           ],
-          responseCookies: [{ name: 'cbh', value: 'cookie-secret' }],
+          responseCookies: [{ name: 'SessionToken', value: 'cookie-secret' }],
         }),
         harEntry({
           startedDateTime: '2026-09-11T10:00:02.000Z',
           url: 'https://app.example/api/v1/clients/123?limit=50&page=1&name=PatientName',
           requestHeaders: [
             { name: 'Accept', value: 'application/json' },
-            { name: 'Cookie', value: 'cbh=cookie-secret' },
+            { name: 'Cookie', value: 'SessionToken=cookie-secret' },
           ],
-          requestCookies: [{ name: 'cbh', value: 'cookie-secret' }],
+          requestCookies: [{ name: 'SessionToken', value: 'cookie-secret' }],
           responseContent: {
             mimeType: 'application/json',
             size: 512,
@@ -116,13 +124,15 @@ function credibleStyleHar() {
 }
 
 test('HAR import emits bounded protocol metadata and removes credential and data values', () => {
-  const evidence = importWebHarEvidence(credibleStyleHar(), {
+  const evidence = importWebHarEvidence(genericApplicationHar(), {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
-    pathLiterals: CREDIBLE_PATH_LITERALS,
+    pathLiterals: STRUCTURAL_PATH_LITERALS,
   })
 
   assert.equal(assertValidWebSessionEvidence(evidence), evidence)
+  assert.equal(evidence.schema_version, '1.1.0')
+  assert.equal(validateWebSessionSchema(evidence), true)
   assert.equal(evidence.entries.length, 3)
   assert.equal(evidence.skipped.off_scope, 1)
   assert.equal(evidence.entries[0].request.path_template, '/auth/check')
@@ -147,17 +157,112 @@ test('HAR import emits bounded protocol metadata and removes credential and data
 
   const serialized = canonicalWebSessionEvidence(evidence)
   for (const secret of [
-    'Peerstar', 'top-secret', 'csrf-secret', 'session-secret', 'cookie-secret',
+    'ExampleTenant', 'top-secret', 'csrf-secret', 'session-secret', 'cookie-secret',
     'Patient Name', '111-22-3333', 'alice@example.com', 'hunter2', 'private response',
   ]) assert.equal(serialized.includes(secret), false, secret)
   assert.match(digestWebSessionEvidence(evidence), /^[a-f0-9]{64}$/)
 })
 
-test('HAR import preserves field and carrier names needed to reconstruct auth', () => {
-  const evidence = importWebHarEvidence(credibleStyleHar(), {
+test('new web evidence uses 1.1.0 while the reader retains the HAR-only 1.0.0 shape', () => {
+  const evidence = importWebHarEvidence({ log: { entries: [harEntry({
+    url: 'https://app.example/api',
+  })] } }, {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
-    pathLiterals: CREDIBLE_PATH_LITERALS,
+  })
+  assert.equal(evidence.schema_version, '1.1.0')
+  assert.equal(validateWebSessionSchema(evidence), true)
+
+  const compatibleHar = structuredClone(evidence)
+  compatibleHar.schema_version = '1.0.0'
+  assert.equal(assertValidWebSessionEvidence(compatibleHar), compatibleHar)
+  assert.equal(validateWebSessionSchema(compatibleHar), true)
+
+  const mislabeledBurp = structuredClone(compatibleHar)
+  mislabeledBurp.source.kind = 'BURP_XML'
+  assert.throws(() => assertValidWebSessionEvidence(mislabeledBurp), /1\.0\.0.*HAR/i)
+  assert.equal(validateWebSessionSchema(mislabeledBurp), false)
+})
+
+test('released 1.0 evidence retains recorded carrier classifications while 1.1 uses current derivation', () => {
+  const fixtureUrls = [
+    './fixtures/compat/0.12/web-session-evidence-1.0.0-expanded-cookie-carrier.json',
+    './fixtures/compat/0.12/web-session-evidence-1.0.0-retired-cookie-carrier.json',
+  ]
+  for (const fixtureUrl of fixtureUrls) {
+    const legacy = JSON.parse(readFileSync(new URL(fixtureUrl, import.meta.url), 'utf8'))
+    const before = JSON.stringify(legacy)
+    assert.equal(assertValidWebSessionEvidence(legacy), legacy)
+    assert.equal(JSON.stringify(legacy), before)
+    assert.equal(validateWebSessionSchema(legacy), true, JSON.stringify(validateWebSessionSchema.errors))
+    assert.match(digestWebSessionEvidence(legacy), /^[a-f0-9]{64}$/u)
+
+    const changedRecordedClassification = structuredClone(legacy)
+    const recorded = changedRecordedClassification.entries[0].response
+    if (recorded.credential_carriers.length > 0) recorded.credential_carriers = []
+    else recorded.credential_carriers = [`cookie:${recorded.cookie_names[0]}`]
+    assert.throws(
+      () => assertValidWebSessionEvidence(changedRecordedClassification),
+      /credential carriers do not match its shape/i,
+    )
+
+    const unsupportedCarrier = structuredClone(legacy)
+    unsupportedCarrier.entries[0].response.credential_carriers.push('cookie:notObserved')
+    unsupportedCarrier.entries[0].response.credential_carriers.sort()
+    assert.throws(
+      () => assertValidWebSessionEvidence(unsupportedCarrier),
+      /credential carrier.*shape|credential carriers do not match/i,
+    )
+
+    const current = structuredClone(legacy)
+    current.schema_version = '1.1.0'
+    assert.equal(validateWebSessionSchema(current), true, JSON.stringify(validateWebSessionSchema.errors))
+    assert.throws(
+      () => assertValidWebSessionEvidence(current),
+      /credential carriers do not match its shape/i,
+    )
+  }
+})
+
+test('request body buckets prefer a finite representative source size', () => {
+  const evidence = importWebHarEvidence({ log: { entries: [
+    harEntry({
+      method: 'POST',
+      url: 'https://app.example/large',
+      postData: {
+        mimeType: 'application/x-www-form-urlencoded',
+        size: 1_048_577,
+        params: [{ name: 'token', value: 'x' }],
+      },
+    }),
+    harEntry({
+      method: 'POST',
+      url: 'https://app.example/representative',
+      postData: {
+        mimeType: 'application/x-www-form-urlencoded',
+        size: 2_048,
+        params: [{ name: 'mode', value: 'tiny' }],
+      },
+    }),
+  ] } }, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+    pathLiterals: ['large', 'representative'],
+  })
+
+  assert.equal(evidence.entries[0].request.body.byte_bucket, 'OVER_1_MIB')
+  assert.equal(evidence.entries[0].request.body.shape_status, 'OMITTED_SIZE_LIMIT')
+  assert.deepEqual(evidence.entries[0].request.body.fields, [])
+  assert.equal(evidence.entries[1].request.body.byte_bucket, 'LE_4_KIB')
+  assert.equal(evidence.entries[1].request.body.shape_status, 'OBSERVED')
+  assert.deepEqual(evidence.entries[1].request.body.fields.map(({ name }) => name), ['mode'])
+})
+
+test('HAR import preserves field and carrier names needed to reconstruct auth', () => {
+  const evidence = importWebHarEvidence(genericApplicationHar(), {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+    pathLiterals: STRUCTURAL_PATH_LITERALS,
   })
   const [login, exchange] = evidence.entries
 
@@ -165,21 +270,21 @@ test('HAR import preserves field and carrier names needed to reconstruct auth', 
   assert.deepEqual(login.request.credential_carriers, ['body:password', 'body:username', 'header:x-csrf-token'])
   assert.deepEqual(exchange.request.cookie_names, ['SessionId'])
   assert.deepEqual(exchange.request.credential_carriers, ['body:SessionId', 'cookie:SessionId'])
-  assert.deepEqual(exchange.response.cookie_names, ['cbh'])
-  assert.deepEqual(exchange.response.credential_carriers, ['cookie:cbh'])
+  assert.deepEqual(exchange.response.cookie_names, ['SessionToken'])
+  assert.deepEqual(exchange.response.credential_carriers, ['cookie:SessionToken'])
   assert.deepEqual(exchange.response.redirect.query_parameters.map(({ name }) => name), ['view'])
 })
 
 test('HAR import requires explicit canonical origins and rejects malformed input bounds', () => {
   assert.throws(
-    () => importWebHarEvidence(credibleStyleHar(), {
+    () => importWebHarEvidence(genericApplicationHar(), {
       sourceSha256: SOURCE_HASH,
       targetOrigins: [],
     }),
     /origin/i,
   )
   assert.throws(
-    () => importWebHarEvidence(credibleStyleHar(), {
+    () => importWebHarEvidence(genericApplicationHar(), {
       sourceSha256: SOURCE_HASH,
       targetOrigins: ['https://app.example/path'],
     }),
@@ -195,10 +300,10 @@ test('HAR import requires explicit canonical origins and rejects malformed input
 })
 
 test('validator rejects raw value fields and evidence that claims an audit verdict', () => {
-  const evidence = importWebHarEvidence(credibleStyleHar(), {
+  const evidence = importWebHarEvidence(genericApplicationHar(), {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
-    pathLiterals: CREDIBLE_PATH_LITERALS,
+    pathLiterals: STRUCTURAL_PATH_LITERALS,
   })
   const withValue = structuredClone(evidence)
   withValue.entries[0].request.query_parameters[0].value = 'secret'
@@ -212,29 +317,29 @@ test('validator rejects raw value fields and evidence that claims an audit verdi
 test('unknown textual path segments are masked unless explicitly declared structural', () => {
   const sample = { log: { entries: [harEntry({
     method: 'GET',
-    url: 'https://app.example/patients/Alice-Smith?action=delete',
+    url: 'https://app.example/resources/Alice-Smith?action=delete',
     status: 200,
   })] } }
   const masked = importWebHarEvidence(sample, {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
-    pathLiterals: ['patients'],
+    pathLiterals: ['resources'],
   })
-  assert.equal(masked.entries[0].request.path_template, '/patients/{segment}')
+  assert.equal(masked.entries[0].request.path_template, '/resources/{segment}')
   assert.deepEqual(masked.entries[0].request.query_parameters[0].semantic_classes, ['WRITE_ACTION'])
   assert.equal(canonicalWebSessionEvidence(masked).includes('Alice-Smith'), false)
   assert.equal(canonicalWebSessionEvidence(masked).includes('delete'), false)
 
   const forged = structuredClone(masked)
-  forged.entries[0].request.path_template = '/patients/123'
+  forged.entries[0].request.path_template = '/resources/123'
   assert.throws(() => assertValidWebSessionEvidence(forged), /canonical/i)
 })
 
 test('validator binds sanitized evidence to source, scope, ids, and derived carriers', () => {
-  const evidence = importWebHarEvidence(credibleStyleHar(), {
+  const evidence = importWebHarEvidence(genericApplicationHar(), {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
-    pathLiterals: CREDIBLE_PATH_LITERALS,
+    pathLiterals: STRUCTURAL_PATH_LITERALS,
   })
   const mutations = [
     (value) => { value.capture_id = `web:${'0'.repeat(32)}` },
@@ -311,7 +416,7 @@ test('HAR import resolves relative Location and response-body destinations again
     responseContent: {
       mimeType: 'application/json',
       size: 128,
-      text: JSON.stringify({ websiteUrl: 'clients/123?view=full' }),
+      text: JSON.stringify({ nextUrl: 'clients/123?view=full' }),
     },
   })] } }, {
     sourceSha256: SOURCE_HASH,
@@ -326,7 +431,7 @@ test('HAR import resolves relative Location and response-body destinations again
     query_parameters: [{ name: 'ticket', semantic_classes: [], sensitive: false, types: ['string'] }],
   })
   assert.deepEqual(response.destinations, [{
-    field_path: 'websiteUrl',
+    field_path: 'nextUrl',
     origin: 'https://app.example',
     path_template: '/auth/clients/{integer}',
     query_parameters: [{ name: 'view', semantic_classes: ['OTHER_ACTION'], sensitive: false, types: ['string'] }],
@@ -347,7 +452,7 @@ test('HAR import derives path action class before path segments are masked', () 
 })
 
 test('app-specific path words require explicit structural declarations', () => {
-  const appSpecific = ['clients', 'home', 'check', 'checkdatacenter', 'checklogin', 'sessionstart', 'start']
+  const appSpecific = ['workspacealpha', 'workspacebeta', 'workspacegamma', 'workspacedelta', 'workspaceepsilon', 'workspacezeta']
   const sample = { log: { entries: [harEntry({
     url: `https://app.example/${appSpecific.join('/')}`,
   })] } }

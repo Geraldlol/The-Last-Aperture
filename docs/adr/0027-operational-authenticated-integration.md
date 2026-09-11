@@ -28,8 +28,8 @@ Expose the implemented mechanisms through the normal public platform routes.
 
 ### Adaptive authenticated campaigns
 
-`campaign-attested` and `campaign-written` may execute response-derived
-candidates when the sealed scope enables discovery. A response may contribute a
+`campaign-attested` may execute response-derived candidates when the sealed
+scope enables discovery. A response may contribute a
 candidate only through the controller's bounded discovery projection. Before
 dispatch, the candidate is canonicalized and independently checked against the
 sealed origin, path prefixes, methods, test categories, substitution rules,
@@ -49,8 +49,8 @@ Chrome active-tab session transport. The operator grants loopback access and
 selects the logged-in tab. The extension binds the one-time pairing capability,
 extension identity, campaign, target origin, tab, document nonce, action digest,
 and protocol phase. It injects the fixed fetch implementation into that tab's
-main world and runs the controller's `PREPARE -> READY -> COMMIT -> RESULT`
-protocol.
+extension-isolated world and runs the controller's
+`PREPARE -> READY -> COMMIT -> RESULT` protocol.
 
 Chrome applies browser-managed session credentials without exporting their
 values. The companion has no cookie, debugger, request-observer, broad target
@@ -59,10 +59,13 @@ extension-owned recovery marker in `chrome.storage.session`; that marker omits
 pairing and controller capabilities, credentials, requests, and responses. Each
 action still passes the controller's immediate pre-send authorization check.
 Navigation, document replacement, origin drift, pairing replay, action drift, or
-protocol drift invalidates the capability. Application-managed bearer tokens
-added by page JavaScript require a separately reviewed contract-bound adapter;
-the companion does not inspect page storage or patch request libraries to obtain
-them.
+protocol drift invalidates the capability. For an application-managed string,
+the scope may seal a declarative page-session adapter with one exact Web Storage
+area/key, raw or strict JSON Pointer extraction, one request-header carrier,
+exact target constraints, validity, and a value-size bound. The value is read
+and applied only inside each isolated dispatch and never crosses the extension
+worker or controller. Without that descriptor, the companion does not inspect
+page storage or patch request libraries.
 
 ### Contract-generated native interaction
 
@@ -73,9 +76,10 @@ maintains per-origin in-memory cookie jars, follows only observed and
 contract-matched redirects, applies observed retry behavior, and obtains
 credentials from an ephemeral provider callback. Declared response-body
 credential carriers are removed from ordinary result data and can reach the
-consumer only through a separate transient receiver callback. It supports the concrete login,
-redirect, cookie-establishment, and authenticated-read sequence needed to turn
-observed browser interactions into application-native integration code.
+consumer only through a separate transient receiver callback. It supports the
+concrete login, redirect, cookie-establishment, and authenticated-read sequence
+needed to turn observed browser interactions into application-native
+integration code.
 
 The operator or consuming application chooses which contract operation to call.
 Generation performs no network request, and neither generated source nor its
@@ -120,11 +124,11 @@ reporting requirements in those ADRs remain current.
 
 An authorized integration can now follow one continuous workflow:
 
-1. capture or import browser observations;
+1. capture or import browser observations from HAR or Burp HTTP-items XML;
 2. build a value-redacted native interaction contract;
 3. generate a digest-bound connector;
-4. validate additional in-scope behavior through the browser-held session and
-   adaptive campaign controller; and
+4. validate additional in-scope behavior through the browser-held session,
+   optional declarative page adapter, and adaptive campaign controller; and
 5. call observed endpoints through the generated runtime with credentials
    supplied only at execution time.
 

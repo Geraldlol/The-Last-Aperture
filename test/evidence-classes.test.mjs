@@ -136,12 +136,12 @@ test('the authorization floor rises with precedence and no adapter may go below 
 })
 
 test('an evidence id is a stable handle and never carries a hostname', () => {
-  assert.equal(normalizeEvidenceId('peerstar-api-image'), 'peerstar-api-image')
+  assert.equal(normalizeEvidenceId('sample-api-image'), 'sample-api-image')
   assert.equal(normalizeEvidenceId('  prod-cluster  '), 'prod-cluster')
-  assert.throws(() => normalizeEvidenceId('api.peerstar.internal'), TypeError)
+  assert.throws(() => normalizeEvidenceId('api.example.internal'), TypeError)
   assert.throws(() => normalizeEvidenceId('localhost'), TypeError)
   assert.throws(() => normalizeEvidenceId('10.0.0.4'), TypeError)
-  assert.throws(() => normalizeEvidenceId('Peerstar-API'), TypeError)
+  assert.throws(() => normalizeEvidenceId('Example-API'), TypeError)
   assert.throws(() => normalizeEvidenceId('-leading-dash'), TypeError)
   assert.throws(() => normalizeEvidenceId(''), TypeError)
   assert.throws(() => normalizeEvidenceId('a'.repeat(65)), TypeError)

@@ -13,6 +13,8 @@ export const HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER =
   'x-red-team-audit-pairing'
 export const HTTP_AUTHED_BROWSER_BRIDGE_SESSION_HEADER =
   'x-red-team-audit-session'
+export const HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER =
+  'x-last-aperture-extension'
 
 const LOOPBACK_HOST = '127.0.0.1'
 const DEFAULT_ATTACH_TIMEOUT_MS = 2 * 60 * 1000
@@ -20,6 +22,7 @@ const MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
 const MAX_RESULT_MESSAGE_BYTES = 2 * 1024 * 1024
 const ALLOWED_PREFLIGHT_HEADERS = new Set([
   'content-type',
+  HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
   HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER,
   HTTP_AUTHED_BROWSER_BRIDGE_SESSION_HEADER,
 ])
@@ -62,8 +65,16 @@ function assertNoAmbientCredentials(request) {
   }
 }
 
-function assertExtensionOrigin(request, expectedOrigin) {
-  if (singleHeader(request, 'origin') !== expectedOrigin) {
+function assertExtensionOrigin(request, expectedOrigin, expectedExtensionId) {
+  const origin = singleHeader(request, 'origin')
+  const isChromeExtensionFetch = origin === undefined
+    && singleHeader(request, 'sec-fetch-site') === 'none'
+    && singleHeader(request, 'sec-fetch-mode') === 'cors'
+    && singleHeader(request, 'sec-fetch-dest') === 'empty'
+  if (
+    singleHeader(request, HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER) !== expectedExtensionId
+    || (origin !== expectedOrigin && !isChromeExtensionFetch)
+  ) {
     throw serverError(
       'HTTP_AUTHED_BROWSER_BRIDGE_ORIGIN_REFUSED',
       'loopback browser bridge request origin was refused',
@@ -235,8 +246,8 @@ async function readJson(request, maximum) {
   }
 }
 
-function authenticateSession(request, session, extensionOrigin) {
-  assertExtensionOrigin(request, extensionOrigin)
+function authenticateSession(request, session, extensionOrigin, extensionId) {
+  assertExtensionOrigin(request, extensionOrigin, extensionId)
   assertNoAmbientCredentials(request)
   session.authenticate({
     origin: extensionOrigin,
@@ -244,8 +255,8 @@ function authenticateSession(request, session, extensionOrigin) {
   })
 }
 
-function handlePreflight(request, response, extensionOrigin, routeMethod) {
-  assertExtensionOrigin(request, extensionOrigin)
+function handlePreflight(request, response, extensionOrigin, extensionId, routeMethod) {
+  assertExtensionOrigin(request, extensionOrigin, extensionId)
   assertNoAmbientCredentials(request)
   if (singleHeader(request, 'access-control-request-method') !== routeMethod) {
     throw serverError(
@@ -314,6 +325,7 @@ function closeServer(server, sockets) {
 export async function createHttpAuthedBrowserBridgeServer({
   extensionId,
   targetOrigin,
+  pageSessionAdapter,
   campaignId,
   campaignGrantSha256,
   attachTimeoutMs = DEFAULT_ATTACH_TIMEOUT_MS,
@@ -354,6 +366,7 @@ export async function createHttpAuthedBrowserBridgeServer({
   const session = createHttpAuthedBrowserBridgeSession({
     extensionId,
     targetOrigin,
+    pageSessionAdapter,
     campaignId: grant,
     clock,
     ...(randomBytes === undefined ? {} : { randomBytes }),
@@ -403,10 +416,10 @@ export async function createHttpAuthedBrowserBridgeServer({
       }
       const requiredMethod = ROUTES.get(rawPath)
       if (request.method === 'OPTIONS') {
-        handlePreflight(request, response, extensionOrigin, requiredMethod)
+        handlePreflight(request, response, extensionOrigin, extensionId, requiredMethod)
         return
       }
-      assertExtensionOrigin(request, extensionOrigin)
+      assertExtensionOrigin(request, extensionOrigin, extensionId)
       includeCors = true
       assertNoAmbientCredentials(request)
       if (request.method !== requiredMethod) {
@@ -458,7 +471,7 @@ export async function createHttpAuthedBrowserBridgeServer({
         return
       }
 
-      authenticateSession(request, session, extensionOrigin)
+      authenticateSession(request, session, extensionOrigin, extensionId)
 
       if (rawPath === '/v1/prepare') {
         const state = session.snapshot().state

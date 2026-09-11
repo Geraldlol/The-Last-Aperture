@@ -12,6 +12,7 @@ const SCHEMA_VERSION = '1.0.0'
 const LOOPBACK_PERMISSION = 'http://127.0.0.1/*'
 const PAIRING_HEADER = 'x-red-team-audit-pairing'
 const SESSION_HEADER = 'x-red-team-audit-session'
+const EXTENSION_HEADER = 'x-last-aperture-extension'
 const BASE64URL_256 = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
 const IDENTIFIER = /^[A-Za-z0-9._:-]{1,128}$/u
@@ -22,6 +23,7 @@ const MAX_CONTROLLER_MESSAGE_BYTES = 24 * 1024 * 1024
 const CONTROLLER_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_POLL_DELAY_MS = 100
 const STORAGE_KEEPALIVE_MS = 20_000
+const POPUP_KEEPALIVE_NAME = 'last-aperture-popup'
 const RECOVERY_STORAGE_KEY = 'last_aperture_http_authed_recovery_v1'
 const RECOVERY_PHASES = new Set(['OPEN', 'PREPARED', 'COMMIT'])
 
@@ -218,7 +220,7 @@ function validateOpened(value, expected) {
 }
 
 function binding(value) {
-  return {
+  const bound = {
     protocol: value.protocol,
     schema_version: value.schema_version,
     campaign_id: value.campaign_id,
@@ -227,14 +229,23 @@ function binding(value) {
     action_sha256: value.action_sha256,
     document_nonce: value.document_nonce,
   }
+  if (value.session_adapter_sha256 !== undefined) {
+    bound.session_adapter_sha256 = value.session_adapter_sha256
+  }
+  return bound
 }
 
 function validatePrepared(value, state) {
+  const hasAdapter = plain(value)
+    && (Object.hasOwn(value, 'session_adapter')
+      || Object.hasOwn(value, 'session_adapter_sha256'))
+  const keys = [
+    'protocol', 'schema_version', 'type', 'campaign_id', 'action_id',
+    'action_nonce', 'action_sha256', 'document_nonce', 'deadline', 'request',
+    ...(hasAdapter ? ['session_adapter', 'session_adapter_sha256'] : []),
+  ]
   if (
-    !exact(value, [
-      'protocol', 'schema_version', 'type', 'campaign_id', 'action_id',
-      'action_nonce', 'action_sha256', 'document_nonce', 'deadline', 'request',
-    ])
+    !exact(value, keys)
     || value.protocol !== PROTOCOL
     || value.schema_version !== SCHEMA_VERSION
     || value.type !== 'PREPARE'
@@ -246,6 +257,10 @@ function validatePrepared(value, state) {
     || !Number.isFinite(Date.parse(value.deadline))
     || !plain(value.request)
     || value.request.origin !== state.preview.target_origin
+    || (hasAdapter && (
+      !plain(value.session_adapter)
+      || !SHA256.test(value.session_adapter_sha256 ?? '')
+    ))
   ) fail('HTTP_AUTHED_BROWSER_PREPARE_INVALID')
   return value
 }
@@ -275,8 +290,8 @@ function injectedCommand(prepared, timeoutMs = prepared.request.timeout_ms) {
     }
   }
   const contentType = request.headers['content-type']
-  const body = request.body_base64 === null
-    ? null
+  const body = typeof request.body_base64 !== 'string'
+    ? undefined
     : {
         encoding: 'base64',
         value: request.body_base64,
@@ -295,11 +310,17 @@ function injectedCommand(prepared, timeoutMs = prepared.request.timeout_ms) {
     method: request.method,
     relative_url: request.path_and_query,
     headers,
-    body,
+    ...(body === undefined ? {} : { body }),
     timeout_ms: timeoutMs,
     deadline_epoch_ms: Date.parse(prepared.deadline),
     max_response_bytes: request.max_response_bytes,
     observe_response: request.observe_response,
+    ...(prepared.session_adapter_sha256 === undefined
+      ? {}
+      : {
+          session_adapter: structuredClone(prepared.session_adapter),
+          session_adapter_sha256: prepared.session_adapter_sha256,
+        }),
   }
 }
 
@@ -445,7 +466,7 @@ export function createBrowserBridgeCompanion({
       fail('HTTP_AUTHED_BROWSER_CONTROLLER_REQUEST_INVALID')
     }
     assertControllerOrigin(controllerBase)
-    const headers = {}
+    const headers = { [EXTENSION_HEADER]: chromeApi.runtime.id }
     if (pairingCode !== undefined) headers[PAIRING_HEADER] = pairingCode
     if (sessionCapability !== undefined) headers[SESSION_HEADER] = sessionCapability
     if (body !== undefined) headers['content-type'] = 'application/json'
@@ -492,9 +513,20 @@ export function createBrowserBridgeCompanion({
       func,
       args,
     })
-    if (!Array.isArray(results) || results.length !== 1 || results[0]?.result === undefined) {
+    if (!Array.isArray(results) || results.length !== 1) {
       fail('HTTP_AUTHED_BROWSER_INJECTION_FAILED')
     }
+    const injectedError = results[0]?.error
+    if (injectedError !== undefined) {
+      const rendered = typeof injectedError === 'string'
+        ? injectedError
+        : injectedError?.message
+      const controlledCode = typeof rendered === 'string'
+        ? rendered.match(/\bHTTP_AUTHED_BROWSER_[A-Z0-9_]{3,96}\b/u)?.[0]
+        : undefined
+      fail(controlledCode ?? 'HTTP_AUTHED_BROWSER_INJECTION_FAILED')
+    }
+    if (results[0]?.result === undefined) fail('HTTP_AUTHED_BROWSER_INJECTION_FAILED')
     return results[0].result
   }
 
@@ -728,6 +760,9 @@ export function createBrowserBridgeCompanion({
         target_origin: prepared.request.origin,
         document_nonce: prepared.document_nonce,
         action_binding_sha256: prepared.action_sha256,
+        ...(prepared.session_adapter_sha256 === undefined
+          ? {}
+          : { session_adapter_sha256: prepared.session_adapter_sha256 }),
       }])
       if (generation !== state.generation || state.phase !== 'PREPARED') return 'CLOSED'
       const readyResponse = await controllerRequest('/v1/ready', {
@@ -750,18 +785,38 @@ export function createBrowserBridgeCompanion({
         [injectedCommand(prepared, remainingMs)],
       )
       if (generation !== state.generation || state.phase !== 'COMMIT') return 'CLOSED'
+      if (
+        plain(result)
+        && exact(result, ['error_code', 'request_may_have_been_sent'])
+        && /^HTTP_AUTHED_BROWSER_[A-Z0-9_]{3,96}$/u.test(result.error_code ?? '')
+        && typeof result.request_may_have_been_sent === 'boolean'
+      ) fail(result.error_code)
       const complete = result?.outcome === 'OBSERVED'
         && result?.response_truncated === false
       const bounded = result?.outcome === 'RESPONSE_BOUNDED'
         && result?.response_truncated === true
       const incomplete = result?.outcome === 'OBSERVATION_INCOMPLETE'
         && result?.response_truncated === false
-      if (
-        !plain(result)
-        || result.action_binding_sha256 !== prepared.action_sha256
-        || !plain(result.response)
-        || (!complete && !bounded && !incomplete)
-      ) fail('HTTP_AUTHED_BROWSER_RESULT_INVALID')
+      if (!plain(result)) {
+        if (result === null) fail('HTTP_AUTHED_BROWSER_RESULT_NULL')
+        if (Array.isArray(result)) fail('HTTP_AUTHED_BROWSER_RESULT_ARRAY')
+        if (typeof result === 'string') fail('HTTP_AUTHED_BROWSER_RESULT_STRING')
+        if (typeof result === 'number') fail('HTTP_AUTHED_BROWSER_RESULT_NUMBER')
+        if (typeof result === 'boolean') fail('HTTP_AUTHED_BROWSER_RESULT_BOOLEAN')
+        fail('HTTP_AUTHED_BROWSER_RESULT_INVALID')
+      }
+      if (result.action_binding_sha256 !== prepared.action_sha256) {
+        fail('HTTP_AUTHED_BROWSER_RESULT_BINDING_INVALID')
+      }
+      if (result.session_adapter_sha256 !== prepared.session_adapter_sha256) {
+        fail('HTTP_AUTHED_BROWSER_RESULT_ADAPTER_INVALID')
+      }
+      if (!plain(result.response)) fail('HTTP_AUTHED_BROWSER_RESULT_RESPONSE_INVALID')
+      if (!complete && !bounded && !incomplete) {
+        fail('HTTP_AUTHED_BROWSER_RESULT_OUTCOME_INVALID')
+      }
+      const response = structuredClone(result.response)
+      if (!Object.hasOwn(response, 'body_base64')) response.body_base64 = null
       await controllerRequest('/v1/result', {
         method: 'POST',
         sessionCapability,
@@ -770,7 +825,7 @@ export function createBrowserBridgeCompanion({
           type: 'RESULT',
           outcome: result.outcome,
           response_truncated: result.response_truncated,
-          response: result.response,
+          response,
         },
       })
       if (generation !== state.generation || state.phase !== 'COMMIT') return 'CLOSED'
@@ -821,6 +876,23 @@ export function createBrowserBridgeCompanion({
 
   const install = () => {
     void ensureInitialized()
+    chromeApi.runtime.onConnect?.addListener((port) => {
+      if (
+        port?.name !== POPUP_KEEPALIVE_NAME
+        || (port.sender?.id !== undefined && port.sender.id !== chromeApi.runtime.id)
+        || typeof port.onMessage?.addListener !== 'function'
+        || typeof port.onDisconnect?.addListener !== 'function'
+      ) {
+        try { port?.disconnect?.() } catch {}
+        return
+      }
+      port.onMessage.addListener((message) => {
+        if (!exact(message, ['type']) || message.type !== 'KEEPALIVE') {
+          try { port.disconnect() } catch {}
+        }
+      })
+      port.onDisconnect.addListener(() => {})
+    })
     chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (sender?.id !== undefined && sender.id !== chromeApi.runtime.id) return false
       handleMessage(message).then(

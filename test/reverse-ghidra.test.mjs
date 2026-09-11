@@ -1,17 +1,23 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   GHIDRA_PROFILE_ID,
+  GHIDRA_WINDOWS_AGENT_MANIFEST_PATH,
+  GHIDRA_WINDOWS_AGENT_SOURCE_PATH,
   assertSupportedGhidraLauncher,
   buildGhidraArguments,
+  prepareWindowsGhidraCompatibilityAgent,
   runGhidraHeadless,
+  windowsJavaDevelopmentToolCandidates,
 } from '../scripts/lib/reverse-ghidra.mjs'
+import { sanitizedProcessEnvironment } from '../scripts/lib/reverse-process.mjs'
 
 const PATHS = process.platform === 'win32'
   ? {
@@ -115,6 +121,25 @@ test('argument construction rejects alternate scripts, raw argv, relative paths,
   assert.throws(() => argumentsFor({ maxCpu: 65 }), /maxCpu/i)
 })
 
+test('Windows Java tool discovery preserves JAVA_HOME, JDK_HOME, then PATH order', () => {
+  assert.deepEqual(
+    windowsJavaDevelopmentToolCandidates({
+      JAVA_HOME: 'C:\\jdk-stale',
+      JDK_HOME: 'C:\\jdk-current',
+      Path: 'C:\\path-jdk;C:\\jdk-current\\bin;relative-entry',
+    }, 'javac.exe'),
+    [
+      'C:\\jdk-stale\\bin\\javac.exe',
+      'C:\\jdk-current\\bin\\javac.exe',
+      'C:\\path-jdk\\javac.exe',
+    ],
+  )
+  assert.throws(
+    () => windowsJavaDevelopmentToolCandidates({ JAVA_HOME: 'relative-jdk' }, 'javac.exe'),
+    /absolute local path/i,
+  )
+})
+
 test('Windows launcher policy admits native and batch launchers but rejects PowerShell scripts', () => {
   for (const launcher of ['C:\\ghidra\\support\\analyzeHeadless.bat', 'C:\\tools\\wrapper.CMD']) {
     assert.equal(assertSupportedGhidraLauncher(launcher, { platform: 'win32' }), launcher)
@@ -155,6 +180,35 @@ test('Windows batch launchers cannot bypass the Job Object adapter through an in
   assert.equal(spawned, false)
 })
 
+test('Windows native launchers run without building or injecting the batch compatibility agent', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-ghidra-native-'))
+  try {
+    const result = await runGhidraHeadless({
+      launcherPath: process.execPath,
+      args: buildGhidraArguments({
+        projectDirectory: join(root, 'project'),
+        projectName: 'last-aperture-analysis',
+        stagedBinary: join(root, 'target.exe'),
+        scriptDirectory: join(root, 'scripts'),
+        exportPath: join(root, 'export.json'),
+        logPath: join(root, 'ghidra.log'),
+        scriptLogPath: join(root, 'script.log'),
+        timeoutSeconds: 90,
+        maxCpu: 2,
+      }),
+      cwd: root,
+      timeoutMs: 30_000,
+      maxOutputBytes: 64 * 1024,
+    })
+    assert.deepEqual(result.tool_components, [])
+    await assert.rejects(stat(join(root, '.ghidra-agent')), { code: 'ENOENT' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Windows runs the official batch-launcher shape through confirmed Job Object supervision', {
   skip: process.platform !== 'win32',
 }, async () => {
@@ -164,6 +218,7 @@ test('Windows runs the official batch-launcher shape through confirmed Job Objec
   await mkdir(fixtureDirectory, { recursive: true })
   await writeFile(launcherPath, [
     '@echo off',
+    'echo agent=%GHIDRA_HEADLESS_JAVA_OPTIONS%',
     'echo batch-job-ok',
     'exit /b 0',
     '',
@@ -178,6 +233,18 @@ test('Windows runs the official batch-launcher shape through confirmed Job Objec
       logPath: join(root, 'output & data!', 'ghidra.log'),
       scriptLogPath: join(root, 'output & data!', 'script.log'),
     }
+    const javaEnvironment = sanitizedProcessEnvironment()
+    const activeJavaHome = javaEnvironment.JAVA_HOME ?? javaEnvironment.JDK_HOME
+    if (activeJavaHome !== undefined) {
+      javaEnvironment.JAVA_HOME = join(root, 'missing-java-home')
+      javaEnvironment.JDK_HOME = activeJavaHome
+    }
+    const preparedAgent = await prepareWindowsGhidraCompatibilityAgent({
+      cwd: root,
+      environment: javaEnvironment,
+      deadline: Date.now() + 30_000,
+      outputBudget: 4_096,
+    })
     const result = await runGhidraHeadless({
       launcherPath,
       args: buildGhidraArguments({
@@ -187,8 +254,9 @@ test('Windows runs the official batch-launcher shape through confirmed Job Objec
         maxCpu: 2,
       }),
       cwd: root,
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
       maxOutputBytes: 4_096,
+      windowsCompatibilityAgent: preparedAgent,
     })
 
     assert.equal(result.code, 0)
@@ -196,9 +264,96 @@ test('Windows runs the official batch-launcher shape through confirmed Job Objec
     assert.equal(result.termination_confirmed, true)
     assert.equal(result.supervision, 'WINDOWS_JOB_OBJECT')
     assert.match(result.stdout.toString('utf8'), /batch-job-ok/)
+    assert.match(result.stdout.toString('utf8'), /-javaagent:.*last-aperture-ghidra-agent\.jar/i)
+    assert.deepEqual(
+      result.tool_components.map(({ role }) => role),
+      ['java-compiler', 'java-archive-builder', 'windows-compatibility-agent'],
+    )
+    for (const component of result.tool_components) {
+      assert.match(component.sha256, /^[a-f0-9]{64}$/u)
+      assert.equal(Number.isSafeInteger(component.size_bytes) && component.size_bytes > 0, true)
+      assert.deepEqual(Object.keys(component).sort(), ['name', 'role', 'sha256', 'size_bytes'])
+    }
+    if (activeJavaHome !== undefined) {
+      const activeJavac = await readFile(join(activeJavaHome, 'bin', 'javac.exe'))
+      assert.equal(
+        result.tool_components.find(({ role }) => role === 'java-compiler').sha256,
+        createHash('sha256').update(activeJavac).digest('hex'),
+      )
+    }
+    const agentJar = await readFile(join(root, '.ghidra-agent', 'last-aperture-ghidra-agent.jar'))
+    assert.equal(
+      result.tool_components.find(({ role }) => role === 'windows-compatibility-agent').sha256,
+      createHash('sha256').update(agentJar).digest('hex'),
+    )
+    assert.equal(
+      (await stat(join(root, '.ghidra-agent', 'last-aperture-ghidra-agent.jar'))).isFile(),
+      true,
+    )
+    await writeFile(preparedAgent.jarPath, Buffer.from('changed agent'))
+    await assert.rejects(
+      runGhidraHeadless({
+        launcherPath,
+        args: buildGhidraArguments({
+          ...paths,
+          projectName: 'last-aperture-analysis',
+          timeoutSeconds: 90,
+          maxCpu: 2,
+        }),
+        cwd: root,
+        timeoutMs: 30_000,
+        maxOutputBytes: 4_096,
+        windowsCompatibilityAgent: preparedAgent,
+      }),
+      (error) => error?.code === 'GHIDRA_SPAWN_FAILED'
+        && error?.cause?.code === 'GHIDRA_WINDOWS_AGENT_CHANGED',
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('Windows Java tool discovery does not fall through an existing unsafe home candidate', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-ghidra-unsafe-jdk-'))
+  const unsafeHome = join(root, 'unsafe-jdk')
+  try {
+    await mkdir(join(unsafeHome, 'bin', 'javac.exe'), { recursive: true })
+    await mkdir(join(unsafeHome, 'bin', 'jar.exe'), { recursive: true })
+    await assert.rejects(
+      prepareWindowsGhidraCompatibilityAgent({
+        cwd: root,
+        environment: {
+          ...sanitizedProcessEnvironment(),
+          JAVA_HOME: unsafeHome,
+        },
+        deadline: Date.now() + 30_000,
+        outputBudget: 4_096,
+      }),
+      (error) => error?.code === 'GHIDRA_JAVA_TOOL_INVALID',
+    )
+    await assert.rejects(stat(join(root, '.ghidra-agent')), { code: 'ENOENT' })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('the Windows compatibility agent is a fixed narrowly scoped source build', async () => {
+  const [source, manifest] = await Promise.all([
+    readFile(GHIDRA_WINDOWS_AGENT_SOURCE_PATH, 'utf8'),
+    readFile(GHIDRA_WINDOWS_AGENT_MANIFEST_PATH, 'utf8'),
+  ])
+  assert.match(source, /ghidra\/app\/plugin\/core\/osgi\/GhidraSourceBundle/)
+  assert.match(source, /path\.toUri\(\)\.toASCIIString\(\)/)
+  assert.match(source, /jdk\.nio\.zipfs\.ZipFileSystemProvider/)
+  assert.match(source, /frame\.getMethodName\(\)\.equals\("removeFileSystem"\)/)
+  assert.match(source, /endsWith\("\.jar"\)/)
+  assert.doesNotMatch(source, /Runtime\.getRuntime|ProcessBuilder|java\.net|Socket/)
+  assert.match(
+    manifest,
+    /Premain-Class: lastaperture\.ghidra\.GhidraBundleLocationAgent/,
+  )
 })
 
 test('runner uses shell false and returns bounded raw process output without a verdict', async () => {
@@ -233,6 +388,8 @@ test('runner uses shell false and returns bounded raw process output without a v
   assert.deepEqual(invocation.options.stdio, ['ignore', 'pipe', 'pipe'])
   assert.equal(invocation.options.env.LAST_APERTURE_TEST_SECRET, undefined)
   assert.equal(Object.keys(invocation.options.env).some((key) => /TOKEN|SECRET|PASSWORD|KEY/i.test(key)), false)
+  assert.equal(invocation.options.env.XDG_CONFIG_HOME, join(PATHS.cwd, '.ghidra-config'))
+  assert.equal(invocation.options.env.XDG_CACHE_HOME, join(PATHS.cwd, '.ghidra-cache'))
   assert.equal(result.profile_id, GHIDRA_PROFILE_ID)
   assert.equal(result.code, 0)
   assert.equal(result.timed_out, false)

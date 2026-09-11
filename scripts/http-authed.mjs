@@ -17,6 +17,7 @@ import {
   HTTP_AUTHED_STDIN_CREDENTIAL_REF,
   readHttpAuthedCredentialFromStdin,
 } from './lib/http-authed-credential.mjs'
+import { readPageSessionAdapterFile } from './lib/page-session-adapter.mjs'
 import {
   planHttpAuthedAttestedScope,
 } from './lib/http-authed-planner.mjs'
@@ -35,7 +36,7 @@ import {
 const HELP = `last-aperture authenticated HTTP campaigns ${PLATFORM_VERSION}
 
 Usage:
-  http-authed plan-attested --scope <absolute-new-scope.json> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <declared-authorizer> --authorization-reference <reference> --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id>) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--response-observation-profile <controller-profile>] [--json]
+  http-authed plan-attested --scope <absolute-new-scope.json> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <declared-authorizer> --authorization-reference <reference> --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id> [--page-session-adapter <absolute-adapter.json>]) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--json]
   http-authed validate-attested --scope <scope.json> [--json]
   http-authed campaign-attested --scope <scope.json> --campaign-grant-sha256 <hex> --ledger <absolute-external-directory> --operator-id <id> [--credential-stdin|--credential-browser] [--materials <absolute-directory>] [--trusted-ledger-record-count <integer> --trusted-ledger-head-sha256 <hex>] [--json]
   http-authed campaign-stop --ledger <absolute-external-directory> --campaign-grant-sha256 <hex> --operator-id <id> [--json]
@@ -64,16 +65,13 @@ Boundary:
   --credential-browser uses that browser-held session without exporting cookies or
   authorization values; this route uses browser-managed DNS rather than
   the native transport's all-answer validation and socket IP pinning.
+  --page-session-adapter may seal one target-neutral WEB_STORAGE source and
+  request-header carrier; its bounded value is acquired only inside each isolated dispatch.
   JSON response shape observation is disabled unless --observe-json-shape is sealed
   at plan time with repeatable --json-shape-key values. It retains only allowed key
   names, structural types, and bounded counts; scalar values and raw bodies remain
   transient and are never emitted. --json-shape-aspnet-d selects one strict JSON
   parse of an exact ASP.NET {d: JSON-string} envelope; it never parses XML or HTML.
-  --response-observation-profile credible-bundle-src-v1 is exclusive with discovery
-  and JSON shape observation. It admits one exact Credible GET, transiently parses
-  one complete identity UTF-8 HTML response, emits at most four fixed-format bundle
-  paths, and discards all response bytes and other HTML data.
-
 Materials:
   A synthetic body is read from body-SHA256.bin, where SHA256 is the lowercase
   SHA-256 of body_id UTF-8. Each action receives a ledger-bound one-use dispatch
@@ -179,6 +177,7 @@ const COMMANDS = {
       'credential-stdin',
       'credential-browser',
       'browser-extension-id',
+      'page-session-adapter',
       'credential-kind',
       'seed-method',
       'seed-test-category',
@@ -187,7 +186,6 @@ const COMMANDS = {
       'json-shape-aspnet-d',
       'json-shape-key',
       'json-shape-max-depth',
-      'response-observation-profile',
       'discovery-source',
       'synthetic-query',
       'synthetic-path',
@@ -434,18 +432,6 @@ async function planInput(options, requestPlanIo = {}) {
   ) {
     throw new Error('--observe-json-shape requires at least one --json-shape-key')
   }
-  if (
-    options['response-observation-profile'] !== undefined
-    && (
-      options['observe-json-shape'] === true
-      || options['enable-discovery'] === true
-      || seedRequests.length !== 1
-    )
-  ) {
-    throw new Error(
-      '--response-observation-profile requires one exact seed and is exclusive with discovery and JSON shape observation',
-    )
-  }
   const usesEnvironmentCredential = typeof options['credential-env'] === 'string'
   const usesStdinCredential = options['credential-stdin'] === true
   const usesBrowserCredential = options['credential-browser'] === true
@@ -466,7 +452,16 @@ async function planInput(options, requestPlanIo = {}) {
     if (options['browser-extension-id'] !== undefined) {
       throw new Error('--browser-extension-id requires --credential-browser')
     }
+    if (options['page-session-adapter'] !== undefined) {
+      throw new Error('--page-session-adapter requires --credential-browser')
+    }
   }
+  const pageSessionAdapter = options['page-session-adapter'] === undefined
+    ? undefined
+    : await readPageSessionAdapterFile(
+        options['page-session-adapter'],
+        requestPlanIo,
+      )
   return {
     outputPath: options.scope,
     engagementId: options['engagement-id'],
@@ -492,6 +487,7 @@ async function planInput(options, requestPlanIo = {}) {
           mode: 'CHROME_ACTIVE_TAB_SESSION',
           extensionId: options['browser-extension-id'],
           origin: options['target-origin'],
+          ...(pageSessionAdapter === undefined ? {} : { pageSessionAdapter }),
         }
       : {
           ref: usesStdinCredential
@@ -525,7 +521,6 @@ async function planInput(options, requestPlanIo = {}) {
           aspNetD: options['json-shape-aspnet-d'] === true,
         }
       : undefined,
-    responseObservationProfile: options['response-observation-profile'],
     validity: {
       notBefore: options['not-before'],
       notAfter: options['not-after'],

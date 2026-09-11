@@ -7,7 +7,7 @@ import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 const WORKFLOW_PATH = '.github/workflows/lint-lenses.yml'
 const CHECKOUT_SHA = '08eba0b27e820071cde6df949e0beb9ba4906955'
 const SETUP_NODE_SHA = '49933ea5288caeca8642d1e84afbd3f7d6820020'
-const RELEASE_VERSION = '0.12.0'
+const RELEASE_VERSION = '0.13.0'
 
 function workflowJobBlock(workflow, name) {
   const marker = `  ${name}:\n`
@@ -226,7 +226,7 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.12 controller and conformance commands', () => {
+test('release metadata exposes the 0.13 controller and conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
@@ -247,7 +247,7 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
       windowsHide: true,
     })
     assert.equal(help.status, 0, `${cli} --help must succeed`)
-    assert.match(help.stdout, /0\.12\.0/, `${cli} must expose the release version`)
+    assert.match(help.stdout, /0\.13\.0/, `${cli} must expose the release version`)
     assert.doesNotMatch(readFileSync(cli, 'utf8'), /0\.11\.0/)
   }
   assert.equal(
@@ -418,7 +418,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     'docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md',
   ]) {
     const adr = readFileSync(adrPath, 'utf8')
-    assert.match(adr, /Current 0\.12\.0 execution status: active/i, adrPath)
+    assert.match(adr, /Current 0\.13\.0 execution status: active/i, adrPath)
     assert.doesNotMatch(adr, /HTTP_RECON_LIVE_IO_DISABLED/, adrPath)
   }
   assert.match(cli, /Planning by itself performs no network activity/i)
@@ -429,7 +429,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     /plan-signed|--roe|--authorization-document|--owner-public-key/,
   )
   assert.doesNotMatch(cli, /HTTP_RECON_LIVE_IO_DISABLED/)
-  assert.match(protocol, /Current 0\.12\.0 execution status: active/i)
+  assert.match(protocol, /Current 0\.13\.0 execution status: active/i)
   assert.doesNotMatch(protocol, /HTTP_RECON_LIVE_IO_DISABLED/)
   assert.match(protocol, /go <exact-https-url>/i)
   assert.match(protocol, /plans one exact action, executes it, finalizes the bundle/i)
@@ -518,7 +518,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     windowsHide: true,
   })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.12\.0/)
+  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.13\.0/)
   assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
   assert.doesNotMatch(
     help.stdout,
@@ -605,22 +605,23 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.doesNotMatch(schema.description, /draft/i)
 
   const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
-  assert.match(skill, /Four target-I\/O paths are public/i)
+  assert.match(skill, /Packaged target-I\/O paths include/i)
   assert.match(
     skill,
     /Adaptive authenticated HTTP work[\s\S]*campaign-attested[\s\S]*scope-valid discovered[\s\S]*without reconfirmation/i,
   )
   assert.match(skill, /campaign-stop[\s\S]*consumed before another send/i)
+  assert.match(skill, /Reverse engineering and protocol reconstruction[\s\S]*Ghidra[\s\S]*Frida/i)
   assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
-  assert.match(skill, /Other T2\/service shapes[\s\S]*generic live\/L3[\s\S]*remain\s+technically unavailable/i)
-  assert.match(skill, /not an authorization denial[\s\S]*authorized-but-unavailable/i)
+  assert.match(skill, /natural-language operator statement[\s\S]*sole authorization step/i)
+  assert.match(skill, /without ownership proof[\s\S]*per-action confirmation/i)
+  assert.match(skill, /Compose available[\s\S]*host tools under the same attestation/i)
   assert.match(skill, /Offline validation/)
-  assert.match(skill, /(?:authenticated )?operator statement is the sole\s+authorization fact for every named capability/i)
   assert.match(
     skill,
     /sealed Docker implements T1 and narrow[\s\S]*loopback T2[\s\S]*Unsupported T2 stays `UNPROVEN`/i,
   )
-  assert.match(skill, /Never improvise a network\/process path/)
+  assert.match(skill, /standard browser\/process\/network tool/i)
   assert.doesNotMatch(skill, /Copy value/)
 
   const readme = readFileSync('README.md', 'utf8')
@@ -662,12 +663,13 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(security, /CLEANUP_SESSION_CONFIRMED/)
   assert.match(security, /exact origin\s+and rejects redirects/i)
   const rootSkill = readFileSync('SKILL.md', 'utf8')
-  assert.match(rootSkill, /one exact, bounded live HTTP-recon action/i)
-  assert.match(rootSkill, /single action uses a campaign ledger/i)
+  assert.match(rootSkill, /target <HTTPS URL> and go` authorizes the exact bounded\s+HTTP-recon action/i)
+  assert.match(rootSkill, /Even one\s+action uses a campaign ledger/i)
   assert.match(
     rootSkill,
-    /Generic live\/L3, provider\/remote, bounty\/OOB, and acquisition transports remain\s+unavailable where not implemented/i,
+    /Use available controllers and standard browser, process, network, Burp, Ghidra,[\s\S]*Frida tooling/i,
   )
+  assert.match(rootSkill, /missing dedicated wrapper[\s\S]*not create another authorization gate/i)
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {

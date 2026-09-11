@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
 
+import { legacyV1CredentialCookieName } from './reverse-v1-compat-semantics.mjs'
 import { stableJson } from './run-engine.mjs'
 
 export const WEB_SESSION_EVIDENCE_KIND = 'red-team-audit/web-session-evidence'
 export const WEB_SESSION_EVIDENCE_PROTOCOL = 'web-session-evidence-v1'
+export const WEB_SESSION_SOURCE_KINDS = Object.freeze(['BURP_XML', 'HAR'])
 
 const HASH = /^[a-f0-9]{64}$/u
 const HTTP_METHOD = /^[!#$%&'*+.^_`|~0-9A-Z-]{1,32}$/u
@@ -38,8 +40,8 @@ const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'x-a
 const CREDENTIAL_CARRIER = /^(?:body:[A-Za-z0-9_$@.:[\]-]{1,1024}|cookie:[A-Za-z0-9_$@.:[\]-]{1,128}|header:[!#$%&'*+.^_`|~0-9a-z-]{1,128})$/u
 const SENSITIVE_NAME = /(?:api[_-]?key|auth|bearer|client[_-]?secret|connection|credential|csrf|jwt|login|pass(?:word|wd)?|secret|session|ssn|token|user(?:name)?|xsrf)/iu
 const CREDENTIAL_COOKIE_TOKENS = new Set(['auth', 'authentication', 'bearer', 'credential', 'csrf', 'jwt', 'session', 'sid', 'token', 'xsrf'])
-const CREDENTIAL_COOKIE_COMPOUND_TOKEN = /^(?:(?:auth|session)(?:cookie|id)?|(?:access|auth|bearer|csrf|id|refresh|xsrf)token|sessid)$/iu
-const CREDENTIAL_COOKIE_EXACT = new Set(['aspxauth', 'cbh', 'connect.sid', 'fedauth', 'jsessionid', 'phpsessid'])
+const CREDENTIAL_COOKIE_COMPOUND_TOKEN = /^(?:(?:auth|session)(?:cookie|id)?|(?:access|auth|bearer|csrf|id|refresh|session|xsrf)token|sessid)$/iu
+const CREDENTIAL_COOKIE_EXACT = new Set(['aspxauth', 'connect.sid', 'fedauth', 'jsessionid', 'phpsessid'])
 const SEMANTIC_NAME = /^(?:action|command|event|method|mode|op|operation|submit|task|view)$/iu
 const SEMANTIC_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/u
 const WRITE_ACTION = /^(?:add|approve|archive|assign|begin|cancel|close|commit|confirm|connect|create|delete|disable|disconnect|edit|enable|end|execute|import|insert|link|merge|move|patch|pay|post|publish|put|remove|reset|revoke|save|send|set|start|stop|submit|sync|update|upload|write)$/iu
@@ -51,6 +53,8 @@ const DEFAULT_PATH_LITERALS = new Set([
 ])
 const REDACTED_FIELD_NAME = 'redacted_name'
 const REDACTED_HEADER_NAME = 'x-redacted-name'
+const SOURCE_KINDS = new Set(WEB_SESSION_SOURCE_KINDS)
+const SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0'])
 
 function fail(message) {
   const error = new Error(message)
@@ -215,14 +219,14 @@ function parameters(values) {
 
 function readHeaders(items) {
   if (items === undefined) return { names: [], values: new Map() }
-  if (!Array.isArray(items) || items.length > MAX_HEADER_NAMES) fail('HAR headers are invalid')
+  if (!Array.isArray(items) || items.length > MAX_HEADER_NAMES) fail('web capture headers are invalid')
   const names = []
   const values = new Map()
   for (const item of items) {
-    if (!plain(item) || typeof item.name !== 'string') fail('HAR header is invalid')
+    if (!plain(item) || typeof item.name !== 'string') fail('web capture header is invalid')
     const rawName = item.name.toLowerCase()
     if (rawName.startsWith(':')) continue
-    if (!HEADER_NAME.test(rawName)) fail('HAR header name is invalid')
+    if (!HEADER_NAME.test(rawName)) fail('web capture header name is invalid')
     const fieldName = valueLikeName(rawName) ? REDACTED_HEADER_NAME : rawName
     names.push(fieldName)
     if (typeof item.value === 'string' && item.value.length <= 65536) values.set(fieldName, [...(values.get(fieldName) ?? []), item.value])
@@ -234,10 +238,10 @@ function readCookieNames(items, headerValues, response = false) {
   const result = new Set()
   const add = (value) => {
     result.add(sanitizedName(value, 'cookie name'))
-    if (result.size > MAX_COOKIE_NAMES) fail('HAR cookie name limit exceeded')
+    if (result.size > MAX_COOKIE_NAMES) fail('web capture cookie name limit exceeded')
   }
   if (items !== undefined) {
-    if (!Array.isArray(items) || items.length > MAX_COOKIE_NAMES) fail('HAR cookies are invalid')
+    if (!Array.isArray(items) || items.length > MAX_COOKIE_NAMES) fail('web capture cookies are invalid')
     for (const item of items) if (plain(item) && typeof item.name === 'string') add(item.name)
   }
   const header = response ? 'set-cookie' : 'cookie'
@@ -294,7 +298,10 @@ function body(postData, fallbackMime) {
   const rawText = typeof postData.text === 'string' ? postData.text : null
   const params = Array.isArray(postData.params) ? postData.params : null
   if (params !== null && params.length > MAX_PARAMETER_PAIRS) fail('body parameter pair limit exceeded')
-  let measured = rawText === null ? 0 : Buffer.byteLength(rawText, 'utf8')
+  const declaredSize = Number.isFinite(postData.size) && postData.size >= 0
+    ? postData.size
+    : null
+  let measured = declaredSize ?? (rawText === null ? 0 : Buffer.byteLength(rawText, 'utf8'))
   let format = 'OPAQUE'
   if (mime === 'application/json' || mime?.endsWith('+json')) format = 'JSON'
   else if (mime === 'application/x-www-form-urlencoded') format = 'FORM'
@@ -316,7 +323,7 @@ function body(postData, fallbackMime) {
     shapeStatus = measured > MAX_BODY_BYTES ? 'OMITTED_SIZE_LIMIT' : 'OBSERVED'
     for (const item of params) {
       if (shapeStatus === 'OMITTED_SIZE_LIMIT') break
-      if (rawText === null) {
+      if (rawText === null && declaredSize === null) {
         measured += Buffer.byteLength(String(item?.value ?? ''), 'utf8')
         if (measured > MAX_BODY_BYTES) {
           fields.clear()
@@ -431,10 +438,10 @@ function responseDestinations(content, scope, pathLiterals, baseUrl) {
   }
 }
 
-function carriers(headerNames, cookies, bodyShape) {
+function carriers(headerNames, cookies, bodyShape, cookieClassifier = credentialCookieName) {
   const result = unique([
     ...headerNames.filter((item) => CREDENTIAL_HEADERS.has(item)).map((item) => `header:${item}`),
-    ...cookies.filter(credentialCookieName).map((item) => `cookie:${item}`),
+    ...cookies.filter(cookieClassifier).map((item) => `cookie:${item}`),
     ...bodyShape.fields.filter((item) => item.sensitive).map((item) => `body:${item.path}`),
   ])
   if (result.length > MAX_CREDENTIAL_CARRIERS) fail('credential carrier limit exceeded')
@@ -537,7 +544,15 @@ function assertBody(item, label) {
   if (!item.fields.every((field, index) => index === 0 || lexical(item.fields[index - 1].path, field.path) < 0)) fail(`${label} fields are not canonical`)
 }
 
-function assertRequest(item, pathLiterals) {
+function assertCredentialCarriersMatchShape(item, schemaVersion, label) {
+  const cookieClassifier = schemaVersion === '1.0.0'
+    ? legacyV1CredentialCookieName
+    : credentialCookieName
+  const expected = carriers(item.header_names, item.cookie_names, item.body, cookieClassifier)
+  if (JSON.stringify(item.credential_carriers) !== JSON.stringify(expected)) fail(`${label} credential carriers do not match its shape`)
+}
+
+function assertRequest(item, pathLiterals, schemaVersion) {
   exact(item, ['body', 'cookie_names', 'credential_carriers', 'header_names', 'method', 'origin', 'path_action_class', 'path_template', 'query_parameters'], 'web request')
   if (!HTTP_METHOD.test(item.method ?? '')) fail('web request method is invalid')
   origin(item.origin)
@@ -553,7 +568,7 @@ function assertRequest(item, pathLiterals) {
   if (item.cookie_names.some(valueLikeName)) fail('web request contains a value-like cookie name')
   if (!canonicalList(item.credential_carriers, (value) => CREDENTIAL_CARRIER.test(value)) || item.credential_carriers.length > MAX_CREDENTIAL_CARRIERS) fail('web request credential carriers are invalid')
   assertBody(item.body, 'web request body')
-  if (JSON.stringify(item.credential_carriers) !== JSON.stringify(carriers(item.header_names, item.cookie_names, item.body))) fail('web request credential carriers do not match its shape')
+  assertCredentialCarriersMatchShape(item, schemaVersion, 'web request')
 }
 
 function assertRedirect(item, pathLiterals) {
@@ -571,7 +586,7 @@ function assertDestination(item, pathLiterals) {
   assertRedirect({ origin: item.origin, path_template: item.path_template, query_parameters: item.query_parameters }, pathLiterals)
 }
 
-function assertResponse(item, pathLiterals) {
+function assertResponse(item, pathLiterals, schemaVersion) {
   exact(item, ['body', 'cookie_names', 'credential_carriers', 'destinations', 'destinations_truncated', 'header_names', 'redirect', 'status'], 'web response')
   if (!Number.isSafeInteger(item.status) || item.status < 0 || item.status > 999) fail('web response status is invalid')
   if (!canonicalList(item.header_names, (value) => HEADER_NAME.test(value) && !valueLikeName(value)) || item.header_names.length > MAX_HEADER_NAMES) fail('web response headers are invalid')
@@ -584,7 +599,7 @@ function assertResponse(item, pathLiterals) {
   item.destinations.forEach((value) => assertDestination(value, pathLiterals))
   if (!item.destinations.every((value, index) => index === 0 || lexical(`${item.destinations[index - 1].field_path}\n${item.destinations[index - 1].origin}\n${item.destinations[index - 1].path_template}`, `${value.field_path}\n${value.origin}\n${value.path_template}`) < 0)) fail('web response destinations are not canonical')
   assertBody(item.body, 'web response body')
-  if (JSON.stringify(item.credential_carriers) !== JSON.stringify(carriers(item.header_names, item.cookie_names, item.body))) fail('web response credential carriers do not match its shape')
+  assertCredentialCarriersMatchShape(item, schemaVersion, 'web response')
 }
 
 function aggregateMetadataItems(entry) {
@@ -604,9 +619,12 @@ function aggregateMetadataItems(entry) {
   return count
 }
 
-function evidenceGaps(entries) {
+function evidenceGaps(entries, sourceKind) {
   const bodies = entries.flatMap((entry) => [entry.request.body, entry.response.body])
-  const gaps = [{ code: 'HAR_METADATA_ONLY', message: 'The importer retains protocol shape and sequence, not values or proof of application semantics.' }]
+  const gaps = [{
+    code: sourceKind === 'BURP_XML' ? 'BURP_XML_METADATA_ONLY' : 'HAR_METADATA_ONLY',
+    message: 'The importer retains protocol shape and sequence, not values or proof of application semantics.',
+  }]
   if (bodies.some((item) => item.fields_truncated)) gaps.push({ code: 'BODY_FIELDS_TRUNCATED', message: 'At least one body field inventory reached a structural traversal or field cap; its fields_truncated flag identifies the omission.' })
   if (bodies.some((item) => item.shape_status === 'OMITTED_SIZE_LIMIT')) gaps.push({ code: 'BODY_SHAPE_OMITTED_SIZE_LIMIT', message: 'At least one structured body exceeded the body byte limit and its field shape was omitted.' })
   if (bodies.some((item) => item.shape_status === 'MALFORMED')) gaps.push({ code: 'BODY_SHAPE_MALFORMED', message: 'At least one declared JSON body could not be parsed, so its field shape is unavailable.' })
@@ -616,10 +634,11 @@ function evidenceGaps(entries) {
 
 export function assertValidWebSessionEvidence(value) {
   exact(value, ['applied_to_audit_bundle', 'capture_id', 'entries', 'gaps', 'kind', 'limits', 'origins', 'path_literals', 'protocol', 'redaction', 'schema_version', 'security_verdict', 'skipped', 'source'], 'web session evidence')
-  if (value.schema_version !== '1.0.0' || value.kind !== WEB_SESSION_EVIDENCE_KIND || value.protocol !== WEB_SESSION_EVIDENCE_PROTOCOL) fail('web session evidence version or kind is invalid')
+  if (!SCHEMA_VERSIONS.has(value.schema_version) || value.kind !== WEB_SESSION_EVIDENCE_KIND || value.protocol !== WEB_SESSION_EVIDENCE_PROTOCOL) fail('web session evidence version or kind is invalid')
   if (!/^web:[a-f0-9]{32}$/u.test(value.capture_id ?? '')) fail('web session capture id is invalid')
   exact(value.source, ['kind', 'sha256'], 'web session source')
-  if (value.source.kind !== 'HAR' || !HASH.test(value.source.sha256 ?? '')) fail('web session source is invalid')
+  if (!SOURCE_KINDS.has(value.source.kind) || !HASH.test(value.source.sha256 ?? '')) fail('web session source is invalid')
+  if (value.schema_version === '1.0.0' && value.source.kind !== 'HAR') fail('web session evidence 1.0.0 supports HAR sources only')
   if (!canonicalList(value.origins) || value.origins.length < 1 || value.origins.length > 32) fail('web session origins are invalid')
   value.origins.forEach(origin)
   if (!canonicalList(value.path_literals, (item) => typeof item === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(item)) || value.path_literals.length > 128) fail('web session path literals are invalid')
@@ -645,8 +664,8 @@ export function assertValidWebSessionEvidence(value) {
     observationIds.add(entry.observation_id)
     if (entry.observed_at !== null && (typeof entry.observed_at !== 'string' || Number.isNaN(Date.parse(entry.observed_at)) || new Date(entry.observed_at).toISOString() !== entry.observed_at)) fail('web session entry timestamp is invalid')
     if (!(entry.total_ms === null || (Number.isSafeInteger(entry.total_ms) && entry.total_ms >= 0 && entry.total_ms <= 86_400_000))) fail('web session duration is invalid')
-    assertRequest(entry.request, value.path_literals)
-    assertResponse(entry.response, value.path_literals)
+    assertRequest(entry.request, value.path_literals, value.schema_version)
+    assertResponse(entry.response, value.path_literals, value.schema_version)
     aggregateItems += aggregateMetadataItems(entry)
     if (aggregateItems > MAX_AGGREGATE_METADATA_ITEMS) fail('web session aggregate metadata item limit exceeded')
     if (!value.origins.includes(entry.request.origin)) fail('web request origin is outside the declared capture scope')
@@ -661,21 +680,26 @@ export function assertValidWebSessionEvidence(value) {
     if (!/^[A-Z][A-Z0-9_]{2,95}$/u.test(gap.code ?? '')) fail('web session gap code is invalid')
     text(gap.message, 'web session gap message')
   }
-  if (JSON.stringify(value.gaps) !== JSON.stringify(evidenceGaps(value.entries))) fail('web session gaps do not match its omissions')
+  if (JSON.stringify(value.gaps) !== JSON.stringify(evidenceGaps(value.entries, value.source.kind))) fail('web session gaps do not match its omissions')
   if (Buffer.byteLength(stableJson(value, 0), 'utf8') > 64 * 1024 * 1024) fail('web session evidence exceeds its byte limit')
   return value
 }
 
-export function importWebHarEvidence(har, { sourceSha256, targetOrigins, pathLiterals = [] } = {}) {
-  if (!HASH.test(sourceSha256 ?? '')) fail('HAR source sha256 is invalid')
+export function importWebSessionEvidence(rawEntries, {
+  sourceKind,
+  sourceSha256,
+  targetOrigins,
+  pathLiterals = [],
+} = {}) {
+  if (!SOURCE_KINDS.has(sourceKind)) fail('web capture source kind is invalid')
+  if (!HASH.test(sourceSha256 ?? '')) fail('web capture source sha256 is invalid')
   if (!Array.isArray(targetOrigins) || targetOrigins.length < 1 || targetOrigins.length > 32) fail('at least one target origin is required')
   const origins = unique(targetOrigins.map(origin))
   if (!Array.isArray(pathLiterals) || pathLiterals.length > 128 || pathLiterals.some((item) => typeof item !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(item))) fail('path literal declarations are invalid')
   const declaredPathLiterals = unique(pathLiterals)
   const scope = new Set(origins)
-  const rawEntries = har?.log?.entries
-  if (!Array.isArray(rawEntries)) fail('HAR input is missing its entry list')
-  if (rawEntries.length > MAX_ENTRIES) fail('HAR entry limit exceeded')
+  if (!Array.isArray(rawEntries)) fail('web capture input is missing its entry list')
+  if (rawEntries.length > MAX_ENTRIES) fail('web capture entry limit exceeded')
   const entries = []
   const skipped = { malformed: 0, non_http: 0, off_scope: 0 }
   rawEntries.forEach((entry, index) => {
@@ -685,21 +709,27 @@ export function importWebHarEvidence(har, { sourceSha256, targetOrigins, pathLit
   })
   const captureId = createHash('sha256').update(`${sourceSha256}\n${origins.join('\n')}`).digest('hex').slice(0, 32)
   return assertValidWebSessionEvidence({
-    schema_version: '1.0.0',
+    schema_version: '1.1.0',
     kind: WEB_SESSION_EVIDENCE_KIND,
     protocol: WEB_SESSION_EVIDENCE_PROTOCOL,
     capture_id: `web:${captureId}`,
-    source: { kind: 'HAR', sha256: sourceSha256 },
+    source: { kind: sourceKind, sha256: sourceSha256 },
     origins,
     path_literals: declaredPathLiterals,
     limits: { ...EVIDENCE_LIMITS },
     redaction: { url_values_removed: true, header_values_removed: true, cookie_values_removed: true, body_values_removed: true, value_like_names_masked: true },
     entries,
     skipped,
-    gaps: evidenceGaps(entries),
+    gaps: evidenceGaps(entries, sourceKind),
     security_verdict: 'NOT_ASSESSED',
     applied_to_audit_bundle: false,
   })
+}
+
+export function importWebHarEvidence(har, options = {}) {
+  const rawEntries = har?.log?.entries
+  if (!Array.isArray(rawEntries)) fail('HAR input is missing its entry list')
+  return importWebSessionEvidence(rawEntries, { ...options, sourceKind: 'HAR' })
 }
 
 export function canonicalWebSessionEvidence(value) {

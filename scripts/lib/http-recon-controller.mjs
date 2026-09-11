@@ -570,9 +570,6 @@ async function loadOperatorAttestedTrust({
       ...(action.request_headers === undefined
         ? {}
         : { request_headers: structuredClone(action.request_headers) }),
-      ...(action.response_observation === undefined
-        ? {}
-        : { response_observation: structuredClone(action.response_observation) }),
       safe_to_get: action.safe_to_get,
     })),
   }
@@ -750,7 +747,6 @@ export async function planOperatorAttestedHttpReconBundle({
   method = 'HEAD',
   safeToGet = false,
   requestHeaderProfile,
-  responseObservationProfile,
   operatorId,
   authorizedBy,
   authorizationReference,
@@ -815,7 +811,6 @@ export async function planOperatorAttestedHttpReconBundle({
     method,
     safeToGet,
     requestHeaderProfile,
-    responseObservationProfile,
     operatorId: normalizedOperatorId,
     authorizedBy: normalizedAuthorizedBy,
     authorizationReference: normalizedReference,
@@ -854,7 +849,6 @@ export async function planOperatorAttestedHttpReconBundle({
       plan_sha256: run.plan_sha256,
       scope_sha256: run.authorization.scope_sha256,
       tls_policy: tlsPolicyForRun(run),
-      response_observation: run.actions[0].response_observation ?? null,
       action_count: 1,
       operator_id: run.authorization.operator_id,
       independently_verified: false,
@@ -882,7 +876,6 @@ export async function goOperatorAttestedHttpRecon({
   method = 'HEAD',
   safeToGet = false,
   requestHeaderProfile,
-  responseObservationProfile,
   operatorId,
   authorizedBy,
   authorizationReference,
@@ -940,7 +933,6 @@ export async function goOperatorAttestedHttpRecon({
     method,
     safeToGet,
     requestHeaderProfile,
-    responseObservationProfile,
     operatorId: declaration.operator_id,
     authorizedBy: effectiveAuthorizedBy,
     authorizationReference: declaration.authorization_reference,
@@ -1228,19 +1220,6 @@ function observationPath(actionId) {
   return `${OBSERVATIONS_DIRECTORY}/${match[1]}.json`
 }
 
-function responseObservationMatchesAction(observation, action) {
-  const expected = action.response_observation ?? null
-  if (expected === null) {
-    return !Object.hasOwn(observation, 'response_observation')
-  }
-  if (!Object.hasOwn(observation, 'response_observation')) return false
-  const observed = observation.response_observation
-  return observed === null || (
-    observed.profile === expected.profile
-    && observed.profile_binding_sha256 === expected.profile_binding_sha256
-  )
-}
-
 function normalizeTransportObservation({
   run,
   action,
@@ -1270,38 +1249,8 @@ function normalizeTransportObservation({
     plan_sha256: run.plan_sha256,
     independently_verified: false,
   }
-  const expectedResponseObservation = action.response_observation ?? null
-  const observedResponseObservation = transport.response_observation ?? null
-  if (
-    expectedResponseObservation === null
-      ? Object.hasOwn(transport, 'response_observation')
-      : (
-          observedResponseObservation !== null
-          && (
-            observedResponseObservation.profile !== expectedResponseObservation.profile
-            || observedResponseObservation.profile_binding_sha256
-              !== expectedResponseObservation.profile_binding_sha256
-          )
-        )
-  ) {
-    throw controllerError(
-      'HTTP_RECON_RESPONSE_OBSERVATION_MISMATCH',
-      'transport response observation does not match the sealed action profile',
-    )
-  }
-  if (
-    expectedResponseObservation !== null
-    && observedResponseObservation === null
-    && stopCondition === null
-    && transport.body.truncated !== true
-  ) {
-    throw controllerError(
-      'HTTP_RECON_RESPONSE_OBSERVATION_MISSING',
-      'successful transport omitted its sealed response observation',
-    )
-  }
   const observation = {
-    schema_version: expectedResponseObservation === null ? '1.0.0' : '1.1.0',
+    schema_version: '1.0.0',
     kind: 'red-team-audit/http-recon-observation',
     observed_at: completedAt,
     authority,
@@ -1315,9 +1264,6 @@ function normalizeTransportObservation({
     response_headers: structuredClone(transport.response_headers),
     response_header_summary: structuredClone(transport.response_header_summary),
     body: structuredClone(transport.body),
-    ...(expectedResponseObservation === null
-      ? {}
-      : { response_observation: structuredClone(observedResponseObservation) }),
     network: {
       resolved_ip: transport.dns.selected_ip,
       resolved_family: transport.dns.selected_family,
@@ -1377,7 +1323,6 @@ async function commitTransportObservation({
     observation_sha256: action.observation_sha256,
     status_code: observation.status_code,
     response_bytes: observation.body.size,
-    response_observation: action.response_observation ?? null,
     stop_condition: observation.stop_condition,
     budget_after: structuredClone(loaded.run.budget),
   }, now)
@@ -1550,7 +1495,6 @@ export async function runHttpReconAction({
       method: action.method,
       url: action.url,
       request_headers: action.request_headers ?? null,
-      response_observation: action.response_observation ?? null,
       operator_id: normalizedOperatorId,
       rationale: normalizedRationale,
       authorization_mode: trust.mode,
@@ -1606,7 +1550,6 @@ export async function runHttpReconAction({
         method,
         url,
         request_headers: requestHeaders ?? null,
-        response_observation: action.response_observation ?? null,
         transport_identity: transportIdentity,
       }, now)
       actionPreDispatchIdentity = transportIdentity
@@ -1626,7 +1569,6 @@ export async function runHttpReconAction({
         url: action.url,
         method: action.method,
         requestHeaderProfile: action.request_headers,
-        responseObservationProfile: action.response_observation,
         tlsVerificationMode: tlsPolicyForRun(loaded.run).mode,
         tlsSpkiSha256: tlsSpkiPinForRun(loaded.run),
         timeoutMs: loaded.run.limits.request_timeout_ms,
@@ -2115,8 +2057,6 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         || event.details?.url !== action.url
         || canonicalJson(event.details?.request_headers ?? null)
           !== canonicalJson(action.request_headers ?? null)
-        || canonicalJson(event.details?.response_observation ?? null)
-          !== canonicalJson(action.response_observation ?? null)
         || event.details?.authorization_mode !== trust.mode
         || canonicalJson(event.details?.budget_before)
           !== canonicalJson(run.budget)
@@ -2131,8 +2071,6 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         || event.details?.url !== action.url
         || canonicalJson(event.details?.request_headers ?? null)
           !== canonicalJson(action.request_headers ?? null)
-        || canonicalJson(event.details?.response_observation ?? null)
-          !== canonicalJson(action.response_observation ?? null)
       ) {
         throw eventTailError('action pre-dispatch tail does not match durable SENT state')
       }
@@ -2159,11 +2097,8 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
       if (
         sha256Hex(observationArtifact.bytes) !== event.details.observation_sha256
         || observationArtifact.value?.action_id !== action.action_id
-        || canonicalJson(event.details?.response_observation ?? null)
-          !== canonicalJson(action.response_observation ?? null)
         || canonicalJson(event.details?.stop_condition ?? null)
           !== canonicalJson(observationArtifact.value?.stop_condition ?? null)
-        || !responseObservationMatchesAction(observationArtifact.value, action)
       ) {
         throw eventTailError('committed-action tail lacks its exact observation')
       }
@@ -2424,8 +2359,6 @@ async function verifyExistingEvidence({
         || event.details?.url !== plannedAction?.url
         || canonicalJson(event.details?.request_headers ?? null)
           !== canonicalJson(plannedAction?.request_headers ?? null)
-        || canonicalJson(event.details?.response_observation ?? null)
-          !== canonicalJson(plannedAction?.response_observation ?? null)
         || canonicalJson(event.details?.tls_policy)
           !== canonicalJson(tlsPolicyForRun(loaded.run))
         || !attestedLeaseValid
@@ -2445,8 +2378,6 @@ async function verifyExistingEvidence({
         || event.details?.url !== plannedAction?.url
         || canonicalJson(event.details?.request_headers ?? null)
           !== canonicalJson(plannedAction?.request_headers ?? null)
-        || canonicalJson(event.details?.response_observation ?? null)
-          !== canonicalJson(plannedAction?.response_observation ?? null)
       ) {
         throw controllerError(
           'HTTP_RECON_ACTION_PRE_DISPATCH_INVALID',
@@ -2519,9 +2450,6 @@ async function verifyExistingEvidence({
         || commit.details.observation_path !== action.observation_path
         || commit.details.status_code !== observation.status_code
         || commit.details.response_bytes !== observation.body.size
-        || canonicalJson(commit.details?.response_observation ?? null)
-          !== canonicalJson(action.response_observation ?? null)
-        || !responseObservationMatchesAction(observation, action)
         || !observationMatchesAction
         || !identityMatches
         || !authorityMatches

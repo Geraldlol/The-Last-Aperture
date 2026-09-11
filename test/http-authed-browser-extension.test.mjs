@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import { createBrowserBridgeCompanion } from '../browser/http-authed-chrome/service-worker.js'
+import { pageSessionAdapterSha256 } from '../scripts/lib/page-session-adapter.mjs'
 
 const EXTENSION_DIRECTORY = fileURLToPath(
   new URL('../browser/http-authed-chrome/', import.meta.url),
@@ -21,6 +22,30 @@ const SESSION_CAPABILITY = 's'.repeat(43)
 const ACTION_ID = `http-authed-action:${'b'.repeat(64)}`
 const ACTION_NONCE = 'n'.repeat(43)
 const ACTION_SHA256 = 'd'.repeat(64)
+
+const PAGE_SESSION_ADAPTER = {
+  schema_version: '1.0.0',
+  kind: 'last-aperture/page-session-adapter',
+  adapter_id: 'synthetic-page-session',
+  source: {
+    type: 'WEB_STORAGE',
+    area: 'LOCAL',
+    key: 'application.session',
+    extraction: { mode: 'RAW' },
+  },
+  carrier: { type: 'REQUEST_HEADER', name: 'authorization', prefix: 'Bearer ' },
+  target_constraints: [{
+    origin: TARGET_ORIGIN,
+    method: 'GET',
+    path_prefix: '/approved',
+  }],
+  validity: {
+    not_before: '2026-01-01T00:00:00.000Z',
+    not_after: '2031-01-01T00:00:00.000Z',
+  },
+  limits: { max_value_bytes: 4096 },
+}
+const PAGE_SESSION_ADAPTER_SHA256 = pageSessionAdapterSha256(PAGE_SESSION_ADAPTER)
 
 const jsonResponse = (value, status = 200) => {
   const body = JSON.stringify(value)
@@ -226,6 +251,8 @@ test('Chrome bridge popup performs explicit pairing and never renders controller
   assert.match(popup, /<script type="module" src="popup\.js"><\/script>/)
   assert.match(source, /chrome\.permissions\.request\(permission\)/)
   assert.match(source, /chrome\.runtime\.sendMessage\(message\)/)
+  assert.match(source, /chrome\.runtime\.connect\(\{ name: 'last-aperture-popup' \}\)/)
+  assert.match(source, /keepAlivePort\.postMessage\(\{ type: 'KEEPALIVE' \}\)/)
   assert.match(source, /LAST_APERTURE_PREVIEW/)
   assert.match(source, /LAST_APERTURE_ATTACH/)
   assert.match(source, /LAST_APERTURE_CLOSE/)
@@ -276,6 +303,14 @@ test('Chrome bridge companion completes preview, open, prepare, ready, result, a
   assert.equal(JSON.stringify(chrome.storageData).includes(PAIRING_CODE), false)
   assert.equal(await companion.runOneCycle(), 'EXECUTED')
   assert.equal(companion.status().phase, 'OPEN')
+  const preparedInjection = chrome.injections.find(({ func }) => (
+    func.name === 'prepareHttpAuthedInjectedFetch'
+  ))
+  const executedInjection = chrome.injections.find(({ func }) => (
+    func.name === 'executeHttpAuthedInjectedFetch'
+  ))
+  assert.equal(Object.hasOwn(preparedInjection.args[0], 'session_adapter_sha256'), false)
+  assert.equal(Object.hasOwn(executedInjection.args[0], 'body'), false)
   assert.equal((await companion.close()).phase, 'IDLE')
 
   assert.deepEqual(requests.map(({ path }) => path), [
@@ -288,6 +323,9 @@ test('Chrome bridge companion completes preview, open, prepare, ready, result, a
   ])
   assert.equal(requests[0].options.headers['x-red-team-audit-pairing'], PAIRING_CODE)
   assert.equal(requests[1].options.headers['x-red-team-audit-pairing'], PAIRING_CODE)
+  for (const request of requests) {
+    assert.equal(request.options.headers['x-last-aperture-extension'], EXTENSION_ID)
+  }
   for (const request of requests.slice(2)) {
     assert.equal(request.options.headers['x-red-team-audit-session'], SESSION_CAPABILITY)
   }
@@ -323,6 +361,74 @@ test('Chrome bridge companion completes preview, open, prepare, ready, result, a
   assert.equal(command.action_binding_sha256, ACTION_SHA256)
   assert.equal(command.deadline_epoch_ms, Date.parse(prepareEnvelope.deadline))
   assert.equal(Object.hasOwn(command, 'credentials'), false)
+})
+
+test('Chrome bridge carries only a bound page adapter descriptor into the isolated dispatch', async () => {
+  const pagePrepare = {
+    ...structuredClone(prepareEnvelope),
+    session_adapter: structuredClone(PAGE_SESSION_ADAPTER),
+    session_adapter_sha256: PAGE_SESSION_ADAPTER_SHA256,
+  }
+  const pageCommit = {
+    ...structuredClone(commitEnvelope),
+    session_adapter_sha256: PAGE_SESSION_ADAPTER_SHA256,
+  }
+  const chrome = fakeChrome({
+    resultOverrides: {
+      executeHttpAuthedInjectedFetch: {
+        outcome: 'OBSERVED',
+        response_truncated: false,
+        action_binding_sha256: ACTION_SHA256,
+        session_adapter_sha256: PAGE_SESSION_ADAPTER_SHA256,
+        response: {
+          status: 200,
+          response_bytes: 2,
+          response_header_names: ['content-type'],
+          headers: [{
+            name: 'content-type',
+            value_base64: Buffer.from('application/json').toString('base64'),
+          }],
+          body_base64: Buffer.from('{}').toString('base64'),
+        },
+      },
+    },
+  })
+  const bodies = []
+  const fetchImpl = async (url, options) => {
+    const path = new URL(url).pathname
+    if (options.body !== undefined) bodies.push(JSON.parse(options.body))
+    if (path === '/v1/preview') return jsonResponse(previewEnvelope)
+    if (path === '/v1/open') return jsonResponse(openEnvelope)
+    if (path === '/v1/prepare') return jsonResponse(pagePrepare)
+    if (path === '/v1/ready') return jsonResponse(pageCommit)
+    if (path === '/v1/result') return jsonResponse({ accepted: true })
+    if (path === '/v1/close') return jsonResponse({ closed: true })
+    assert.fail(`unexpected controller route: ${path}`)
+  }
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl,
+    autoPump: false,
+  })
+  await companion.preview({ port: 4711, pairingCode: PAIRING_CODE })
+  await companion.attach()
+  assert.equal(await companion.runOneCycle(), 'EXECUTED')
+  await companion.close()
+
+  const preparation = chrome.injections.find(({ func }) => (
+    func.name === 'prepareHttpAuthedInjectedFetch'
+  )).args[0]
+  assert.equal(preparation.session_adapter_sha256, PAGE_SESSION_ADAPTER_SHA256)
+  const command = chrome.injections.find(({ func }) => (
+    func.name === 'executeHttpAuthedInjectedFetch'
+  )).args[0]
+  assert.deepEqual(command.session_adapter, PAGE_SESSION_ADAPTER)
+  assert.equal(command.session_adapter_sha256, PAGE_SESSION_ADAPTER_SHA256)
+  const ready = bodies.find(({ type }) => type === 'READY')
+  const result = bodies.find(({ type }) => type === 'RESULT')
+  assert.equal(ready.session_adapter_sha256, PAGE_SESSION_ADAPTER_SHA256)
+  assert.equal(result.session_adapter_sha256, PAGE_SESSION_ADAPTER_SHA256)
+  assert.doesNotMatch(JSON.stringify([chrome.injections, bodies]), /SYNTHETIC_PAGE_TOKEN/)
 })
 
 test('Chrome bridge refuses absent loopback permission and mismatched active origins before attachment', async () => {

@@ -10,7 +10,7 @@ import { evidenceForLens, readEvidenceIndex } from '../scripts/lib/evidence-pack
 
 const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
 
-async function acquiredImage(evidenceId = 'peerstar-api-image') {
+async function acquiredImage(evidenceId = 'sample-api-image') {
   const out = join(await mkdtemp(join(tmpdir(), 'rta-packet-')), 'ev')
   const planned = await adapter.plan({
     evidence_id: evidenceId,
@@ -263,7 +263,7 @@ test('a planned run hands the image to exactly the lenses that declare its kind'
   // declares nothing at all.
   assert.equal(lenses.includes('mobile-app-security'), false)
   assert.equal(lenses.includes('threat-modeling'), false)
-  assert.deepEqual(withEvidence[0].evidence_ids, ['peerstar-api-image'])
+  assert.deepEqual(withEvidence[0].evidence_ids, ['sample-api-image'])
 
   const requiredCounts = Object.fromEntries(lenses.map((lens) => {
     const sidecar = plan.jobSidecars.find((candidate) =>
@@ -352,7 +352,7 @@ test('planning rejects duplicate evidence identities before emitting an ambiguou
       targetRoot: await repositoryWithADockerfile(),
       evidenceBundles: [first, second],
     }),
-    /evidence_id must be unique within a run: peerstar-api-image/,
+    /evidence_id must be unique within a run: sample-api-image/,
   )
 
   const { directory: _directory, ...portableDuplicate } = structuredClone(second)
@@ -361,7 +361,7 @@ test('planning rejects duplicate evidence identities before emitting an ambiguou
       targetRoot: await repositoryWithADockerfile(),
       evidenceBundles: [first, portableDuplicate],
     }),
-    /evidence_id must be unique within a run: peerstar-api-image/,
+    /evidence_id must be unique within a run: sample-api-image/,
   )
 })
 

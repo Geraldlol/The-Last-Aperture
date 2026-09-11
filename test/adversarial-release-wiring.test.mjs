@@ -42,7 +42,10 @@ test('generic adversarial validation CLI is release-wired with its trust contrac
   assert.doesNotMatch(cli, /eval\s*\(|execSync|spawnSync|child_process/)
   assert.doesNotMatch(cli, /process\.env.*CONTROLLER|--controller-root/)
   assert.match(controller, /trusted append-only campaign ledger/i)
-  assert.match(skill, /public\s+L3 controller[\s\S]*append-only ledger/i)
+  assert.match(
+    skill,
+    /L3_MAXIMUM_AUTHORIZED[\s\S]*Record actions, observations, stop, and\s+cleanup in its ledger/i,
+  )
 
   const help = spawnSync(process.execPath, ['scripts/adversarial.mjs', '--help'], {
     encoding: 'utf8',

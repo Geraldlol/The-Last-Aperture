@@ -18,7 +18,7 @@ async function scratch() {
 }
 
 const request = {
-  evidence_id: 'peerstar-api-image',
+  evidence_id: 'sample-api-image',
   source_path: SOURCE,
   target_class: 'LAB',
   phi_scope: 'none',

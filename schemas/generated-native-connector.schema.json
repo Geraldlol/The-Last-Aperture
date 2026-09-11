@@ -35,6 +35,48 @@
       "items": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/endpoint" }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source_contract": {
+            "type": "object",
+            "properties": { "schema_version": { "const": "1.0.0" } },
+            "required": ["schema_version"]
+          }
+        },
+        "required": ["source_contract"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/endpointV10" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source_contract": {
+            "type": "object",
+            "properties": { "schema_version": { "const": "1.1.0" } },
+            "required": ["schema_version"]
+          }
+        },
+        "required": ["source_contract"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/endpointV11" }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sourceContract": {
       "type": "object",
@@ -43,7 +85,7 @@
       "properties": {
         "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
         "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "schema_version": { "const": "1.0.0" },
+        "schema_version": { "enum": ["1.0.0", "1.1.0"] },
         "protocol": { "const": "native-interaction-contract-v1" },
         "generated_at": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/timestamp" },
         "basis": { "$ref": "https://red-team-audit.dev/schemas/native-interaction-contract.schema.json#/$defs/basis" }

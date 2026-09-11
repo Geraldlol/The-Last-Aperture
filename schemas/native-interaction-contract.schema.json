@@ -22,7 +22,7 @@
     "gaps"
   ],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
+    "schema_version": { "enum": ["1.0.0", "1.1.0"] },
     "kind": { "const": "red-team-audit/native-interaction-contract" },
     "protocol": { "const": "native-interaction-contract-v1" },
     "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
@@ -49,6 +49,36 @@
       "items": { "$ref": "#/$defs/gap" }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.0.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/endpointV10" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/endpointV11" }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "timestamp": {
@@ -336,6 +366,7 @@
       "properties": {
         "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
         "evidence_ref": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" },
+        "provenance": { "enum": ["BURP_XML", "WEB_HAR"] },
         "request": { "$ref": "#/$defs/exchangeRequest" },
         "response": { "$ref": "#/$defs/exchangeResponse" },
         "sequence": { "type": "integer", "minimum": 1, "maximum": 10000 }
@@ -344,10 +375,16 @@
     "endpoint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["auth", "discovered_via", "endpoint_id", "evidence_refs", "exchanges", "method", "observations", "origin", "pagination", "path_template", "protocol_role", "redirects", "request", "response", "retry", "side_effect", "write_verification"],
+      "required": ["auth", "endpoint_id", "evidence_refs", "exchanges", "method", "observations", "origin", "pagination", "path_template", "protocol_role", "redirects", "request", "response", "retry", "side_effect", "write_verification"],
       "properties": {
         "auth": { "$ref": "#/$defs/auth" },
-        "discovered_via": { "const": ["WEB_HAR"] },
+        "discovered_via": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["BURP_XML", "WEB_HAR"] }
+        },
         "endpoint_id": { "type": "string", "pattern": "^endpoint:[a-f0-9]{32}$" },
         "evidence_refs": {
           "type": "array",
@@ -377,6 +414,60 @@
         "side_effect": { "$ref": "#/$defs/sideEffect" },
         "write_verification": { "enum": ["FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED", "NOT_APPLICABLE", "NOT_OBSERVED"] }
       }
+    },
+    "exchangeV10": {
+      "allOf": [
+        { "$ref": "#/$defs/exchange" },
+        {
+          "type": "object",
+          "not": {
+            "properties": { "provenance": true },
+            "required": ["provenance"]
+          }
+        }
+      ]
+    },
+    "exchangeV11": {
+      "allOf": [
+        { "$ref": "#/$defs/exchange" },
+        {
+          "type": "object",
+          "required": ["provenance"],
+          "properties": { "provenance": true }
+        }
+      ]
+    },
+    "endpointV10": {
+      "allOf": [
+        { "$ref": "#/$defs/endpoint" },
+        {
+          "type": "object",
+          "required": ["discovered_via"],
+          "properties": {
+            "discovered_via": { "const": ["WEB_HAR"] },
+            "exchanges": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/exchangeV10" }
+            }
+          }
+        }
+      ]
+    },
+    "endpointV11": {
+      "allOf": [
+        { "$ref": "#/$defs/endpoint" },
+        {
+          "type": "object",
+          "required": ["discovered_via"],
+          "properties": {
+            "discovered_via": true,
+            "exchanges": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/exchangeV11" }
+            }
+          }
+        }
+      ]
     },
     "authStep": {
       "type": "object",

@@ -16,6 +16,7 @@ function capture() {
 
 function operations(calls) {
   return {
+    importBurpFile: async (options) => { calls.push(['burp', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'e'.repeat(64), entries: 1 } },
     importHarFile: async (options) => { calls.push(['web', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'a'.repeat(64), entries: 1 } },
     buildProtocolContractFile: async (options) => { calls.push(['protocol', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'b'.repeat(64), endpoints: 1 } },
     generateNativeConnectorPackage: async (options) => { calls.push(['generate', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'c'.repeat(64), endpoints: 1 } },
@@ -30,6 +31,7 @@ test('help describes every narrow reverse route', async () => {
   const io = capture()
   assert.equal(await runReverseCli(['--help'], { ...operations([]), ...io }), 0)
   assert.match(io.stdoutText(), /web import-har/)
+  assert.match(io.stdoutText(), /web import-burp/)
   assert.match(io.stdoutText(), /protocol build/)
   assert.match(io.stdoutText(), /protocol generate/)
   assert.match(io.stdoutText(), /protocol verify/)
@@ -47,7 +49,7 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
     '--har', 'C:\\lab\\session.har',
     '--origin', 'https://app.example',
     '--origin', 'https://api.example',
-    '--path-literal', 'patients',
+    '--path-literal', 'resources',
     '--path-literal', 'records',
     '--out', 'C:\\out\\web.json',
     '--json',
@@ -55,10 +57,24 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
   assert.deepEqual(calls[0], ['web', {
     harPath: 'C:\\lab\\session.har',
     targetOrigins: ['https://app.example', 'https://api.example'],
-    pathLiterals: ['patients', 'records'],
+    pathLiterals: ['resources', 'records'],
     outPath: 'C:\\out\\web.json',
   }])
   assert.equal(JSON.parse(io.stdoutText()).status, 'SUCCEEDED')
+
+  assert.equal(await runReverseCli([
+    'web', 'import-burp',
+    '--burp', 'C:\\lab\\items.xml',
+    '--origin', 'https://app.example',
+    '--path-literal', 'records',
+    '--out', 'C:\\out\\burp-web.json',
+  ], { ...ops, ...capture() }), 0)
+  assert.deepEqual(calls[1], ['burp', {
+    burpPath: 'C:\\lab\\items.xml',
+    targetOrigins: ['https://app.example'],
+    pathLiterals: ['records'],
+    outPath: 'C:\\out\\burp-web.json',
+  }])
 
   assert.equal(await runReverseCli([
     'protocol', 'build',
@@ -67,7 +83,7 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
     '--reverse-evidence', 'C:\\out\\native.json',
     '--out', 'C:\\out\\contract.json',
   ], { ...ops, ...capture() }), 0)
-  assert.deepEqual(calls[1][1], {
+  assert.deepEqual(calls[2][1], {
     webEvidencePaths: ['C:\\out\\web-one.json', 'C:\\out\\web-two.json'],
     reverseEvidencePaths: ['C:\\out\\native.json'],
     outPath: 'C:\\out\\contract.json',
@@ -76,19 +92,19 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
     'protocol', 'generate',
     '--contract', 'C:\\out\\contract.json',
     '--out', 'C:\\out\\connector',
-    '--name', '@peerstar/credible-native',
+    '--name', '@example/portal-native',
   ], { ...ops, ...capture() }), 0)
-  assert.deepEqual(calls[2], ['generate', {
+  assert.deepEqual(calls[3], ['generate', {
     contractPath: 'C:\\out\\contract.json',
     outPath: 'C:\\out\\connector',
-    packageName: '@peerstar/credible-native',
+    packageName: '@example/portal-native',
   }])
   assert.equal(await runReverseCli([
     'protocol', 'verify',
     '--package', 'C:\\out\\connector',
     '--manifest-sha256', 'd'.repeat(64),
   ], { ...ops, ...capture() }), 0)
-  assert.deepEqual(calls[3], ['verify', {
+  assert.deepEqual(calls[4], ['verify', {
     packagePath: 'C:\\out\\connector',
     expectedManifestSha256: 'd'.repeat(64),
   }])

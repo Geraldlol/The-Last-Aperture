@@ -125,7 +125,8 @@ function validHook(hook, ids, resolvers) {
   return true
 }
 
-function loadConfiguration() {
+function loadConfiguration(parametersValue) {
+  const parameters = parametersValue
   if (!exactKeys(parameters, [
     'profileId', 'planSha256', 'artifactSha256', 'targetMode', 'hooks',
     'durationSeconds', 'maxEvents', 'maxCaptureRecords', 'maxCaptureBytesTotal',
@@ -151,7 +152,7 @@ function loadConfiguration() {
   return { ...parameters, hooks }
 }
 
-const configuration = loadConfiguration()
+let configuration = null
 let lastObservedAt = 0
 
 function emit(value) {
@@ -210,7 +211,10 @@ function resolveHook(hook) {
   }
 }
 
-const resolvedHooks = configuration.hooks.map(resolveHook)
+function initialize(parametersValue) {
+  if (configuration !== null) throw new Error('typed profile was already initialized')
+  configuration = loadConfiguration(parametersValue)
+  const resolvedHooks = configuration.hooks.map(resolveHook)
 for (const resolved of resolvedHooks) {
   const executableRange = Process.findRangeByAddress(resolved.address)
   if (executableRange === null || !executableRange.protection.includes('x')) {
@@ -469,3 +473,10 @@ setTimeout(() => {
     captured_payload_bytes: capturedPayloadBytes, truncated,
   })
 }, configuration.durationSeconds * 1000)
+}
+
+rpc.exports = {
+  init(_stage, parametersValue) {
+    initialize(parametersValue)
+  },
+}

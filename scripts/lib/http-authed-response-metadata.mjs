@@ -1,17 +1,6 @@
-import { compareCanonicalStrings } from './canonical-order.mjs'
-
 const HTTP_FIELD_NAME = /^[!#$%&'*+.^_`|~0-9a-z-]+$/
 
 export const HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE = 'JSON_SHAPE_OBSERVATION'
-export const HTTP_AUTHED_BOUNDED_PROFILE_FAILURE_STAGE =
-  'BOUNDED_PROFILE_OBSERVATION'
-
-export const HTTP_AUTHED_RESPONSE_OBSERVATION_FAILURE_STAGES = Object.freeze([
-  HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE,
-  HTTP_AUTHED_BOUNDED_PROFILE_FAILURE_STAGE,
-])
-
-const CREDIBLE_BUNDLE_PATH = /^\/assets\/bundle-[0-9]{8}_[0-9]{4}\.js$/u
 
 export const HTTP_AUTHED_RESPONSE_BYTE_BUCKETS = Object.freeze([
   'EMPTY',
@@ -101,48 +90,4 @@ export function assertHttpAuthedResponseByteBucket(value) {
     throw new TypeError('response byte bucket is invalid')
   }
   return value
-}
-
-export function sanitizeHttpAuthedBoundedResponseObservation(value, expectedDescriptor) {
-  if (
-    value === null
-    || typeof value !== 'object'
-    || Array.isArray(value)
-    || Object.getPrototypeOf(value) !== Object.prototype
-    || Object.keys(value).sort().join(',')
-      !== 'bundle_paths,profile,profile_binding_sha256'
-    || value.profile !== 'credible-bundle-src-v1'
-    || !/^[a-f0-9]{64}$/u.test(value.profile_binding_sha256 ?? '')
-    || !Array.isArray(value.bundle_paths)
-    || value.bundle_paths.length > 4
-  ) {
-    throw new TypeError('bounded response-observation metadata is invalid')
-  }
-  if (
-    expectedDescriptor !== undefined
-    && (
-      value.profile !== expectedDescriptor?.profile
-      || value.profile_binding_sha256 !== expectedDescriptor?.profile_binding_sha256
-    )
-  ) {
-    throw new TypeError('bounded response-observation metadata is not sealed by the action')
-  }
-  const paths = [...value.bundle_paths]
-  if (
-    new Set(paths).size !== paths.length
-    || paths.some((path) => typeof path !== 'string' || !CREDIBLE_BUNDLE_PATH.test(path))
-    // Locale-independent by rule: these paths are sealed and digested, so their
-    // order must be identical on every host regardless of OS locale or ICU
-    // version. CREDIBLE_BUNDLE_PATH restricts them to ASCII digits inside a fixed
-    // prefix and suffix, where code-unit and collation order always agree, so no
-    // already-sealed path set reorders under this change.
-    || paths.some((path, index) => index > 0 && compareCanonicalStrings(paths[index - 1], path) >= 0)
-  ) {
-    throw new TypeError('bounded response-observation paths are invalid')
-  }
-  return {
-    profile: value.profile,
-    profile_binding_sha256: value.profile_binding_sha256,
-    bundle_paths: paths,
-  }
 }

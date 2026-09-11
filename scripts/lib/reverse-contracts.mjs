@@ -575,7 +575,9 @@ function assertFridaV2Observations(observations, status, targetExecution, expect
 
 export function assertValidReverseEvidence(value) {
   exactObject(value, TOP_LEVEL_FIELDS, 'reverse evidence')
-  if (value.schema_version !== '1.0.0' || value.kind !== REVERSE_EVIDENCE_KIND || value.protocol !== REVERSE_EVIDENCE_PROTOCOL) {
+  if (!['1.0.0', '1.1.0'].includes(value.schema_version)
+    || value.kind !== REVERSE_EVIDENCE_KIND
+    || value.protocol !== REVERSE_EVIDENCE_PROTOCOL) {
     fail('reverse evidence version or kind is invalid')
   }
   if (!RUN_ID_PATTERN.test(value.run_id ?? '')) fail('reverse evidence run id is invalid')
@@ -603,11 +605,38 @@ export function assertValidReverseEvidence(value) {
     fail('artifact size is invalid')
   }
 
-  exactObject(value.tool, ['invocation_sha256', 'name', 'version'], 'tool')
+  const toolFields = value.tool?.components === undefined
+    ? ['invocation_sha256', 'name', 'version']
+    : ['components', 'invocation_sha256', 'name', 'version']
+  exactObject(value.tool, toolFields, 'tool')
   const expectedTool = value.engine === 'ghidra' ? 'Ghidra' : 'Frida'
   if (value.tool.name !== expectedTool) fail('tool name does not match engine')
   if (value.tool.version !== null) boundedText(value.tool.version, 'tool version', { max: 256 })
   if (!HASH_PATTERN.test(value.tool.invocation_sha256 ?? '')) fail('tool invocation digest is invalid')
+  if (value.schema_version === '1.0.0' && value.tool.components !== undefined) {
+    fail('reverse evidence 1.0.0 cannot carry tool components')
+  }
+  if (value.schema_version === '1.1.0' && value.tool.components === undefined) {
+    fail('reverse evidence 1.1.0 requires tool components')
+  }
+  if (value.tool.components !== undefined) {
+    if (!Array.isArray(value.tool.components)
+      || value.tool.components.length < 1
+      || value.tool.components.length > 16) fail('tool components are invalid')
+    const roles = new Set()
+    for (const component of value.tool.components) {
+      exactObject(component, ['name', 'role', 'sha256', 'size_bytes'], 'tool component')
+      if (!/^[a-z][a-z0-9-]{2,63}$/u.test(component.role ?? '') || roles.has(component.role)) {
+        fail('tool component role is invalid or duplicated')
+      }
+      roles.add(component.role)
+      boundedText(component.name, 'tool component name', { max: 256 })
+      if (!HASH_PATTERN.test(component.sha256 ?? '')) fail('tool component sha256 is invalid')
+      if (!Number.isSafeInteger(component.size_bytes)
+        || component.size_bytes < 1
+        || component.size_bytes > 2 * 1024 * 1024 * 1024) fail('tool component size is invalid')
+    }
+  }
 
   exactObject(value.limits, ['max_observations', 'max_output_bytes', 'timeout_ms'], 'limits')
   if (!Number.isSafeInteger(value.limits.timeout_ms) || value.limits.timeout_ms < 1000 || value.limits.timeout_ms > 30 * 60 * 1000) {

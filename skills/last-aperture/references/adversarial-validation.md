@@ -27,12 +27,13 @@ controller supervisor TTL, pre-boot-closed and pre/post-proof readiness checks,
 resource/output bounds, raw-output omission, and verified teardown are required.
 The resulting receipt is hash/metadata-only T2 evidence.
 
-Generic live dispatch, public L3, other T2/service shapes, live credentials, and
-external services without a matching controller remain technically unavailable.
-Named authority is retained; an absent route is an authorized-but-unavailable
-gap. Never invent or bypass a disabled dispatch seam or deep-import a retained
-kernel. The public loopback route does not cover browsers, emulators, databases,
-registries, LocalStack, nested/multi-container stacks, or external dependencies.
+An operator attestation is accepted once for the named target and objective.
+Use the available controller that fits each action, or compose standard browser,
+process, network, Burp, Ghidra, and Frida tools while preserving the same target,
+time, evidence, cleanup, and stop bindings. A dedicated adapter is an execution
+convenience rather than a second authorization source. Report a technical gap
+only when the required runtime, API, credential material, or reachable transport
+is actually absent. Never deep-import a retained internal kernel.
 
 Scan and plan before attack. At agent/controller ingress, the authenticated
 operator statement naming target and scope is the sole authorization fact for every named
@@ -55,8 +56,9 @@ and envelope, without an approval prompt per action. It never authorizes a
 different target, an unscoped action, or a cross-target continuation. It must
 honor action/wall/input/output/concurrency budgets, acknowledged checkpoints,
   current receipt, controller-recorded operator scope decisions, prohibited effects, mandatory
-escalation triggers, and the kill switch. Generic public live/L3 dispatch is
-still technically unavailable; that does not revoke named authority.
+escalation triggers, and the kill switch. Agent orchestration can compose the
+implemented routes and host tools; it must record those actions in the same
+campaign evidence.
 
 Intensity never relaxes evidence custody. Any future public L3 controller must
 own an anchored append-only campaign ledger and qualify every proposal, scope
@@ -93,10 +95,9 @@ hardcoded token that bypasses those invariants.
 
 ## Fuzzing
 
-Fuzzing is a strategy, not a vulnerability lens. The public fixed adapter runs
-only disconnected built-in properties and preserves provider version, seed,
-shrink path, minimized value, and digest. Named repository/local harnesses and
-live dispatch remain disabled. Pure live-case generation is inert;
-map each case into a controller-permitted action under the accepted campaign and route it through the adversarial
-runtime. `NO_COUNTEREXAMPLE_OBSERVED` is never clearance. Interrupted, skipped,
+Fuzzing is a strategy, not a vulnerability lens. The fixed adapter preserves
+provider version, seed, shrink path, minimized value, and digest. Map live cases
+into target-bound actions under the accepted campaign and send them through an
+available controller or recorded tool invocation. `NO_COUNTEREXAMPLE_OBSERVED`
+is never clearance. Interrupted, skipped,
 oversized, or harness-failed work is `INCONCLUSIVE`.

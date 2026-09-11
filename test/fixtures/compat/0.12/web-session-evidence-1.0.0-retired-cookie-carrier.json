@@ -1,0 +1,94 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "red-team-audit/web-session-evidence",
+  "protocol": "web-session-evidence-v1",
+  "capture_id": "web:135a27070183dae46dd3a5b639d5d4e9",
+  "source": {
+    "kind": "HAR",
+    "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "origins": [
+    "https://portal.example"
+  ],
+  "path_literals": [],
+  "limits": {
+    "max_aggregate_metadata_items": 100000,
+    "max_body_bytes": 1048576,
+    "max_cookie_names": 512,
+    "max_credential_carriers": 2048,
+    "max_destinations": 64,
+    "max_entries": 10000,
+    "max_fields": 1024,
+    "max_header_names": 512,
+    "max_parameter_pairs": 4096
+  },
+  "redaction": {
+    "url_values_removed": true,
+    "header_values_removed": true,
+    "cookie_values_removed": true,
+    "body_values_removed": true,
+    "value_like_names_masked": true
+  },
+  "entries": [
+    {
+      "observation_id": "webobs:749a0aad2874cd455c5567fcf27be2b8",
+      "sequence": 1,
+      "observed_at": "2026-09-11T12:00:00.000Z",
+      "request": {
+        "method": "GET",
+        "origin": "https://portal.example",
+        "path_template": "/api",
+        "path_action_class": "NONE",
+        "query_parameters": [],
+        "header_names": [],
+        "cookie_names": [],
+        "credential_carriers": [],
+        "body": {
+          "format": "NONE",
+          "content_type": null,
+          "byte_bucket": "EMPTY",
+          "shape_status": "NOT_OBSERVED",
+          "fields_truncated": false,
+          "fields": []
+        }
+      },
+      "response": {
+        "status": 200,
+        "header_names": [
+          "set-cookie"
+        ],
+        "cookie_names": [
+          "cbh"
+        ],
+        "credential_carriers": [
+          "cookie:cbh"
+        ],
+        "redirect": null,
+        "destinations": [],
+        "destinations_truncated": false,
+        "body": {
+          "format": "JSON",
+          "content_type": "application/json",
+          "byte_bucket": "LE_1_KIB",
+          "shape_status": "OBSERVED",
+          "fields_truncated": false,
+          "fields": []
+        }
+      },
+      "total_ms": 10
+    }
+  ],
+  "skipped": {
+    "malformed": 0,
+    "non_http": 0,
+    "off_scope": 0
+  },
+  "gaps": [
+    {
+      "code": "HAR_METADATA_ONLY",
+      "message": "The importer retains protocol shape and sequence, not values or proof of application semantics."
+    }
+  ],
+  "security_verdict": "NOT_ASSESSED",
+  "applied_to_audit_bundle": false
+}

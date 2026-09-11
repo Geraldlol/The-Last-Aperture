@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Main-Class: dev.lastaperture.burp.LastApertureBurpExtension
+Implementation-Title: The Last Aperture Burp Proxy Export
+Implementation-Version: 1.0.0
+

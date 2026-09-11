@@ -1,4 +1,4 @@
-# Reverse engineering and native interaction contracts
+# Reverse engineering and application interaction contracts
 
 Last Aperture can turn bounded observations from an owned or otherwise
 operator-authorized application into a reviewable protocol map. The intended
@@ -44,12 +44,25 @@ npm.cmd run audit:reverse -- ghidra analyze `
 ```
 
 The Ghidra launcher must be an absolute local path. Native launchers are invoked
-directly. On Windows, stock `.bat` and `.cmd` launchers run through the bundled
-fixed bridge inside a kill-on-close Job Object. The controller validates the
-launcher and bridge, supplies the fixed argument vector through a sanitized
-environment, enforces combined output and Ghidra-log budgets, and confirms tree
-termination before accepting evidence. It never interpolates a caller command
-line or enables a general shell-execution route.
+directly without compiling or injecting the compatibility agent; their
+`tool.components` bind only the launcher and fixed exporter. On Windows, stock
+`.bat` and `.cmd` launchers require `javac.exe` and
+`jar.exe` from `JAVA_HOME`, `JDK_HOME`, or `PATH`. The controller copies and
+compiles its bundled fixed compatibility agent only inside owned scratch, then
+runs the launcher through the fixed bridge inside a kill-on-close Job Object.
+It resolves and hashes the exact `javac.exe` and `jar.exe` files before and
+after the build, hashes the generated agent JAR before and after analysis, and
+records those content digests in `tool.components` and the sealed invocation
+digest. Absolute tool paths remain local and are not written to evidence. The
+controller validates those inputs, supplies the fixed argument vector
+through a sanitized environment, enforces combined build, process-output, and
+Ghidra-log budgets, and confirms tree termination before accepting evidence. It
+never interpolates a caller command line or enables a general shell-execution
+route.
+
+Content-addressed Ghidra evidence emits reverse-evidence schema `1.1.0` and
+requires `tool.components`. The reader continues to accept legacy `1.0.0`
+evidence without that field; `1.0.0` cannot be used to carry the new provenance.
 
 ### Frida call-trace profiles
 
@@ -112,29 +125,45 @@ cleanup are complete. Existing-process and device attachment remains `PARTIAL`
 with `RUNTIME_ARTIFACT_IDENTITY_UNVERIFIED`, because a supplied local copy cannot
 prove the bytes loaded by that runtime.
 
-### Offline HAR import
+### Offline HAR and Burp HTTP-items import
 
-The web profile imports a HAR file already captured by the operator. Import is
-offline: it reads the file and performs no browser automation, login, replay, or
-target request. Every retained request must match one of the explicit canonical
-HTTP or HTTPS origins. Entries for other origins are counted and omitted.
+The web profile imports a HAR file or Burp Suite Save Items XML already captured
+by the operator. Both routes are offline: they read one local file and perform
+no browser automation, login, replay, or target request. Every retained request
+must match one of the explicit canonical HTTP or HTTPS origins. Entries for
+other origins are counted and omitted.
 
 ```powershell
 npm.cmd run audit:reverse -- web import-har `
   --har C:\captures\synthetic-session.har `
   --origin https://app.example `
   --origin https://login.example `
-  --path-literal patients `
+  --path-literal resources `
   --out C:\reverse-output\web-session-001.json
+
+npm.cmd run audit:reverse -- web import-burp `
+  --burp C:\captures\synthetic-saved-items.xml `
+  --origin https://app.example `
+  --origin https://login.example `
+  --path-literal resources `
+  --out C:\reverse-output\web-session-002.json
 ```
 
 Repeat `--path-literal` only for operator-reviewed application route segments
 that are safe to retain. It is not a declaration that an arbitrary identifier
 or record value is public.
 
-The resulting `web-session-evidence-v1` keeps:
+The resulting `web-session-evidence-v1` records `source.kind: HAR` or
+`source.kind: BURP_XML` and keeps:
 
-- the HAR SHA-256, declared origins, stable observation IDs, order, timestamps,
+New HAR and Burp XML imports emit schema `1.1.0`. The reader retains schema
+`1.0.0` compatibility for historical HAR evidence by applying the frozen 1.0
+carrier classifier only while validating those records. Current `1.1.0`
+evidence must match the current target-neutral carrier derivation exactly; a
+Burp source mislabeled as `1.0.0` is rejected.
+
+- the source-file SHA-256, declared origins, stable observation IDs, order,
+  timestamps,
   bounded total timings, and malformed/non-HTTP/off-scope counts;
 - origin, method, a templated path, query parameter names and inferred types;
 - request and response header names, cookie names, and credential carrier
@@ -164,9 +193,9 @@ Integer, UUID, long hexadecimal, email-like, and opaque path segments are
 replaced with typed placeholders. Unknown textual segments become `{segment}`;
 only built-in structural route words, version segments, existing placeholders,
 and explicitly reviewed `--path-literal` declarations remain literal. The
-importer does not modify or delete the source HAR, which still contains the
-original secrets and application data. Use synthetic sessions; treat the source
-capture as sensitive material. Field, header, cookie, and approved path-literal
+importer does not modify or delete its source capture, which can still contain
+the original secrets and application data. Use synthetic sessions; treat the
+source capture as sensitive material. Field, header, cookie, and approved path-literal
 names can themselves reveal business or person-specific information, so the
 sanitized output still requires review before sharing.
 
@@ -175,7 +204,38 @@ distinguishes observed structure from a missing body, malformed JSON, and a
 body omitted above the 1 MiB inspection limit. `fields_truncated` and
 `destinations_truncated` identify structural traversal or item caps, and the
 capture repeats each observed omission as a deterministic review gap. The
-runtime also rejects evidence above 100,000 aggregate metadata items.
+runtime also rejects evidence above 100,000 aggregate metadata items. The Burp
+XML parser additionally refuses declarations/entities, unsupported nesting,
+inconsistent URL/request metadata, malformed HTTP messages, and oversized
+documents, messages, headers, nodes, fields, or item counts.
+
+### Optional Burp Montoya exporter
+
+`integrations/burp-montoya` is an optional read-only Burp extension. It reads
+existing Proxy history through the
+[Montoya API](https://portswigger.github.io/burp-extensions-montoya-api/javadoc/index.html),
+uses each item's `finalRequest()`, applies one exact canonical origin, one path
+prefix, reviewed path literals, and an item limit, then writes a new sanitized
+HAR 1.2 file. It does not invoke Scanner, dispatch traffic, or modify traffic.
+
+Build from the trusted checkout with a caller-supplied local Montoya API JAR;
+the build does not download dependencies and supports JDK 17 through 21:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File integrations\burp-montoya\build.ps1 `
+  -MontoyaApiJar C:\tools\montoya-api.jar `
+  -OutJar C:\reverse-output\last-aperture-burp.jar
+```
+
+Load that JAR as a Burp extension, open its **Last Aperture** tab, and export to
+a new absolute local `.har` path. The extension removes header, cookie, query,
+and body values before writing; it preserves bounded names, methods, statuses,
+coarse body sizes, structural content type, and templated paths. Its
+`_lastAperture` metadata records the Burp name, version, build, edition,
+capabilities, scope, omissions, and `core_evidence_provenance: WEB_HAR`.
+Import that output with `web import-har`. Direct Save Items XML uses
+`web import-burp` and retains `BURP_XML` provenance.
 
 ## Build a native interaction contract
 
@@ -183,6 +243,14 @@ runtime also rejects evidence above 100,000 aggregate metadata items.
 available, Ghidra or Frida reverse-evidence files. It verifies each input's
 strict contract, records its canonical digest, and emits
 `native-interaction-contract-v1`.
+
+New contracts emit schema `1.1.0` and require endpoint and per-exchange source
+provenance. The reader accepts the released schema `1.0.0` shape without
+rewriting it: every endpoint must retain `discovered_via: ["WEB_HAR"]`, while
+its exchanges must omit the later `provenance` field. Historical `1.0.0`
+route, action, role, and side-effect fields are checked with the frozen 1.0
+classifier. That classifier is never used to build a new `1.1.0` contract;
+new contracts use only the current target-neutral rules.
 
 ```powershell
 npm.cmd run audit:reverse -- protocol build `
@@ -192,8 +260,8 @@ npm.cmd run audit:reverse -- protocol build `
   --out C:\reverse-output\native-interaction-001.json
 ```
 
-The contract follows the pattern used to build native Credible interactions:
-model authentication as an ordered state machine; keep endpoints token-free;
+The contract uses a target-neutral interaction pattern: model authentication as
+an ordered state machine; keep endpoints token-free;
 track credential carriers, per-origin cookie transitions, and redirect targets;
 and describe reads and writes with request/response shapes and evidence links.
 Connector code can then implement the reviewed state machine with explicit
@@ -240,8 +308,9 @@ change succeeded. A native connector still needs record-specific before,
 success, failure, rollback, and post-read predicates.
 
 Ghidra and Frida evidence is digest-linked to the contract. The current builder
-does not correlate native call sites or time windows to HAR entries, and all
-endpoint provenance remains `WEB_HAR`. Static or dynamic evidence therefore
+does not correlate native call sites or time windows to web observations.
+Endpoint and per-exchange provenance remains `WEB_HAR`, `BURP_XML`, or both,
+according to its exact source captures. Static or dynamic evidence therefore
 cannot upgrade an inferred web behavior into a confirmed implementation fact.
 The contract remains `DRAFT_OBSERVED` with
 `generated_client_status: CONTRACT_ONLY` and explicit gaps for operator review,
@@ -255,11 +324,11 @@ self-contained Node package without contacting any origin:
 ```powershell
 npm.cmd run audit:reverse -- protocol generate `
   --contract C:\reverse-output\native-interaction-001.json `
-  --out C:\reverse-output\portal-connector `
-  --name @peerstar/portal-native
+  --out C:\reverse-output\application-connector `
+  --name @example/application-connector
 
 npm.cmd run audit:reverse -- protocol verify `
-  --package C:\reverse-output\portal-connector `
+  --package C:\reverse-output\application-connector `
   --manifest-sha256 <digest-returned-by-generate>
 ```
 
@@ -286,7 +355,7 @@ carry credentials or application data.
 Supply credentials at runtime through an asynchronous callback:
 
 ```js
-import { createConnector } from '@peerstar/portal-native'
+import { createConnector } from '@example/application-connector'
 
 const connector = createConnector({
   credentialReceiver: async ({ credentials }) => retainTokensInMemory(credentials),
@@ -342,8 +411,18 @@ When discovery is enabled, bounded Link, Location, HTML, JSON, OpenAPI, sitemap,
 and Allow projections can add same-origin candidates within the sealed path,
 method, category, substitution, depth, candidate, and total-action budgets.
 Every candidate is canonicalized and reauthorized immediately before dispatch.
-Chrome applies the tab's supported current-session credentials without exporting
-their values. That route keeps its own operator statement, origin scope,
+Chrome applies supported browser-managed credentials without exporting their
+values. For applications that keep a short-lived string in Web Storage, the
+scope may also seal a target-neutral page-session adapter. The descriptor names
+one exact `LOCAL` or `SESSION` area and key, `RAW` or strict `JSON_POINTER`
+extraction, one lower-case non-routing request-header carrier and optional prefix, exact
+HTTPS origin/method/path-prefix constraints, an exact validity interval, and a
+maximum value size. The value is acquired anew and applied inside the same
+isolated dispatch. Only the adapter and its digest cross the extension worker
+and controller; the value does not enter those processes, retained evidence, or
+logs. See the [browser bridge guide](../browser/http-authed-chrome/README.md).
+
+That route keeps its own operator statement, origin scope,
 mutation permit, ledger, result projection, and stop/cleanup rules; see
 [Authorized authenticated HTTP campaign](../README.md#authorized-authenticated-http-campaign)
 and [ADR 0016](adr/0016-authenticated-mutation-actions.md). The generated
@@ -352,8 +431,8 @@ contract from reviewed observations before regenerating it.
 
 The generated connector can implement observed login and session bootstrap
 through contract endpoint IDs and a credential provider. No credential is
-copied from a HAR into generated code, configuration, chat, argv, evidence, or
-logs.
+copied from a HAR or Burp capture into generated code, configuration, chat,
+argv, evidence, or logs.
 
 ## Authorization and evidence boundaries
 
@@ -369,9 +448,35 @@ stability, establish data ownership, or establish the legal basis of a live
 integration. Their digests preserve provenance; their labels preserve the
 limits of what was observed.
 
-The JavaScript contract tests exercise the controller-built argument vectors,
-typed Frida capture parsing and lifecycle, bounded Ghidra export, process
-supervision, redaction, connector runtime, and protocol inference rules. This
-release has not run a real Ghidra or Frida conformance session on the current
-workstation. Treat tool-specific runtime behavior and cleanup as unverified
-until an explicit lab run succeeds and its evidence is reviewed.
+The contract tests exercise controller-built argument vectors, typed Frida
+capture parsing and lifecycle, bounded Ghidra export, process supervision,
+redaction, connector runtime, and protocol inference rules. Maintainer
+validation on 2026-09-11 ran Ghidra 12.1.2 against a 4,096-byte synthetic PE.
+The controller exited zero, reported `SUCCEEDED` with four observations, and
+verified cleanup; its only gaps were `STATIC_ANALYSIS_ONLY` and
+`TOOL_VERSION_UNRECORDED`. The fixture SHA-256 was
+`49a35e55808a8f9bf5e658b21cbb7a87af62d98df6344002c2f89080f74fe8aa` and the
+content-addressed schema `1.1.0` validation run was
+`reverse:971d25da105e844a9966c4350ddb04c0`,
+with invocation SHA-256
+`1705fcc86ca3b32295c2a35e4f960d6b7dd37fa5bcd38e3174ba68739e968c25` and
+evidence SHA-256
+`c5629b17d535fd5d9c879284838745aeb112c1a803b225c04a75b7d3de52021d`.
+Its seven tool components bind the launcher, exporter, agent source and
+manifest, `javac.exe`, `jar.exe`, and the generated compatibility-agent JAR.
+
+The same validation ran official Frida 17.18.0/frida-tools 14.10.4 against a
+synthetic local PE fixture: v1 hooked `kernel32.dll!Sleep` with 41 observations,
+and v2 hooked `kernel32.dll!GetCurrentProcessId` with 43 observations. Both
+controllers reported `SUCCEEDED` with verified cleanup. Burp Suite 2026.8
+launcher help/version checks and the Montoya build, mock export, deterministic
+HAR, and core-import conformance also passed.
+
+Official Chrome for Testing 153.0.8010.36 loaded and enabled the real unpacked
+v0.13.0 extension, Manifest V3 worker, and popup. Exact originless binding,
+preview, and attach passed. A full synthetic page-adapter campaign completed one
+action with zero failed, rejected, or uncertain actions and seven ledger
+records; the server observed one authorized request and no unauthorized request,
+and the session value remained browser-side. These fixture results establish
+only the tested routes and versions; they do not establish compatibility with
+another binary, device, browser profile, Burp project, or application.

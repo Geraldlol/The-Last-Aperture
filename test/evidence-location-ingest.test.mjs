@@ -21,7 +21,7 @@ let planned
 let acquiredEvidenceContext
 let acquiredBundle
 
-async function acquiredImage(evidenceId = 'peerstar-api-image') {
+async function acquiredImage(evidenceId = 'sample-api-image') {
   const out = join(await mkdtemp(join(tmpdir(), 'rta-ingest-evidence-')), 'bundle')
   const request = await adapter.plan({
     evidence_id: evidenceId,
@@ -51,7 +51,7 @@ function evidenceFinding(overrides = {}) {
     topic: 'dockerfile-and-image-content',
     title: 'A whiteout-shaped entry contains unexpected data',
     claimed_impact_severity: 'High',
-    location: ['peerstar-api-image:layer/01/.wh.audit-log.txt'],
+    location: ['sample-api-image:layer/01/.wh.audit-log.txt'],
     evidence: 'not actually a whiteout',
     attack: 'Pull the image and inspect the upper layer entry.',
     impact: 'Content represented as deleted remains readable.',
@@ -106,7 +106,7 @@ function lensDispatch(lens, plan = planned) {
   const run = structuredClone(plan.run)
   const job = run.jobs.find((candidate) =>
     candidate.lens === lens
-    && (candidate.evidence_ids ?? []).includes('peerstar-api-image'))
+    && (candidate.evidence_ids ?? []).includes('sample-api-image'))
   const sidecar = structuredClone(plan.jobSidecars.find(
     (candidate) => candidate.job_id === job.job_id,
   ))
@@ -119,12 +119,12 @@ function cloudDispatch(plan = planned) {
 
 function locationMatchedBy(ruleId, lens = 'cloud-and-iac') {
   const authority = lensDispatch(lens).sidecar.evidence.find(
-    ({ evidence_context: context }) => context.evidence_id === 'peerstar-api-image',
+    ({ evidence_context: context }) => context.evidence_id === 'sample-api-image',
   )
   const entry = authority.entries.find(({ matched_rule_ids: ruleIds = [] }) =>
     ruleIds.includes(ruleId))
   assert.ok(entry, `fixture carries no controller match for ${ruleId}`)
-  return `peerstar-api-image:${entry.locator}`
+  return `sample-api-image:${entry.locator}`
 }
 
 function controllerRequiredFindings({ job, sidecar }, existing = []) {
@@ -205,7 +205,7 @@ before(async () => {
 
 test('a valid current OCI plan remains non-clear without exhaustive analysis', () => {
   const record = planned.run.evidence_coverage.bundle_coverage.find(
-    ({ evidence_id: evidenceId }) => evidenceId === 'peerstar-api-image',
+    ({ evidence_id: evidenceId }) => evidenceId === 'sample-api-image',
   )
 
   assert.equal(record.state, 'PARTIAL')
@@ -219,7 +219,7 @@ test('a real lens dispatch may originate a finding at an authorized evidence loc
     ({ candidate_id: candidateId }) => candidateId === evidenceFinding().candidate_id,
   )
   assert.deepEqual(acceptedFinding.location, [
-    'peerstar-api-image:layer/01/.wh.audit-log.txt',
+    'sample-api-image:layer/01/.wh.audit-log.txt',
   ])
 })
 
@@ -395,7 +395,7 @@ test('evidence ingest rejects forged packet authority and locators outside its i
 
   assert.throws(
     () => acceptFinding(cloudDispatch(), evidenceFinding({
-      location: ['peerstar-api-image:layer/99/not-in-the-index.txt'],
+      location: ['sample-api-image:layer/99/not-in-the-index.txt'],
     })),
     /locator.*outside.*sealed evidence index/i,
   )
@@ -520,7 +520,7 @@ test('a real truncated index requires and accepts retained matches but rejects o
   omitted.sidecar.evidence = [projection]
   assert.throws(
     () => acceptFinding(omitted, evidenceFinding({
-      location: ['peerstar-api-image:layer/99/omitted.txt'],
+      location: ['sample-api-image:layer/99/omitted.txt'],
       adapter_rule_id: retained.adapter_rule_id,
       evidence_claim: retained.evidence_claim,
     })),
@@ -570,7 +570,7 @@ test('planning a portable bundle without an index cannot authorize an invented l
 
 test('triage preserves an existing evidence location but cannot append one without packet authority', () => {
   let run = structuredClone(planned.run)
-  const evidenceOrigins = completedEvidenceOrigins(run, 'peerstar-api-image')
+  const evidenceOrigins = completedEvidenceOrigins(run, 'sample-api-image')
   const business = run.jobs.find(
     (job) => job.job_id === 'triage:business-logic',
   )
@@ -628,20 +628,20 @@ test('triage preserves an existing evidence location but cannot append one witho
 
   const appended = structuredClone(triageResult)
   appended.findings[0].location.push(
-    'peerstar-api-image:layer/00/build-secret.txt',
+    'sample-api-image:layer/00/build-secret.txt',
   )
   assert.throws(
     () => applyJobResult(run, appended, {
       expectedPacketSha256: INPUT_SHA256,
       sidecar,
     }),
-    /immutable packet carries no authority for evidence "peerstar-api-image"/i,
+    /immutable packet carries no authority for evidence "sample-api-image"/i,
   )
 })
 
 test('proof preserves an existing evidence location without treating it as repository scope', () => {
   let run = structuredClone(planned.run)
-  const evidenceOrigins = completedEvidenceOrigins(run, 'peerstar-api-image')
+  const evidenceOrigins = completedEvidenceOrigins(run, 'sample-api-image')
   const prior = {
     ...evidenceFinding(),
     effective_severity: 'High',
@@ -700,12 +700,12 @@ test('proof preserves an existing evidence location without treating it as repos
 
   const appended = structuredClone(proofResult)
   appended.findings[0].location.push(
-    'peerstar-api-image:layer/00/build-secret.txt',
+    'sample-api-image:layer/00/build-secret.txt',
   )
   assert.throws(
     () => applyJobResult(run, appended, {
       expectedPacketSha256: INPUT_SHA256,
     }),
-    /immutable packet carries no authority for evidence "peerstar-api-image"/i,
+    /immutable packet carries no authority for evidence "sample-api-image"/i,
   )
 })

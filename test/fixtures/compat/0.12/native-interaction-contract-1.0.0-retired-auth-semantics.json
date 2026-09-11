@@ -1,0 +1,155 @@
+{
+  "auth_flows": [
+    {
+      "capture_id": "web:29473e2e7de4bf67c60cd65df2fb6043",
+      "flow_id": "authflow:8917b822059a3534953165e81733535e",
+      "origins": [
+        "https://portal.example"
+      ],
+      "steps": [
+        {
+          "destination": null,
+          "destination_candidates": [],
+          "destination_correlation": "NOT_OBSERVED",
+          "endpoint_id": "endpoint:8b1edff917515f409afea96f88cd3cd3",
+          "evidence_ref": "webobs:c4d2206caffb00fa8b56ff5d9c76be93",
+          "inputs": [
+            "body:UserName"
+          ],
+          "next_observation_id": null,
+          "outputs": [],
+          "redirect_endpoint_id": null,
+          "request_action": "AUTH_REQUEST",
+          "request_action_basis": "INFERRED_PATH",
+          "response_status": 200,
+          "response_transitions": [],
+          "sequence": 1
+        }
+      ]
+    }
+  ],
+  "basis": {
+    "reverse_evidence_sha256": [],
+    "web_session_evidence_sha256": [
+      "ed77f76b803336abb047bf98a195698845e69b9cf119ca84ec68813675333bcd"
+    ]
+  },
+  "contract_id": "interaction:73edab8668cbc7983d66844c2ae5c39e",
+  "endpoints": [
+    {
+      "auth": {
+        "request_carriers": [
+          "body:UserName"
+        ],
+        "request_cookie_names": [],
+        "response_carriers": [],
+        "response_cookie_names": []
+      },
+      "discovered_via": [
+        "WEB_HAR"
+      ],
+      "endpoint_id": "endpoint:8b1edff917515f409afea96f88cd3cd3",
+      "evidence_refs": [
+        "webobs:c4d2206caffb00fa8b56ff5d9c76be93"
+      ],
+      "exchanges": [
+        {
+          "capture_id": "web:29473e2e7de4bf67c60cd65df2fb6043",
+          "evidence_ref": "webobs:c4d2206caffb00fa8b56ff5d9c76be93",
+          "request": {
+            "action": "AUTH_REQUEST",
+            "action_basis": "INFERRED_PATH",
+            "credential_carriers": [
+              "body:UserName"
+            ]
+          },
+          "response": {
+            "credential_carriers": [],
+            "destinations": [],
+            "status": 200
+          },
+          "sequence": 1
+        }
+      ],
+      "method": "POST",
+      "observations": 1,
+      "origin": "https://portal.example",
+      "pagination": "NOT_OBSERVED",
+      "path_template": "/CheckDataCenter",
+      "protocol_role": "AUTH",
+      "redirects": [],
+      "request": {
+        "content_types": [
+          "application/x-www-form-urlencoded"
+        ],
+        "fields": [
+          {
+            "name": "UserName",
+            "path": "UserName",
+            "semantic_classes": [],
+            "sensitive": true,
+            "types": [
+              "string"
+            ]
+          }
+        ],
+        "header_names": [],
+        "path_action_classes": [
+          "NONE"
+        ],
+        "query_parameters": []
+      },
+      "response": {
+        "content_types": [
+          "application/json"
+        ],
+        "fields": [],
+        "statuses": [
+          200
+        ]
+      },
+      "retry": "NOT_OBSERVED",
+      "side_effect": {
+        "basis": "AUTH_FLOW",
+        "classification": "UNKNOWN"
+      },
+      "write_verification": "NOT_APPLICABLE"
+    }
+  ],
+  "gaps": [
+    {
+      "code": "CONTRACT_REQUIRES_OPERATOR_REVIEW",
+      "message": "Observed shapes and inferred auth stages require review before implementing or replaying a connector."
+    },
+    {
+      "code": "WRITE_SUCCESS_PREDICATES_UNPROVEN",
+      "message": "A status code or read-back sequence alone does not prove a write succeeded; define record-specific success, failure, and rollback predicates."
+    },
+    {
+      "code": "TEMPLATE_VARIANCE_UNCONFIRMED",
+      "message": "Capture at least two synthetic sessions before treating path placeholders, cardinality, or optional fields as stable."
+    }
+  ],
+  "generated_at": "2026-09-11T12:01:00.000Z",
+  "generated_client_status": "CONTRACT_ONLY",
+  "kind": "red-team-audit/native-interaction-contract",
+  "protocol": "native-interaction-contract-v1",
+  "redaction": {
+    "bodies_removed": true,
+    "credentials_removed": true,
+    "protocol_values_removed": true,
+    "value_like_names_masked": true
+  },
+  "schema_version": "1.0.0",
+  "security_verdict": "NOT_ASSESSED",
+  "status": "DRAFT_OBSERVED",
+  "subjects": {
+    "artifact_sha256": [],
+    "origins": [
+      "https://portal.example"
+    ],
+    "path_literals": [
+      "CheckDataCenter"
+    ]
+  }
+}

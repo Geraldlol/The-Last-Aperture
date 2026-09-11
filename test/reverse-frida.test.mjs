@@ -379,6 +379,10 @@ test('runFridaTrace binds the ready frame to the exact validated module and symb
 test('the bundled agent uses fixed parameters and emits bounded metadata without reading arguments or memory', async () => {
   const source = await readFile(AGENT, 'utf8')
   assert.match(source, /parameters/)
+  assert.match(source, /rpc\.exports\s*=\s*\{/)
+  assert.match(source, /init\(_stage, parametersValue\)/)
+  assert.match(source, /loadConfiguration\(parametersValue\)/)
+  assert.doesNotMatch(source, /loadConfiguration\(\)/)
   assert.match(source, /Process\.mainModule/)
   assert.match(source, /Process\.getModuleByName/)
   assert.match(source, /findExportByName/)

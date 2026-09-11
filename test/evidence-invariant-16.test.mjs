@@ -30,7 +30,7 @@ function record(overrides = {}) {
     topic: 'container-image-content',
     title: 'Deleted build secret is readable below the whiteout',
     claimed_impact_severity: 'High',
-    location: ['peerstar-api-image:layer/02/secret.txt'],
+    location: ['sample-api-image:layer/02/secret.txt'],
     evidence: 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI',
     attack: 'extract layer 02 and read secret.txt',
     impact: 'Recovers a deployment credential',
@@ -39,7 +39,7 @@ function record(overrides = {}) {
     proof_plan: 'Read the quoted bytes from the sealed bundle',
     evidence_claim: 'secret-present-in-artifact',
     evidence_context: {
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       target_identity: 'sha256:9f2c',
@@ -120,7 +120,7 @@ test('the higher-precedence class prevails and the conflict is recorded', () => 
     candidate_id: 'container-image-content:5c1a7f30',
     lens: 'cloud-and-iac',
     topic: 'container-image-content',
-    location: ['peerstar-api-image:layer/02/secret.txt'],
+    location: ['sample-api-image:layer/02/secret.txt'],
     evidence_context: { evidence_class: 'built-artifact' },
   }
   const conflicts = evidenceConflicts([sourceClaim, artifactClaim])

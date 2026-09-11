@@ -6,14 +6,14 @@ export function attestedScope({ actionCount = 128 } = {}) {
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-authed-scope',
-    engagement_id: 'peerstar-credible-authorized-assessment',
+    engagement_id: 'example-authorized-assessment',
     environment: 'production',
     data_class: 'phi',
     authorization: {
       mode: 'OPERATOR_ATTESTED_AUTHED',
       authorization_id: 'operator-attestation-2026-08-16',
       statement: OPERATOR_ATTESTED_AUTHED_STATEMENT,
-      operator_id: 'peerstar-security-operator',
+      operator_id: 'example-security-operator',
       authorized_by: 'engagement operator',
       authorization_reference: 'Operator-held engagement authorization reference 2026-08-16',
       attested_at: '2026-08-16T12:00:00.000Z',
@@ -26,7 +26,7 @@ export function attestedScope({ actionCount = 128 } = {}) {
         mutation: true,
       },
       authorized_scope: {
-        origins: ['https://peerstar-test.example.test'],
+        origins: ['https://app.example.test'],
         path_prefixes: ['/'],
         methods: ['HEAD', 'GET', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'],
         test_categories: [
@@ -55,11 +55,11 @@ export function attestedScope({ actionCount = 128 } = {}) {
     liveness: {
       credential_preflight: {
         method: 'GET',
-        url: 'https://peerstar-test.example.test/whoami',
+        url: 'https://app.example.test/whoami',
       },
     },
     target: {
-      origin: 'https://peerstar-test.example.test',
+      origin: 'https://app.example.test',
       ownership: 'third_party_owned',
       tls: { mode: 'PKIX_HOSTNAME' },
     },
@@ -87,7 +87,7 @@ export function attestedScope({ actionCount = 128 } = {}) {
     ],
     requests: Array.from({ length: actionCount }, (_unused, index) => {
       const sequence = index + 1
-      const url = `https://peerstar-test.example.test/security-test-resource/${sequence}`
+      const url = `https://app.example.test/security-test-resource/${sequence}`
       return {
         kind: 'mutate',
         sequence,
