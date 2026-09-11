@@ -5,6 +5,7 @@ import {
   buildProtocolContractFile as defaultBuildProtocolContractFile,
   importBurpFile as defaultImportBurpFile,
   importHarFile as defaultImportHarFile,
+  importLiveMetadata as defaultImportLiveMetadata,
   traceFridaArtifact as defaultTraceFridaArtifact,
   traceFridaPlanFile as defaultTraceFridaPlanFile,
 } from './lib/reverse-controller.mjs'
@@ -19,9 +20,10 @@ import { PLATFORM_VERSION } from './lib/version.mjs'
 export const REVERSE_HELP = `The Last Aperture reverse engineering ${PLATFORM_VERSION}
 
 Usage:
-  last-aperture-reverse web import-har --har <absolute.har> --origin <canonical-origin> [--origin <canonical-origin> ...] [--path-literal <segment> ...] --out <absolute-new.json> [--json]
-  last-aperture-reverse web import-burp --burp <absolute-items.xml> --origin <canonical-origin> [--origin <canonical-origin> ...] [--path-literal <segment> ...] --out <absolute-new.json> [--json]
-  last-aperture-reverse protocol build --web-evidence <absolute.json> [--web-evidence <absolute.json> ...] [--reverse-evidence <absolute.json> ...] --out <absolute-new.json> [--json]
+  last-aperture-reverse web import-har --har <absolute.har> --origin <canonical-origin> [--origin <canonical-origin> ...] --path-prefix <canonical-raw-path> [--path-literal <segment> ...] --out <absolute-new.json> [--json]
+  last-aperture-reverse web import-burp --burp <absolute-items.xml> --origin <canonical-origin> [--origin <canonical-origin> ...] --path-prefix <canonical-raw-path> [--path-literal <segment> ...] --out <absolute-new.json> [--json]
+  last-aperture-reverse web import-live-metadata --recon-bundle <absolute-directory> [--auth-scope <absolute.json> --auth-ledger <absolute-directory>] --origin <canonical-origin> [--origin <canonical-origin> ...] --path-prefix <canonical-raw-path> [--path-literal <segment> ...] --out <absolute-new-directory> [--json]
+  last-aperture-reverse protocol build [--web-evidence <absolute.json> ...] [--reverse-evidence <absolute.json> ...] --out <absolute-new.json> [--json]
   last-aperture-reverse protocol generate --contract <absolute.json> --out <absolute-new-directory> [--name <npm-package-name>] [--json]
   last-aperture-reverse protocol verify --package <absolute-generated-directory> --manifest-sha256 <externally-retained-sha256> [--json]
   last-aperture-reverse ghidra analyze --lab-root <absolute-directory> --binary <contained-relative-path> --artifact-kind <native-executable|shared-library|firmware-image> --ghidra <absolute-launcher> --out <absolute-new-directory> [--json]
@@ -33,7 +35,9 @@ named local-lab executable; the typed v2 plan also supports bounded local, USB,
 and explicit-device attachment. The routes never accept raw tool arguments,
 caller scripts, remote host/token configuration, or evaluated code. HAR and Burp
 HTTP-items values are removed;
+--path-prefix bounds raw request paths plus retained redirects and destinations;
 --path-literal declares a route segment safe to retain in the protocol shape.
+Protocol build requires one or more inputs across web and reverse evidence.
 Protocol generation is offline and emits a contract-bound Node connector;
 protocol verify checks it against the externally retained manifest digest.
 `
@@ -130,6 +134,7 @@ function renderResult(result, asJson, stdout) {
 export async function runReverseCli(argv, {
   importBurpFile = defaultImportBurpFile,
   importHarFile = defaultImportHarFile,
+  importLiveMetadata = defaultImportLiveMetadata,
   buildProtocolContractFile = defaultBuildProtocolContractFile,
   generateNativeConnectorPackage = defaultGenerateNativeConnectorPackage,
   verifyGeneratedConnectorPackage = defaultVerifyGeneratedConnectorPackage,
@@ -151,26 +156,49 @@ export async function runReverseCli(argv, {
     const [command, action] = parsed.positionals
     let result
     if (command === 'web' && action === 'import-har') {
-      assertRoute(parsed, 'web', 'import-har', ['har', 'origin', 'path-literal', 'out'])
+      assertRoute(parsed, 'web', 'import-har', ['har', 'origin', 'path-prefix', 'path-literal', 'out'])
       result = await importHarFile({
         harPath: requireScalar(parsed.options, 'har'),
         targetOrigins: requireList(parsed.options, 'origin'),
+        targetPathPrefix: requireScalar(parsed.options, 'path-prefix'),
         pathLiterals: optionalList(parsed.options, 'path-literal'),
         outPath: requireScalar(parsed.options, 'out'),
       })
     } else if (command === 'web' && action === 'import-burp') {
-      assertRoute(parsed, 'web', 'import-burp', ['burp', 'origin', 'path-literal', 'out'])
+      assertRoute(parsed, 'web', 'import-burp', ['burp', 'origin', 'path-prefix', 'path-literal', 'out'])
       result = await importBurpFile({
         burpPath: requireScalar(parsed.options, 'burp'),
         targetOrigins: requireList(parsed.options, 'origin'),
+        targetPathPrefix: requireScalar(parsed.options, 'path-prefix'),
+        pathLiterals: optionalList(parsed.options, 'path-literal'),
+        outPath: requireScalar(parsed.options, 'out'),
+      })
+    } else if (command === 'web' && action === 'import-live-metadata') {
+      assertRoute(parsed, 'web', 'import-live-metadata', [
+        'recon-bundle', 'auth-scope', 'auth-ledger', 'origin', 'path-prefix', 'path-literal', 'out',
+      ])
+      result = await importLiveMetadata({
+        reconBundle: requireScalar(parsed.options, 'recon-bundle'),
+        authScopePath: parsed.options.get('auth-scope'),
+        authLedgerDirectory: parsed.options.get('auth-ledger'),
+        targetOrigins: requireList(parsed.options, 'origin'),
+        targetPathPrefix: requireScalar(parsed.options, 'path-prefix'),
         pathLiterals: optionalList(parsed.options, 'path-literal'),
         outPath: requireScalar(parsed.options, 'out'),
       })
     } else if (command === 'protocol' && action === 'build') {
       assertRoute(parsed, 'protocol', 'build', ['web-evidence', 'reverse-evidence', 'out'])
+      const webEvidencePaths = optionalList(parsed.options, 'web-evidence')
+      const reverseEvidencePaths = optionalList(parsed.options, 'reverse-evidence')
+      if (webEvidencePaths.length + reverseEvidencePaths.length === 0) {
+        throw cliError(
+          'REVERSE_CLI_OPTION_REQUIRED',
+          'protocol build requires at least one --web-evidence or --reverse-evidence option',
+        )
+      }
       result = await buildProtocolContractFile({
-        webEvidencePaths: requireList(parsed.options, 'web-evidence'),
-        reverseEvidencePaths: optionalList(parsed.options, 'reverse-evidence'),
+        webEvidencePaths,
+        reverseEvidencePaths,
         outPath: requireScalar(parsed.options, 'out'),
       })
     } else if (command === 'protocol' && action === 'generate') {

@@ -50,13 +50,24 @@ or unsupported launch shape is a technical gap, not an authorization denial.
   web evidence projection. XML declarations/entities, malformed or inconsistent
   messages, and resource-bound violations are refused. The source retains
   `BURP_XML` provenance.
+- `web import-live-metadata` reads a structurally and digest-verified HTTP
+  reconnaissance bundle offline and can also read the matching historical
+  authenticated scope and append-only campaign ledger. Reconnaissance supplies
+  method, URL, status, response-header names, observation time/timing, a coarse
+  body-size bucket, and source/hash metadata. It supplies no header/body values,
+  response shape, or redirect semantics. Authenticated evidence includes only a
+  settled `SEALED_PLAN` probe seed and status; it adds a request-header carrier
+  only when the sealed page-session adapter explicitly names that carrier.
+  Response-discovered actions and ambient credential names or values are never
+  projected.
 - The optional `integrations/burp-montoya` extension reads existing Proxy history
   with `finalRequest()` and emits a create-only sanitized HAR under one exact
   origin, path prefix, route-literal set, and item limit. It uses no Scanner,
   traffic dispatch, or traffic modification API. Import its `WEB_HAR` output
   with `web import-har`.
-- `protocol build` digest-links sanitized web evidence and optional Ghidra or
-  Frida evidence into `native-interaction-contract-v1`.
+- `protocol build` digest-links one or more sanitized web, Ghidra, or Frida
+  evidence files into `native-interaction-contract-v1`; reverse evidence alone
+  is valid and preserves explicit missing-web gaps.
 - `protocol generate` validates that contract offline and writes a new,
   deterministic Node connector package labeled `GENERATED_REVIEWABLE`. Its
   runtime accepts endpoint IDs rather than arbitrary URLs and is bound to the
@@ -67,6 +78,15 @@ or unsupported launch shape is a technical gap, not an authorization denial.
 Write outputs outside the target and refuse replacement. Hash inputs before and
 after tool execution. Keep Ghidra scratch and Frida processes bounded, and treat
 cleanup uncertainty as failure or an explicit gap.
+
+The live metadata import does not prove a complete authentication flow,
+response-discovered endpoint inventory, write semantics, replay safety,
+pagination, coverage, or credential availability. Historical import accepts an
+expired scope only after structural and digest verification against its ledger;
+that offline acceptance does not renew it. Live dispatch still requires a
+current scope. Engagement inputs, captures, and credential references are
+immutable: an omitted one requires a successor engagement. Resume can unblock
+only an already named host adapter or tool that has become available.
 
 ## Web protocol evidence
 

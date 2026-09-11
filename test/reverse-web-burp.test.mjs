@@ -109,6 +109,28 @@ test('Burp HTTP-items XML imports base64 messages through value-free web evidenc
   ]) assert.equal(serialized.includes(value), false, value)
 })
 
+test('Burp HTTP-items XML applies the same exact path-prefix boundary to requests and destinations', () => {
+  const outsideUrl = 'https://service.example/authentication?tenant=private&mode=private-mode'
+  const outsideRequest = REQUEST.replace(
+    'POST /auth/login?tenant=private&mode=private-mode',
+    'POST /authentication?tenant=private&mode=private-mode',
+  )
+  const xml = document([
+    burpItem({ request: REQUEST, response: RESPONSE }),
+    burpItem({ request: outsideRequest, response: RESPONSE, url: outsideUrl }),
+  ].join('\n'))
+  const evidence = importBurpHttpItemsEvidence(xml, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://service.example'],
+    targetPathPrefix: '/auth',
+  })
+
+  assert.deepEqual(evidence.entries.map(({ request }) => request.path_template), ['/auth/login'])
+  assert.equal(evidence.skipped.off_scope, 1)
+  assert.equal(evidence.entries[0].response.redirect, null)
+  assert.deepEqual(evidence.entries[0].response.destinations, [])
+})
+
 test('Burp HTTP-items XML accepts plain raw HTTP and normalizes mixed source provenance', () => {
   const burp = importBurpHttpItemsEvidence(document(burpItem({
     request: REQUEST,
@@ -210,5 +232,7 @@ test('Burp importer rejects duplicate singleton fields and unsafe HTTP header fo
 })
 
 test('web evidence schema admits only HAR and Burp XML source kinds', () => {
-  assert.deepEqual(WEB_SESSION_SCHEMA.$defs.source.properties.kind.enum, ['BURP_XML', 'HAR'])
+  assert.deepEqual(WEB_SESSION_SCHEMA.$defs.source.properties.kind.enum, [
+    'BURP_XML', 'HAR', 'HTTP_AUTHED_CAMPAIGN', 'HTTP_RECON',
+  ])
 })

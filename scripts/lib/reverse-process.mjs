@@ -18,7 +18,7 @@ const LOG_POLL_INTERVAL_MS = 100
 const WINDOWS_HELPER_OUTPUT_BYTES = 64 * 1024
 const WINDOWS_HELPER_GRACE_MS = 20_000
 const WINDOWS_HELPER_RESULT_BYTES = 64 * 1024
-const WINDOWS_JOB_REQUEST_VERSION = '1.0.0'
+const WINDOWS_JOB_REQUEST_VERSION = '1.1.0'
 const OPEN_READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 
 export const WINDOWS_JOB_HELPER_PATH = fileURLToPath(
@@ -71,6 +71,49 @@ function missingProcessGroup(error) {
 
 function missingFile(error) {
   return error?.code === 'ENOENT'
+}
+
+function assertStopMarkerPath(path, platform = process.platform) {
+  if (path === undefined || path === null) return null
+  if (typeof path !== 'string') throw new TypeError('stop marker path must be one absolute local path')
+  const absolute = platform === 'win32' ? win32.isAbsolute(path) : isAbsolute(path)
+  if (!absolute || path.includes('\u0000')
+    || (platform === 'win32' && path.startsWith('\\\\'))
+    || (platform !== 'win32' && path.startsWith('//'))) {
+    throw new TypeError('stop marker path must be one absolute local path')
+  }
+  return path
+}
+
+async function stopMarkerExists(path, lstatImpl = nodeLstat) {
+  if (path === null) return false
+  try {
+    await lstatImpl(path, { bigint: true })
+    return true
+  } catch (error) {
+    if (missingFile(error)) return false
+    throw error
+  }
+}
+
+function stoppedBeforeStartResult(platform, startedAt) {
+  return Object.freeze({
+    code: null,
+    signal: null,
+    timed_out: false,
+    stop_requested: true,
+    output_limit_exceeded: false,
+    log_limit_exceeded: false,
+    log_integrity_failed: false,
+    log_bytes: 0,
+    spawn_error: false,
+    started: false,
+    termination_confirmed: true,
+    supervision: platform === 'win32' ? 'WINDOWS_JOB_OBJECT' : 'POSIX_PROCESS_GROUP',
+    duration_ms: Math.max(0, Date.now() - startedAt),
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+  })
 }
 
 export function isWindowsBatchLauncher(path) {
@@ -212,16 +255,18 @@ function prepareWindowsTarget(file, args, environment) {
   }
 }
 
-function failedWindowsResult(startedAt) {
+function failedWindowsResult(startedAt, { targetMayHaveStarted = false } = {}) {
   return Object.freeze({
     code: null,
     signal: null,
     timed_out: false,
+    stop_requested: false,
     output_limit_exceeded: false,
     log_limit_exceeded: false,
     log_integrity_failed: false,
     log_bytes: 0,
     spawn_error: true,
+    started: targetMayHaveStarted,
     termination_confirmed: false,
     supervision: 'WINDOWS_JOB_OBJECT',
     duration_ms: Math.max(0, Date.now() - startedAt),
@@ -315,10 +360,12 @@ export async function runWindowsJobProcess({
   maxOutputBytes,
   logPaths = [],
   maxLogBytes = maxOutputBytes,
-}) {
+  stopMarkerPath,
+}, internals = {}) {
   const startedAt = Date.now()
   let adapterDirectory
   let adapterIdentity
+  let targetMayHaveStarted = false
   try {
     const target = prepareWindowsTarget(file, args, env)
     const fixedFiles = [WINDOWS_JOB_HELPER_PATH, ...target.adapterFiles]
@@ -346,12 +393,14 @@ export async function runWindowsJobProcess({
       max_output_bytes: maxOutputBytes,
       log_paths: logPaths,
       max_log_bytes: maxLogBytes,
+      stop_marker_path: assertStopMarkerPath(stopMarkerPath, 'win32'),
       stdout_path: stdoutPath,
       stderr_path: stderrPath,
     }
     await writeFile(requestPath, `${JSON.stringify(request)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
     const powerShellPath = windowsSystemTool(env, win32.join('WindowsPowerShell', 'v1.0', 'powershell.exe'))
-    const helperResult = await invokeWindowsHelper({
+    targetMayHaveStarted = true
+    const helperResult = await (internals.invokeWindowsHelperImpl ?? invokeWindowsHelper)({
       file: powerShellPath,
       args: [
         '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -376,14 +425,14 @@ export async function runWindowsJobProcess({
     if (!exactObject(structured, [
       'code', 'duration_ms', 'log_bytes', 'log_integrity_failed', 'log_limit_exceeded',
       'output_limit_exceeded', 'request_nonce', 'schema_version', 'spawn_error',
-      'supervision', 'termination_confirmed', 'timed_out',
+      'stop_requested', 'supervision', 'termination_confirmed', 'timed_out',
     ]) || structured.schema_version !== WINDOWS_JOB_REQUEST_VERSION
       || structured.request_nonce !== requestNonce
       || structured.supervision !== 'WINDOWS_JOB_OBJECT'
       || !(structured.code === null || Number.isSafeInteger(structured.code))
       || !Number.isSafeInteger(structured.duration_ms) || structured.duration_ms < 0
       || !Number.isSafeInteger(structured.log_bytes) || structured.log_bytes < 0 || structured.log_bytes > maxLogBytes
-      || ['log_integrity_failed', 'log_limit_exceeded', 'output_limit_exceeded', 'spawn_error', 'termination_confirmed', 'timed_out']
+      || ['log_integrity_failed', 'log_limit_exceeded', 'output_limit_exceeded', 'spawn_error', 'stop_requested', 'termination_confirmed', 'timed_out']
         .some((field) => typeof structured[field] !== 'boolean')
       || (helperResult.code === 1) !== structured.spawn_error
       || (structured.spawn_error && (structured.code !== null || structured.termination_confirmed))
@@ -401,11 +450,13 @@ export async function runWindowsJobProcess({
       code: structured.code,
       signal: null,
       timed_out: structured.timed_out,
+      stop_requested: structured.stop_requested,
       output_limit_exceeded: structured.output_limit_exceeded,
       log_limit_exceeded: structured.log_limit_exceeded,
       log_integrity_failed: structured.log_integrity_failed,
       log_bytes: structured.log_bytes,
       spawn_error: structured.spawn_error,
+      started: structured.spawn_error !== true,
       termination_confirmed: terminationConfirmed,
       supervision: structured.supervision,
       duration_ms: structured.duration_ms,
@@ -413,7 +464,10 @@ export async function runWindowsJobProcess({
       stderr,
     })
   } catch {
-    return failedWindowsResult(startedAt)
+    if (adapterDirectory !== undefined && adapterIdentity !== undefined) {
+      try { await cleanupAdapterDirectory(adapterDirectory, adapterIdentity) } catch {}
+    }
+    return failedWindowsResult(startedAt, { targetMayHaveStarted })
   }
 }
 
@@ -434,7 +488,9 @@ export async function runSupervisedProcess({
   maxOutputBytes,
   logPaths = [],
   maxLogBytes = maxOutputBytes,
+  stopMarkerPath,
 }, internals = {}) {
+  const startedAt = Date.now()
   const {
     platform = process.platform,
     spawnImpl = nodeSpawn,
@@ -442,10 +498,18 @@ export async function runSupervisedProcess({
     processKillImpl = process.kill.bind(process),
     postTerminationTimeoutMs = POST_TERMINATION_TIMEOUT_MS,
     logPollIntervalMs = LOG_POLL_INTERVAL_MS,
+    stopPollIntervalMs = 50,
     windowsJobRunnerImpl = runWindowsJobProcess,
   } = internals
+  if (!Number.isSafeInteger(stopPollIntervalMs) || stopPollIntervalMs < 10 || stopPollIntervalMs > 1_000) {
+    throw new TypeError('stop marker poll interval is outside process supervision bounds')
+  }
+  const markerPath = assertStopMarkerPath(stopMarkerPath, platform)
+  if (markerPath !== null && await stopMarkerExists(markerPath, lstatImpl)) {
+    return stoppedBeforeStartResult(platform, startedAt)
+  }
   if (platform === 'win32' && !Object.hasOwn(internals, 'spawnImpl')) {
-    return await windowsJobRunnerImpl({
+    const request = {
       file,
       args,
       cwd,
@@ -454,9 +518,10 @@ export async function runSupervisedProcess({
       maxOutputBytes,
       logPaths,
       maxLogBytes,
-    })
+    }
+    if (markerPath !== null) request.stopMarkerPath = markerPath
+    return await windowsJobRunnerImpl(request)
   }
-  const startedAt = Date.now()
   const stdout = []
   const stderr = []
   let capturedBytes = 0
@@ -465,6 +530,8 @@ export async function runSupervisedProcess({
   let logLimitExceeded = false
   let logIntegrityFailed = false
   let logBytes = 0
+  let stopRequested = false
+  let started = false
   let child
 
   child = spawnImpl(file, [...args], {
@@ -493,6 +560,8 @@ export async function runSupervisedProcess({
     let postTerminationTimer
     let logTimer
     let logInspectionPromise
+    let stopTimer
+    let stopInspectionPromise
 
     const finish = (code, signal, terminationConfirmed) => {
       if (settled) return
@@ -500,15 +569,18 @@ export async function runSupervisedProcess({
       clearTimeout(timeoutTimer)
       clearTimeout(postTerminationTimer)
       clearInterval(logTimer)
+      clearInterval(stopTimer)
       resolve(Object.freeze({
         code,
         signal,
         timed_out: timedOut,
+        stop_requested: stopRequested,
         output_limit_exceeded: outputLimitExceeded,
         log_limit_exceeded: logLimitExceeded,
         log_integrity_failed: logIntegrityFailed,
         log_bytes: logBytes,
         spawn_error: spawnError,
+        started,
         termination_confirmed: terminationConfirmed,
         supervision,
         duration_ms: Math.max(0, Date.now() - startedAt),
@@ -554,6 +626,23 @@ export async function runSupervisedProcess({
           postTerminationTimeoutMs,
         )
       }
+    }
+
+    const inspectStopMarker = async () => {
+      if (markerPath === null || settled || stopRequested) return
+      if (stopInspectionPromise) return await stopInspectionPromise
+      stopInspectionPromise = (async () => {
+        try {
+          if (!await stopMarkerExists(markerPath, lstatImpl)) return
+        } catch {
+          // A marker that cannot be inspected must fail closed and stop the tree.
+        } finally {
+          stopInspectionPromise = undefined
+        }
+        stopRequested = true
+        requestTermination()
+      })()
+      return await stopInspectionPromise
     }
 
     const inspectLogs = async () => {
@@ -633,6 +722,7 @@ export async function runSupervisedProcess({
 
     child.stdout?.on('data', capture(stdout))
     child.stderr?.on('data', capture(stderr))
+    child.once('spawn', () => { started = true })
     child.once('error', () => {
       spawnError = true
       if (pid === null) {
@@ -652,6 +742,11 @@ export async function runSupervisedProcess({
     if (logPaths.length > 0) {
       logTimer = setInterval(() => { void inspectLogs() }, logPollIntervalMs)
       logTimer.unref?.()
+    }
+    if (markerPath !== null) {
+      stopTimer = setInterval(() => { void inspectStopMarker() }, stopPollIntervalMs)
+      stopTimer.unref?.()
+      void inspectStopMarker()
     }
   })
 }

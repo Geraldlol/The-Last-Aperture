@@ -167,6 +167,174 @@ function windowsPowerShell(environment) {
   )
 }
 
+async function writeLongLivedProcessTreeFixture(root) {
+  const scriptPath = join(root, 'long-lived-tree.mjs')
+  await writeFile(scriptPath, [
+    "import { spawn } from 'node:child_process'",
+    "import { writeFileSync } from 'node:fs'",
+    "process.on('SIGTERM', () => {})",
+    "const childCode = \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"",
+    "const descendant = spawn(process.execPath, ['-e', childCode], { stdio: 'ignore' })",
+    "writeFileSync(process.argv[2], JSON.stringify({ root: process.pid, descendant: descendant.pid }))",
+    "process.stdout.write('tree-ready\\n')",
+    'setInterval(() => {}, 1000)',
+    '',
+  ].join('\n'), 'utf8')
+  return scriptPath
+}
+
+async function readJsonEventually(path, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(path, 'utf8'))
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`timed out waiting for ${path}`)
+}
+
+async function processEventuallyAbsent(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (processExists(pid) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return !processExists(pid)
+}
+
+async function killFixtureProcesses(processes) {
+  for (const pid of [processes?.root, processes?.descendant]) {
+    if (!Number.isSafeInteger(pid) || !processExists(pid)) continue
+    try { process.kill(pid, 'SIGKILL') } catch {}
+  }
+}
+
+test('a pre-existing stop marker prevents the supervised process from starting', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-pre-stop-test-'))
+  const stopMarkerPath = join(root, 'stop.json')
+  await writeFile(stopMarkerPath, '{}\n', 'utf8')
+  let spawnCalled = false
+  try {
+    const result = await runSupervisedProcess({
+      file: process.execPath,
+      args: ['--version'],
+      cwd: root,
+      env: sanitizedProcessEnvironment(),
+      timeoutMs: 10_000,
+      maxOutputBytes: 4_096,
+      stopMarkerPath,
+    }, {
+      platform: process.platform,
+      spawnImpl: () => {
+        spawnCalled = true
+        throw new Error('must not spawn')
+      },
+    })
+
+    assert.equal(spawnCalled, false)
+    assert.equal(result.stop_requested, true)
+    assert.equal(result.started, false)
+    assert.equal(result.termination_confirmed, true)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a Windows helper result failure after launch remains a possibly-started outcome', async () => {
+  const environment = {
+    ...sanitizedProcessEnvironment(),
+    SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+  }
+  const result = await runWindowsJobProcess({
+    file: process.execPath,
+    args: ['--version'],
+    cwd: tmpdir(),
+    env: environment,
+    timeoutMs: 10_000,
+    maxOutputBytes: 4_096,
+  }, {
+    invokeWindowsHelperImpl: async () => ({ code: 0, failed: false, timedOut: false }),
+  })
+
+  assert.equal(result.spawn_error, true)
+  assert.equal(result.started, true)
+  assert.equal(result.termination_confirmed, false)
+})
+
+test('POSIX timeout uses SIGKILL to remove a SIGTERM-resistant child and its descendant', {
+  skip: process.platform === 'win32',
+  timeout: 15_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-posix-tree-timeout-'))
+  const pidPath = join(root, 'tree.json')
+  const scriptPath = await writeLongLivedProcessTreeFixture(root)
+  let processes
+  try {
+    const startedAt = Date.now()
+    const resultPromise = runSupervisedProcess({
+      file: process.execPath,
+      args: [scriptPath, pidPath],
+      cwd: root,
+      env: sanitizedProcessEnvironment(),
+      timeoutMs: 3_000,
+      maxOutputBytes: 4_096,
+    })
+    processes = await readJsonEventually(pidPath)
+    process.kill(processes.root, 'SIGTERM')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(processExists(processes.root), true, 'fixture must ignore SIGTERM')
+
+    const result = await resultPromise
+    assert.equal(result.timed_out, true)
+    assert.equal(result.stop_requested, false)
+    assert.equal(result.termination_confirmed, true)
+    assert.equal(await processEventuallyAbsent(processes.root), true)
+    assert.equal(await processEventuallyAbsent(processes.descendant), true)
+    assert.equal(Date.now() - startedAt < 10_000, true, 'termination must remain bounded')
+  } finally {
+    await killFixtureProcesses(processes)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a live stop marker terminates the supervised child and descendant tree', {
+  timeout: 20_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-tree-stop-test-'))
+  const pidPath = join(root, 'tree.json')
+  const stopMarkerPath = join(root, 'stop.json')
+  const scriptPath = await writeLongLivedProcessTreeFixture(root)
+  let processes
+  try {
+    const startedAt = Date.now()
+    const resultPromise = runSupervisedProcess({
+      file: process.execPath,
+      args: [scriptPath, pidPath],
+      cwd: root,
+      env: sanitizedProcessEnvironment(),
+      timeoutMs: 10_000,
+      maxOutputBytes: 4_096,
+      stopMarkerPath,
+    })
+    processes = await readJsonEventually(pidPath)
+    await writeFile(stopMarkerPath, '{"stop":true}\n', { encoding: 'utf8', flag: 'wx' })
+
+    const result = await resultPromise
+    assert.equal(result.stop_requested, true, result.stderr.toString('utf8'))
+    assert.equal(result.timed_out, false)
+    assert.equal(result.started, true)
+    assert.equal(result.termination_confirmed, true)
+    assert.equal(await processEventuallyAbsent(processes.root), true)
+    assert.equal(await processEventuallyAbsent(processes.descendant), true)
+    assert.equal(Date.now() - startedAt < 10_000, true, 'stop completion must remain bounded')
+  } finally {
+    await killFixtureProcesses(processes)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Windows Job Object supervision enforces one exact stdout and stderr budget', {
   skip: process.platform !== 'win32',
 }, async () => {

@@ -12,6 +12,37 @@ Node connector generated from that contract. It does not export a browser
 credential or declare an application secure. Its evidence outputs use
 `security_verdict: NOT_ASSESSED` and are not applied to an audit evidence bundle.
 
+## Unified target workflow
+
+`engage run` is the normal entrypoint. It binds the exact operator statement,
+target, supplied captures/plans, tool discovery, route grants, results, and later
+connector work to one engagement:
+
+```powershell
+npm.cmd run audit -- engage run C:\reverse-lab\application.exe `
+  --target-kind artifact `
+  --attestation-file C:\engagement-inputs\authority.txt `
+  --profile full `
+  --out C:\engagements\application
+
+npm.cmd run audit -- engage run https://portal.example/app `
+  --attestation-file C:\engagement-inputs\authority.txt `
+  --profile full `
+  --input capture=C:\captures\portal.har `
+  --input capture=C:\captures\portal-burp.xml `
+  --out C:\engagements\portal
+```
+
+The controller runs ready routes in dependency order. `engage resume` can
+unblock only host availability for a tool or adapter already named by the
+engagement; the original authority remains bound and is not requested again.
+The intake, capture list, and credential references are immutable. If an input,
+capture, or credential reference was omitted, add it in a successor engagement
+instead of trying to extend the existing one. A selected-tab attachment is
+attempted only after authenticated dispatch. Failure or timeout is a settled
+route outcome and is not retried in that engagement. The route-specific
+commands below remain useful for direct compatibility and diagnosis.
+
 ## Evidence sources
 
 ### Ghidra static profile
@@ -125,6 +156,51 @@ cleanup are complete. Existing-process and device attachment remains `PARTIAL`
 with `RUNTIME_ARTIFACT_IDENTITY_UNVERIFIED`, because a supplied local copy cannot
 prove the bytes loaded by that runtime.
 
+### Verified live metadata import
+
+`web import-live-metadata` is an offline projection over an already verified
+HTTP reconnaissance bundle and, optionally, the exact scope and append-only
+ledger from an authenticated campaign. The import itself sends no target
+request and acquires no browser credential:
+
+```powershell
+npm.cmd run audit:reverse -- web import-live-metadata `
+  --recon-bundle C:\engagements\portal\routes\https-recon\http-recon `
+  --auth-scope C:\engagements\portal\routes\authenticated-http-browser\scopes\scope.json `
+  --auth-ledger C:\engagements\portal\routes\authenticated-http-browser\campaign-ledger `
+  --origin https://portal.example `
+  --path-prefix /app `
+  --path-literal app `
+  --out C:\reverse-output\live-metadata-001 `
+  --json
+```
+
+The reconnaissance projection contributes the verified method, URL, response
+status, response-header names, observation time, timing, and a coarse response
+body-size bucket. Its source SHA-256 binds the verified reconnaissance document,
+including the bounded response hash metadata recorded there. Header and body
+values, response-field shape, and redirect semantics are not projected into
+the web-session evidence.
+
+The optional authenticated projection considers only settled probe seeds whose
+campaign-ledger provenance is exactly `SEALED_PLAN`. It retains that sealed
+method/URL seed and settled response status. A request-header credential carrier
+is present only when the sealed page-session adapter explicitly named that
+carrier. It does not import response-discovered candidates or ambient browser
+credential names or values.
+
+These `HTTP_RECON` and `HTTP_AUTHED_CAMPAIGN` records are metadata-only evidence.
+They do not establish a complete authentication flow, a response-discovered
+endpoint inventory, write behavior or success, replay safety, pagination,
+coverage, or credential availability. Each output carries an explicit
+metadata-only gap and remains `security_verdict: NOT_ASSESSED`.
+
+Historical authenticated import verifies the scope structure, its digest
+bindings, and the matching append-only campaign ledger without requiring the
+scope validity window to remain current. This allows offline import after
+expiry; it does not renew authority or authorize target I/O. Any live campaign
+dispatch still requires the scope to be current at the dispatch boundary.
+
 ### Offline HAR and Burp HTTP-items import
 
 The web profile imports a HAR file or Burp Suite Save Items XML already captured
@@ -138,6 +214,7 @@ npm.cmd run audit:reverse -- web import-har `
   --har C:\captures\synthetic-session.har `
   --origin https://app.example `
   --origin https://login.example `
+  --path-prefix / `
   --path-literal resources `
   --out C:\reverse-output\web-session-001.json
 
@@ -145,11 +222,14 @@ npm.cmd run audit:reverse -- web import-burp `
   --burp C:\captures\synthetic-saved-items.xml `
   --origin https://app.example `
   --origin https://login.example `
+  --path-prefix / `
   --path-literal resources `
   --out C:\reverse-output\web-session-002.json
 ```
 
-Repeat `--path-literal` only for operator-reviewed application route segments
+`--path-prefix` is required and filters raw capture URLs before templating;
+`/app` admits `/app` and `/app/...` while excluding `/application`. Repeat
+`--path-literal` only for operator-reviewed application route segments
 that are safe to retain. It is not a declaration that an arbitrary identifier
 or record value is public.
 
@@ -239,8 +319,8 @@ Import that output with `web import-har`. Direct Save Items XML uses
 
 ## Build a native interaction contract
 
-`protocol build` combines one or more web-session evidence files and, when
-available, Ghidra or Frida reverse-evidence files. It verifies each input's
+`protocol build` combines one or more web-session, Ghidra, or Frida evidence
+files. Either evidence family can stand alone. It verifies each input's
 strict contract, records its canonical digest, and emits
 `native-interaction-contract-v1`.
 
@@ -309,9 +389,12 @@ success, failure, rollback, and post-read predicates.
 
 Ghidra and Frida evidence is digest-linked to the contract. The current builder
 does not correlate native call sites or time windows to web observations.
-Endpoint and per-exchange provenance remains `WEB_HAR`, `BURP_XML`, or both,
-according to its exact source captures. Static or dynamic evidence therefore
-cannot upgrade an inferred web behavior into a confirmed implementation fact.
+Endpoint and per-exchange provenance remains the exact source set: `WEB_HAR`,
+`BURP_XML`, `HTTP_RECON`, or `HTTP_AUTHED_CAMPAIGN`. The two live-metadata source
+kinds retain the metadata-only limits above; combining them with other evidence
+does not fill their omitted auth-flow, response-shape, write, replay,
+pagination, or coverage semantics. Static or dynamic evidence therefore cannot
+upgrade an inferred web behavior into a confirmed implementation fact.
 The contract remains `DRAFT_OBSERVED` with
 `generated_client_status: CONTRACT_ONLY` and explicit gaps for operator review,
 write semantics, capture variance, and native correlation.

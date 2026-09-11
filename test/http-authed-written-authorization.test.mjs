@@ -601,6 +601,30 @@ test('bounded file loading verifies the operator-attested scope and exact mode',
   assert.match(verified.authorizationBindingSha256, /^[a-f0-9]{64}$/)
 })
 
+test('historical file loading retains structural and digest verification after expiry', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-historical-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const scopePath = join(directory, 'scope.json')
+  const scope = operatorAttestedScope()
+  await writeFile(scopePath, `${JSON.stringify(scope)}\n`, 'utf8')
+
+  await assert.rejects(
+    httpAuthedContracts.readAndVerifyHttpAuthedAuthorization({
+      scopePath,
+      requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+      now: new Date('2027-08-16T12:00:00.000Z'),
+    }),
+    (error) => error.code === 'HTTP_AUTHED_AUTHORIZATION_EXPIRED',
+  )
+  const historical = await httpAuthedContracts.readAndVerifyHistoricalHttpAuthedAuthorization({
+    scopePath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+  })
+  assert.deepEqual(historical.scope, scope)
+  assert.match(historical.authorizationBindingSha256, /^[a-f0-9]{64}$/)
+  assert.equal(historical.campaignGrantSha256, plannedCampaignGrantSha256(scope))
+})
+
 test('CLI validates an operator-attested campaign without printing sensitive material', async (t) => {
   const { main } = await import('../scripts/http-authed.mjs')
   const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-cli-'))

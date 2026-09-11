@@ -56,6 +56,10 @@ import {
   importWebHarEvidence,
 } from './reverse-web-har.mjs'
 import { importBurpHttpItemsEvidence } from './reverse-web-burp.mjs'
+import {
+  importVerifiedHttpAuthedSessionEvidence,
+  importVerifiedHttpReconSessionEvidence,
+} from './reverse-web-live.mjs'
 import { assertLocalFilesystemEndpoint } from './filesystem-endpoint.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { stableJson } from './run-engine.mjs'
@@ -891,7 +895,13 @@ function resultSummary(outputPath, evidence) {
   }
 }
 
-export async function importHarFile({ harPath, targetOrigins, pathLiterals = [], outPath } = {}) {
+export async function importHarFile({
+  harPath,
+  targetOrigins,
+  targetPathPrefix = '/',
+  pathLiterals = [],
+  outPath,
+} = {}) {
   if (!Array.isArray(targetOrigins) || targetOrigins.length < 1 || targetOrigins.length > 32) {
     fail('REVERSE_ORIGINS_INVALID', 'web HAR import requires one to 32 target origins')
   }
@@ -902,6 +912,7 @@ export async function importHarFile({ harPath, targetOrigins, pathLiterals = [],
   const evidence = importWebHarEvidence(decodeJson(bytes, 'HAR input'), {
     sourceSha256: sha256(bytes),
     targetOrigins,
+    targetPathPrefix,
     pathLiterals,
   })
   await exclusiveWrite(outputPath, canonicalWebSessionEvidence(evidence))
@@ -914,7 +925,13 @@ export async function importHarFile({ harPath, targetOrigins, pathLiterals = [],
   }
 }
 
-export async function importBurpFile({ burpPath, targetOrigins, pathLiterals = [], outPath } = {}) {
+export async function importBurpFile({
+  burpPath,
+  targetOrigins,
+  targetPathPrefix = '/',
+  pathLiterals = [],
+  outPath,
+} = {}) {
   if (!Array.isArray(targetOrigins) || targetOrigins.length < 1 || targetOrigins.length > 32) {
     fail('REVERSE_ORIGINS_INVALID', 'web Burp XML import requires one to 32 target origins')
   }
@@ -925,6 +942,7 @@ export async function importBurpFile({ burpPath, targetOrigins, pathLiterals = [
   const evidence = importBurpHttpItemsEvidence(bytes, {
     sourceSha256: sha256(bytes),
     targetOrigins,
+    targetPathPrefix,
     pathLiterals,
   })
   await exclusiveWrite(outputPath, canonicalWebSessionEvidence(evidence))
@@ -934,6 +952,69 @@ export async function importBurpFile({ burpPath, targetOrigins, pathLiterals = [
     digest: digestWebSessionEvidence(evidence),
     entries: evidence.entries.length,
     skipped: evidence.skipped,
+  }
+}
+
+export async function importLiveMetadata({
+  reconBundle,
+  authScopePath,
+  authLedgerDirectory,
+  targetOrigins,
+  targetPathPrefix = '/',
+  pathLiterals = [],
+  outPath,
+  now,
+} = {}) {
+  if (!Array.isArray(targetOrigins) || targetOrigins.length < 1 || targetOrigins.length > 32) {
+    fail('REVERSE_ORIGINS_INVALID', 'live metadata import requires one to 32 target origins')
+  }
+  if ((authScopePath === undefined) !== (authLedgerDirectory === undefined)) {
+    fail('REVERSE_LIVE_AUTH_INPUT_INVALID', 'authenticated metadata requires both scope and ledger inputs')
+  }
+  const reconPath = await checkedDirectory(localAbsolutePath(reconBundle, 'HTTP reconnaissance bundle'))
+  const scopePath = authScopePath === undefined
+    ? undefined
+    : (await checkedExistingPath(localAbsolutePath(authScopePath, 'authenticated scope'), 'input', {
+        maximumBytes: MAX_JSON_INPUT_BYTES,
+      })).path
+  const ledgerPath = authLedgerDirectory === undefined
+    ? undefined
+    : await checkedDirectory(localAbsolutePath(authLedgerDirectory, 'authenticated campaign ledger'))
+  const outputPath = await outputDirectoryCandidate(outPath)
+  for (const input of [reconPath, scopePath, ledgerPath].filter(Boolean)) {
+    if (equalPath(input, outputPath) || inside(input, outputPath) || inside(outputPath, input)) {
+      fail('REVERSE_OUTPUT_INVALID', 'live metadata output must be disjoint from every source input')
+    }
+  }
+  let reconEvidence
+  let authEvidence
+  await initializeOutputDirectory(outputPath, async () => {
+    reconEvidence = await importVerifiedHttpReconSessionEvidence({
+      bundle: reconPath,
+      targetOrigins,
+      targetPathPrefix,
+      pathLiterals,
+      ...(typeof now === 'function' ? { now } : {}),
+    })
+    await exclusiveWrite(join(outputPath, 'http-recon.json'), canonicalWebSessionEvidence(reconEvidence))
+    if (scopePath !== undefined) {
+      authEvidence = await importVerifiedHttpAuthedSessionEvidence({
+        scopePath,
+        ledgerDirectory: ledgerPath,
+        targetOrigins,
+        targetPathPrefix,
+        pathLiterals,
+      })
+      await exclusiveWrite(join(outputPath, 'authenticated-campaign.json'), canonicalWebSessionEvidence(authEvidence))
+    }
+  })
+  const evidence = [reconEvidence, authEvidence].filter(Boolean)
+  return {
+    status: 'SUCCEEDED',
+    output_path: outputPath,
+    captures: evidence.length,
+    entries: evidence.reduce((total, item) => total + item.entries.length, 0),
+    digests: evidence.map(digestWebSessionEvidence).sort(compareCanonicalStrings),
   }
 }
 
@@ -987,13 +1068,16 @@ async function readProtocolEvidence(webPaths, reversePaths) {
 }
 
 export async function buildProtocolContractFile({
-  webEvidencePaths,
+  webEvidencePaths = [],
   reverseEvidencePaths = [],
   outPath,
   generatedAt,
 } = {}) {
-  const webPaths = distinctAbsolutePaths(webEvidencePaths, 'web evidence input', 1, 32)
+  const webPaths = distinctAbsolutePaths(webEvidencePaths, 'web evidence input', 0, 32)
   const reversePaths = distinctAbsolutePaths(reverseEvidencePaths, 'reverse evidence input', 0, 64)
+  if (webPaths.length + reversePaths.length === 0) {
+    fail('REVERSE_EVIDENCE_INPUT_INVALID', 'protocol build requires at least one web or reverse evidence file')
+  }
   const outputPath = await assertOutputAbsent(outPath, 'protocol contract output')
   if ([...webPaths, ...reversePaths].some((path) => equalPath(path, outputPath))) {
     fail('REVERSE_OUTPUT_INVALID', 'protocol contract output must differ from every evidence input')

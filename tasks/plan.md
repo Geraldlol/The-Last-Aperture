@@ -16,15 +16,24 @@ becoming separate authorization prompts.
 ## Public workflow
 
 ```text
-last-aperture engage run <target> --attestation-file <file> --out <new-directory>
+last-aperture engage run <target> --attestation-file <file> --profile <profile> --out <new-directory>
 last-aperture engage resume <engagement-directory>
 last-aperture engage status <engagement-directory> [--json]
 last-aperture engage stop <engagement-directory> [--reason <text>] [--json]
+last-aperture engage work next <engagement-directory> [--json]
+last-aperture engage work status <engagement-directory> [--json]
+last-aperture engage work submit <engagement-directory> --work-id <id> --result <absolute-json> [--json]
+last-aperture engage work finalize <engagement-directory> [--json]
+last-aperture engage work validate <engagement-directory> [--json]
 ```
 
-Agents may add reviewed material and record composed host-tool work through the
-same controller. These are implementation operations, not new authorization
-steps.
+For the packaged Chrome bridge, `engage run` accepts exactly one
+`--credential-reference browser:<32-character-lowercase-a-p-extension-id>` and
+an optional `--input configuration=<absolute-page-session-adapter.json>`.
+
+All reviewed inputs and credential references are sealed at intake. Adding one
+later requires a successor engagement. A declared tool or named host adapter may
+become available before resume without changing authority.
 
 ## Architecture
 
@@ -40,21 +49,25 @@ ordinary-language statement + target
  repository  HTTP   browser/Burp  reverse/connector
 ```
 
-- `engagement.json` stores the normalized target, objective, scope mode, and the
+- `engagement.json` stores the normalized target, objective, selected authority
+  profile, scope mode, and the
   digest of the accepted authority record.
 - `authorization.json` stores the exact bounded statement once. Resume derives
   short-lived route grants from its digest and never synthesizes a new operator
   statement.
-- `ledger/` stores canonical, create-only, hash-chained records. A dispatch
+- `ledger/` stores canonical, create-only, hash-chained records, with an external
+  sibling head chain that detects retained-bundle prefix rollback. A dispatch
   permit is durable before route I/O. Stop is durable and checked before every
   later dispatch.
 - A frozen route registry orders repository, reconnaissance, authenticated
   browser/HTTP, capture import, Ghidra, Frida, protocol build, connector
-  generation, and verification work. Missing tools or material produce
-  `WAITING_FOR_MATERIAL`; independent work continues.
-- Existing child bundles remain authoritative for their own protocol. The
-  engagement ledger records their relative path and digest without upgrading
-  observations into unsupported security verdicts.
+  generation, and verification work. Missing declared tools or named adapters
+  produce `WAITING_FOR_MATERIAL`; independent work continues. Omitted immutable
+  inputs require a successor engagement.
+- Completed route outputs carry canonical tree bindings that are verified before
+  status, resume, or dependent dispatch. Existing mutable child ledgers remain
+  authoritative for their own protocol and are checkpointed by the engagement
+  ledger without upgrading observations into unsupported security verdicts.
 
 ## Implementation order
 
@@ -67,8 +80,9 @@ ordinary-language statement + target
 
 ## Success criteria
 
-- Any bounded ordinary-language affirmative statement is accepted; no canned
-  phrase, signature, RoE file, or repeat confirmation is required.
+- A bounded affirmative statement plus one explicit machine profile is accepted;
+  no canned phrase, signature, RoE file, or repeat confirmation is required. A
+  restrictive statement cannot be expanded into the `full` profile.
 - Equivalent targets canonicalize identically; target drift and local artifact
   replacement are rejected before route I/O.
 - Every route grant binds the same engagement, authority, and target digests.

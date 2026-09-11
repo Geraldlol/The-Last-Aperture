@@ -23,6 +23,7 @@ namespace LastAperture.WindowsProcess
     {
         public long? Code;
         public bool TimedOut;
+        public bool StopRequested;
         public bool OutputLimitExceeded;
         public bool LogLimitExceeded;
         public bool LogIntegrityFailed;
@@ -388,6 +389,19 @@ namespace LastAperture.WindowsProcess
             return info.ActiveProcesses == 0;
         }
 
+        private static bool StopMarkerPresent(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return false;
+            try
+            {
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+            catch { return true; }
+        }
+
         public static JobRunResult Run(
             string file,
             string[] arguments,
@@ -395,6 +409,7 @@ namespace LastAperture.WindowsProcess
             string currentDirectory,
             IDictionary<string, string> environment,
             int timeoutMs,
+            string stopMarkerPath,
             long maxOutputBytes,
             string stdoutPath,
             string stderrPath,
@@ -472,36 +487,46 @@ namespace LastAperture.WindowsProcess
                 stdoutTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStdoutRead, stdoutPath); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
                 stderrTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStderrRead, stderrPath); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-                if (ResumeThread(processInfo.hThread) == UInt32.MaxValue)
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread");
-                CloseHandle(processInfo.hThread); processInfo.hThread = IntPtr.Zero;
-
                 bool rootExited = false;
-                while (true)
+                if (StopMarkerPresent(stopMarkerPath))
+                    result.StopRequested = true;
+                if (!result.StopRequested)
                 {
-                    uint wait = WaitForSingleObject(processInfo.hProcess, 25);
-                    if (wait == WAIT_OBJECT_0) { rootExited = true; break; }
-                    if (wait == WAIT_FAILED) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "WaitForSingleObject");
-                    if (wait != WAIT_TIMEOUT) throw new InvalidOperationException("unexpected process wait result");
-                    if (capture.Exceeded) { result.OutputLimitExceeded = true; break; }
-                    bool logIntegrity;
-                    long logBytes;
-                    if (LogsExceeded(logPaths, maxLogBytes, out logBytes, out logIntegrity))
+                    if (ResumeThread(processInfo.hThread) == UInt32.MaxValue)
+                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread");
+                    CloseHandle(processInfo.hThread); processInfo.hThread = IntPtr.Zero;
+
+                    while (true)
                     {
-                        result.LogLimitExceeded = true;
+                        uint wait = WaitForSingleObject(processInfo.hProcess, 25);
+                        if (wait == WAIT_OBJECT_0) { rootExited = true; break; }
+                        if (wait == WAIT_FAILED) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "WaitForSingleObject");
+                        if (wait != WAIT_TIMEOUT) throw new InvalidOperationException("unexpected process wait result");
+                        if (StopMarkerPresent(stopMarkerPath))
+                        {
+                            result.StopRequested = true;
+                            break;
+                        }
+                        if (capture.Exceeded) { result.OutputLimitExceeded = true; break; }
+                        bool logIntegrity;
+                        long logBytes;
+                        if (LogsExceeded(logPaths, maxLogBytes, out logBytes, out logIntegrity))
+                        {
+                            result.LogLimitExceeded = true;
+                            result.LogBytes = logBytes;
+                            break;
+                        }
                         result.LogBytes = logBytes;
-                        break;
-                    }
-                    result.LogBytes = logBytes;
-                    if (logIntegrity)
-                    {
-                        result.LogIntegrityFailed = true;
-                        break;
-                    }
-                    if (clock.ElapsedMilliseconds >= timeoutMs)
-                    {
-                        result.TimedOut = true;
-                        break;
+                        if (logIntegrity)
+                        {
+                            result.LogIntegrityFailed = true;
+                            break;
+                        }
+                        if (clock.ElapsedMilliseconds >= timeoutMs)
+                        {
+                            result.TimedOut = true;
+                            break;
+                        }
                     }
                 }
 
@@ -565,13 +590,17 @@ try {
   if ((Get-Item -LiteralPath $RequestPath).Length -gt 1048576) { throw 'request too large' }
   if (Test-Path -LiteralPath $ResultPath) { throw 'result already exists' }
   $request = Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $expected = @('args', 'batch_bridge', 'cwd', 'env', 'file', 'log_paths', 'max_log_bytes', 'max_output_bytes', 'request_nonce', 'schema_version', 'stderr_path', 'stdout_path', 'timeout_ms')
+  $expected = @('args', 'batch_bridge', 'cwd', 'env', 'file', 'log_paths', 'max_log_bytes', 'max_output_bytes', 'request_nonce', 'schema_version', 'stderr_path', 'stdout_path', 'stop_marker_path', 'timeout_ms')
   $actual = @($request.PSObject.Properties.Name | Sort-Object)
   if (($actual -join "`n") -ne (($expected | Sort-Object) -join "`n")) { throw 'request shape invalid' }
-  if ($request.schema_version -ne '1.0.0') { throw 'request version invalid' }
+  if ($request.schema_version -ne '1.1.0') { throw 'request version invalid' }
   if ([string]$request.request_nonce -notmatch '^[a-f0-9]{64}$') { throw 'request nonce invalid' }
   if (-not [IO.Path]::IsPathRooted([string]$request.file) -or -not [IO.Path]::IsPathRooted([string]$request.cwd)) { throw 'target path invalid' }
   if (-not [IO.Path]::IsPathRooted([string]$request.stdout_path) -or -not [IO.Path]::IsPathRooted([string]$request.stderr_path)) { throw 'capture path invalid' }
+  if ($null -ne $request.stop_marker_path) {
+    $stopMarkerText = [string]$request.stop_marker_path
+    if (-not [IO.Path]::IsPathRooted($stopMarkerText) -or $stopMarkerText.StartsWith('\\')) { throw 'stop marker path invalid' }
+  }
   if ($null -ne $request.batch_bridge -and -not [IO.Path]::IsPathRooted([string]$request.batch_bridge)) { throw 'batch bridge path invalid' }
   $timeout = [int64]$request.timeout_ms
   $outputLimit = [int64]$request.max_output_bytes
@@ -588,6 +617,7 @@ try {
 
   Add-Type -TypeDefinition $nativeSource -Language CSharp
   $batchBridge = if ($null -eq $request.batch_bridge) { $null } else { [string]$request.batch_bridge }
+  $stopMarker = if ($null -eq $request.stop_marker_path) { $null } else { [string]$request.stop_marker_path }
   $nativeResult = [LastAperture.WindowsProcess.Native]::Run(
     [string]$request.file,
     [string[]]$arguments,
@@ -595,6 +625,7 @@ try {
     [string]$request.cwd,
     $environment,
     [int]$timeout,
+    $stopMarker,
     $outputLimit,
     [string]$request.stdout_path,
     [string]$request.stderr_path,
@@ -602,10 +633,11 @@ try {
     $logLimit
   )
   Write-ExclusiveJson -Path $ResultPath -Value ([ordered]@{
-    schema_version = '1.0.0'
+    schema_version = '1.1.0'
     request_nonce = [string]$request.request_nonce
     code = $nativeResult.Code
     timed_out = $nativeResult.TimedOut
+    stop_requested = $nativeResult.StopRequested
     output_limit_exceeded = $nativeResult.OutputLimitExceeded
     log_limit_exceeded = $nativeResult.LogLimitExceeded
     log_integrity_failed = $nativeResult.LogIntegrityFailed
@@ -619,10 +651,11 @@ try {
 } catch {
   if (-not (Test-Path -LiteralPath $ResultPath)) {
     Write-ExclusiveJson -Path $ResultPath -Value ([ordered]@{
-      schema_version = '1.0.0'
+      schema_version = '1.1.0'
       request_nonce = if ($null -ne $request -and $null -ne $request.request_nonce) { [string]$request.request_nonce } else { '0' * 64 }
       code = $null
       timed_out = $false
+      stop_requested = $false
       output_limit_exceeded = $false
       log_limit_exceeded = $false
       log_integrity_failed = $false

@@ -79,6 +79,31 @@ function burpXml() {
   </item></items>`
 }
 
+function inconclusiveReverseEvidence() {
+  return {
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/reverse-evidence',
+    protocol: 'reverse-evidence-v1',
+    run_id: 'reverse:0123456789abcdef0123456789abcdef',
+    engine: 'ghidra',
+    profile_id: 'ghidra-headless-fixed-export-v1',
+    started_at: '2026-09-11T12:00:00.000Z',
+    finished_at: '2026-09-11T12:00:01.000Z',
+    artifact: {
+      kind: 'native-executable', path: 'bin/app.exe', sha256: 'c'.repeat(64), size_bytes: 4096,
+    },
+    tool: { name: 'Ghidra', version: '12.1.3', invocation_sha256: 'd'.repeat(64) },
+    limits: { timeout_ms: 300000, max_output_bytes: 8192, max_observations: 100 },
+    status: 'INCONCLUSIVE',
+    target_execution: 'NOT_PERFORMED',
+    security_verdict: 'NOT_ASSESSED',
+    applied_to_audit_bundle: false,
+    observations: [],
+    gaps: [{ code: 'FIXTURE_INCONCLUSIVE', message: 'No native observations were retained.' }],
+    cleanup: { attempted: true, verified: true },
+  }
+}
+
 function ghidraExport(executableSha256, pathTemplate = '/api/session/{integer}') {
   return {
     schema_version: '1.0.0',
@@ -141,10 +166,16 @@ test('imports a bounded HAR to exclusive redacted web evidence', async () => {
   try {
     const harPath = join(files.root, 'session.har')
     const outPath = join(files.root, 'web-evidence.json')
-    await writeFile(harPath, JSON.stringify(har()), 'utf8')
+    const captured = har()
+    captured.log.entries.push({
+      ...structuredClone(captured.log.entries[0]),
+      request: { ...structuredClone(captured.log.entries[0].request), url: 'https://portal.example/admin' },
+    })
+    await writeFile(harPath, JSON.stringify(captured), 'utf8')
     const result = await importHarFile({
       harPath,
       targetOrigins: ['https://portal.example'],
+      targetPathPrefix: '/auth',
       outPath,
     })
     const text = await readFile(outPath, 'utf8')
@@ -152,6 +183,8 @@ test('imports a bounded HAR to exclusive redacted web evidence', async () => {
     assert.equal(result.status, 'SUCCEEDED')
     assert.equal(result.output_path, outPath)
     assert.equal(evidence.kind, 'red-team-audit/web-session-evidence')
+    assert.equal(evidence.entries.length, 1)
+    assert.equal(evidence.skipped.off_scope, 1)
     assert.equal(evidence.entries[0].request.path_template, '/auth/login')
     assert.equal(text.includes('Bearer secret'), false)
     assert.equal(text.includes('connection=secret'), false)
@@ -174,6 +207,7 @@ test('imports bounded Burp HTTP-items XML to the shared redacted evidence contra
     const result = await importBurpFile({
       burpPath,
       targetOrigins: ['https://portal.example'],
+      targetPathPrefix: '/auth',
       outPath,
     })
     const text = await readFile(outPath, 'utf8')
@@ -181,6 +215,7 @@ test('imports bounded Burp HTTP-items XML to the shared redacted evidence contra
     assert.equal(result.status, 'SUCCEEDED')
     assert.equal(evidence.source.kind, 'BURP_XML')
     assert.equal(evidence.entries[0].request.path_template, '/auth/login')
+    assert.equal(evidence.entries[0].response.redirect, null)
     for (const value of ['Bearer secret', 'connection=secret', 'password=secret']) {
       assert.equal(text.includes(value), false)
     }
@@ -238,6 +273,41 @@ test('builds a native interaction contract from strict evidence files', async ()
         outPath,
       }),
       /exist|overwrite|exclusive/i,
+    )
+  } finally {
+    await rm(files.root, { recursive: true, force: true })
+  }
+})
+
+test('builds a native interaction contract from reverse evidence alone', async () => {
+  const files = await fixture()
+  try {
+    const reversePath = join(files.root, 'reverse.json')
+    const outPath = join(files.root, 'interaction.json')
+    await writeFile(reversePath, JSON.stringify(inconclusiveReverseEvidence()), 'utf8')
+    const result = await buildProtocolContractFile({
+      reverseEvidencePaths: [reversePath],
+      outPath,
+      generatedAt: '2026-09-11T12:01:00.000Z',
+    })
+    const contract = JSON.parse(await readFile(outPath, 'utf8'))
+    assert.equal(result.status, 'SUCCEEDED')
+    assert.deepEqual(contract.basis.web_session_evidence_sha256, [])
+    assert.equal(contract.basis.reverse_evidence_sha256.length, 1)
+    assert.deepEqual(contract.subjects.artifact_sha256, ['c'.repeat(64)])
+    assert.equal(contract.gaps.some(({ code }) => code === 'NO_WEB_ENDPOINTS'), true)
+  } finally {
+    await rm(files.root, { recursive: true, force: true })
+  }
+})
+
+test('protocol contract file refuses an empty evidence set', async () => {
+  const files = await fixture()
+  try {
+    await assert.rejects(
+      buildProtocolContractFile({ outPath: join(files.root, 'interaction.json') }),
+      (error) => error?.code === 'REVERSE_EVIDENCE_INPUT_INVALID'
+        && /at least one.*web or reverse evidence/i.test(error.message),
     )
   } finally {
     await rm(files.root, { recursive: true, force: true })

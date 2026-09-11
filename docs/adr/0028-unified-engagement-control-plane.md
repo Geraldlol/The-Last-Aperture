@@ -17,32 +17,63 @@ execution friction remained.
 ## Decision
 
 Add one outer engagement controller as the normal operator-facing entrypoint.
-It accepts a target and one bounded ordinary-language authorization statement,
-persists that statement once, and binds it to a canonical target and objective.
+It accepts a target, one bounded ordinary-language authorization statement, and
+one explicit machine-readable authority profile. It persists that authority
+once and binds it to a canonical target and objective. Restrictive statement
+language cannot be expanded by selecting a broader profile.
 The engagement remains authoritative across Codex/Claude handoffs and resumes.
 It never asks the operator to repeat unchanged authority.
 
-The controller owns a canonical append-only ledger. It selects applicable routes
-from a frozen registry, records a durable dispatch permit before target I/O, and
-records every result, gap, child-ledger anchor, cleanup state, stop, and terminal
-outcome. Existing route controllers retain their own validation and evidence
-contracts. Their ledgers become child evidence; they are not competing authority
-sources.
+The controller owns a canonical append-only ledger plus an external sibling head
+chain. It selects applicable routes from a frozen registry, records a durable
+dispatch permit before target I/O, and records every result, gap, cleanup state,
+stop, and terminal outcome. Successful route outputs are bound by canonical
+file-tree manifests and reverified before status, resume, or dependent dispatch.
+Existing route controllers retain their own validation and evidence contracts.
+Mutable child ledgers are checkpointed into the outer ledger; they are not
+competing authority sources.
 
-A technically missing tool, credential reference, browser session, capture, or
-runtime produces `WAITING_FOR_MATERIAL` or `AUTHORIZED_BUT_UNAVAILABLE`. It does
-not trigger another authorization question and does not stop independent routes.
+A technically missing installed tool or already named host adapter produces
+`WAITING_FOR_MATERIAL` or `AUTHORIZED_BUT_UNAVAILABLE`. It does not trigger
+another authorization question and does not stop independent routes. Intake is
+immutable: an omitted capture, configuration, credential reference, target, or
+scope fact requires a successor engagement rather than a resume.
+Once the authenticated browser route is dispatched, selected-tab attachment
+failure is recorded as a settled route outcome rather than resumable waiting.
 
 The controller may derive short-lived route grants from the durable engagement
 authority. Those grants bind the engagement, authority, target, route, and
 invocation digests. They are controller implementation records, not new operator
 statements.
 
+After a successful HTTPS-recon dependency, the controller can derive the
+authenticated browser route from exactly one
+`browser:<32-character-lowercase-a-p-extension-id>` credential reference. An
+optional content-bound `last-aperture/page-session-adapter` configuration names
+the browser storage source and request carrier without exposing the session
+value. The derived short-lived scope, campaign grant, campaign ledger, and
+materials directory stay under the route directory and are bound into its
+terminal output manifest. Named browser references with other forms require a
+host-injected credential resolver and otherwise remain waiting material.
+
+After verified HTTPS reconnaissance, a fixed offline route projects its bound
+method, URL, status, header-name, complete-body size-bucket, and timing metadata
+into value-free web evidence. When the authenticated route succeeded, it selects
+the exact scope named by that route's permit-bound invocation from the retained
+scope history and projects only settled sealed-plan seed status plus a
+page-session request-header carrier explicitly named by that scope. Historical
+scope verification remains structural and digest-bound after expiry; live sends
+still require current validity. The projection does not claim response-discovered
+endpoint inventory, complete auth flow, response shape, redirect or write
+semantics, replay, pagination, credential values, or coverage.
+
 The public workflow is `engage run`, `engage resume`, `engage status`, and
-`engage stop`. Compatibility entrypoints remain available and are invoked only
-through fixed public adapters without a shell. Agent-composed browser, process,
-network, or analyst-tool work is recorded in the same engagement before and
-after execution.
+`engage stop`. Repository engagements also expose `engage work next`, `status`,
+`submit`, `finalize`, and `validate`; their persisted envelopes, staged results,
+and child-ledger checkpoints are bound into the outer engagement ledger.
+Compatibility entrypoints remain available and are invoked only through fixed
+public adapters without a shell. Host-tool work without a registered route stays
+outside the public engagement record.
 
 ## Consequences
 
@@ -80,4 +111,3 @@ to remove and obscures the actual original authority.
 - Missing material is recorded and independent work continues.
 - Stop is durable and prevents all subsequent dispatch.
 - Existing route compatibility tests remain green.
-

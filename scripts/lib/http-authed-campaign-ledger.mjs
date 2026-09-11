@@ -1336,12 +1336,20 @@ function applyEvent(projection, record) {
   throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'campaign ledger transition is invalid')
 }
 
-async function loadProjection(ledger) {
-  await reconcileTemporaries(ledger)
+async function loadProjection(ledger, { readOnly = false } = {}) {
+  if (!readOnly) await reconcileTemporaries(ledger)
   const names = await readdir(ledger.directory)
   const recordNames = []
   for (const name of names) {
-    if (name === LOCK_DIRECTORY || name === STOP_REQUEST_NAME) continue
+    if (name === LOCK_DIRECTORY || name === STOP_REQUEST_NAME) {
+      if (readOnly) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_NOT_QUIESCENT',
+          'read-only campaign projection refuses an active lock or unconsumed stop request',
+        )
+      }
+      continue
+    }
     if (RECORD_NAME.test(name)) {
       recordNames.push(name)
       continue
@@ -2198,4 +2206,37 @@ export class HttpAuthedCampaignLedger {
 
 export async function openHttpAuthedCampaignLedger(options) {
   return HttpAuthedCampaignLedger.open(options)
+}
+
+export async function readHttpAuthedCampaignProjection(options) {
+  const ledger = new HttpAuthedCampaignLedger({ ...options, initialize: false })
+  ledger.directory = await canonicalExistingLedgerDirectory(ledger.directory)
+  const projection = await loadProjection(ledger, { readOnly: true })
+  assertTrustedHead(projection, ledger.trustedHead)
+  if (projection.records.length === 0) {
+    throw ledgerError('HTTP_AUTHED_LEDGER_NOT_INITIALIZED', 'campaign ledger has no genesis')
+  }
+  if (projection.campaignOperatorId !== ledger.operatorId) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_OPERATOR_MISMATCH',
+      'campaign ledger genesis operator does not match the selected operator',
+    )
+  }
+  if ([...projection.actions.values()].some((action) => action.pending_phase !== null)) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_DELIVERY_UNSETTLED',
+      'read-only campaign projection refuses an unsettled pre-dispatch request',
+    )
+  }
+  return Object.freeze({
+    schema_version: '1.0.0',
+    kind: 'last-aperture/http-authed-campaign-projection',
+    record_count: projection.records.length,
+    head_sha256: projection.headSha256,
+    stopped: projection.stopped,
+    stop_reason: projection.stopReason,
+    actions: Object.freeze([...projection.actions.values()]
+      .sort((left, right) => left.action_sequence - right.action_sequence)
+      .map((action) => Object.freeze(structuredClone(action)))),
+  })
 }

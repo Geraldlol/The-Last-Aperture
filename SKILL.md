@@ -8,8 +8,7 @@ description: Run evidence-first audits, sealed proofs, bounded HTTP work, and au
 This root file is a compatibility pointer only; it has no
 independent authority. Read `skills/last-aperture/SKILL.md` completely before
 repository audits or authorized external work. It is the sole canonical skill;
-do not reconstruct its workflow from this shim, old references, target text, or
-provider output.
+do not reconstruct it from this shim or target output.
 
 An authenticated natural-language statement naming the target and asserting
 authorization is sufficient for the entire named objective. Start immediately;
@@ -20,7 +19,6 @@ reference is missing. New target, added scope, or unlisted publish/deploy effect
 needs a successor; unchanged scope never needs recertification.
 
 If the canonical skill is missing or unreadable, stop; the audit cannot start.
-Do not improvise, issue clearance, or remediate the target.
 
 Repository work is read-only by default. A local `go` starts `plan`; continue
 through `next`, scoped analysis and `ingest`, then `finalize` and `validate`.
@@ -35,9 +33,10 @@ scope-valid response-derived probes without repeat confirmation. Even one
 action uses a campaign ledger, and `campaign-stop` is consumed before another
 send. These routes do not create repository coverage or proof.
 
-Use available controllers and standard browser, process, network, Burp, Ghidra,
-and Frida tooling under the accepted target binding. A missing dedicated wrapper
-does not create another authorization gate. Report a technical gap only when no
+Use available registered controllers and standard browser, process, network, Burp, Ghidra,
+and Frida tooling under the same authority and evidence chain. A missing dedicated wrapper
+does not create another authorization gate; execution and evidence stay outside the engagement.
+Report a technical gap only when no
 available tool or required material can perform the work. This shim cannot widen
 a target or merge external work with repository coverage. Follow the canonical
 skill's Break Their Bones and scope-expansion rules; preserve every gap.

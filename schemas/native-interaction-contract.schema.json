@@ -22,7 +22,7 @@
     "gaps"
   ],
   "properties": {
-    "schema_version": { "enum": ["1.0.0", "1.1.0"] },
+    "schema_version": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
     "kind": { "const": "red-team-audit/native-interaction-contract" },
     "protocol": { "const": "native-interaction-contract-v1" },
     "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
@@ -67,6 +67,20 @@
     {
       "if": {
         "properties": { "schema_version": { "const": "1.1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/endpointV11" }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.2.0" } },
         "required": ["schema_version"]
       },
       "then": {
@@ -366,7 +380,7 @@
       "properties": {
         "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
         "evidence_ref": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" },
-        "provenance": { "enum": ["BURP_XML", "WEB_HAR"] },
+        "provenance": { "enum": ["BURP_XML", "HTTP_AUTHED_CAMPAIGN", "HTTP_RECON", "WEB_HAR"] },
         "request": { "$ref": "#/$defs/exchangeRequest" },
         "response": { "$ref": "#/$defs/exchangeResponse" },
         "sequence": { "type": "integer", "minimum": 1, "maximum": 10000 }
@@ -381,9 +395,9 @@
         "discovered_via": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 2,
+          "maxItems": 4,
           "uniqueItems": true,
-          "items": { "enum": ["BURP_XML", "WEB_HAR"] }
+          "items": { "enum": ["BURP_XML", "HTTP_AUTHED_CAMPAIGN", "HTTP_RECON", "WEB_HAR"] }
         },
         "endpoint_id": { "type": "string", "pattern": "^endpoint:[a-f0-9]{32}$" },
         "evidence_refs": {

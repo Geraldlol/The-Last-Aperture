@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/engagement-manifest.schema.json",
+  "title": "The Last Aperture immutable engagement manifest",
+  "description": "Immutable engagement identity and authority bindings. Runtime status belongs only to the hash-chained ledger.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "platform_version",
+    "engagement_id",
+    "created_at",
+    "objective",
+    "target",
+    "target_sha256",
+    "intake_sha256",
+    "authority_sha256",
+    "route_registry_version",
+    "ledger"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/engagement-manifest" },
+    "platform_version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$" },
+    "engagement_id": { "$ref": "#/$defs/id" },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "objective": { "$ref": "#/$defs/objective" },
+    "target": { "$ref": "#/$defs/target" },
+    "target_sha256": { "$ref": "#/$defs/sha256" },
+    "intake_sha256": { "$ref": "#/$defs/sha256" },
+    "authority_sha256": { "$ref": "#/$defs/sha256" },
+    "route_registry_version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9.+_-]*$" },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "schema_version"],
+      "properties": {
+        "format": { "const": "CANONICAL_JSON_DIRECTORY_SHA256_CHAIN" },
+        "schema_version": { "const": "1.0.0" }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "objective": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000\\u0001-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "locator"],
+          "properties": {
+            "kind": { "enum": ["https", "repository", "artifact", "browser"] },
+            "locator": { "$ref": "#/$defs/locator" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "locator", "instance_sha256"],
+          "properties": {
+            "kind": { "enum": ["process", "device"] },
+            "locator": { "$ref": "#/$defs/locator" },
+            "instance_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    }
+  }
+}

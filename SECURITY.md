@@ -15,14 +15,30 @@ details of an unfixed vulnerability in a public issue.
 
 ## Supported security boundary
 
-**Current release status:** sealed repository T1 proof, narrow Node/npm
-loopback T2 proof, bounded HTTP-recon, adaptive authenticated campaigns, and the
-narrow reverse-engineering CLI are active. A `go <exact-https-url>` invocation is the operator's launch
+**Current release status:** the unified `engage` controller persists one
+target/authority binding and orchestrates the applicable shipped routes. Sealed
+repository T1 proof, narrow Node/npm loopback T2 proof, bounded HTTP-recon,
+adaptive authenticated campaigns, and the narrow reverse-engineering CLI are
+active. Browser sessions, Burp, Ghidra, and Frida are shipped as narrow routes.
+A `go <exact-https-url>` invocation is the operator's launch
 directive for one sealed recon action. Authenticated campaigns execute sealed
 requests and scope-valid discovered probes through the durable campaign ledger. Generic live
 adversarial/L3, other T2/service shapes, bounty/OOB, provider/remote,
 acquisition, and database execution routes remain technically unavailable as
-described below.
+described below. The engagement layer does not turn an unavailable route into an
+implemented transport or semantic oracle.
+
+`engage run` writes canonical create-only `intake.json`, `authorization.json`,
+and `engagement.json` files outside the target. The manifest binds the exact
+intake, authority, normalized target, platform, and route-registry digests. Its
+ledger binds every record to the same engagement, mirrors each head into an
+external sibling chain, and records route planning,
+waiting conditions, a target/plan/invocation-bound grant before dispatch, route
+outcomes, resumes, stop, and terminal state. `engage resume` verifies the stored
+bytes, retained head, and canonical route-output trees before reusing that
+authority without another operator statement. Stop prevents later dispatch;
+the shared process supervisor performs bounded process-tree termination and
+reports any unconfirmed cleanup as uncertain.
 
 The reverse CLI has separate evidence paths. Ghidra performs fixed
 headless static export on a copied local artifact and emits bounded function,
@@ -31,7 +47,8 @@ authentication-hint metadata. Frida v1 spawns one exact operator-named local-lab
 executable, module, and symbol with a metadata-only agent. Frida v2 accepts a
 strict typed plan for multiple hooks, local or device attachment, declared
 argument/return capture, and raw/base64, SHA-256, or metadata retention. HAR and
-Burp HTTP-items XML import are offline and accept only explicitly named origins;
+Burp HTTP-items XML import are offline and accept only explicitly named origins
+and an exact path prefix that is applied before value-redacting templates;
 protocol build turns sanitized web and
 native evidence into a `DRAFT_OBSERVED` interaction contract. `protocol
 generate` then validates that contract offline and emits a deterministic,
@@ -53,6 +70,16 @@ schemas, so use synthetic non-PHI sessions and review sanitized output before
 sharing it. The Burp XML parser refuses document declarations/entities,
 unexpected nesting, inconsistent URL/request metadata, malformed HTTP messages,
 and oversized documents, messages, headers, nodes, fields, or item counts.
+
+`web import-live-metadata` is an offline projection of verified HTTP-recon output
+and, when present, one successful authenticated campaign's exact invocation scope
+and append-only ledger. It retains only method, URL, status, header names,
+complete-body size buckets, timing, settled sealed-plan seed status, and an
+explicit page-session request-header carrier. It does not infer response shapes,
+redirect semantics, response-discovered locators, write behavior, replay,
+pagination, credential values, or coverage. Historical scope reading verifies
+schema, semantics, and content digests without requiring the old dispatch window
+to remain current; live HTTP dispatch continues to enforce that window.
 
 The optional Montoya extension reads only existing Burp Proxy history and uses
 the final request representation. It applies an exact origin, path prefix,
@@ -77,6 +104,10 @@ security changes. Raw typed captures can contain credentials or application
 data and must be handled as sensitive material. Attach evidence is `PARTIAL`
 because a local artifact copy cannot prove which bytes the existing runtime
 loaded. Tool absence or unsupported launch shape is an explicit gap.
+Unified process targets use one concrete PID and device targets one concrete
+device ID. A trusted runtime-identity adapter binds the selected instance at
+intake and re-resolves it on resume and immediately before Frida dispatch; a
+missing adapter or changed instance fails closed.
 The generated connector performs contract-bound HTTP at runtime: callers select
 an endpoint ID and can supply path, query, header, and body values. It rejects
 undeclared endpoint IDs, origins, methods, fields, redirects, and retry routes;
@@ -99,10 +130,15 @@ target/scope is supplied, proceed; ask once only when it is missing. Do not
 require another consent, RoE, ownership, or legal check. The operator remains
 accountable. Ordinary language is sufficient and remains effective across
 Codex/Claude handoffs for the same objective. Agents may compose available
-controllers with standard browser, process, network, Burp, Ghidra, and Frida
-tools while retaining the same target, time, credential, evidence, cleanup, and
-stop bindings. Technical unavailability means the required runtime, API,
+registered routes while retaining the same target, credential, evidence, cleanup,
+and stop bindings. Other host-tool execution and evidence stays outside the
+public engagement until a registered route exists. Technical unavailability means
+the required runtime, API,
 material, or reachable transport is actually absent. See ADR 0023.
+The intake is immutable: a capture, configuration, or credential reference omitted
+at `engage run` cannot be enrolled by `resume` and requires a successor engagement.
+Resume can use a tool or named host adapter that was already declared and later
+became available.
 Former active-controller `--attest-authorized` and
 `--confirm-authorization-current` spellings are rejected rather than treated as
 authority. The release-disabled acquisition prototype still documents its own
@@ -168,12 +204,13 @@ are proven absent. Cleanup ambiguity terminalizes the attempt, while a captured
 receipt resumes without re-execution. None of these technical recovery checks
 asks for renewed authorization.
 
-The CLI lexically rejects direct UNC/WebDAV and Windows namespace-prefixed
-device/pipe arguments, plus a stored UNC repository root. Other offline paths
-are operator-trusted endpoints in this release. Symlink/junction ancestors,
-mapped or remote volumes, DOS aliases, paths embedded in other JSON, and
-concurrent path replacement require the future enrolled local-volume controller;
-do not treat the lexical guard as filesystem attestation.
+The shared path guard lexically rejects direct UNC/WebDAV and Windows
+namespace-prefixed device/pipe arguments, plus a stored UNC repository root. The
+`engage` controller additionally rejects observed symlink/junction ancestors and
+rechecks bound inputs; legacy offline commands do not all make that guarantee.
+Mapped or remote volumes, DOS aliases, paths embedded in other JSON, and hostile
+concurrent replacement remain operator-trusted. Do not treat these checks as
+local-volume attestation.
 
 Repository generators, fixture builders, benchmark generation, residue scans,
 shell-lens/Python conformance, and real-service or real-container conformance

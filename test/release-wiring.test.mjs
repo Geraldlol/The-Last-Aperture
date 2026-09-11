@@ -7,7 +7,7 @@ import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 const WORKFLOW_PATH = '.github/workflows/lint-lenses.yml'
 const CHECKOUT_SHA = '08eba0b27e820071cde6df949e0beb9ba4906955'
 const SETUP_NODE_SHA = '49933ea5288caeca8642d1e84afbd3f7d6820020'
-const RELEASE_VERSION = '0.13.0'
+const RELEASE_VERSION = '0.14.0'
 
 function workflowJobBlock(workflow, name) {
   const marker = `  ${name}:\n`
@@ -226,7 +226,7 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.13 controller and conformance commands', () => {
+test('release metadata exposes the 0.14 controller and conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
@@ -247,7 +247,7 @@ test('release metadata exposes the 0.13 controller and conformance commands', ()
       windowsHide: true,
     })
     assert.equal(help.status, 0, `${cli} --help must succeed`)
-    assert.match(help.stdout, /0\.13\.0/, `${cli} must expose the release version`)
+    assert.match(help.stdout, /0\.14\.0/, `${cli} must expose the release version`)
     assert.doesNotMatch(readFileSync(cli, 'utf8'), /0\.11\.0/)
   }
   assert.equal(
@@ -518,7 +518,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     windowsHide: true,
   })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.13\.0/)
+  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.14\.0/)
   assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
   assert.doesNotMatch(
     help.stdout,
@@ -615,13 +615,14 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
   assert.match(skill, /natural-language operator statement[\s\S]*sole authorization step/i)
   assert.match(skill, /without ownership proof[\s\S]*per-action confirmation/i)
-  assert.match(skill, /Compose available[\s\S]*host tools under the same attestation/i)
+  assert.match(skill, /Compose only available registered controller routes[\s\S]*same attestation/i)
+  assert.match(skill, /host tools remain outside the public engagement[\s\S]*registered route/i)
   assert.match(skill, /Offline validation/)
   assert.match(
     skill,
     /sealed Docker implements T1 and narrow[\s\S]*loopback T2[\s\S]*Unsupported T2 stays `UNPROVEN`/i,
   )
-  assert.match(skill, /standard browser\/process\/network tool/i)
+  assert.match(skill, /Process\/device engagement targets require an enrolled host runtime-identity adapter/i)
   assert.doesNotMatch(skill, /Copy value/)
 
   const readme = readFileSync('README.md', 'utf8')
@@ -667,9 +668,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(rootSkill, /Even one\s+action uses a campaign ledger/i)
   assert.match(
     rootSkill,
-    /Use available controllers and standard browser, process, network, Burp, Ghidra,[\s\S]*Frida tooling/i,
+    /Use available registered controllers[\s\S]*same authority and evidence chain/i,
   )
-  assert.match(rootSkill, /missing dedicated wrapper[\s\S]*not create another authorization gate/i)
+  assert.match(rootSkill, /missing dedicated wrapper[\s\S]*execution and evidence stay[\s\S]*outside the engagement/i)
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {

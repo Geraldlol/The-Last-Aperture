@@ -1,2 +1,2 @@
-export const PLATFORM_VERSION = '0.13.0'
-export const PLATFORM_SERIES = '0.13'
+export const PLATFORM_VERSION = '0.14.0'
+export const PLATFORM_SERIES = '0.14'

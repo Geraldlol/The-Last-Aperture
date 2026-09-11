@@ -26,8 +26,13 @@ const FIELD_NAME = /^[A-Za-z0-9_$@.:[\]-]{1,128}$/u
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u
 const SENSITIVE_NAME = /(?:api[_-]?key|auth|bearer|client[_-]?secret|connection|credential|csrf|jwt|login|pass(?:word|wd)?|secret|session|ssn|token|user(?:name)?|xsrf)/iu
 const SEMANTIC_NAME = /^(?:action|command|event|method|mode|op|operation|submit|task|view)$/iu
-const ENDPOINT_PROVENANCE = new Set(['BURP_XML', 'WEB_HAR'])
-const NATIVE_SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0'])
+const ENDPOINT_PROVENANCE = new Set([
+  'BURP_XML',
+  'HTTP_AUTHED_CAMPAIGN',
+  'HTTP_RECON',
+  'WEB_HAR',
+])
+const NATIVE_SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0'])
 const MAX_AGGREGATE_WEB_ENTRIES = 20_000
 const MAX_AGGREGATE_REVERSE_OBSERVATIONS = 20_000
 const MAX_AGGREGATE_FIELDS = 100_000
@@ -501,10 +506,16 @@ export function buildNativeInteractionContract({ webSessionEvidence = [], revers
   if (new Set(reverseEvidence.map(digestReverseEvidence)).size !== reverseEvidence.length) fail('reverse evidence inputs must be distinct')
   canonicalTime(generatedAt)
   aggregateFieldCount(webSessionEvidence)
+  const sourceProvenance = (kind) => ({
+    BURP_XML: 'BURP_XML',
+    HAR: 'WEB_HAR',
+    HTTP_AUTHED_CAMPAIGN: 'HTTP_AUTHED_CAMPAIGN',
+    HTTP_RECON: 'HTTP_RECON',
+  })[kind]
   const allEntries = webSessionEvidence.flatMap((capture) => capture.entries.map((entry) => ({
     ...entry,
     capture_id: capture.capture_id,
-    source_provenance: capture.source.kind === 'BURP_XML' ? 'BURP_XML' : 'WEB_HAR',
+    source_provenance: sourceProvenance(capture.source.kind),
   })))
   if (new Set(allEntries.map(({ observation_id: id }) => id)).size !== allEntries.length) fail('web session observations must be distinct across captures')
   const endpointMap = aggregateEndpoints(allEntries)
@@ -535,7 +546,9 @@ export function buildNativeInteractionContract({ webSessionEvidence = [], revers
   if (flows.some((flow) => flow.steps.some((step) => step.destination_correlation === 'AMBIGUOUS'))) gaps.push({ code: 'MULTIPLE_RESPONSE_DESTINATIONS_REQUIRE_REVIEW', message: 'At least one response exposed multiple destinations without one unique forward match; no transition link was inferred for that step.' })
   if (flows.some((flow) => flow.steps.some((step) => step.destination_candidates.some((destination) => pathHasTemplateSegment(destination.path_template))))) gaps.push({ code: 'REDACTED_DESTINATION_CORRELATION_UNPROVEN', message: 'At least one response destination contains a redacted path segment, so no transition link is inferred from path-template equality.' })
   const contract = {
-    schema_version: '1.1.0',
+    schema_version: webSessionEvidence.some((capture) => (
+      ['HTTP_AUTHED_CAMPAIGN', 'HTTP_RECON'].includes(capture.source.kind)
+    )) ? '1.2.0' : '1.1.0',
     kind: NATIVE_INTERACTION_CONTRACT_KIND,
     protocol: NATIVE_INTERACTION_CONTRACT_PROTOCOL,
     contract_id: `interaction:${'0'.repeat(32)}`,

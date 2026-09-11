@@ -628,6 +628,21 @@ export function verifyHttpAuthedAuthorization({ scope, now = new Date() }) {
   })
 }
 
+export function verifyHistoricalHttpAuthedAuthorization({ scope }) {
+  assertValidHttpAuthedScope(scope)
+  if (!isHttpAuthedRuntimeAuthorizationMode(scope.authorization.mode)) {
+    throw contractError(
+      'HTTP_AUTHED_RUNTIME_MODE_REQUIRED',
+      'historical verification requires operator-attested authorization',
+    )
+  }
+  return {
+    scope,
+    authorizationBindingSha256: httpAuthedAuthorizationBindingSha256(scope),
+    campaignGrantSha256: sha256Hex(canonicalJson(scope)),
+  }
+}
+
 export function verifyHttpAuthedCandidate({
   scope,
   action,
@@ -733,10 +748,9 @@ async function readStableBoundedFile(path, { label, maxBytes }) {
   }
 }
 
-export async function readAndVerifyHttpAuthedAuthorization({
+async function readHttpAuthedAuthorizationScope({
   scopePath,
   requiredMode,
-  now = new Date(),
 }) {
   const scopeBytes = await readStableBoundedFile(scopePath, {
     label: 'http-authed scope',
@@ -759,7 +773,24 @@ export async function readAndVerifyHttpAuthedAuthorization({
       'scope authorization mode does not match the selected command',
     )
   }
+  return scope
+}
+
+export async function readAndVerifyHttpAuthedAuthorization({
+  scopePath,
+  requiredMode,
+  now = new Date(),
+}) {
+  const scope = await readHttpAuthedAuthorizationScope({ scopePath, requiredMode })
   return verifyHttpAuthedAuthorization({ scope, now })
+}
+
+export async function readAndVerifyHistoricalHttpAuthedAuthorization({
+  scopePath,
+  requiredMode,
+}) {
+  const scope = await readHttpAuthedAuthorizationScope({ scopePath, requiredMode })
+  return verifyHistoricalHttpAuthedAuthorization({ scope })
 }
 
 function actionIdentityInput(action) {

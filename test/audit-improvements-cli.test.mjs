@@ -82,17 +82,47 @@ test('review handoff and result preflight share the ingestion contract without p
       examined_files: job.scoped_files,
     }
     await writeFile(resultPath, JSON.stringify(completed))
+    const exactBytes = await readFile(resultPath)
+    const exactSha256 = createHash('sha256').update(exactBytes).digest('hex')
     const checked = json(['check-result', bundle, resultPath, '--json'])
     assert.equal(checked.valid, true)
     assert.equal(checked.applied, false)
     assert.equal(checked.semantic_authority, 'PROVIDER_DECLARED')
     assert.equal(checked.job_id, job.job_id)
     assert.deepEqual(await digestTree(bundle), before)
-    const ingested = invoke(['ingest', bundle, resultPath])
+    const boundChecked = json([
+      'check-result', bundle, resultPath,
+      '--expected-sha256', exactSha256,
+      '--expected-size', String(exactBytes.length),
+      '--json',
+    ])
+    assert.equal(boundChecked.applied, false)
+    const wrongBinding = json([
+      'check-result', bundle, resultPath,
+      '--expected-sha256', '0'.repeat(64),
+      '--expected-size', String(exactBytes.length),
+      '--json',
+    ], 1)
+    assert.equal(wrongBinding.valid, false)
+    assert.deepEqual(await digestTree(bundle), before)
+    const ingested = invoke([
+      'ingest', bundle, resultPath,
+      '--expected-sha256', exactSha256,
+      '--expected-size', String(exactBytes.length),
+    ])
     assert.equal(ingested.status, 0, ingested.stderr)
     const run = JSON.parse(await readFile(join(bundle, 'run.json'), 'utf8'))
     assert.equal(run.jobs.find((entry) => entry.job_id === job.job_id).state, 'SUCCEEDED')
     assert.notEqual(run.state, 'COMPLETE_CLEAN')
+    const reconciled = json([
+      'check-result', bundle, resultPath,
+      '--expected-sha256', exactSha256,
+      '--expected-size', String(exactBytes.length),
+      '--json',
+    ])
+    assert.equal(reconciled.valid, true)
+    assert.equal(reconciled.applied, true)
+    assert.equal(reconciled.job_id, job.job_id)
     const stale = invoke(['review-template', bundle, '--job', job.job_id])
     assert.equal(stale.status, 1)
     assert.match(stale.stderr, /pending source-review/)

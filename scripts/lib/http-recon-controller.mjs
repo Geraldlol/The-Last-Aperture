@@ -2547,6 +2547,38 @@ export async function validateHttpReconBundle({
   }
 }
 
+export async function readVerifiedHttpReconEvidence({
+  bundle,
+  now = () => new Date(),
+}) {
+  const loaded = await loadRun(bundle)
+  const trust = await loadAuthorizationContext({
+    loaded,
+    now,
+    requireCurrentValidity: false,
+  })
+  const evidence = await verifyExistingEvidence({
+    loaded,
+    trust,
+    forDispatch: false,
+  })
+  if (
+    loaded.run.state === 'PROBE_PLAN_COMPLETE'
+    && evidence.observations.length !== loaded.run.actions.length
+  ) {
+    throw controllerError(
+      'HTTP_RECON_COMPLETE_DENOMINATOR_MISMATCH',
+      'complete state requires one observation per action',
+    )
+  }
+  return Object.freeze({
+    schema_version: '1.0.0',
+    kind: 'last-aperture/verified-http-recon-evidence',
+    run: Object.freeze(structuredClone(loaded.run)),
+    observations: Object.freeze(evidence.observations.map((item) => Object.freeze(structuredClone(item)))),
+  })
+}
+
 export async function httpReconReportPath(bundle) {
   const loaded = await loadRun(bundle)
   if (!loaded.run.report) {

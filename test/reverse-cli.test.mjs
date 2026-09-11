@@ -18,6 +18,7 @@ function operations(calls) {
   return {
     importBurpFile: async (options) => { calls.push(['burp', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'e'.repeat(64), entries: 1 } },
     importHarFile: async (options) => { calls.push(['web', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'a'.repeat(64), entries: 1 } },
+    importLiveMetadata: async (options) => { calls.push(['live', options]); return { status: 'SUCCEEDED', output_path: options.outPath, captures: 2, entries: 2 } },
     buildProtocolContractFile: async (options) => { calls.push(['protocol', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'b'.repeat(64), endpoints: 1 } },
     generateNativeConnectorPackage: async (options) => { calls.push(['generate', options]); return { status: 'SUCCEEDED', output_path: options.outPath, digest: 'c'.repeat(64), endpoints: 1 } },
     verifyGeneratedConnectorPackage: async (options) => { calls.push(['verify', options]); return { status: 'SUCCEEDED', output_path: options.packagePath, manifest_sha256: options.expectedManifestSha256 } },
@@ -32,12 +33,39 @@ test('help describes every narrow reverse route', async () => {
   assert.equal(await runReverseCli(['--help'], { ...operations([]), ...io }), 0)
   assert.match(io.stdoutText(), /web import-har/)
   assert.match(io.stdoutText(), /web import-burp/)
+  assert.match(io.stdoutText(), /web import-live-metadata/)
+  assert.match(io.stdoutText(), /--path-prefix/)
   assert.match(io.stdoutText(), /protocol build/)
   assert.match(io.stdoutText(), /protocol generate/)
   assert.match(io.stdoutText(), /protocol verify/)
   assert.match(io.stdoutText(), /ghidra analyze/)
   assert.match(io.stdoutText(), /frida trace/)
   assert.match(io.stdoutText(), /frida trace-plan/)
+})
+
+test('CLI maps the fixed live metadata adapter without arbitrary arguments', async () => {
+  const calls = []
+  const io = capture()
+  assert.equal(await runReverseCli([
+    'web', 'import-live-metadata',
+    '--recon-bundle', 'C:\\staged\\recon',
+    '--auth-scope', 'C:\\staged\\scope.json',
+    '--auth-ledger', 'C:\\staged\\ledger',
+    '--origin', 'https://target.example',
+    '--path-prefix', '/app',
+    '--path-literal', 'app',
+    '--out', 'C:\\out\\live',
+    '--json',
+  ], { ...operations(calls), ...io }), 0)
+  assert.deepEqual(calls, [['live', {
+    reconBundle: 'C:\\staged\\recon',
+    authScopePath: 'C:\\staged\\scope.json',
+    authLedgerDirectory: 'C:\\staged\\ledger',
+    targetOrigins: ['https://target.example'],
+    targetPathPrefix: '/app',
+    pathLiterals: ['app'],
+    outPath: 'C:\\out\\live',
+  }]])
 })
 
 test('CLI preserves repeatable origins and evidence inputs and emits JSON', async () => {
@@ -49,6 +77,7 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
     '--har', 'C:\\lab\\session.har',
     '--origin', 'https://app.example',
     '--origin', 'https://api.example',
+    '--path-prefix', '/app',
     '--path-literal', 'resources',
     '--path-literal', 'records',
     '--out', 'C:\\out\\web.json',
@@ -57,6 +86,7 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
   assert.deepEqual(calls[0], ['web', {
     harPath: 'C:\\lab\\session.har',
     targetOrigins: ['https://app.example', 'https://api.example'],
+    targetPathPrefix: '/app',
     pathLiterals: ['resources', 'records'],
     outPath: 'C:\\out\\web.json',
   }])
@@ -66,12 +96,14 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
     'web', 'import-burp',
     '--burp', 'C:\\lab\\items.xml',
     '--origin', 'https://app.example',
+    '--path-prefix', '/app/',
     '--path-literal', 'records',
     '--out', 'C:\\out\\burp-web.json',
   ], { ...ops, ...capture() }), 0)
   assert.deepEqual(calls[1], ['burp', {
     burpPath: 'C:\\lab\\items.xml',
     targetOrigins: ['https://app.example'],
+    targetPathPrefix: '/app/',
     pathLiterals: ['records'],
     outPath: 'C:\\out\\burp-web.json',
   }])
@@ -110,6 +142,35 @@ test('CLI preserves repeatable origins and evidence inputs and emits JSON', asyn
   }])
 })
 
+test('protocol build accepts reverse evidence without web evidence', async () => {
+  const calls = []
+  const io = capture()
+  assert.equal(await runReverseCli([
+    'protocol', 'build',
+    '--reverse-evidence', 'C:\\out\\native.json',
+    '--out', 'C:\\out\\contract.json',
+  ], { ...operations(calls), ...io }), 0)
+  assert.deepEqual(calls, [['protocol', {
+    webEvidencePaths: [],
+    reverseEvidencePaths: ['C:\\out\\native.json'],
+    outPath: 'C:\\out\\contract.json',
+  }]])
+})
+
+test('protocol build refuses an empty evidence set before invoking the controller', async () => {
+  const calls = []
+  const io = capture()
+  assert.equal(await runReverseCli([
+    'protocol', 'build',
+    '--out', 'C:\\out\\contract.json',
+    '--json',
+  ], { ...operations(calls), ...io }), 1)
+  assert.deepEqual(calls, [])
+  const failure = JSON.parse(io.stderrText())
+  assert.equal(failure.error.code, 'REVERSE_CLI_OPTION_REQUIRED')
+  assert.match(failure.error.message, /at least one.*web-evidence.*reverse-evidence/i)
+})
+
 test('CLI maps fixed Ghidra and Frida inputs without accepting raw target arguments', async () => {
   const calls = []
   const deps = { ...operations(calls), ...capture() }
@@ -145,6 +206,7 @@ test('CLI rejects unknown, missing, duplicate scalar, and widened options withou
   const cases = [
     ['unknown'],
     ['web', 'import-har', '--har', 'x', '--origin', 'https://x.example'],
+    ['web', 'import-har', '--har', 'x', '--origin', 'https://x.example', '--out', 'z'],
     ['web', 'import-har', '--har', 'x', '--har', 'y', '--origin', 'https://x.example', '--out', 'z'],
     ['frida', 'trace', '--lab-root', 'x', '--binary', 'x', '--frida', 'x', '--module', 'x', '--symbol', 'x', '--out', 'x', '--target-arg', '--unsafe'],
     ['frida', 'trace-plan', '--plan', 'x', '--frida', 'x', '--out', 'x', '--script', 'caller.js'],

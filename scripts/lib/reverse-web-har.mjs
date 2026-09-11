@@ -5,7 +5,12 @@ import { stableJson } from './run-engine.mjs'
 
 export const WEB_SESSION_EVIDENCE_KIND = 'red-team-audit/web-session-evidence'
 export const WEB_SESSION_EVIDENCE_PROTOCOL = 'web-session-evidence-v1'
-export const WEB_SESSION_SOURCE_KINDS = Object.freeze(['BURP_XML', 'HAR'])
+export const WEB_SESSION_SOURCE_KINDS = Object.freeze([
+  'BURP_XML',
+  'HAR',
+  'HTTP_AUTHED_CAMPAIGN',
+  'HTTP_RECON',
+])
 
 const HASH = /^[a-f0-9]{64}$/u
 const HTTP_METHOD = /^[!#$%&'*+.^_`|~0-9A-Z-]{1,32}$/u
@@ -54,7 +59,7 @@ const DEFAULT_PATH_LITERALS = new Set([
 const REDACTED_FIELD_NAME = 'redacted_name'
 const REDACTED_HEADER_NAME = 'x-redacted-name'
 const SOURCE_KINDS = new Set(WEB_SESSION_SOURCE_KINDS)
-const SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0'])
+const SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0'])
 
 function fail(message) {
   const error = new Error(message)
@@ -149,6 +154,36 @@ function origin(value) {
   try { parsed = new URL(value) } catch { fail('target origin is invalid') }
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash || parsed.origin !== value) fail('target origin must be one canonical HTTP or HTTPS origin')
   return parsed.origin
+}
+
+export function canonicalWebPathPrefix(value) {
+  if (
+    typeof value !== 'string'
+    || value.length < 1
+    || value.length > 2048
+    || !value.startsWith('/')
+    || CONTROL.test(value)
+    || /%(?:2e|2f|5c)/iu.test(value)
+    || /%(?![0-9a-f]{2})/iu.test(value)
+  ) fail('target path prefix must be one canonical raw URL pathname')
+  let parsed
+  try { parsed = new URL(value, 'https://last-aperture.invalid/') } catch {
+    fail('target path prefix must be one canonical raw URL pathname')
+  }
+  if (
+    parsed.origin !== 'https://last-aperture.invalid'
+    || parsed.pathname !== value
+    || parsed.search
+    || parsed.hash
+  ) fail('target path prefix must be one canonical raw URL pathname')
+  return value
+}
+
+function pathWithinPrefix(pathname, pathPrefix) {
+  if (/%(?:2e|2f|5c)/iu.test(pathname)) return false
+  if (pathPrefix === '/') return true
+  return pathname === pathPrefix
+    || pathname.startsWith(pathPrefix.endsWith('/') ? pathPrefix : `${pathPrefix}/`)
 }
 
 function mediaType(value) {
@@ -378,7 +413,7 @@ function responseBody(content) {
   return { format, content_type: mime, byte_bucket: measured === null ? 'UNKNOWN' : bucket(measured), shape_status: shapeStatus, fields_truncated: state.truncated, fields: finishFields(fields) }
 }
 
-function responseDestinations(content, scope, pathLiterals, baseUrl) {
+function responseDestinations(content, scope, pathPrefix, pathLiterals, baseUrl) {
   if (!plain(content) || typeof content.text !== 'string' || Buffer.byteLength(content.text, 'utf8') > MAX_BODY_BYTES) return { values: [], truncated: false }
   const mime = mediaType(content.mimeType)
   if (!(mime === 'application/json' || mime?.endsWith('+json'))) return { values: [], truncated: false }
@@ -416,7 +451,12 @@ function responseDestinations(content, scope, pathLiterals, baseUrl) {
       ) {
         let parsed
         try { parsed = new URL(child, baseUrl) } catch { parsed = null }
-        if (parsed && ['http:', 'https:'].includes(parsed.protocol) && scope.has(parsed.origin)) {
+        if (
+          parsed
+          && ['http:', 'https:'].includes(parsed.protocol)
+          && scope.has(parsed.origin)
+          && pathWithinPrefix(parsed.pathname, pathPrefix)
+        ) {
           const item = {
             field_path: fieldPath,
             origin: parsed.origin,
@@ -448,16 +488,28 @@ function carriers(headerNames, cookies, bodyShape, cookieClassifier = credential
   return result
 }
 
-function redirect(values, scope, pathLiterals, baseUrl) {
+function redirect(values, scope, pathPrefix, pathLiterals, baseUrl) {
   const raw = values.at(-1)
   if (typeof raw !== 'string' || raw.length > 8192 || CONTROL.test(raw)) return null
   let parsed
   try { parsed = new URL(raw, baseUrl) } catch { return null }
-  if (!scope.has(parsed.origin) || !['http:', 'https:'].includes(parsed.protocol)) return null
+  if (
+    !scope.has(parsed.origin)
+    || !['http:', 'https:'].includes(parsed.protocol)
+    || !pathWithinPrefix(parsed.pathname, pathPrefix)
+  ) return null
   return { origin: parsed.origin, path_template: webPathTemplate(parsed.pathname, { pathLiterals }), query_parameters: parameters(parsed.searchParams) }
 }
 
-function sanitizeEntry(entry, sequence, scope, sourceSha256, pathLiterals) {
+function sanitizeEntry(
+  entry,
+  sequence,
+  scope,
+  pathPrefix,
+  sourceSha256,
+  pathLiterals,
+  deriveHeaderValues,
+) {
   if (
     !plain(entry)
     || !plain(entry.request)
@@ -470,15 +522,18 @@ function sanitizeEntry(entry, sequence, scope, sourceSha256, pathLiterals) {
   try { url = new URL(entry.request.url) } catch { return { skip: 'non_http' } }
   if (!['http:', 'https:'].includes(url.protocol)) return { skip: 'non_http' }
   if (!scope.has(url.origin)) return { skip: 'off_scope' }
+  if (!pathWithinPrefix(url.pathname, pathPrefix)) return { skip: 'off_scope' }
   const method = typeof entry.request.method === 'string' ? entry.request.method.toUpperCase() : ''
   if (!HTTP_METHOD.test(method)) return { skip: 'malformed' }
   const requestHeaders = readHeaders(entry.request.headers)
-  const requestCookies = readCookieNames(entry.request.cookies, requestHeaders.values)
-  const requestBody = body(entry.request.postData, requestHeaders.values.get('content-type')?.at(-1))
+  const requestHeaderValues = deriveHeaderValues ? requestHeaders.values : new Map()
+  const requestCookies = readCookieNames(entry.request.cookies, requestHeaderValues)
+  const requestBody = body(entry.request.postData, requestHeaderValues.get('content-type')?.at(-1))
   const responseHeaders = readHeaders(entry.response.headers)
-  const responseCookies = readCookieNames(entry.response.cookies, responseHeaders.values, true)
+  const responseHeaderValues = deriveHeaderValues ? responseHeaders.values : new Map()
+  const responseCookies = readCookieNames(entry.response.cookies, responseHeaderValues, true)
   const responseShape = responseBody(entry.response.content)
-  const destinations = responseDestinations(entry.response.content, scope, pathLiterals, url)
+  const destinations = responseDestinations(entry.response.content, scope, pathPrefix, pathLiterals, url)
   const status = Number(entry.response.status)
   if (!Number.isSafeInteger(status) || status < 0 || status > 999) return { skip: 'malformed' }
   const pathTemplate = webPathTemplate(url.pathname, { pathLiterals })
@@ -507,7 +562,7 @@ function sanitizeEntry(entry, sequence, scope, sourceSha256, pathLiterals) {
       header_names: responseHeaders.names,
       cookie_names: responseCookies,
       credential_carriers: carriers(responseHeaders.names, responseCookies, responseShape),
-      redirect: redirect(responseHeaders.values.get('location') ?? [], scope, pathLiterals, url),
+      redirect: redirect(responseHeaderValues.get('location') ?? [], scope, pathPrefix, pathLiterals, url),
       destinations: destinations.values,
       destinations_truncated: destinations.truncated,
       body: responseShape,
@@ -621,10 +676,14 @@ function aggregateMetadataItems(entry) {
 
 function evidenceGaps(entries, sourceKind) {
   const bodies = entries.flatMap((entry) => [entry.request.body, entry.response.body])
-  const gaps = [{
-    code: sourceKind === 'BURP_XML' ? 'BURP_XML_METADATA_ONLY' : 'HAR_METADATA_ONLY',
-    message: 'The importer retains protocol shape and sequence, not values or proof of application semantics.',
-  }]
+  const sourceGap = sourceKind === 'BURP_XML'
+    ? ['BURP_XML_METADATA_ONLY', 'The importer retains protocol shape and sequence, not values or proof of application semantics.']
+    : sourceKind === 'HAR'
+      ? ['HAR_METADATA_ONLY', 'The importer retains protocol shape and sequence, not values or proof of application semantics.']
+      : sourceKind === 'HTTP_RECON'
+        ? ['HTTP_RECON_METADATA_ONLY', 'The verified reconnaissance adapter retains one bounded request and response metadata record without body or header values.']
+        : ['HTTP_AUTHED_CAMPAIGN_METADATA_ONLY', 'The authenticated adapter retains settled sealed-plan request metadata; response-discovered locator values and ambient browser credential names remain unavailable.']
+  const gaps = [{ code: sourceGap[0], message: sourceGap[1] }]
   if (bodies.some((item) => item.fields_truncated)) gaps.push({ code: 'BODY_FIELDS_TRUNCATED', message: 'At least one body field inventory reached a structural traversal or field cap; its fields_truncated flag identifies the omission.' })
   if (bodies.some((item) => item.shape_status === 'OMITTED_SIZE_LIMIT')) gaps.push({ code: 'BODY_SHAPE_OMITTED_SIZE_LIMIT', message: 'At least one structured body exceeded the body byte limit and its field shape was omitted.' })
   if (bodies.some((item) => item.shape_status === 'MALFORMED')) gaps.push({ code: 'BODY_SHAPE_MALFORMED', message: 'At least one declared JSON body could not be parsed, so its field shape is unavailable.' })
@@ -639,6 +698,7 @@ export function assertValidWebSessionEvidence(value) {
   exact(value.source, ['kind', 'sha256'], 'web session source')
   if (!SOURCE_KINDS.has(value.source.kind) || !HASH.test(value.source.sha256 ?? '')) fail('web session source is invalid')
   if (value.schema_version === '1.0.0' && value.source.kind !== 'HAR') fail('web session evidence 1.0.0 supports HAR sources only')
+  if (value.schema_version === '1.1.0' && !['BURP_XML', 'HAR'].includes(value.source.kind)) fail('web session evidence 1.1.0 supports HAR and Burp sources only')
   if (!canonicalList(value.origins) || value.origins.length < 1 || value.origins.length > 32) fail('web session origins are invalid')
   value.origins.forEach(origin)
   if (!canonicalList(value.path_literals, (item) => typeof item === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(item)) || value.path_literals.length > 128) fail('web session path literals are invalid')
@@ -689,7 +749,9 @@ export function importWebSessionEvidence(rawEntries, {
   sourceKind,
   sourceSha256,
   targetOrigins,
+  targetPathPrefix = '/',
   pathLiterals = [],
+  deriveHeaderValues = true,
 } = {}) {
   if (!SOURCE_KINDS.has(sourceKind)) fail('web capture source kind is invalid')
   if (!HASH.test(sourceSha256 ?? '')) fail('web capture source sha256 is invalid')
@@ -698,18 +760,27 @@ export function importWebSessionEvidence(rawEntries, {
   if (!Array.isArray(pathLiterals) || pathLiterals.length > 128 || pathLiterals.some((item) => typeof item !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(item))) fail('path literal declarations are invalid')
   const declaredPathLiterals = unique(pathLiterals)
   const scope = new Set(origins)
+  const pathPrefix = canonicalWebPathPrefix(targetPathPrefix)
   if (!Array.isArray(rawEntries)) fail('web capture input is missing its entry list')
   if (rawEntries.length > MAX_ENTRIES) fail('web capture entry limit exceeded')
   const entries = []
   const skipped = { malformed: 0, non_http: 0, off_scope: 0 }
   rawEntries.forEach((entry, index) => {
-    const result = sanitizeEntry(entry, index + 1, scope, sourceSha256, declaredPathLiterals)
+    const result = sanitizeEntry(
+      entry,
+      index + 1,
+      scope,
+      pathPrefix,
+      sourceSha256,
+      declaredPathLiterals,
+      deriveHeaderValues === true,
+    )
     if (result.skip) skipped[result.skip] += 1
     else entries.push(result.value)
   })
   const captureId = createHash('sha256').update(`${sourceSha256}\n${origins.join('\n')}`).digest('hex').slice(0, 32)
   return assertValidWebSessionEvidence({
-    schema_version: '1.1.0',
+    schema_version: ['HAR', 'BURP_XML'].includes(sourceKind) ? '1.1.0' : '1.2.0',
     kind: WEB_SESSION_EVIDENCE_KIND,
     protocol: WEB_SESSION_EVIDENCE_PROTOCOL,
     capture_id: `web:${captureId}`,

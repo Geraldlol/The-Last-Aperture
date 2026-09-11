@@ -299,6 +299,83 @@ test('HAR import requires explicit canonical origins and rejects malformed input
   )
 })
 
+test('HAR import enforces an exact raw path-prefix boundary before retaining entries', () => {
+  const evidence = importWebHarEvidence({ log: { entries: [
+    harEntry({
+      url: 'https://app.example/app',
+      responseHeaders: [{ name: 'Location', value: '/application?ticket=private' }],
+      responseContent: {
+        mimeType: 'application/json',
+        size: 256,
+        text: JSON.stringify({
+          childUrl: '/app/clients/123?view=full',
+          exactUrl: '/app',
+          adminUrl: '/admin',
+          lookalikeUrl: '/application',
+        }),
+      },
+    }),
+    harEntry({ url: 'https://app.example/app/clients/123' }),
+    harEntry({ url: 'https://app.example/application' }),
+    harEntry({ url: 'https://app.example/admin' }),
+    harEntry({ url: 'https://app.example/app%2Fencoded-boundary' }),
+    harEntry({ url: 'https://app.example/app/segment%2F..%2F..%2Fadmin' }),
+  ] } }, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+    targetPathPrefix: '/app',
+    pathLiterals: ['app', 'clients'],
+  })
+
+  assert.deepEqual(evidence.entries.map(({ sequence }) => sequence), [1, 2])
+  assert.equal(evidence.skipped.off_scope, 4)
+  assert.equal(evidence.entries[0].response.redirect, null)
+  assert.deepEqual(evidence.entries[0].response.destinations.map((destination) => ({
+    field: destination.field_path,
+    path: destination.path_template,
+  })), [
+    { field: 'childUrl', path: '/app/clients/{integer}' },
+    { field: 'exactUrl', path: '/app' },
+  ])
+})
+
+test('HAR import rejects non-canonical and ambiguous target path prefixes', () => {
+  const prefixes = [
+    'app',
+    '//other.example/app',
+    '/app/../admin',
+    '/app?query=1',
+    '/app#fragment',
+    '/app%2fadmin',
+    '/app%',
+  ]
+  for (const targetPathPrefix of prefixes) {
+    assert.throws(
+      () => importWebHarEvidence({ log: { entries: [] } }, {
+        sourceSha256: SOURCE_HASH,
+        targetOrigins: ['https://app.example'],
+        targetPathPrefix,
+      }),
+      /path prefix|pathname/i,
+      targetPathPrefix,
+    )
+  }
+})
+
+test('a trailing slash remains an exact path-prefix boundary', () => {
+  const evidence = importWebHarEvidence({ log: { entries: [
+    harEntry({ url: 'https://app.example/app' }),
+    harEntry({ url: 'https://app.example/app/' }),
+    harEntry({ url: 'https://app.example/app/child' }),
+  ] } }, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+    targetPathPrefix: '/app/',
+  })
+  assert.deepEqual(evidence.entries.map(({ sequence }) => sequence), [2, 3])
+  assert.equal(evidence.skipped.off_scope, 1)
+})
+
 test('validator rejects raw value fields and evidence that claims an audit verdict', () => {
   const evidence = importWebHarEvidence(genericApplicationHar(), {
     sourceSha256: SOURCE_HASH,

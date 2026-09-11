@@ -125,7 +125,7 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.bin['last-aperture-reverse'], './scripts/reverse.mjs')
-  assert.equal(packageDocument.version, '0.13.0')
+  assert.equal(packageDocument.version, '0.14.0')
   assert.ok(packageDocument.files.includes('integrations/'))
   assert.ok(packageDocument.files.includes('!docs/superpowers/'))
   assert.ok(packageDocument.files.includes('!**/.gradle/'))
@@ -214,6 +214,7 @@ test('reverse capabilities and the canonical skill expose only the implemented n
   assert.deepEqual(byId.get('frida-local-reverse')?.commands, ['last-aperture-reverse frida trace'])
   assert.deepEqual(byId.get('frida-typed-reverse')?.commands, ['last-aperture-reverse frida trace-plan'])
   assert.deepEqual(byId.get('web-protocol-reconstruction')?.commands, [
+    'last-aperture-reverse web import-live-metadata',
     'last-aperture-reverse web import-har',
     'last-aperture-reverse web import-burp',
     'last-aperture-reverse protocol build',

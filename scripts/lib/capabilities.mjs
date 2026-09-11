@@ -62,6 +62,11 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Static checks do not inspect a Docker daemon, verify an image, or prove runtime readiness.',
     },
     {
+      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
+      description: 'Durable target-neutral engagement orchestration across applicable registered routes under one operator statement and shared ledger.',
+      limitation: 'Orchestration covers shipped registered routes. Declared tool or named host-adapter unavailability remains explicit; omitted immutable inputs or references require a successor engagement, and route evidence retains its own limits.',
+    },
+    {
       id: 't1-proof', status: 'AVAILABLE_NARROW', commands: ['run-proof'],
       description: 'Sealed, network-denied repository proof through the fixed Docker worker route.',
       limitation: 'Requires a compatible immutable Node/npm worker, sealed inputs, and the existing proof contract; no arbitrary runtime support.',
@@ -97,9 +102,9 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Only the bundled typed-capture agent and exact plan selectors are accepted. Declared raw captures can contain sensitive values. Attach evidence remains PARTIAL because a supplied local artifact copy cannot prove the attached runtime loaded identical bytes.',
     },
     {
-      id: 'web-protocol-reconstruction', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse web import-har', 'last-aperture-reverse web import-burp', 'last-aperture-reverse protocol build', 'last-aperture-reverse protocol generate', 'last-aperture-reverse protocol verify'],
-      description: 'Import an authorized HAR or Burp HTTP-items XML capture offline, compile its observed endpoint and auth shapes, and generate a deterministic self-contained Node connector with contract-bound endpoint IDs, origins, methods, redirects, retries, credential carriers, and per-origin cookie jars.',
-      limitation: 'Generation and verification perform no network I/O. The generated runtime is labeled GENERATED_REVIEWABLE and accepts only behaviors represented by its validated observed contract; verification requires the externally retained manifest digest.',
+      id: 'web-protocol-reconstruction', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse web import-live-metadata', 'last-aperture-reverse web import-har', 'last-aperture-reverse web import-burp', 'last-aperture-reverse protocol build', 'last-aperture-reverse protocol generate', 'last-aperture-reverse protocol verify'],
+      description: 'Import verified Last Aperture recon and settled sealed-plan auth metadata, an authorized HAR, or Burp HTTP-items XML offline; compile bounded observed protocol shapes; and generate a deterministic contract-bound Node connector.',
+      limitation: 'Live-metadata projection retains no values and does not claim complete endpoint/auth coverage, response-discovered locators, response shape, redirects, writes, replay, or pagination. Generation and verification perform no network I/O. The generated runtime is labeled GENERATED_REVIEWABLE, remains limited to its validated observed contract, and requires the externally retained manifest digest.',
     },
     {
       id: 'burp-proxy-history-export', status: 'AVAILABLE_NARROW', commands: ['integrations/burp-montoya/build.ps1'],
@@ -133,7 +138,7 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     },
     {
       id: 'generic-live', status: 'UNAVAILABLE', commands: [],
-      description: 'Generic autonomous live assessment, bounty, and out-of-band workflows.',
+      description: 'Unbounded or arbitrary autonomous live assessment, bounty, and out-of-band execution.',
       limitation: 'Only the specific implemented public routes listed above are available.',
     },
     {
