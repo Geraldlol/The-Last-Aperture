@@ -161,21 +161,21 @@ async function createDirectoryLink(target, path) {
 
 test('CLI help exposes only explicit platform commands', () => {
   const output = execFileSync(process.execPath, [CLI, 'help'], { encoding: 'utf8' })
-  assert.match(output, new RegExp(`^red-team-audit ${PLATFORM_VERSION.replaceAll('.', '\\.')}`, 'm'))
-  assert.match(output, /red-team-audit plan/)
+  assert.match(output, new RegExp(`^last-aperture ${PLATFORM_VERSION.replaceAll('.', '\\.')}`, 'm'))
+  assert.match(output, /last-aperture plan/)
   assert.match(output, /--max-shard-files <count>/)
   assert.match(output, /--max-shard-bytes <bytes>/)
   assert.match(output, /--max-closure-rounds <count>/)
   assert.match(output, /--require-source-closure/)
   assert.match(output, /--completeness-inputs <inputs\.json>/)
   assert.match(output, /--database-conformance <complete-bundle>/)
-  assert.match(output, /red-team-audit ingest-batch/)
-  assert.match(output, /red-team-audit run-remote/)
-  assert.match(output, /red-team-audit unlock/)
-  assert.match(output, /red-team-audit attest/)
-  assert.match(output, /red-team-audit publish/)
-  assert.match(output, /red-team-audit validate/)
-  assert.match(output, /red-team-audit benchmark/)
+  assert.match(output, /last-aperture ingest-batch/)
+  assert.match(output, /last-aperture run-remote/)
+  assert.match(output, /last-aperture unlock/)
+  assert.match(output, /last-aperture attest/)
+  assert.match(output, /last-aperture publish/)
+  assert.match(output, /last-aperture validate/)
+  assert.match(output, /last-aperture benchmark/)
   assert.match(output, /never executes repository code/i)
 })
 
@@ -553,7 +553,7 @@ test('CLI attests a terminal run and verifies its exact external trust root', as
       ],
       { encoding: 'utf8' },
     )
-    assert.match(anchoredReport, /# Red Team Audit Report/)
+    assert.match(anchoredReport, /# The Last Aperture Report/)
 
     const unanchored = execFileSync(
       process.execPath,
@@ -1146,7 +1146,7 @@ test('CLI explicitly initializes and advances external transparency continuity b
       { encoding: 'utf8' },
     )
     assert.equal(reported.status, 0, reported.stderr)
-    assert.match(reported.stdout, /# Red Team Audit Report/)
+    assert.match(reported.stdout, /# The Last Aperture Report/)
     assert.match(
       reported.stderr,
       /Checkpoint continuity: CONSISTENT_WITH_EXTERNALLY_RETAINED_CHECKPOINT/,
@@ -1452,7 +1452,7 @@ test('plan bundle publication removes its verified staging directory after a lat
   await withCliRepository(async ({ root, output }) => {
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       createdAt: new Date('2026-07-29T15:00:00.000Z'),
     })
     plan.run.publication_fault = 1n
@@ -1469,7 +1469,7 @@ test('plan bundle publication fails closed without replacing an existing final d
   await withCliRepository(async ({ root, output }) => {
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       createdAt: new Date('2026-07-29T15:01:00.000Z'),
     })
     const finalDirectory = join(
@@ -2025,7 +2025,7 @@ test('CLI unlock removes only a stale parsed-PID lock', async () => {
       { encoding: 'utf8' },
     )
     assert.equal(blocked.status, 1)
-    assert.match(blocked.stderr, /run is locked[\s\S]*red-team-audit unlock/i)
+    assert.match(blocked.stderr, /run is locked[\s\S]*last-aperture unlock/i)
 
     await writeFile(recoveryPath, JSON.stringify({
       pid: stalePid,
@@ -2215,7 +2215,7 @@ test('CLI refuses to mix provider work across repository snapshots', async () =>
 test('historical bundles remain reportable while active dispatch requires the current lens pack', async () => {
   await withCliRepository(async ({ root, output }) => {
     const historicalLenses = join(output, 'historical-lenses')
-    await cp(resolve('skills/red-team-audit/lenses'), historicalLenses, {
+    await cp(resolve('skills/last-aperture/lenses'), historicalLenses, {
       recursive: true,
     })
     const historicalLens = join(historicalLenses, 'web-and-api.md')
@@ -2286,7 +2286,7 @@ test('CLI report keeps streamed Markdown stdout free of SARIF status messages', 
       { encoding: 'utf8' },
     )
     assert.equal(result.status, 0)
-    assert.match(result.stdout, /^# Red Team Audit Report/m)
+    assert.match(result.stdout, /^# The Last Aperture Report/m)
     assert.doesNotMatch(result.stdout, /\bWrote\b/)
     assert.match(result.stderr, new RegExp(`Wrote .*${sarifPath.split(/[\\/]/).at(-1)}`))
     const sarif = JSON.parse(await readFile(sarifPath, 'utf8'))
@@ -2434,7 +2434,7 @@ test('CLI admits sealed remote_static planning while unsealed planning stays clo
     })
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       policy,
       sealSource: true,
     })

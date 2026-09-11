@@ -25,11 +25,11 @@
 - **Status:** Historical; the public acquisition CLI and audit evidence import were superseded and disabled 2026-09-03.
 - **Scope:** Phase 0 of a four-phase program (see *Program phases*)
 - **Motivating incident:** DEF CON 34 Kubernetes Learning CTF — "Terminate Transfer", "Shell in the Ghost"
-- **Canonical contracts this design extends:** `skills/red-team-audit/lenses/_schema.md`, `skills/red-team-audit/lenses/_topics.md`, `skills/red-team-audit/lenses/_harness.md`, `skills/red-team-audit/lenses/_database-adapters/contract.md`
+- **Canonical contracts this design extends:** `skills/last-aperture/lenses/_schema.md`, `skills/last-aperture/lenses/_topics.md`, `skills/last-aperture/lenses/_harness.md`, `skills/last-aperture/lenses/_database-adapters/contract.md`
 
 ## Directory note
 
-The canonical lens registry is `skills/red-team-audit/lenses/` (15 lenses plus `_schema.md`, `_topics.md`, `_harness.md`, `_database-adapters/`). The ten files under `references/` at the repository root are a **legacy copy** with superseded names. This design edits the canonical registry only. Deciding the fate of `references/` is out of scope; do not delete it as a side effect of this work.
+The canonical lens registry is `skills/last-aperture/lenses/` (15 lenses plus `_schema.md`, `_topics.md`, `_harness.md`, `_database-adapters/`). The ten files under `references/` at the repository root are a **legacy copy** with superseded names. This design edits the canonical registry only. Deciding the fate of `references/` is out of scope; do not delete it as a side effect of this work.
 
 Canonical lenses:
 

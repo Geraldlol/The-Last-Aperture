@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { parseLens, stripFencedBlocks } from '../scripts/lib/frontmatter.mjs'
 import { signalActivatorMatches } from '../scripts/lib/activation.mjs'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 const FIXTURE_MANIFEST = 'fixtures/EXPECTED.md'
 const FIXTURE_OWNERSHIP = 'fixtures/OWNERSHIP.tsv'
 

@@ -66,7 +66,7 @@ test('status CLI reports verified recorded state without writing, reading a remo
 })
 
 test('status CLI validates arguments before loading a bundle', () => {
-  assert.match(cli('help'), /red-team-audit status .*\[--json\]/)
+  assert.match(cli('help'), /last-aperture status .*\[--json\]/)
   for (const args of [
     ['status'],
     ['status', 'missing', 'extra'],

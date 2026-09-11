@@ -18,7 +18,7 @@ function profile(overrides = {}) {
   return {
     schema: EVIDENCE_BUNDLE_SCHEMA_VERSION,
     evidence_context: {
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       target_identity: 'sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c',

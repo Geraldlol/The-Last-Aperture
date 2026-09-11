@@ -6,9 +6,9 @@ import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 function discoveryScope() {
   const scope = attestedScope({ actionCount: 1 })
-  const actionUrl = 'https://peerstar-test.example.test/approved/seed'
+  const actionUrl = 'https://app.example.test/approved/seed'
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
-  scope.liveness.credential_preflight.url = 'https://peerstar-test.example.test/approved/whoami'
+  scope.liveness.credential_preflight.url = 'https://app.example.test/approved/whoami'
   scope.requests[0].url = actionUrl
   scope.requests[0].before_read.url = actionUrl
   scope.requests[0].after_read.url = actionUrl

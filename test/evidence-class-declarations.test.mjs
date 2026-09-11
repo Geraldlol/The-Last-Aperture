@@ -6,7 +6,7 @@ import { parseLens } from '../scripts/lib/frontmatter.mjs'
 import { checkEvidenceClasses, lensEvidenceDeclarations } from '../scripts/lib/registry.mjs'
 import { EVIDENCE_CLASS_ORDER } from '../scripts/lib/evidence-classes.mjs'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 
 function corpus() {
   return readdirSync(LENS_DIR)

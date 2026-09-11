@@ -498,7 +498,8 @@ function dispatchWithTimeout(dispatch, action, context, timeoutMs, campaignSigna
       controller.abort(error)
       reject(error)
     }, timeoutMs)
-    timer.unref?.()
+    // Keep the abort deadline alive until settlement, even if the operation has
+    // no other handles. Early process exit must not lose the terminal stop state.
   })
   const campaignAbort = campaignSignal === undefined
     ? null

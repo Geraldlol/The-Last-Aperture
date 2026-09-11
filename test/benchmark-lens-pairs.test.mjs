@@ -19,7 +19,7 @@ const pairs = [
 test('each newly represented lens has a detector-aligned vulnerable and clean pair', () => {
   for (const [lensName, detectorIndex, fixtureName] of pairs) {
     const lensText = readFileSync(
-      new URL(`../skills/red-team-audit/lenses/${lensName}.md`, import.meta.url),
+      new URL(`../skills/last-aperture/lenses/${lensName}.md`, import.meta.url),
       'utf8',
     )
     const lens = parseLens(lensText, `${lensName}.md`)

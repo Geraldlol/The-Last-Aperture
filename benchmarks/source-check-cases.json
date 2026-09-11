@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0.0",
+  "corpus_id": "javascript-tls-configuration-synthetic-v1",
+  "provenance": {
+    "classification": "synthetic-development",
+    "authorship": "Authored from the public two-rule contract without inspecting the checker implementation.",
+    "externally_validated": false,
+    "target_code_executed": false,
+    "limitations": "Small, intentionally labeled syntax examples. Not an external benchmark, real-world accuracy estimate, exploitability test, or security clearance. Cases cease to be held out when used for development."
+  },
+  "cases": [
+    {
+      "case_id": "env-direct-disable",
+      "path": "env-direct.js",
+      "source": "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-env-disable" },
+      "rationale": "An unshadowed global process receives the exact disabling string."
+    },
+    {
+      "case_id": "env-static-brackets",
+      "path": "env-brackets.cjs",
+      "source": "process['env']['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-env-disable" },
+      "rationale": "Static string-bracket notation denotes the same supported environment assignment."
+    },
+    {
+      "case_id": "https-default-request",
+      "path": "default-request.mjs",
+      "source": "import client from 'node:https';\nclient.request({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "An unchanged default builtin import receives an unambiguous direct literal option."
+    },
+    {
+      "case_id": "https-namespace-get",
+      "path": "namespace-get.mjs",
+      "source": "import * as secureClient from 'node:https';\nsecureClient['get']({ ['rejectUnauthorized']: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "Static bracket names preserve the direct builtin call and option identity."
+    },
+    {
+      "case_id": "https-named-agent",
+      "path": "named-agent.mjs",
+      "source": "import { Agent as ClientAgent } from 'node:https';\nnew ClientAgent({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "The named builtin Agent constructor uses a direct literal disabling option."
+    },
+    {
+      "case_id": "https-cjs-request",
+      "path": "commonjs-request.cjs",
+      "source": "const client = require('node:https');\nclient.request({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "An unchanged CommonJS builtin module binding is a supported direct-call form."
+    },
+    {
+      "case_id": "https-cjs-named-get",
+      "path": "commonjs-get.cjs",
+      "source": "const { get: fetchSecure } = require('node:https');\nfetchSecure({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "Destructuring renames a supported builtin method without changing its identity."
+    },
+    {
+      "case_id": "tls-named-connect",
+      "path": "connect.mjs",
+      "source": "import { connect as connectSecure } from 'node:tls';\nconnectSecure({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "observation", "rule_id": "node-tls-option-disable" },
+      "rationale": "The builtin TLS connect call directly supplies the disabling option."
+    },
+    {
+      "case_id": "env-enabled-string",
+      "path": "env-enabled.js",
+      "source": "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "The exact literal is not the disabling value. This is not a whole-file security claim."
+    },
+    {
+      "case_id": "env-read-only",
+      "path": "env-read.js",
+      "source": "const previousSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "Reading the environment property does not perform the matched assignment."
+    },
+    {
+      "case_id": "comment-and-string",
+      "path": "documentation.js",
+      "source": "// process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\nconst documentation = \"client.request({ rejectUnauthorized: false })\";\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "Comments and ordinary strings are inert syntax, not matched operations."
+    },
+    {
+      "case_id": "https-validation-enabled",
+      "path": "https-enabled.mjs",
+      "source": "import client from 'node:https';\nclient.request({ rejectUnauthorized: true });\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "The direct literal explicitly enables the relevant validation option."
+    },
+    {
+      "case_id": "tls-validation-enabled",
+      "path": "tls-enabled.cjs",
+      "source": "const tls = require('node:tls');\ntls.connect({ rejectUnauthorized: true });\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "A supported TLS call with the enabled literal is not the disabling pattern."
+    },
+    {
+      "case_id": "unrelated-object-property",
+      "path": "unrelated-object.js",
+      "source": "const displaySettings = { rejectUnauthorized: false };\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "An unconsumed object property alone does not identify a builtin TLS operation."
+    },
+    {
+      "case_id": "unrelated-module-name",
+      "path": "custom-client.mjs",
+      "source": "import https from './display-client.js';\nhttps.request({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "A local variable name does not convert a non-builtin import into node:https."
+    },
+    {
+      "case_id": "https-empty-options",
+      "path": "empty-options.mjs",
+      "source": "import client from 'node:https';\nclient.request({});\n",
+      "expectation": { "outcome": "no_observation" },
+      "rationale": "An empty direct options literal contains neither a disabling option nor an override."
+    },
+    {
+      "case_id": "unsupported-typescript",
+      "path": "typed-options.ts",
+      "source": "const enabled: boolean = true;\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "TypeScript is outside the documented JS/MJS/CJS syntax surface."
+    },
+    {
+      "case_id": "unsupported-jsx",
+      "path": "view.jsx",
+      "source": "const view = <section />;\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "JSX is outside the documented syntax surface."
+    },
+    {
+      "case_id": "parse-failure",
+      "path": "invalid.js",
+      "source": "const options = {;\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "A parse failure must not become an assessed negative."
+    },
+    {
+      "case_id": "shadowed-process",
+      "path": "shadowed.js",
+      "source": "function configure(process) { process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; }\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "The process identifier is a parameter; the contract requires an explicit binding-uncertainty gap."
+    },
+    {
+      "case_id": "reassigned-builtin-binding",
+      "path": "reassigned.cjs",
+      "source": "let client = require('node:https');\nclient = replacementClient;\nclient.request({ rejectUnauthorized: false });\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "Reassignment prevents the checker from treating the call as an unchanged builtin binding."
+    },
+    {
+      "case_id": "spread-option-uncertainty",
+      "path": "spread.mjs",
+      "source": "import client from 'node:https';\nclient.request({ rejectUnauthorized: false, ...settings });\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "A later spread may override the disabling property; the supported contract abstains."
+    },
+    {
+      "case_id": "duplicate-option-override",
+      "path": "duplicate.mjs",
+      "source": "import client from 'node:https';\nclient.request({ rejectUnauthorized: false, rejectUnauthorized: true });\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "Duplicate override resolution is outside the no-override literal contract and must not silently clear the case."
+    },
+    {
+      "case_id": "indirect-options-object",
+      "path": "indirect.mjs",
+      "source": "import client from 'node:https';\nconst options = { rejectUnauthorized: false };\nclient.request(options);\n",
+      "expectation": { "outcome": "abstain" },
+      "rationale": "The checker does not propagate object values into calls; indirect options require a coverage gap."
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/controller-failure-envelope.schema.json",
-  "title": "Red Team Audit signed controller failure envelope",
+  "title": "The Last Aperture signed controller failure envelope",
   "description": "A controller-observed provider failure, optionally including a partial byte-delivery receipt, bound to one durable attempt and signed with an external Ed25519 key.",
   "type": "object",
   "additionalProperties": false,

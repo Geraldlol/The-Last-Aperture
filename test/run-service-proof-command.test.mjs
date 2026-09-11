@@ -242,7 +242,7 @@ async function proofReadyBundle({ createdAt = new Date() } = {}) {
   }, { workspaceRoot: target, policySource: 'external' })
   const plan = await createRunPlan({
     targetRoot: target,
-    lensDirectory: join(WORKSPACE, 'skills', 'red-team-audit', 'lenses'),
+    lensDirectory: join(WORKSPACE, 'skills', 'last-aperture', 'lenses'),
     policy,
     createdAt,
     sealSource: true,

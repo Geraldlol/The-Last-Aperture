@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/engagement-intake.schema.json",
+  "title": "The Last Aperture unified engagement intake",
+  "description": "One operator statement, objective, canonical target, named credential references, and optional local inputs accepted at engagement ingress.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "operator_id",
+    "declared_at",
+    "statement",
+    "objective",
+    "authorization_profile",
+    "capabilities",
+    "effects",
+    "target",
+    "credential_references",
+    "inputs"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/engagement-intake" },
+    "operator_id": { "$ref": "#/$defs/id" },
+    "declared_at": { "$ref": "#/$defs/timestamp" },
+    "statement": { "$ref": "#/$defs/statement" },
+    "objective": { "$ref": "#/$defs/objective" },
+    "authorization_profile": { "enum": ["full", "repository-read", "web", "reverse", "offline"] },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "effects": { "$ref": "#/$defs/effects" },
+    "target": { "$ref": "#/$defs/target" },
+    "credential_references": { "$ref": "#/$defs/credentialReferences" },
+    "inputs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "locator", "sha256", "size_bytes"],
+        "properties": {
+          "kind": { "enum": ["artifact", "capture", "configuration", "plan"] },
+          "locator": { "$ref": "#/$defs/locator" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size_bytes": { "type": "integer", "minimum": 0, "maximum": 2147483648 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "statement": { "type": "string", "minLength": 1, "maxLength": 8192 },
+    "objective": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "locator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000\\u0001-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]*$"
+    },
+    "credentialReferences": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "repository-audit",
+          "repository-agent-work",
+          "https-recon",
+          "authenticated-http-browser",
+          "web-live-metadata-import",
+          "web-capture-har-import",
+          "web-capture-burp-import",
+          "ghidra-analysis",
+          "frida-trace",
+          "protocol-build",
+          "connector-generate",
+          "connector-verify"
+        ]
+      }
+    },
+    "effects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "ANALYZE_LOCAL_ARTIFACT",
+          "ATTACH_AUTHORIZED_RUNTIME",
+          "GENERATE_LOCAL_CONNECTOR",
+          "INGEST_BOUND_AGENT_RESULT",
+          "INSPECT_AUTHORIZED_REPOSITORY",
+          "RUN_TARGET_BOUND_PROBES",
+          "SEND_AUTHENTICATED_TARGET_REQUESTS",
+          "SEND_BOUNDED_TARGET_REQUESTS"
+        ]
+      }
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "locator"],
+          "properties": {
+            "kind": { "enum": ["https", "repository", "artifact", "browser"] },
+            "locator": { "$ref": "#/$defs/locator" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "locator", "instance_sha256"],
+          "properties": {
+            "kind": { "enum": ["process", "device"] },
+            "locator": { "$ref": "#/$defs/locator" },
+            "instance_sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    }
+  }
+}

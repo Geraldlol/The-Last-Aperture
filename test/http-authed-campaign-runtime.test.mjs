@@ -146,12 +146,12 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
 
   assert.equal(calls.length, 2)
   assert.equal(result.actions.completed, 2)
-  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.12')
+  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.14')
   assert.equal(result.actions.discovered, 1)
   assert.equal(result.ledger.terminal_actions, 2)
   assert.doesNotMatch(
     JSON.stringify(result),
-    /peerstar-test|approved|TRANSIENT_RUNTIME_BODY_SENTINEL|synthetic-runtime-credential/i,
+    /generic-test|approved|TRANSIENT_RUNTIME_BODY_SENTINEL|synthetic-runtime-credential/i,
   )
 
   const replay = await runHttpAuthedAttestedCampaign({
@@ -408,7 +408,24 @@ test('browser campaign opens its stop ledger before attach and closes its bridge
     mode: 'CHROME_ACTIVE_TAB_SESSION',
     extension_id: 'abcdefghijklmnopabcdefghijklmnop',
     origin: scope.target.origin,
+    session_adapter: {
+      schema_version: '1.0.0',
+      kind: 'last-aperture/page-session-adapter',
+      adapter_id: 'synthetic-runtime-session',
+      source: {
+        type: 'WEB_STORAGE', area: 'LOCAL', key: 'application.session',
+        extraction: { mode: 'RAW' },
+      },
+      carrier: { type: 'REQUEST_HEADER', name: 'authorization', prefix: 'Bearer ' },
+      target_constraints: [{ origin: scope.target.origin, method: 'GET', path_prefix: '/' }],
+      validity: {
+        not_before: scope.validity.not_before,
+        not_after: scope.validity.not_after,
+      },
+      limits: { max_value_bytes: 4096 },
+    },
   }
+  scope.schema_version = '1.4.0'
   scope.authorization.permissions.mutation = false
   scope.requests = [{
     kind: 'probe',
@@ -441,6 +458,7 @@ test('browser campaign opens its stop ledger before attach and closes its bridge
       assert.equal(configuration.extensionId, scope.credential.extension_id)
       assert.equal(configuration.targetOrigin, scope.target.origin)
       assert.equal(configuration.campaignGrantSha256, verified.campaignGrantSha256)
+      assert.deepEqual(configuration.pageSessionAdapter, scope.credential.session_adapter)
       return {
         pairing: { port: 43123, capability: 'x'.repeat(43) },
         waitForAttach: async () => {
@@ -728,7 +746,7 @@ test('operator stop interrupts a credential read that never resolves', async (t)
   assert.equal(result.actions.completed, 0)
 })
 
-test('campaign-attested CLI executes a fixed controller-governed active probe', async (t) => {
+test('campaign-attested CLI executes a controller-governed active probe', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-runtime-cli-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const scope = attestedScope({ actionCount: 1 })
@@ -773,19 +791,21 @@ test('campaign-attested CLI executes a fixed controller-governed active probe', 
   await access(join(root, 'ledger'))
 })
 
-test('public campaign refuses adaptive discovery before credentials, ledger, or transport', async (t) => {
+test('public campaign executes sealed adaptive discovery through the controller', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-runtime-public-discovery-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const scope = attestedScope({ actionCount: 1 })
   scope.limits.min_interval_ms = 0
   scope.credential.binding_sha256 = sha256Hex(Buffer.from(CREDENTIAL))
   scope.authorization.permissions.mutation = false
+  scope.authorization.authorized_scope.path_prefixes = ['/approved']
+  scope.liveness.credential_preflight.url = `${scope.target.origin}/approved/whoami`
   scope.requests = [{
     kind: 'probe',
     sequence: 1,
     test_category: 'api_security',
     method: 'GET',
-    url: `${scope.target.origin}/discovery-must-remain-disabled`,
+    url: `${scope.target.origin}/approved/discovery-seed`,
     expected_effect: 'none',
   }]
   scope.discovery = {
@@ -794,7 +814,7 @@ test('public campaign refuses adaptive discovery before credentials, ledger, or 
     path_prefixes: [...scope.authorization.authorized_scope.path_prefixes],
     sources: ['location_header'],
     candidate_methods: ['GET'],
-    test_category: scope.authorization.authorized_scope.test_categories[0],
+    test_category: 'api_security',
     synthetic_query_values: {},
     synthetic_path_values: {},
     max_response_bytes: scope.limits.max_response_bytes,
@@ -803,34 +823,45 @@ test('public campaign refuses adaptive discovery before credentials, ledger, or 
   const scopePath = join(root, 'scope.json')
   const ledgerPath = join(root, 'ledger')
   await writeFile(scopePath, JSON.stringify(scope), 'utf8')
-  let sends = 0
-  let credentialReads = 0
+  const calls = []
+  let output = ''
 
-  await assert.rejects(
-    httpAuthedMain([
+  await httpAuthedMain([
       'campaign-attested',
       '--scope', scopePath,
       '--campaign-grant-sha256', verified.campaignGrantSha256,
       '--ledger', ledgerPath,
       '--operator-id', scope.authorization.operator_id,
+      '--json',
     ], {
       clock: () => NOW,
-      credentialStdinReader: async () => { credentialReads += 1; return CREDENTIAL },
-      transport: async () => { sends += 1 },
-      write: () => {},
-    }),
-    (error) => error.code === 'HTTP_AUTHED_PUBLIC_DISCOVERY_REQUIRES_ADAPTIVE_CONTROLLER',
-  )
+      env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
+      transport: async (request) => {
+        await request.beforeSend()
+        calls.push(request.url)
+        await request.responseObserver?.({
+          status: 200,
+          headers: calls.length === 1
+            ? [{ name: 'location', value: '/approved/discovered-endpoint' }]
+            : [],
+          bodyChunks: [],
+        })
+        return { status: 200, responseBytes: 0, responseHeaderNames: [] }
+      },
+      write: (value) => { output += value },
+    })
 
-  assert.equal(credentialReads, 0)
-  assert.equal(sends, 0)
-  await assert.rejects(access(ledgerPath), { code: 'ENOENT' })
+  assert.equal(calls.length, 2)
+  assert.equal(JSON.parse(output).actions.discovered, 1)
+  await access(ledgerPath)
 })
 
-test('public campaign refuses more than 256 sealed actions before credentials, ledger, or transport', async (t) => {
+test('public campaign executes more than 256 sealed actions through the general controller', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-runtime-public-cap-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const scope = attestedScope({ actionCount: 257 })
+  scope.limits.min_interval_ms = 0
+  scope.credential.binding_sha256 = sha256Hex(Buffer.from(CREDENTIAL))
   scope.authorization.permissions.mutation = false
   scope.requests = Array.from({ length: 257 }, (_unused, index) => ({
     kind: 'probe',
@@ -845,27 +876,29 @@ test('public campaign refuses more than 256 sealed actions before credentials, l
   const ledgerPath = join(root, 'ledger')
   await writeFile(scopePath, JSON.stringify(scope), 'utf8')
   let sends = 0
-  let credentialReads = 0
+  let output = ''
 
-  await assert.rejects(
-    httpAuthedMain([
+  await httpAuthedMain([
       'campaign-attested',
       '--scope', scopePath,
       '--campaign-grant-sha256', verified.campaignGrantSha256,
       '--ledger', ledgerPath,
       '--operator-id', scope.authorization.operator_id,
+      '--json',
     ], {
       clock: () => NOW,
-      credentialStdinReader: async () => { credentialReads += 1; return CREDENTIAL },
-      transport: async () => { sends += 1 },
-      write: () => {},
-    }),
-    (error) => error.code === 'HTTP_AUTHED_PUBLIC_CAMPAIGN_ACTION_LIMIT',
-  )
+      env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
+      transport: async (request) => {
+        await request.beforeSend()
+        sends += 1
+        return { status: 200, responseBytes: 0, responseHeaderNames: [] }
+      },
+      write: (value) => { output += value },
+    })
 
-  assert.equal(credentialReads, 0)
-  assert.equal(sends, 0)
-  await assert.rejects(access(ledgerPath), { code: 'ENOENT' })
+  assert.equal(sends, 257)
+  assert.equal(JSON.parse(output).actions.completed, 257)
+  await access(ledgerPath)
 })
 
 test('fixed campaigns ledger terminal response stops and send no later sealed action', async (t) => {

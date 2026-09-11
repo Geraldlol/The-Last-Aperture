@@ -1,4 +1,4 @@
-# red-team-audit: enhancement and open-source release
+# last-aperture: enhancement and open-source release
 
 **Date:** 2026-07-26
 **Status:** Historical; superseded by ADR 0001, ADR 0002, and ADR 0003
@@ -15,7 +15,7 @@ and controller-owned database discovery.
 
 ## 1. Purpose
 
-Turn the existing `red-team-audit` skill from a single-pass prose auditor into a verifying audit pipeline, and publish it as an MIT-licensed open-source project that works both as a portable markdown skill and as an installable Claude Code plugin.
+Turn the existing `last-aperture` skill from a single-pass prose auditor into a verifying audit pipeline, and publish it as an MIT-licensed open-source project that works both as a portable markdown skill and as an installable Claude Code plugin.
 
 Two goals, and they reinforce each other. The pipeline is what makes the project worth publishing; publishing is what forces the pipeline to be legible to people who did not write it.
 
@@ -45,7 +45,7 @@ Four structural problems:
 | Findings are prose with no verification step | No way to separate a real bug from a plausible-sounding one. This is the single biggest credibility gap. |
 | Implicitly assumes pasted code or a small diff | No recon phase, so a whole-repo audit either blows context or silently covers a fraction of the code. |
 | Reference files have no declared scope boundaries | Two references covering adjacent ground produce the same finding twice, and there is no merge step to catch it. |
-| Two identical copies on disk | `~/.claude/skills/red-team-audit` and the working copy have the same hash today and no mechanism keeping them that way. |
+| Two identical copies on disk | `~/.claude/skills/last-aperture` and the working copy have the same hash today and no mechanism keeping them that way. |
 
 The modes are also implemented as parallel structures rather than as variations on one flow, which triples the surface that has to stay consistent.
 
@@ -69,12 +69,12 @@ Each of these was decided explicitly. Rationale is recorded because the reasonin
 The repository root is the plugin root. The skill lives one level down, which is what Claude Code's plugin discovery expects.
 
 ```
-red-team-audit/                      # repo root == plugin root
+last-aperture/                      # repo root == plugin root
 ├── .claude-plugin/
 │   ├── plugin.json                  # plugin manifest
 │   └── marketplace.json             # lets users add this repo as a marketplace directly
 ├── skills/
-│   └── red-team-audit/
+│   └── last-aperture/
 │       ├── SKILL.md                 # orchestrator only
 │       └── lenses/
 │           ├── _schema.md           # candidate-finding contract
@@ -469,14 +469,14 @@ The plugin manifest and marketplace descriptor must validate against the current
 Requirements independent of the manifest's exact field set:
 
 - `.claude-plugin/plugin.json` at the repository root.
-- The skill discoverable at `skills/red-team-audit/SKILL.md`.
+- The skill discoverable at `skills/last-aperture/SKILL.md`.
 - `.claude-plugin/marketplace.json` present, so a user can add the GitHub repository directly as a marketplace.
 - `SKILL.md` frontmatter keeps `name` and `description`. The description retains the trigger language that makes auto-triggering work, since that behaviour is load-bearing.
-- `AGENTS.md` at the root as the entry point for harnesses that look for it, pointing at `skills/red-team-audit/SKILL.md`.
+- `AGENTS.md` at the root as the entry point for harnesses that look for it, pointing at `skills/last-aperture/SKILL.md`.
 
 ### Source of truth
 
-The repository is canonical. `~/.claude/skills/red-team-audit` is replaced with a directory junction into `skills/red-team-audit/` inside the repository, so editing the repository updates the installed skill and the two copies cannot diverge. The existing duplicate is removed only after the junction is verified to resolve.
+The repository is canonical. `~/.claude/skills/last-aperture` is replaced with a directory junction into `skills/last-aperture/` inside the repository, so editing the repository updates the installed skill and the two copies cannot diverge. The existing duplicate is removed only after the junction is verified to resolve.
 
 ### README
 
@@ -565,7 +565,7 @@ Verifiable, in the order they can be checked:
 5. On a repository with a working test framework, **every finding reported at Critical or High has `verification_status: CONFIRMED`** with T1 or T2 evidence attached — the declared assertion signature, path-reached evidence, a control, the identical pre/post command, and passing regression tests. `UNPROVEN`, `INCONCLUSIVE` and T0/T3 evidence all cap at Medium, so a Critical or High carrying any of them is a contract violation, not a judgement call. T2 request-and-response evidence satisfies this criterion exactly as an executed test does.
 6. On the same repository, the report includes a `Coverage` block naming any file or lens not examined.
 7. The plugin installs from a local clone and the skill appears in the available-skills list.
-8. `~/.claude/skills/red-team-audit` resolves through the junction to the repository, and no second copy of `SKILL.md` exists on disk.
+8. `~/.claude/skills/last-aperture` resolves through the junction to the repository, and no second copy of `SKILL.md` exists on disk.
 9. Every bullet in every lens's `Known false positives` section has a corresponding case in `fixtures/clean/`.
 10. Every literal string, filename, or API symbol a lens instructs an auditor to search for has been verified to occur in real code of that stack, or has been rewritten as a structural check.
 11. The skill asks for a capability mode before Phase 3 and honours that mode's tier ceiling: Static reaches T0/T3, Test execution reaches T1, Local dynamic reaches T2.

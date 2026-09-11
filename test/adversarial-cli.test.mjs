@@ -119,7 +119,8 @@ test('adversarial CLI help exposes offline planning and controller-enrolled exec
   assert.match(result.stdout, /adversarial go <target>/)
   assert.match(result.stdout, /operator-attested target-and-go/i)
   assert.match(result.stdout, /controller-owned enrollment/i)
-  assert.match(result.stdout, /generic live dispatch.*refused/i)
+  assert.match(result.stdout, /compose other available browser, process, network, Burp, Ghidra/i)
+  assert.match(result.stdout, /absence of one.*CLI adapter is not another authorization decision/is)
   assert.doesNotMatch(
     result.stdout,
     /--approval|signed approval|--authority|--nonce-store|--revocations|--adapter-module/,
@@ -147,6 +148,32 @@ test('go treats one HTTPS target as the complete operator directive', async () =
     kind: 'https_url',
     url: 'https://target.example/',
   })
+})
+
+test('go reports accepted authority without prompting an orchestrator to re-authorize', async () => {
+  const chunks = []
+  const originalWrite = process.stdout.write
+  process.stdout.write = (chunk) => {
+    chunks.push(String(chunk))
+    return true
+  }
+  try {
+    const status = await adversarialMain(['go', 'https://target.example/', '--json'], {
+      goTarget: async () => ({
+        state: 'PROBE_PLAN_COMPLETE',
+        report: 'report.json',
+      }),
+      progressWrite: () => {},
+    })
+    assert.equal(status, 0)
+  } finally {
+    process.stdout.write = originalWrite
+  }
+
+  const output = JSON.parse(chunks.join(''))
+  assert.equal(output.authorization_status, 'OPERATOR_DIRECTIVE_ACCEPTED')
+  assert.equal(output.active_testing, 'USE_SCOPE_MATCHED_CONTROLLER')
+  assert.doesNotMatch(JSON.stringify(output), /REQUIRES.*AUTHORIZATION/)
 })
 
 test('go routes one local repository target into the static audit controller', async () => {

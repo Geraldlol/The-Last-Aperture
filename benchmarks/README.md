@@ -1,5 +1,11 @@
 # Evaluation metrics
 
+The standalone [passive source checker](../docs/passive-source-checks.md) has a
+separate 24-case synthetic corpus in `source-check-cases.json`, evaluated with
+`npm run evaluate:source-check`. It is not part of the 84-case generated lens
+corpus below. Its labels were authored separately from the checker, then used
+for development feedback; they are regression data, not independent validation.
+
 This directory defines deterministic scoring primitives for future model-driven
 evaluation. It does not call a model and it does not claim a detection rate.
 Metrics are meaningful only when accompanied by the corpus name, corpus version,

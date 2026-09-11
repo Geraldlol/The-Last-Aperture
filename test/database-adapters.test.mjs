@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const ADAPTER_DIRECTORY = new URL(
-  '../skills/red-team-audit/lenses/_database-adapters/',
+  '../skills/last-aperture/lenses/_database-adapters/',
   import.meta.url,
 )
 const ADAPTER_PATH = fileURLToPath(ADAPTER_DIRECTORY)

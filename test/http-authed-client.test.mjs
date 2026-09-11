@@ -29,7 +29,7 @@ function campaign({ method = 'PROPFIND', action = {} } = {}) {
     sequence: 2_000_000,
     test_category: 'api_security',
     method,
-    url: 'https://peerstar-test.example.test/discovered/method-surface',
+    url: 'https://app.example.test/discovered/method-surface',
     expected_effect: 'none',
     ...action,
   }
@@ -70,7 +70,7 @@ test('method-complete operator-attested probe reaches one injected transport wit
   assert.equal(calls[0].method, 'PROPFIND')
   assert.equal(calls[0].url, candidate.url)
   assert.equal(calls[0].responseObserver, undefined)
-  assert.equal(calls[0].headers['user-agent'], 'red-team-audit-http-authed/0.12')
+  assert.equal(calls[0].headers['user-agent'], 'red-team-audit-http-authed/0.14')
   assert.equal(calls[0].headers.authorization, `Bearer ${CREDENTIAL.toString('utf8')}`)
   assert.equal(result.action.sequence, 2_000_000)
   assert.deepEqual(result.response, {
@@ -490,7 +490,7 @@ test('protected HTTPS transport refuses noncanonical method casing before I/O', 
   })
   await assert.rejects(
     () => transport({
-      url: 'https://peerstar-test.example.test/method-surface',
+      url: 'https://app.example.test/method-surface',
       method: 'customProbe',
       headers: {},
       body: null,
@@ -520,7 +520,7 @@ test('protected native HTTPS transport refuses CONNECT before DNS or request con
 
   await assert.rejects(
     transport({
-      url: 'https://peerstar-test.example.test/tunnel-target',
+      url: 'https://app.example.test/tunnel-target',
       method: 'CONNECT',
       headers: {},
       body: null,
@@ -583,7 +583,7 @@ test('protected HTTPS transport sends every authorized non-tunneling method once
   const transport = createHttpAuthedHttpsTransport({ dnsLookup, httpsRequest })
   const methods = [
     'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE',
-    'PROPFIND', 'COPY', 'MOVE', 'LOCK', 'UNLOCK', 'X-PEERSTAR-AUDIT',
+    'PROPFIND', 'COPY', 'MOVE', 'LOCK', 'UNLOCK', 'X-EXAMPLE-AUDIT',
   ]
   assert.equal(methods.includes('CONNECT'), false)
   const results = []
@@ -622,7 +622,7 @@ test('operator-attested dispatcher executes a verified custom method without ret
   const urlMarker = 'SYNTHETIC_PATIENT_IDENTIFIER_8675309'
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
     action: {
-      url: `https://peerstar-test.example.test/discovered/${urlMarker}?subject=${urlMarker}`,
+      url: `https://app.example.test/discovered/${urlMarker}?subject=${urlMarker}`,
     },
   })
   let calls = 0
@@ -714,7 +714,7 @@ test('operator-attested dispatcher propagates controller candidate-binding rejec
   const driftedCandidate = {
     ...candidate,
     sequence: candidate.sequence + 1,
-    url: 'https://peerstar-test.example.test/discovered/other-authorized-path',
+    url: 'https://app.example.test/discovered/other-authorized-path',
   }
   let sent = 0
 

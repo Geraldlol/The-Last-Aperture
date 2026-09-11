@@ -2,13 +2,13 @@
 
 - Status: Accepted for the v0.11 authorized-reconnaissance slice
 - Date: 2026-08-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Amends: ADR 0013; amended by ADR 0021, which retains operator-statement
   authority and retires the externally signed authorization mode
 - Amended by: ADR 0015, which removes the mandatory advance SPKI pin from
   operator-attested planning
 
-> **Current 0.12.0 execution status: active through the bounded controller.**
+> **Current 0.13.0 execution status: active through the bounded controller.**
 > `go <exact-https-url>` records the operator invocation as the authorization
 > declaration and executes one sealed action without a second attestation step.
 > The declaration is not independent proof of permission; exact-target and

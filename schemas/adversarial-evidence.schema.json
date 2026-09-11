@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/adversarial-evidence.schema.json",
-  "title": "Red Team Audit public adversarial evidence claim",
+  "title": "The Last Aperture public adversarial evidence claim",
   "description": "A bounded, metadata-only normalization of caller-supplied attack/control/replay claims. This schema does not establish authenticity or evidence custody.",
   "type": "object",
   "additionalProperties": false,

@@ -48,7 +48,7 @@ test('a parameter that fails its pattern is refused, never interpolated', () => 
 
 test('sf.query accepts a SELECT and nothing else', () => {
   const built = buildReadOnlyCommand('sf.query', {
-    alias: 'peerstar-prod',
+    alias: 'reference-production',
     soql: 'SELECT Id, Name FROM PermissionSet LIMIT 50',
   })
   assert.deepEqual(built.args.slice(0, 4), ['data', 'query', '--json', '-o'])

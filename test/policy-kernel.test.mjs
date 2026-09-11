@@ -215,7 +215,7 @@ test('read access is root-bounded and carries a realpath enforcement requirement
 
   const outsideRoot = authorizeAction(policy, {
     type: 'read_file',
-    path: 'skills/red-team-audit/SKILL.md',
+    path: 'skills/last-aperture/SKILL.md',
   })
   assert.equal(outsideRoot.allowed, false)
   assert.equal(codeOf(outsideRoot), 'PATH_NOT_ALLOWED')

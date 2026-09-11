@@ -35,7 +35,7 @@ async function adapterWithStub(body) {
 
 const REQUEST = {
   evidence_id: 'prod-cluster',
-  context: 'peerstar-prod',
+  context: 'reference-production',
   operations: [{ operation_id: 'k8s.resources', params: { kind: 'secrets', namespace: 'clinical' } }],
   target_class: 'PRODUCTION',
   acknowledge_production: true,

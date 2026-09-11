@@ -168,7 +168,7 @@ async function createProviderFixture(label) {
   )
   const plan = await createRunPlan({
     targetRoot: root,
-    lensDirectory: resolve('skills/red-team-audit/lenses'),
+    lensDirectory: resolve('skills/last-aperture/lenses'),
     sealSource: true,
     createdAt: new Date('2026-07-29T09:59:00.000Z'),
   })

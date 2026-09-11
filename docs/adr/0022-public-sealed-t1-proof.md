@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes for public T1 activation: ADR 0020's disabled `run-proof` and
   source-sealing release gate
 - Replaces as current capability statement: the disabled release status in

@@ -212,7 +212,7 @@ import {
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
-const DEFAULT_LENS_DIRECTORY = join(PROJECT_ROOT, 'skills', 'red-team-audit', 'lenses')
+const DEFAULT_LENS_DIRECTORY = join(PROJECT_ROOT, 'skills', 'last-aperture', 'lenses')
 const DEFAULT_THRESHOLDS = join(PROJECT_ROOT, 'benchmarks', 'thresholds.json')
 const DEFAULT_BENCHMARK_CASES = join(PROJECT_ROOT, 'benchmarks', 'cases.json')
 // context, version, image, create, profile inspect, attached start/exit,
@@ -247,33 +247,39 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit ${PLATFORM_VERSION}
+const HELP = `last-aperture ${PLATFORM_VERSION}
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
-  red-team-audit next <run.json|bundle-directory>
-  red-team-audit status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit capabilities [--json]
-  red-team-audit doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
-  red-team-audit review-template <bundle> --job <job-id>
-  red-team-audit check-result <bundle> <job-result.json> [--json]
-  red-team-audit verdict <bundle> [--candidate <candidate-id>] [--json]
-  red-team-audit repair-brief <bundle> [--candidate <candidate-id>] [--baseline <bundle>] [--json]
-  red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>  [DISABLED]
-  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>  [DISABLED]
-  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json> --worker <proof-worker.json>
-  red-team-audit run-service-proof <run.json|bundle-directory> <service-proof-config.json> --worker <proof-worker.json>
-  red-team-audit ingest <run.json|bundle-directory> <job-result.json>
-  red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
-  red-team-audit finalize <run.json|bundle-directory>
-  red-team-audit abort <run.json|bundle-directory> --reason <text>
-  red-team-audit unlock <run.json|bundle-directory>
-  red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]  [DISABLED]
-  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
-  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
-  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
+  last-aperture engage run <target> --attestation-file <file> --profile <full|repository-read|web|reverse|offline> --out <new-directory> [--target-kind <kind>] [--objective <text>] [--credential-reference <name> ...] [--input <kind=absolute-path> ...] [--json]
+  last-aperture engage resume|status|stop <engagement-directory> [options]
+  last-aperture engage work next|status|finalize|validate <engagement-directory> [--json]
+  last-aperture engage work submit <engagement-directory> --work-id <repository-work:sha256> --result <absolute-json-path> [--json]
+    Browser auth accepts --credential-reference browser:<32-character a-p Chrome-extension-id>
+    and optional --input configuration=<absolute-page-session-adapter.json>.
+  last-aperture plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  last-aperture next <run.json|bundle-directory>
+  last-aperture status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
+  last-aperture capabilities [--json]
+  last-aperture doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
+  last-aperture review-template <bundle> --job <job-id>
+  last-aperture check-result <bundle> <job-result.json> [--expected-sha256 <sha256> --expected-size <bytes>] [--json]
+  last-aperture verdict <bundle> [--candidate <candidate-id>] [--json]
+  last-aperture repair-brief <bundle> [--candidate <candidate-id>] [--baseline <bundle>] [--json]
+  last-aperture run-provider <run.json|bundle-directory> <provider-config.json>  [DISABLED]
+  last-aperture run-remote <run.json|bundle-directory> <remote-gateway-config.json>  [DISABLED]
+  last-aperture run-proof <run.json|bundle-directory> <proof-config.json> --worker <proof-worker.json>
+  last-aperture run-service-proof <run.json|bundle-directory> <service-proof-config.json> --worker <proof-worker.json>
+  last-aperture ingest <run.json|bundle-directory> <job-result.json> [--expected-sha256 <sha256> --expected-size <bytes>]
+  last-aperture ingest-batch <run.json|bundle-directory> <job-result.json>...
+  last-aperture finalize <run.json|bundle-directory>
+  last-aperture abort <run.json|bundle-directory> --reason <text>
+  last-aperture unlock <run.json|bundle-directory>
+  last-aperture attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
+  last-aperture publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]  [DISABLED]
+  last-aperture validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  last-aperture report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  last-aperture compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
+  last-aperture benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
 
 Safety:
   Static/read-only planning is the default. Repository content is untrusted data.
@@ -348,12 +354,18 @@ const COMMAND_ARGUMENTS = {
   capabilities: { positionals: 0, options: { json: 'flag' } },
   doctor: { positionals: 0, options: { json: 'flag', worker: 'value', bundle: 'value' } },
   'review-template': { positionals: 1, options: { job: 'value' } },
-  'check-result': { positionals: 2, options: { json: 'flag' } },
+  'check-result': {
+    positionals: 2,
+    options: { json: 'flag', 'expected-sha256': 'value', 'expected-size': 'value' },
+  },
   verdict: { positionals: 1, options: { json: 'flag', candidate: 'value' } },
   'repair-brief': { positionals: 1, options: { json: 'flag', candidate: 'value', baseline: 'value' } },
   'run-provider': { positionals: 2, options: {} },
   'run-remote': { positionals: 2, options: {} },
-  ingest: { positionals: 2, options: {} },
+  ingest: {
+    positionals: 2,
+    options: { 'expected-sha256': 'value', 'expected-size': 'value' },
+  },
   'ingest-batch': { minPositionals: 2, options: {} },
   finalize: { positionals: 1, options: {} },
   abort: { positionals: 1, options: { reason: 'value' } },
@@ -498,6 +510,48 @@ async function readJson(path, options = {}) {
   } catch (error) {
     throw new Error(`invalid JSON in ${absolutePath}: ${error.message}`)
   }
+}
+
+function exactResultSourceBinding(options) {
+  const expectedSha256 = options?.['expected-sha256']
+  const expectedSizeValue = options?.['expected-size']
+  if ((expectedSha256 === undefined) !== (expectedSizeValue === undefined)) {
+    throw new Error('--expected-sha256 and --expected-size must be provided together')
+  }
+  if (expectedSha256 === undefined) return undefined
+  if (typeof expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(expectedSha256)) {
+    throw new Error('--expected-sha256 must be a lowercase SHA-256 digest')
+  }
+  const expectedSize = nonNegativeInteger(expectedSizeValue, '--expected-size')
+  if (expectedSize > MAX_PROVIDER_RESULT_BYTES) {
+    throw new Error(`--expected-size exceeds the ${MAX_PROVIDER_RESULT_BYTES}-byte provider result limit`)
+  }
+  return { sha256: expectedSha256, size: expectedSize }
+}
+
+async function readJobResultSource(resultPath, expectedSource) {
+  const absolutePath = resolve(resultPath)
+  const bytes = await readBoundedFile(
+    absolutePath,
+    MAX_PROVIDER_RESULT_BYTES,
+    'provider result JSON',
+  )
+  if (
+    expectedSource !== undefined
+    && (
+      bytes.length !== expectedSource.size
+      || sha256(bytes) !== expectedSource.sha256
+    )
+  ) {
+    throw new Error('provider result source differs from its controller-bound digest or size')
+  }
+  let jobResult
+  try {
+    jobResult = JSON.parse(bytes.toString('utf8'))
+  } catch (error) {
+    throw new Error(`invalid JSON in ${absolutePath}: ${error.message}`)
+  }
+  return { bytes, jobResult }
 }
 
 async function readBoundedFile(path, maxBytes, label) {
@@ -999,7 +1053,7 @@ async function persistRun(path, run, expectedDigest, hooks = {}) {
     if (error.code === 'EEXIST') {
       throw new Error(
         `run is locked by another update: ${lockPath}; ` +
-        `if its owner exited, run red-team-audit unlock ${JSON.stringify(directory)}`,
+        `if its owner exited, run last-aperture unlock ${JSON.stringify(directory)}`,
       )
     }
     throw error
@@ -4217,23 +4271,33 @@ async function checkResultCommand(positionals, options) {
     stage = 'SNAPSHOT_VALIDATION'
     const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
     stage = 'RESULT_VALIDATION'
-    const prepared = await prepareOneResult(
-      loaded, resolve(positionals[1]), control.artifactCapacity, control.inventoryEntries,
+    const expectedSource = exactResultSourceBinding(options)
+    const resultPath = resolve(positionals[1])
+    const source = await readJobResultSource(resultPath, expectedSource)
+    const applied = await verifyAlreadyAppliedResult(loaded, source)
+    const prepared = applied ?? await prepareOneResult(
+      loaded,
+      resultPath,
+      control.artifactCapacity,
+      control.inventoryEntries,
+      { source },
     )
     stage = 'SNAPSHOT_RECHECK'
     await assertInspectionUnchanged(loaded)
     const result = {
       valid: true,
-      applied: false,
+      applied: applied !== null,
       run_id: loaded.run.run_id,
       job_id: prepared.jobId,
       result_state: prepared.jobState,
       semantic_authority: 'PROVIDER_DECLARED',
-      note: 'This checks the ingestion contract only. No result was committed and no security conclusion was authenticated.',
+      note: applied === null
+        ? 'This checks the ingestion contract only. No result was committed and no security conclusion was authenticated.'
+        : 'The exact result is already committed in this bundle. No additional mutation was performed.',
     }
     process.stdout.write(options.json
       ? terminalSafeSerializedJson(stableJson(result))
-      : `VALID RESULT (not ingested): ${terminalSafeText(prepared.jobId)}\n${result.note}\n`)
+      : `VALID RESULT (${applied === null ? 'not ingested' : 'already ingested'}): ${terminalSafeText(prepared.jobId)}\n${result.note}\n`)
   } catch {
     // Parser and scope-validation errors can contain provider-controlled text.
     // Project only a fixed stage/code, never raw evidence, messages, or Ajv params.
@@ -6802,11 +6866,11 @@ async function prepareOneResult(
   resultPath,
   artifactCapacity,
   inventoryEntries,
+  options = {},
 ) {
-  const jobResult = await readJson(resultPath, {
-    maxBytes: MAX_PROVIDER_RESULT_BYTES,
-    label: 'provider result JSON',
-  })
+  const source = options.source
+    ?? await readJobResultSource(resultPath, options.expectedSource)
+  const jobResult = source.jobResult
   assertValidJobResult(jobResult)
   const job = loaded.run.jobs.find(({ job_id }) => job_id === jobResult.job_id)
   if (!job) throw new Error(`unknown job ${jobResult.job_id}`)
@@ -6867,15 +6931,63 @@ async function prepareOneResult(
   }
 }
 
+async function verifyAlreadyAppliedResult(loaded, source) {
+  const jobResult = source.jobResult
+  assertValidJobResult(jobResult)
+  const job = loaded.run.jobs.find(({ job_id: jobId }) => jobId === jobResult.job_id)
+  if (job === undefined || !['SUCCEEDED', 'FAILED'].includes(job.state)) return null
+  if (
+    loaded.run.run_id !== jobResult.run_id
+    || job.state !== jobResult.state
+    || typeof job.input_sha256 !== 'string'
+    || job.input_sha256.toLowerCase() !== jobResult.input_sha256.toLowerCase()
+    || stableJson(job.producer, 0) !== stableJson(jobResult.producer, 0)
+  ) return null
+
+  const sidecar = await loadJobSidecar(loaded.directory, loaded.run, job)
+  const expectedPacket = dispatchPacket(loaded.run, job, sidecar)
+  if (jobResult.input_sha256.toLowerCase() !== expectedPacket.packet_sha256) return null
+
+  const canonicalResult = stableJson(jobResult)
+  const resultDigest = sha256(canonicalResult)
+  const artifactKey = `result_${artifactKeyToken(job.job_id).toLowerCase()}`
+  const artifact = loaded.run.artifacts?.[artifactKey]
+  const expectedPath = `results/${artifactToken(job.job_id)}.${resultDigest}.json`
+  if (
+    artifact === undefined
+    || artifact.path !== expectedPath
+    || artifact.sha256 !== resultDigest
+  ) return null
+  const committed = await readSafeBundleFile(loaded.directory, expectedPath, {
+    maxBytes: MAX_PROVIDER_RESULT_BYTES,
+    label: 'committed provider result artifact',
+  })
+  if (!committed.content.equals(Buffer.from(canonicalResult, 'utf8'))) return null
+  return {
+    jobId: job.job_id,
+    jobState: jobResult.state,
+  }
+}
+
 function logAcceptedResult(prepared) {
   console.log(`Accepted ${prepared.jobId}: ${prepared.jobState}`)
   console.log(`Run: ${prepared.runState}/${prepared.runPhase}`)
   console.log(`Pending jobs: ${prepared.pendingCount}`)
 }
 
-async function ingestOneResult(loaded, resultPath, artifactCapacity, inventoryEntries) {
+async function ingestOneResult(
+  loaded,
+  resultPath,
+  artifactCapacity,
+  inventoryEntries,
+  options = {},
+) {
   const prepared = await prepareOneResult(
-    loaded, resultPath, artifactCapacity, inventoryEntries,
+    loaded,
+    resultPath,
+    artifactCapacity,
+    inventoryEntries,
+    options,
   )
   await persistRun(loaded.path, prepared.advanced, loaded.sourceDigest, {
     beforeCommit: () => writeOnceBundleArtifact(
@@ -6890,13 +7002,18 @@ async function ingestOneResult(loaded, resultPath, artifactCapacity, inventoryEn
   return prepared.nextArtifactCapacity
 }
 
-async function ingestCommand(positionals) {
+async function ingestCommand(positionals, options) {
   const loaded = await loadRun(requirePositional(positionals, 0, 'run'))
   const resultPath = resolve(requirePositional(positionals, 1, 'job result'))
+  const expectedSource = exactResultSourceBinding(options)
   assertValidRun(loaded.run)
   const control = await verifyRepositorySnapshot(loaded.directory, loaded.run)
   await ingestOneResult(
-    loaded, resultPath, control.artifactCapacity, control.inventoryEntries,
+    loaded,
+    resultPath,
+    control.artifactCapacity,
+    control.inventoryEntries,
+    { expectedSource },
   )
 }
 
@@ -7392,6 +7509,12 @@ export async function main(argv = process.argv.slice(2)) {
   const command = argv[0]
   if (!command || command === 'help' || command === '--help' || command === '-h') {
     process.stdout.write(HELP)
+    return
+  }
+  if (command === 'engage') {
+    const { runEngageCli } = await import('./engage.mjs')
+    const exitCode = await runEngageCli(argv.slice(1))
+    if (exitCode !== 0) process.exitCode = exitCode
     return
   }
   assertLocalFilesystemEndpoint(process.cwd(), 'working directory')

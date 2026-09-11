@@ -2,7 +2,7 @@
 
 - Status: Accepted; core, sealed T1, and narrow loopback T2 implemented; generic live/L3 gated
 - Date: 2026-09-03
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes the proof-status semantics in `2026-08-02-test-execution-capability.md`
   and the approval-free active-request decision in ADR 0019.
 - Clarified by ADR 0023: named operator authority and route availability are

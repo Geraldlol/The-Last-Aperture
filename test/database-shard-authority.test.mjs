@@ -330,7 +330,7 @@ before(async () => {
   ])
   plan = await createRunPlan({
     targetRoot: repository,
-    lensDirectory: join(process.cwd(), 'skills', 'red-team-audit', 'lenses'),
+    lensDirectory: join(process.cwd(), 'skills', 'last-aperture', 'lenses'),
     createdAt: new Date('2026-07-29T20:00:00.000Z'),
     maxClosureRounds: 2,
     shardOptions: {

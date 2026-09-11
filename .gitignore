@@ -6,6 +6,12 @@ node_modules/
 # Local detector experiments and generated probe output.
 /scratchpad/
 
+# Local validation and diagnostic scratch files. Keep them out of source and
+# npm packages while allowing the files to remain in an operator checkout.
+/_tmp_validate.mjs
+/validate_tmp.mjs
+/scripts/audit.mjs.bak_diag
+
 # Subagent-driven-development scratch: ledgers, briefs, reports, review
 # packages. Working notes for a plan in flight, not part of the record.
 .superpowers/

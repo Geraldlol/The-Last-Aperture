@@ -13,14 +13,14 @@ function operatorAttestedScope({ actionCount = 128 } = {}) {
   return {
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-authed-scope',
-    engagement_id: 'peerstar-credible-authorized-assessment',
+    engagement_id: 'example-authorized-assessment',
     environment: 'production',
     data_class: 'phi',
     authorization: {
       mode: 'OPERATOR_ATTESTED_AUTHED',
       authorization_id: 'operator-attestation-2026-08-16',
       statement: OPERATOR_ATTESTED_AUTHED_STATEMENT,
-      operator_id: 'peerstar-security-operator',
+      operator_id: 'example-security-operator',
       authorized_by: 'engagement operator',
       authorization_reference: 'Operator-held engagement authorization reference 2026-08-16',
       attested_at: '2026-08-16T12:00:00.000Z',
@@ -33,7 +33,7 @@ function operatorAttestedScope({ actionCount = 128 } = {}) {
         mutation: true,
       },
       authorized_scope: {
-        origins: ['https://peerstar-test.example.test'],
+        origins: ['https://app.example.test'],
         path_prefixes: ['/'],
         methods: ['HEAD', 'GET', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'],
         test_categories: [
@@ -62,11 +62,11 @@ function operatorAttestedScope({ actionCount = 128 } = {}) {
     liveness: {
       credential_preflight: {
         method: 'GET',
-        url: 'https://peerstar-test.example.test/whoami',
+        url: 'https://app.example.test/whoami',
       },
     },
     target: {
-      origin: 'https://peerstar-test.example.test',
+      origin: 'https://app.example.test',
       ownership: 'third_party_owned',
       tls: { mode: 'PKIX_HOSTNAME' },
     },
@@ -94,7 +94,7 @@ function operatorAttestedScope({ actionCount = 128 } = {}) {
     ],
     requests: Array.from({ length: actionCount }, (_unused, index) => {
       const sequence = index + 1
-      const url = `https://peerstar-test.example.test/security-test-resource/${sequence}`
+      const url = `https://app.example.test/security-test-resource/${sequence}`
       return {
         kind: 'mutate',
         sequence,
@@ -162,7 +162,7 @@ test('operator-attested probe-only campaigns require no approver or countersigna
     sequence: 1,
     test_category: 'api_security',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/security-start',
+    url: 'https://app.example.test/security-start',
     expected_effect: 'none',
   }]
   assert.equal('approver' in scope, false)
@@ -186,13 +186,13 @@ test('operator-attested scopes reject URL credentials and fragments before runti
     sequence: 1,
     test_category: 'api_security',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/security-start',
+    url: 'https://app.example.test/security-start',
     expected_effect: 'none',
   }]
 
   const credentialUrl = structuredClone(base)
   credentialUrl.requests[0].url =
-    'https://synthetic-user:synthetic-password@peerstar-test.example.test/security-start'
+    'https://synthetic-user:synthetic-password@app.example.test/security-start'
   assert.throws(
     () => assertValidHttpAuthedScope(credentialUrl),
     (error) => error.code === 'HTTP_AUTHED_URL_CREDENTIALS_REFUSED',
@@ -200,7 +200,7 @@ test('operator-attested scopes reject URL credentials and fragments before runti
 
   const fragmentUrl = structuredClone(base)
   fragmentUrl.liveness.credential_preflight.url =
-    'https://peerstar-test.example.test/whoami#fragment'
+    'https://app.example.test/whoami#fragment'
   assert.throws(
     () => assertValidHttpAuthedScope(fragmentUrl),
     (error) => error.code === 'HTTP_AUTHED_URL_FRAGMENT_REFUSED',
@@ -256,7 +256,7 @@ test('operator-attested engagement permits explicitly authorized non-tunneling H
     sequence: index + 1,
     test_category: 'api_security',
     method,
-    url: `https://peerstar-test.example.test/method-probe/${index + 1}`,
+    url: `https://app.example.test/method-probe/${index + 1}`,
     expected_effect: 'none',
   }))
 
@@ -271,7 +271,7 @@ test('native authenticated scopes refuse CONNECT tunnel actions', () => {
     sequence: 1,
     test_category: 'api_security',
     method: 'CONNECT',
-    url: 'https://peerstar-test.example.test/tunnel-target',
+    url: 'https://app.example.test/tunnel-target',
     expected_effect: 'none',
   }]
 
@@ -289,7 +289,7 @@ test('operator-attested engagement requires canonical uppercase method tokens', 
     sequence: 1,
     test_category: 'api_security',
     method: 'customProbe',
-    url: 'https://peerstar-test.example.test/method-probe/custom',
+    url: 'https://app.example.test/method-probe/custom',
     expected_effect: 'none',
   }
 
@@ -313,7 +313,7 @@ test('runtime discoveries are admitted by engagement scope without an action-cou
     sequence: 1_000_000,
     test_category: 'api_security',
     method: 'PROPFIND',
-    url: 'https://peerstar-test.example.test/discovered/webdav/resource',
+    url: 'https://app.example.test/discovered/webdav/resource',
     expected_effect: 'none',
   }
 
@@ -356,7 +356,7 @@ test('write-capable and body-bearing probes require explicit mutation permission
     sequence: 1,
     test_category: 'api_security',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/safe-probe',
+    url: 'https://app.example.test/safe-probe',
     expected_effect: 'none',
   }]
   assert.doesNotThrow(() => assertValidHttpAuthedScope(scope))
@@ -451,8 +451,8 @@ test('campaign cannot widen the operator-attested origin, path, or method scope'
 test('operator-attested path prefixes use canonical segment boundaries', () => {
   const scope = operatorAttestedScope({ actionCount: 1 })
   scope.authorization.authorized_scope.path_prefixes = ['/approved']
-  scope.liveness.credential_preflight.url = 'https://peerstar-test.example.test/approved/whoami'
-  scope.requests[0].url = 'https://peerstar-test.example.test/approved/seed'
+  scope.liveness.credential_preflight.url = 'https://app.example.test/approved/whoami'
+  scope.requests[0].url = 'https://app.example.test/approved/seed'
   scope.requests[0].before_read.url = scope.requests[0].url
   scope.requests[0].after_read.url = scope.requests[0].url
   scope.requests[0].rollback.url = scope.requests[0].url
@@ -464,16 +464,16 @@ test('operator-attested path prefixes use canonical segment boundaries', () => {
     sequence: 2,
     test_category: 'api_security',
     method: 'GET',
-    url: 'https://peerstar-test.example.test/approved/nested',
+    url: 'https://app.example.test/approved/nested',
     expected_effect: 'none',
   }
   const expectedCampaignGrantSha256 = plannedCampaignGrantSha256(scope)
   assert.doesNotThrow(() => verifyCandidate(scope, candidate, { expectedCampaignGrantSha256 }))
 
   for (const url of [
-    'https://peerstar-test.example.test/approved-evil',
-    'https://peerstar-test.example.test/approved/%2f..%2fadmin',
-    'https://peerstar-test.example.test/approved/%252f..%252fadmin',
+    'https://app.example.test/approved-evil',
+    'https://app.example.test/approved/%2f..%2fadmin',
+    'https://app.example.test/approved/%252f..%252fadmin',
   ]) {
     assert.throws(
       () => verifyCandidate(scope, { ...candidate, url }, { expectedCampaignGrantSha256 }),
@@ -597,8 +597,32 @@ test('bounded file loading verifies the operator-attested scope and exact mode',
     requiredMode: 'OPERATOR_ATTESTED_AUTHED',
     now: new Date('2026-08-16T12:00:00.000Z'),
   })
-  assert.equal(verified.scope.engagement_id, 'peerstar-credible-authorized-assessment')
+  assert.equal(verified.scope.engagement_id, 'example-authorized-assessment')
   assert.match(verified.authorizationBindingSha256, /^[a-f0-9]{64}$/)
+})
+
+test('historical file loading retains structural and digest verification after expiry', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-http-authed-historical-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const scopePath = join(directory, 'scope.json')
+  const scope = operatorAttestedScope()
+  await writeFile(scopePath, `${JSON.stringify(scope)}\n`, 'utf8')
+
+  await assert.rejects(
+    httpAuthedContracts.readAndVerifyHttpAuthedAuthorization({
+      scopePath,
+      requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+      now: new Date('2027-08-16T12:00:00.000Z'),
+    }),
+    (error) => error.code === 'HTTP_AUTHED_AUTHORIZATION_EXPIRED',
+  )
+  const historical = await httpAuthedContracts.readAndVerifyHistoricalHttpAuthedAuthorization({
+    scopePath,
+    requiredMode: 'OPERATOR_ATTESTED_AUTHED',
+  })
+  assert.deepEqual(historical.scope, scope)
+  assert.match(historical.authorizationBindingSha256, /^[a-f0-9]{64}$/)
+  assert.equal(historical.campaignGrantSha256, plannedCampaignGrantSha256(scope))
 })
 
 test('CLI validates an operator-attested campaign without printing sensitive material', async (t) => {

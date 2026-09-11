@@ -19,7 +19,7 @@ import {
 import { stableJson } from './lib/run-engine.mjs'
 import { terminalSafeSerializedJson, terminalSafeText } from './lib/terminal-text.mjs'
 
-const HELP = `red-team-audit database conformance 0.7.0
+const HELP = `last-aperture database conformance 0.7.0
 
 Usage:
   database-conformance plan <outside-target-directory> [--engines <comma-separated-engine-ids>] [--json]

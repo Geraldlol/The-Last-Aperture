@@ -15,13 +15,13 @@ import {
   resolveHttpAuthedCredential,
 } from './http-authed-credential.mjs'
 import { discoverHttpAuthedCandidates } from './http-authed-discovery.mjs'
-import { createHttpReconResponseObservationDescriptor } from './http-recon-response-observations.mjs'
 
 const DEFAULT_LIMITS = Object.freeze({
   request_timeout_ms: 10_000,
   max_response_bytes: 65_536,
   min_interval_ms: 1_000,
   concurrency: 1,
+  max_actions: 10_000,
 })
 
 const EVIDENCE_HANDLING = Object.freeze({
@@ -146,6 +146,9 @@ function plannedCredential(credential, bindingSha256) {
       mode: 'CHROME_ACTIVE_TAB_SESSION',
       extension_id: credential.extensionId,
       origin: credential.origin,
+      ...(credential.pageSessionAdapter === undefined
+        ? {}
+        : { session_adapter: structuredClone(credential.pageSessionAdapter) }),
     }
   }
   return {
@@ -261,42 +264,6 @@ function buildResponseObservation(observation) {
   }
 }
 
-function sealBoundedResponseObservation({ profile, requests, limits, jsonObservation, discovery }) {
-  if (profile === undefined) return undefined
-  if (profile !== 'credible-bundle-src-v1') {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_RESPONSE_OBSERVATION_INVALID',
-      'authenticated bounded response observation requires a controller-defined profile',
-    )
-  }
-  if (
-    jsonObservation !== undefined
-    || discovery !== undefined && discovery !== false
-    || requests.length !== 1
-    || requests[0].kind !== 'probe'
-    || requests[0].method !== 'GET'
-    || requests[0].request_body !== undefined
-  ) {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_RESPONSE_OBSERVATION_INVALID',
-      'authenticated bounded response observation requires one bodyless GET probe without discovery or JSON shape observation',
-    )
-  }
-  try {
-    return createHttpReconResponseObservationDescriptor({
-      profile,
-      method: requests[0].method,
-      url: requests[0].url,
-      maxResponseBytes: limits.max_response_bytes,
-    })
-  } catch {
-    throw plannerError(
-      'HTTP_AUTHED_PLAN_RESPONSE_OBSERVATION_INVALID',
-      'authenticated bounded response observation is outside its fixed method, origin, or byte boundary',
-    )
-  }
-}
-
 function buildDiscovery(discovery, { targetOrigin, pathPrefixes, methods, categories, limits }) {
   if (discovery === undefined || discovery === false) return undefined
   if (discovery !== true && (
@@ -318,6 +285,11 @@ function buildDiscovery(discovery, { targetOrigin, pathPrefixes, methods, catego
     synthetic_query_values: options.syntheticQueryValues ?? {},
     synthetic_path_values: options.syntheticPathValues ?? {},
     max_response_bytes: options.maxResponseBytes ?? limits.max_response_bytes,
+    // The total sealed action budget is the default expansion budget too. This
+    // avoids a second hidden product ceiling while preserving a finite,
+    // operator-reviewable campaign boundary.
+    max_depth: options.maxDepth ?? limits.max_actions,
+    max_candidates: options.maxCandidates ?? limits.max_actions,
   }
 }
 
@@ -520,16 +492,6 @@ async function planHttpAuthedScope(input, deps) {
   assertPersistedScopeMetadataIsSynthetic(requests, preflightUrl)
   const limits = normalizeLimits(planned.limits)
   const responseObservation = buildResponseObservation(planned.responseObservation)
-  const boundedResponseObservation = sealBoundedResponseObservation({
-    profile: planned.responseObservationProfile,
-    requests,
-    limits,
-    jsonObservation: responseObservation,
-    discovery: planned.discovery,
-  })
-  if (boundedResponseObservation !== undefined) {
-    requests[0].response_observation = boundedResponseObservation
-  }
   const browserSession = credential.mode === 'CHROME_ACTIVE_TAB_SESSION'
   const credentialBindingSha256 = browserSession
     ? undefined
@@ -540,8 +502,8 @@ async function planHttpAuthedScope(input, deps) {
         readStdin: deps.credentialStdinReader,
       })
   const scope = {
-    schema_version: boundedResponseObservation !== undefined
-      ? '1.3.0'
+    schema_version: credential.pageSessionAdapter !== undefined
+      ? '1.4.0'
       : responseObservation === undefined
         ? '1.0.0'
         : responseObservation.mode === 'ASPNET_D_JSON_SHAPE_ONLY'

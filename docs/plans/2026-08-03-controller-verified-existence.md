@@ -14,7 +14,7 @@
 
 - Branch: `agent/red-team-audit-v11-existence`. Already created.
 - Baseline before this work: **778 tests, 775 pass, 1 skipped, 2 failing.** The 2 failures are `cloud-iac-fixtures.test.mjs` needing ripgrep, which this machine lacks. They are environmental and must not be counted as regressions or "fixed".
-- `skills/red-team-audit/SKILL.md` is **7,995 of 8,000 bytes**. Do not add prose to it. Documentation goes to `skills/red-team-audit/lenses/_schema.md`.
+- `skills/last-aperture/SKILL.md` is **7,995 of 8,000 bytes**. Do not add prose to it. Documentation goes to `skills/last-aperture/lenses/_schema.md`.
 - `npm.cmd run lint` must stay `PASS: R1-R8, SKILL and ledger gate clean` after every task.
 - `npm.cmd run gen -- --check` must stay PASS at 174 slugs.
 - Run commands with `npm.cmd`, not `npm` — this is Windows with Git Bash.
@@ -1573,7 +1573,7 @@ git commit -m "feat: report controller existence verdicts and provider contradic
 ### Task 10: Documentation and the backward-compatibility proof
 
 **Files:**
-- Modify: `skills/red-team-audit/lenses/_schema.md`
+- Modify: `skills/last-aperture/lenses/_schema.md`
 - Modify: `README.md` (the `## Current release` list)
 - Test: `test/existence-backcompat.test.mjs` (create)
 
@@ -1581,7 +1581,7 @@ git commit -m "feat: report controller existence verdicts and provider contradic
 - Consumes: everything above.
 - Produces: no code interface. This task proves the change is safe on the existing corpus and documents the two new fields where lens authors will read them.
 
-**Do not touch `skills/red-team-audit/SKILL.md`** — it is 7,995 of 8,000 bytes and `npm.cmd run lint` enforces that ceiling.
+**Do not touch `skills/last-aperture/SKILL.md`** — it is 7,995 of 8,000 bytes and `npm.cmd run lint` enforces that ceiling.
 
 - [ ] **Step 1: Write the backward-compatibility test**
 
@@ -1619,7 +1619,7 @@ Expected: PASS, 2 tests. If it fails, the change is not backward compatible — 
 
 - [ ] **Step 3: Document the two fields**
 
-In `skills/red-team-audit/lenses/_schema.md`, in the field table near the `evidence` row (line 146 area), add:
+In `skills/last-aperture/lenses/_schema.md`, in the field table near the `evidence` row (line 146 area), add:
 
 ```markdown
 | `quotes` | `[{path, line, text}]` | The verbatim span, separately from the prose in `evidence`. The controller opens the file and confirms the text is there, comparing each line with leading and trailing whitespace trimmed so re-indentation does not fail a true quote. It records the line it actually found. Nothing here is taken on trust: `existence_check` is what you assert, `quotes` is what the controller checks. |
@@ -1652,7 +1652,7 @@ Expected: 808 tests, 805 pass, 1 skipped, 2 fail (ripgrep); `PASS: R1-R8, SKILL 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_schema.md README.md test/existence-backcompat.test.mjs
+git add skills/last-aperture/lenses/_schema.md README.md test/existence-backcompat.test.mjs
 git commit -m "docs: document controller-verified existence for lens authors"
 ```
 

@@ -23,7 +23,7 @@
 - `npm.cmd run lint` must stay `PASS: R1-R8, SKILL and ledger gate clean` after every task. Underscore-prefixed files and directories under `lenses/` are skipped by the linter (`lint-lenses.mjs:27`), so `_evidence-adapters/` is invisible to it — that is intended, and Task 4 adds its own gate instead.
 - `npm.cmd run gen -- --check` must stay `PASS ... (174 slugs)`.
 - Run commands with `npm.cmd`, not `npm` — this is Windows with Git Bash.
-- `skills/red-team-audit/SKILL.md` is at 7,995 of its 8,000-byte budget. **Add no prose to it.** Everything documentary in this plan goes to `_evidence-adapters/contract.md`.
+- `skills/last-aperture/SKILL.md` is at 7,995 of its 8,000-byte budget. **Add no prose to it.** Everything documentary in this plan goes to `_evidence-adapters/contract.md`.
 - Every schema in `schemas/` uses `"additionalProperties": false`. Keep it.
 - Ordering must be locale-independent (ADR 0012): use `compareCanonicalStrings` from `scripts/lib/canonical-order.mjs`, never `localeCompare`.
 - Do not use `Date.now()` or `new Date()` for anything that lands in a digest. Timestamps are passed in.
@@ -1463,8 +1463,8 @@ git commit -m "feat: sealed content-addressed evidence bundles that refuse on an
 ### Task 4: The acquisition adapter contract and its routing manifest
 
 **Files:**
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/contract.md`
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/manifest.json`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/contract.md`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/manifest.json`
 - Create: `scripts/lib/evidence-adapters.mjs`
 - Test: `test/evidence-adapters.test.mjs`
 
@@ -1508,7 +1508,7 @@ import {
 } from '../scripts/lib/evidence-classes.mjs'
 
 const CONTRACT_PATH = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/contract.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/contract.md', import.meta.url),
 )
 
 test('four adapters plus the inventory-only fallback are declared', () => {
@@ -1610,7 +1610,7 @@ Expected: FAIL — `Cannot find module '.../scripts/lib/evidence-adapters.mjs'`
 
 - [ ] **Step 3: Write the routing manifest**
 
-Create `skills/red-team-audit/lenses/_evidence-adapters/manifest.json`:
+Create `skills/last-aperture/lenses/_evidence-adapters/manifest.json`:
 
 ```json
 {
@@ -1692,7 +1692,7 @@ Create `skills/red-team-audit/lenses/_evidence-adapters/manifest.json`:
 
 - [ ] **Step 4: Write the contract document**
 
-Create `skills/red-team-audit/lenses/_evidence-adapters/contract.md`. It is modelled section-for-section on `_database-adapters/contract.md`. Full text:
+Create `skills/last-aperture/lenses/_evidence-adapters/contract.md`. It is modelled section-for-section on `_database-adapters/contract.md`. Full text:
 
 ````markdown
 # Evidence acquisition adapter contract
@@ -1941,7 +1941,7 @@ import { compareCanonicalStrings } from './canonical-order.mjs'
 import { EVIDENCE_CLASS_ORDER, isEvidenceClass } from './evidence-classes.mjs'
 
 export const EVIDENCE_ADAPTER_MANIFEST_URL = new URL(
-  '../../skills/red-team-audit/lenses/_evidence-adapters/manifest.json',
+  '../../skills/last-aperture/lenses/_evidence-adapters/manifest.json',
   import.meta.url,
 )
 
@@ -2061,7 +2061,7 @@ Expected: `PASS: generated artifacts match frontmatter (174 slugs).`
 - [ ] **Step 8: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_evidence-adapters scripts/lib/evidence-adapters.mjs test/evidence-adapters.test.mjs
+git add skills/last-aperture/lenses/_evidence-adapters scripts/lib/evidence-adapters.mjs test/evidence-adapters.test.mjs
 git commit -m "feat: evidence acquisition adapter contract, routing manifest and rule-ID discipline"
 ```
 

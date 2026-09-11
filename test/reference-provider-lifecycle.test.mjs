@@ -110,7 +110,7 @@ test('reference provider drives a sealed no-candidate run through the full obser
     )
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       sealSource: true,
       createdAt: new Date('2026-07-29T09:00:00.000Z'),
     })

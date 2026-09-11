@@ -2,7 +2,7 @@
 
 - Status: Accepted - implemented in v0.12.0
 - Date: 2026-08-16
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0013, which reserved authenticated/mutation actions for a separate
   typed tier; relates to ADR 0014 (operator-attested lower-assurance mode) and
   ADR 0015 (PKIX defaults). Does NOT extend `http-recon-v1` or the repository
@@ -11,6 +11,8 @@
   runtime-command, and reporting restrictions.
 - Amended: ADR 0021 (2026-09-04) supersedes its signed/document authorization
   routing and external mutation-countersignature requirements.
+- Amended: ADR 0027 (2026-09-11) enables public adaptive discovery, removes the
+  256-action public-only ceiling, and ships the active Chrome companion.
 
 > **Supersession notice:** Authorization-mode, owner-key, passkey, signed RoE,
 > authorization-document-as-authority, and `countersignature-N.json` requirements
@@ -18,6 +20,12 @@
 > sole authority primitive; the controller now issues ledger-consumed technical
 > action permits. Transport, credential, observation, rollback, stop, and
 > uncertain-delivery mechanics remain in force where retained.
+
+> **Operational amendment (2026-09-11):** References below to fixed-only public
+> campaigns, a 256-action public ceiling, response-derived discovery being
+> unavailable, or an inert/disabled packaged Chrome companion are historical.
+> ADR 0027 exposes those implemented paths while retaining per-action scope,
+> ledger, credential, mutation, stop, cleanup, and evidence checks.
 
 ## Amendment notice
 

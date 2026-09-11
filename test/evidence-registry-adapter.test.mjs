@@ -9,7 +9,7 @@ import { runEvidenceAdapterConformance } from './helpers/evidence-adapter-confor
 import { absentCliResolver, stubCli } from './helpers/stub-cli.mjs'
 
 const DIGEST = 'sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c'
-const REFERENCE = `registry.example.com/peerstar/api@${DIGEST}`
+const REFERENCE = `registry.example.com/example/application@${DIGEST}`
 const FIXTURE = resolve('test/fixtures/evidence/vulnerable-image.tar').replaceAll('\\', '\\\\')
 
 // The stub copies the committed fixture to wherever crane was told to write.
@@ -30,7 +30,7 @@ async function adapterWithStub() {
 }
 
 const REQUEST = {
-  evidence_id: 'peerstar-api-image',
+  evidence_id: 'sample-api-image',
   image: REFERENCE,
   credential_ref: 'env:REGISTRY_TOKEN',
   target_class: 'NONPROD',
@@ -56,7 +56,7 @@ test('plan pins the digest and never contacts the registry', async () => {
 test('plan refuses an unpinned reference', async () => {
   const adapter = await adapterWithStub()
   await assert.rejects(
-    () => adapter.plan({ ...REQUEST, image: 'registry.example.com/peerstar/api:latest' }),
+    () => adapter.plan({ ...REQUEST, image: 'registry.example.com/example/application:latest' }),
     /digest|pinned/i,
   )
 })

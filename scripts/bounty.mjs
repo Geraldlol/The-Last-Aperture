@@ -22,7 +22,7 @@ import {
 import { PLATFORM_VERSION } from './lib/run-engine.mjs'
 import { terminalSafeJson, terminalSafeText } from './lib/terminal-text.mjs'
 
-const HELP = `red-team-audit bounty-v1 program perimeter ${PLATFORM_VERSION}
+const HELP = `last-aperture bounty-v1 program perimeter ${PLATFORM_VERSION}
 
 Usage:
   bounty plan --platform <yeswehack|hackerone|intigriti|direct> --program <handle> --engagement-id <id> --policy-url <https-url> --policy-file <snapshot> --operator-id <id> --authorized-by <text> --user-agent <program-mandated-marker> --allow <spec> [--allow <spec>...] [--deny <spec>...] --rate-limit-rps <n> --not-before <iso8601> --not-after <iso8601> --attest-enrolled --out <parent> [--active-testing] [--mutation] [--automation] [--intensity <normal|aggressive|ham>] [--desync] [--non-production] [--json]

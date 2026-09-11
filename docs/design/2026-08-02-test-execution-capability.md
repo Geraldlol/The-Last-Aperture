@@ -2,11 +2,11 @@
 
 - Status: Historical proposal; public execution superseded by ADR 0020
 - Date: 2026-08-02
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Relates to: ADR 0002 (sealed provider execution), ADR 0006 (disposable
-  conformance lab), `skills/red-team-audit/lenses/_harness.md`
+  conformance lab), `skills/last-aperture/lenses/_harness.md`
 
-> **Current 0.12.0 execution status: disabled.** This document records the
+> **Current 0.13.0 execution status: disabled.** This document records the
 > earlier `TEST_EXECUTION` design; it is not an active capability statement.
 > The public `run-proof` and `run-provider` commands refuse before bundle or
 > configuration access pending the enrolled, network-denied worker controls
@@ -44,7 +44,7 @@ LOCAL_DYNAMIC:  new Set(['T0', 'T1', 'T2', 'T3'])
 
 `STATIC` admits exactly the two capped tiers. Every completed audit to date ran
 `STATIC`, so every finding was `T0`/`UNPROVEN` and the Medium ceiling was
-correct. The most recent `PeerStar-Prod` run claimed 3 Critical and 16 High and
+correct. The most recent reference production run claimed 3 Critical and 16 High and
 reported all 43 findings at Medium or Low. That was the system working.
 
 Most of the machinery for `TEST_EXECUTION` is already built and unreachable:
@@ -109,7 +109,7 @@ and one more provider claim, and it is the only split consistent with a platform
 whose premise is not trusting provider assertions.
 
 ```
-red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
+last-aperture run-proof <run.json|bundle-directory> <proof-config.json>
 ```
 
 `proof-config.json` names the target job, the authored files and their content

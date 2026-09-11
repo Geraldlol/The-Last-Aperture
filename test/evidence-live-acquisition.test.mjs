@@ -29,7 +29,7 @@ async function kubectlStub() {
 
 const request = {
   evidence_id: 'prod-cluster',
-  context: 'peerstar-prod',
+  context: 'reference-production',
   operations: [
     { operation_id: 'k8s.resource', params: { kind: 'pods', name: 'api-0', namespace: 'clinical' } },
   ],

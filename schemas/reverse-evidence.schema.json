@@ -1,0 +1,852 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/reverse-evidence.schema.json",
+  "title": "The Last Aperture reverse engineering evidence",
+  "description": "Bounded observations from one fixed Ghidra static-analysis profile or a typed Frida v1/v2 native-call trace profile. This document is outside the audit evidence bundle and carries no security verdict. Runtime validation additionally enforces timestamps, digest bindings, observation ordering and counts, Frida lifecycle sequencing, and output byte limits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "protocol",
+    "run_id",
+    "engine",
+    "profile_id",
+    "started_at",
+    "finished_at",
+    "artifact",
+    "tool",
+    "limits",
+    "status",
+    "target_execution",
+    "security_verdict",
+    "applied_to_audit_bundle",
+    "observations",
+    "gaps",
+    "cleanup"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0", "1.1.0"] },
+    "kind": { "const": "red-team-audit/reverse-evidence" },
+    "protocol": { "const": "reverse-evidence-v1" },
+    "run_id": { "type": "string", "pattern": "^reverse:[a-f0-9]{32}$" },
+    "engine": { "enum": ["ghidra", "frida"] },
+    "profile_id": { "enum": ["ghidra-headless-fixed-export-v1", "native-call-trace-v1", "native-call-trace-v2"] },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "finished_at": { "$ref": "#/$defs/timestamp" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "tool": { "$ref": "#/$defs/tool" },
+    "limits": { "$ref": "#/$defs/limits" },
+    "status": { "enum": ["SUCCEEDED", "PARTIAL", "INCONCLUSIVE", "FAILED"] },
+    "target_execution": { "enum": ["NOT_PERFORMED", "LOCAL_LAB_SPAWN", "LOCAL_PROCESS_ATTACH", "USB_DEVICE_ATTACH", "DEVICE_ID_ATTACH"] },
+    "security_verdict": { "const": "NOT_ASSESSED" },
+    "applied_to_audit_bundle": { "const": false },
+    "observations": { "type": "array", "maxItems": 10000 },
+    "gaps": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/gap" }
+    },
+    "cleanup": { "$ref": "#/$defs/cleanup" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": { "schema_version": { "const": "1.0.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "object",
+            "properties": { "components": false }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": { "schema_version": { "const": "1.1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "object",
+            "properties": {
+              "components": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": { "$ref": "#/$defs/toolComponent" }
+              }
+            },
+            "required": ["components"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": { "engine": { "const": "ghidra" } },
+        "required": ["engine"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "profile_id": { "const": "ghidra-headless-fixed-export-v1" },
+          "target_execution": { "const": "NOT_PERFORMED" },
+          "tool": {
+            "type": "object",
+            "properties": { "name": { "const": "Ghidra" } }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "SUCCEEDED" } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "$ref": "#/$defs/ghidraSucceededObservations" } } }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "PARTIAL" } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "$ref": "#/$defs/ghidraPartialObservations" } } }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "enum": ["FAILED", "INCONCLUSIVE"] } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "type": "array", "maxItems": 0 } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "engine": { "const": "frida" },
+          "profile_id": { "const": "native-call-trace-v1" }
+        },
+        "required": ["engine", "profile_id"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "profile_id": { "const": "native-call-trace-v1" },
+          "target_execution": { "const": "LOCAL_LAB_SPAWN" },
+          "artifact": {
+            "type": "object",
+            "properties": { "kind": { "const": "native-executable" } }
+          },
+          "tool": {
+            "type": "object",
+            "properties": { "name": { "const": "Frida" } }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "SUCCEEDED" } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "$ref": "#/$defs/fridaSucceededObservations" } } }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "PARTIAL" } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "$ref": "#/$defs/fridaPartialObservations" } } }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "enum": ["FAILED", "INCONCLUSIVE"] } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "type": "array", "maxItems": 0 } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "engine": { "const": "frida" },
+          "profile_id": { "const": "native-call-trace-v2" }
+        },
+        "required": ["engine", "profile_id"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "target_execution": { "enum": ["LOCAL_LAB_SPAWN", "LOCAL_PROCESS_ATTACH", "USB_DEVICE_ATTACH", "DEVICE_ID_ATTACH"] },
+          "artifact": {
+            "type": "object",
+            "properties": { "kind": { "enum": ["native-executable", "shared-library", "application-package"] } }
+          },
+          "tool": {
+            "type": "object",
+            "properties": { "name": { "const": "Frida" } }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "type": "object",
+              "properties": { "target_execution": { "const": "LOCAL_LAB_SPAWN" } },
+              "required": ["target_execution"]
+            },
+            "then": {
+              "type": "object",
+              "properties": {
+                "artifact": { "type": "object", "properties": { "kind": { "const": "native-executable" } } }
+              }
+            }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "SUCCEEDED" } }, "required": ["status"] },
+            "then": {
+              "type": "object",
+              "properties": {
+                "target_execution": { "const": "LOCAL_LAB_SPAWN" },
+                "observations": { "$ref": "#/$defs/fridaV2SucceededObservations" }
+              }
+            }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "const": "PARTIAL" } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "$ref": "#/$defs/fridaV2PartialObservations" } } }
+          },
+          {
+            "if": { "type": "object", "properties": { "status": { "enum": ["FAILED", "INCONCLUSIVE"] } }, "required": ["status"] },
+            "then": { "type": "object", "properties": { "observations": { "type": "array", "maxItems": 0 } } }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "cleanup": {
+            "type": "object",
+            "properties": { "verified": { "const": true } },
+            "required": ["verified"]
+          }
+        },
+        "required": ["cleanup"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "cleanup": {
+            "type": "object",
+            "properties": { "attempted": { "const": true } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "type": "object", "properties": { "status": { "const": "SUCCEEDED" } }, "required": ["status"] },
+      "then": {
+        "type": "object",
+        "properties": {
+          "cleanup": {
+            "type": "object",
+            "properties": { "verified": { "const": true } }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "plainText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028-\\u202e\\u2066-\\u2069]+$"
+    },
+    "artifactPath": {
+      "allOf": [
+        { "$ref": "#/$defs/plainText" },
+        { "type": "string", "maxLength": 2048 },
+        { "not": { "type": "string", "pattern": "^(?:[A-Za-z]:|[/\\\\])" } },
+        { "not": { "type": "string", "pattern": "(?:^|[/\\\\])(?:\\.|\\.\\.)(?:[/\\\\]|$)" } },
+        { "not": { "type": "string", "pattern": "[/\\\\](?:[/\\\\]|$)" } }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "sha256", "size_bytes"],
+      "properties": {
+        "kind": { "enum": ["firmware-image", "native-executable", "shared-library", "application-package"] },
+        "path": { "$ref": "#/$defs/artifactPath" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 2147483648 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["invocation_sha256", "name", "version"],
+      "properties": {
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/toolComponent" }
+        },
+        "invocation_sha256": { "$ref": "#/$defs/sha256" },
+        "name": { "enum": ["Ghidra", "Frida"] },
+        "version": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "allOf": [
+                { "$ref": "#/$defs/plainText" },
+                { "type": "string", "maxLength": 256 }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "toolComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "sha256", "size_bytes"],
+      "properties": {
+        "name": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 256 }
+          ]
+        },
+        "role": { "type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 2147483648 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_observations", "max_output_bytes", "timeout_ms"],
+      "properties": {
+        "max_observations": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "max_output_bytes": { "type": "integer", "minimum": 4096, "maximum": 67108864 },
+        "timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" },
+        "message": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 2048 }
+          ]
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "verified"],
+      "properties": {
+        "attempted": { "type": "boolean" },
+        "verified": { "type": "boolean" }
+      }
+    },
+    "ghidraOffset": { "type": "string", "pattern": "^0x(?:0|[1-9a-f][0-9a-f]*)$" },
+    "ghidraProgram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available_functions", "compiler_spec_id", "emitted_functions", "executable_format", "executable_sha256", "image_base", "language_id", "maximum_address", "minimum_address", "truncated", "type"],
+      "properties": {
+        "available_functions": { "type": "integer", "minimum": 0, "maximum": 20000000 },
+        "compiler_spec_id": { "$ref": "#/$defs/ghidraText" },
+        "emitted_functions": { "type": "integer", "minimum": 0, "maximum": 20000 },
+        "executable_format": { "$ref": "#/$defs/ghidraText" },
+        "executable_sha256": { "$ref": "#/$defs/sha256" },
+        "image_base": { "$ref": "#/$defs/ghidraText" },
+        "language_id": { "$ref": "#/$defs/ghidraText" },
+        "maximum_address": { "$ref": "#/$defs/ghidraText" },
+        "minimum_address": { "$ref": "#/$defs/ghidraText" },
+        "truncated": { "type": "boolean" },
+        "type": { "const": "program-summary" }
+      }
+    },
+    "ghidraSucceededProgram": {
+      "allOf": [
+        { "$ref": "#/$defs/ghidraProgram" },
+        { "type": "object", "properties": { "truncated": { "const": false } } }
+      ]
+    },
+    "ghidraText": {
+      "allOf": [
+        { "$ref": "#/$defs/plainText" },
+        { "type": "string", "maxLength": 512 }
+      ]
+    },
+    "ghidraProtocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["auth_hint_candidates", "auth_hint_limit", "auth_hints_truncated", "emitted_auth_hints", "emitted_endpoints", "emitted_network_imports", "endpoint_candidates", "endpoint_limit", "endpoints_truncated", "external_function_scan_truncated", "external_functions_scanned", "matching_network_imports", "network_import_limit", "network_imports_truncated", "references_per_import_limit", "string_record_limit", "string_records_scanned", "string_scan_truncated", "string_values_scanned", "truncated_string_values", "type"],
+      "properties": {
+        "auth_hint_candidates": { "$ref": "#/$defs/ghidraCount" },
+        "auth_hint_limit": { "const": 512 },
+        "auth_hints_truncated": { "type": "boolean" },
+        "emitted_auth_hints": { "$ref": "#/$defs/ghidraCount" },
+        "emitted_endpoints": { "$ref": "#/$defs/ghidraCount" },
+        "emitted_network_imports": { "$ref": "#/$defs/ghidraCount" },
+        "endpoint_candidates": { "$ref": "#/$defs/ghidraCount" },
+        "endpoint_limit": { "const": 512 },
+        "endpoints_truncated": { "type": "boolean" },
+        "external_function_scan_truncated": { "type": "boolean" },
+        "external_functions_scanned": { "$ref": "#/$defs/ghidraCount" },
+        "matching_network_imports": { "$ref": "#/$defs/ghidraCount" },
+        "network_import_limit": { "const": 512 },
+        "network_imports_truncated": { "type": "boolean" },
+        "references_per_import_limit": { "const": 128 },
+        "string_record_limit": { "const": 100000 },
+        "string_records_scanned": { "$ref": "#/$defs/ghidraCount" },
+        "string_scan_truncated": { "type": "boolean" },
+        "string_values_scanned": { "$ref": "#/$defs/ghidraCount" },
+        "truncated_string_values": { "$ref": "#/$defs/ghidraCount" },
+        "type": { "const": "protocol-summary" }
+      }
+    },
+    "ghidraSucceededProtocol": {
+      "allOf": [
+        { "$ref": "#/$defs/ghidraProtocol" },
+        {
+          "type": "object",
+          "properties": {
+            "auth_hints_truncated": { "const": false },
+            "endpoints_truncated": { "const": false },
+            "network_imports_truncated": { "const": false },
+            "string_scan_truncated": { "const": false }
+          }
+        }
+      ]
+    },
+    "ghidraCount": { "type": "integer", "minimum": 0, "maximum": 2000000 },
+    "ghidraReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_offset", "kind"],
+      "properties": {
+        "from_offset": { "$ref": "#/$defs/ghidraOffset" },
+        "kind": { "enum": ["CALL", "DATA", "OTHER"] }
+      }
+    },
+    "ghidraNetworkImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["api", "callsite_offsets", "references", "references_scanned", "references_truncated", "type"],
+      "properties": {
+        "api": {
+          "enum": ["POSIX_CONNECT", "POSIX_GETADDRINFO", "POSIX_RECV", "POSIX_SEND", "POSIX_SOCKET", "LIBCURL_EASY_GETINFO", "LIBCURL_EASY_INIT", "LIBCURL_EASY_PERFORM", "LIBCURL_EASY_SETOPT", "LIBCURL_HEADER_APPEND", "OPENSSL_CONNECT", "OPENSSL_READ", "OPENSSL_SET_SERVER_NAME", "OPENSSL_VERIFY_RESULT", "OPENSSL_WRITE", "WINHTTP_CONNECT", "WINHTTP_OPEN", "WINHTTP_OPEN_REQUEST", "WINHTTP_QUERY_HEADERS", "WINHTTP_RECEIVE_RESPONSE", "WINHTTP_SEND_REQUEST", "WINHTTP_SET_CREDENTIALS", "WINHTTP_SET_OPTION", "WININET_CONNECT", "WININET_GET_COOKIE", "WININET_OPEN", "WININET_OPEN_REQUEST", "WININET_QUERY_INFO", "WININET_READ", "WININET_SEND_REQUEST", "WININET_SET_COOKIE", "WINDOWS_CREDENTIAL_READ", "WINDOWS_SSPI_ACQUIRE_CREDENTIALS", "WINDOWS_SSPI_INITIALIZE_CONTEXT"]
+        },
+        "callsite_offsets": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ghidraOffset" }
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/ghidraReference" }
+        },
+        "references_scanned": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "references_truncated": { "type": "boolean" },
+        "type": { "const": "network-import" }
+      }
+    },
+    "ghidraEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_truncated", "host", "origin", "path_template", "path_truncated", "path_values_redacted", "port", "query_names", "query_names_truncated", "scheme", "source_offsets", "type", "userinfo_present"],
+      "properties": {
+        "candidate_truncated": { "type": "boolean" },
+        "host": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 253 }
+          ]
+        },
+        "origin": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 512, "pattern": "^https?://" }
+          ]
+        },
+        "path_template": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 512, "pattern": "^/" }
+          ]
+        },
+        "path_truncated": { "type": "boolean" },
+        "path_values_redacted": { "type": "boolean" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "query_names": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._~-]{0,63}$" }
+        },
+        "query_names_truncated": { "type": "boolean" },
+        "scheme": { "enum": ["http", "https"] },
+        "source_offsets": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/ghidraOffset" }
+        },
+        "type": { "const": "static-endpoint" },
+        "userinfo_present": { "type": "boolean" }
+      }
+    },
+    "ghidraAuthHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hint", "source_offset", "type"],
+      "properties": {
+        "hint": {
+          "enum": ["API_KEY_IDENTIFIER", "AUTHORIZATION_HEADER_NAME", "BASIC_SCHEME", "BEARER_SCHEME", "COOKIE_HEADER_NAME", "CSRF_IDENTIFIER", "OAUTH_ACCESS_TOKEN_PARAMETER", "OAUTH_CLIENT_CREDENTIALS", "OAUTH_FLOW", "OAUTH_PKCE", "OAUTH_REFRESH_TOKEN_PARAMETER", "OPENID_CONNECT", "PASSWORD_FIELD_IDENTIFIER", "SAML_FLOW", "SESSION_IDENTIFIER", "SET_COOKIE_HEADER_NAME", "URL_USERINFO_CREDENTIALS", "USERNAME_FIELD_IDENTIFIER", "WWW_AUTHENTICATE_HEADER_NAME"]
+        },
+        "source_offset": {
+          "anyOf": [
+            { "const": "UNMAPPED" },
+            { "$ref": "#/$defs/ghidraOffset" }
+          ]
+        },
+        "type": { "const": "auth-hint" }
+      }
+    },
+    "ghidraFunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body_address_count", "entry_point", "external", "name", "thunk", "type"],
+      "properties": {
+        "body_address_count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "entry_point": { "$ref": "#/$defs/ghidraText" },
+        "external": { "type": "boolean" },
+        "name": { "$ref": "#/$defs/ghidraText" },
+        "thunk": { "type": "boolean" },
+        "type": { "const": "function" }
+      }
+    },
+    "ghidraObservation": {
+      "oneOf": [
+        { "$ref": "#/$defs/ghidraNetworkImport" },
+        { "$ref": "#/$defs/ghidraEndpoint" },
+        { "$ref": "#/$defs/ghidraAuthHint" },
+        { "$ref": "#/$defs/ghidraFunction" }
+      ]
+    },
+    "ghidraSucceededObservations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "prefixItems": [
+        { "$ref": "#/$defs/ghidraSucceededProgram" },
+        { "$ref": "#/$defs/ghidraSucceededProtocol" }
+      ],
+      "items": { "$ref": "#/$defs/ghidraObservation" }
+    },
+    "ghidraCompleteObservations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "prefixItems": [
+        { "$ref": "#/$defs/ghidraProgram" },
+        { "$ref": "#/$defs/ghidraProtocol" }
+      ],
+      "items": { "$ref": "#/$defs/ghidraObservation" }
+    },
+    "ghidraPartialObservations": {
+      "anyOf": [
+        { "type": "array", "maxItems": 0 },
+        { "$ref": "#/$defs/ghidraCompleteObservations" }
+      ]
+    },
+    "fridaReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "frame_nonce", "module_name", "module_relative_offset", "observed_at_ms", "profile_id", "schema_version", "symbol_name"],
+      "properties": {
+        "event": { "const": "ready" },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "module_name": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 256 }
+          ]
+        },
+        "module_relative_offset": { "type": "string", "maxLength": 34, "pattern": "^0x(?:0|[1-9a-f][0-9a-f]*)$" },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "profile_id": { "const": "native-call-trace-v1" },
+        "schema_version": { "const": "1.0.0" },
+        "symbol_name": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 512 }
+          ]
+        }
+      }
+    },
+    "fridaCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "frame_nonce", "observed_at_ms", "profile_id", "schema_version", "sequence", "thread_id"],
+      "properties": {
+        "event": { "enum": ["enter", "leave"] },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "profile_id": { "const": "native-call-trace-v1" },
+        "schema_version": { "const": "1.0.0" },
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "thread_id": { "$ref": "#/$defs/safeInteger" }
+      }
+    },
+    "fridaComplete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "events_emitted", "frame_nonce", "observed_at_ms", "profile_id", "schema_version", "truncated"],
+      "properties": {
+        "event": { "const": "complete" },
+        "events_emitted": { "$ref": "#/$defs/safeInteger" },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "profile_id": { "const": "native-call-trace-v1" },
+        "schema_version": { "const": "1.0.0" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "fridaSucceededComplete": {
+      "allOf": [
+        { "$ref": "#/$defs/fridaComplete" },
+        { "type": "object", "properties": { "truncated": { "const": false } } }
+      ]
+    },
+    "fridaPartialComplete": {
+      "allOf": [
+        { "$ref": "#/$defs/fridaComplete" },
+        { "type": "object", "properties": { "truncated": { "const": true } } }
+      ]
+    },
+    "fridaSucceededObservations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "prefixItems": [{ "$ref": "#/$defs/fridaReady" }],
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/fridaCall" },
+          { "$ref": "#/$defs/fridaSucceededComplete" }
+        ]
+      },
+      "contains": { "$ref": "#/$defs/fridaSucceededComplete" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "fridaPartialObservations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10000,
+      "prefixItems": [{ "$ref": "#/$defs/fridaReady" }],
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/fridaCall" },
+          { "$ref": "#/$defs/fridaPartialComplete" }
+        ]
+      },
+      "contains": { "$ref": "#/$defs/fridaPartialComplete" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "fridaV2TargetMode": {
+      "enum": [
+        "local-spawn", "local-pid", "local-name", "usb-pid", "usb-name",
+        "usb-app-identifier", "device-pid", "device-name", "device-app-identifier"
+      ]
+    },
+    "fridaV2SessionReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_sha256", "event", "frame_nonce", "hooks_expected", "observed_at_ms",
+        "plan_sha256", "profile_id", "schema_version", "target_mode"
+      ],
+      "properties": {
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "event": { "const": "session-ready" },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "hooks_expected": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "profile_id": { "const": "native-call-trace-v2" },
+        "schema_version": { "const": "1.0.0" },
+        "target_mode": { "$ref": "#/$defs/fridaV2TargetMode" }
+      }
+    },
+    "fridaV2HookReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_sha256", "event", "frame_nonce", "hook_id", "module_name",
+        "module_relative_offset", "observed_at_ms", "plan_sha256", "profile_id",
+        "resolved_address", "resolver_kind", "schema_version", "symbol_name", "target_mode"
+      ],
+      "properties": {
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "event": { "const": "hook-ready" },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "hook_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$" },
+        "module_name": { "oneOf": [{ "type": "null" }, { "allOf": [{ "$ref": "#/$defs/plainText" }, { "type": "string", "maxLength": 256 }] }] },
+        "module_relative_offset": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x(?:0|[1-9a-f][0-9a-f]{0,15})$" }] },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "profile_id": { "const": "native-call-trace-v2" },
+        "resolved_address": { "type": "string", "pattern": "^0x[1-9a-f][0-9a-f]{0,15}$" },
+        "resolver_kind": { "enum": ["export", "module-offset", "absolute", "debug-symbol"] },
+        "schema_version": { "const": "1.0.0" },
+        "symbol_name": { "oneOf": [{ "type": "null" }, { "allOf": [{ "$ref": "#/$defs/plainText" }, { "type": "string", "maxLength": 512 }] }] },
+        "target_mode": { "$ref": "#/$defs/fridaV2TargetMode" }
+      }
+    },
+    "fridaV2Pointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "is_null", "module_name", "module_relative_offset", "protection"],
+      "properties": {
+        "address": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x(?:0|[1-9a-f][0-9a-f]{0,15})$" }] },
+        "is_null": { "type": "boolean" },
+        "module_name": { "oneOf": [{ "type": "null" }, { "allOf": [{ "$ref": "#/$defs/plainText" }, { "type": "string", "maxLength": 256 }] }] },
+        "module_relative_offset": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x(?:0|[1-9a-f][0-9a-f]{0,15})$" }] },
+        "protection": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[r-][w-][x-]$" }] }
+      }
+    },
+    "fridaV2Capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id", "captured_bytes", "codec", "error_code", "pointer", "requested_bytes",
+        "retention", "status", "truncated", "truncation_reason", "value", "value_encoding"
+      ],
+      "properties": {
+        "capture_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$" },
+        "captured_bytes": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "codec": { "enum": ["pointer", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "bool", "utf8", "utf16", "bytes"] },
+        "error_code": { "enum": [null, "NULL_POINTER", "LENGTH_READ_FAILED", "MEMORY_READ_FAILED", "VALUE_CONVERSION_FAILED", "CAPTURE_BUDGET_EXHAUSTED"] },
+        "pointer": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/fridaV2Pointer" }] },
+        "requested_bytes": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0, "maximum": 4294967295 }] },
+        "retention": { "enum": ["raw", "sha256", "metadata"] },
+        "status": { "enum": ["CAPTURED", "READ_FAILED"] },
+        "truncated": { "type": "boolean" },
+        "truncation_reason": { "enum": [null, "DECLARED_MAX", "RANGE_BOUNDARY", "SESSION_BUDGET", "FRAME_BUDGET"] },
+        "value": { "type": ["null", "string", "integer", "boolean"] },
+        "value_encoding": { "enum": ["none", "base64", "number", "decimal", "boolean", "pointer", "sha256"] }
+      }
+    },
+    "fridaV2Call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_sha256", "call_id", "captures", "event", "frame_nonce", "hook_id", "observed_at_ms",
+        "plan_sha256", "profile_id", "schema_version", "sequence", "target_mode", "thread_id"
+      ],
+      "properties": {
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "call_id": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "captures": { "type": "array", "maxItems": 33, "items": { "$ref": "#/$defs/fridaV2Capture" } },
+        "event": { "enum": ["enter", "leave"] },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "hook_id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._:-]{0,127}$" },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "profile_id": { "const": "native-call-trace-v2" },
+        "schema_version": { "const": "1.0.0" },
+        "sequence": { "type": "integer", "minimum": 1, "maximum": 9000 },
+        "target_mode": { "$ref": "#/$defs/fridaV2TargetMode" },
+        "thread_id": { "$ref": "#/$defs/safeInteger" }
+      }
+    },
+    "fridaV2Complete": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_sha256", "capture_attempts", "capture_failures", "capture_truncations",
+        "captured_payload_bytes", "event", "events_emitted", "frame_nonce", "hooks_detached",
+        "hooks_ready", "observed_at_ms", "plan_sha256", "profile_id", "schema_version",
+        "target_mode", "truncated"
+      ],
+      "properties": {
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "capture_attempts": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "capture_failures": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "capture_truncations": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "captured_payload_bytes": { "type": "integer", "minimum": 0, "maximum": 8388608 },
+        "event": { "const": "complete" },
+        "events_emitted": { "type": "integer", "minimum": 0, "maximum": 9000 },
+        "frame_nonce": { "$ref": "#/$defs/sha256" },
+        "hooks_detached": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "hooks_ready": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "observed_at_ms": { "$ref": "#/$defs/safeInteger" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "profile_id": { "const": "native-call-trace-v2" },
+        "schema_version": { "const": "1.0.0" },
+        "target_mode": { "$ref": "#/$defs/fridaV2TargetMode" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "fridaV2SucceededComplete": {
+      "allOf": [
+        { "$ref": "#/$defs/fridaV2Complete" },
+        { "type": "object", "properties": {
+          "target_mode": { "const": "local-spawn" }, "truncated": { "const": false },
+          "capture_failures": { "const": 0 }, "capture_truncations": { "const": 0 }
+        } }
+      ]
+    },
+    "fridaV2SucceededObservations": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 9258,
+      "prefixItems": [{ "$ref": "#/$defs/fridaV2SessionReady" }],
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/fridaV2HookReady" },
+          { "$ref": "#/$defs/fridaV2Call" },
+          { "$ref": "#/$defs/fridaV2SucceededComplete" }
+        ]
+      },
+      "contains": { "$ref": "#/$defs/fridaV2SucceededComplete" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "fridaV2PartialObservations": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 9258,
+      "prefixItems": [{ "$ref": "#/$defs/fridaV2SessionReady" }],
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/fridaV2HookReady" },
+          { "$ref": "#/$defs/fridaV2Call" },
+          { "$ref": "#/$defs/fridaV2Complete" }
+        ]
+      },
+      "contains": { "$ref": "#/$defs/fridaV2Complete" },
+      "minContains": 1,
+      "maxContains": 1
+    },
+    "safeInteger": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+  }
+}

@@ -16,7 +16,7 @@ import { declaredEvidenceRuleAnchors } from '../scripts/lib/evidence-adapters.mj
 import { parseLens } from '../scripts/lib/frontmatter.mjs'
 
 const ARTIFACT_DOC = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/artifact.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/artifact.md', import.meta.url),
 )
 
 const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
@@ -103,7 +103,7 @@ test('each rule asserts a claim the citing lens is permitted to make', () => {
   assert.deepEqual(Object.keys(claims).sort(), Object.keys(ORACLES).sort())
 
   const lens = parseLens(
-    readFileSync('skills/red-team-audit/lenses/cloud-and-iac.md', 'utf8'),
+    readFileSync('skills/last-aperture/lenses/cloud-and-iac.md', 'utf8'),
     'cloud-and-iac.md',
   )
   const permitted = lens.frontmatter.activates_on.evidence_classes['built-artifact'].may_conclude

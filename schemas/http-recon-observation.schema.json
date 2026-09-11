@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-recon-observation.schema.json",
-  "title": "Red Team Audit bounded HTTP reconnaissance observation",
+  "title": "The Last Aperture bounded HTTP reconnaissance observation",
   "description": "A redacted record of one authorized HTTPS probe with no retained response body.",
   "type": "object",
   "additionalProperties": false,
@@ -26,7 +26,7 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": ["1.0.0", "1.1.0"]
+      "const": "1.0.0"
     },
     "kind": {
       "const": "red-team-audit/http-recon-observation"
@@ -79,12 +79,6 @@
     "body": {
       "$ref": "#/$defs/body"
     },
-    "response_observation": {
-      "oneOf": [
-        { "type": "null" },
-        { "$ref": "#/$defs/responseObservation" }
-      ]
-    },
     "network": {
       "$ref": "#/$defs/network"
     },
@@ -102,13 +96,6 @@
       ]
     }
   },
-  "allOf": [
-    {
-      "if": { "required": ["response_observation"] },
-      "then": { "properties": { "schema_version": { "const": "1.1.0" } } },
-      "else": { "properties": { "schema_version": { "const": "1.0.0" } } }
-    }
-  ],
   "$defs": {
     "id": {
       "type": "string",
@@ -267,173 +254,6 @@
             "captured-prefix"
           ]
         }
-      }
-    },
-    "responseObservation": {
-      "oneOf": [
-        { "$ref": "#/$defs/bundleSourceResponseObservation" },
-        { "$ref": "#/$defs/crossOriginAstResponseObservation" }
-      ]
-    },
-    "bundleSourceResponseObservation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "profile",
-        "profile_binding_sha256",
-        "bundle_paths"
-      ],
-      "properties": {
-        "profile": {
-          "const": "credible-bundle-src-v1"
-        },
-        "profile_binding_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "bundle_paths": {
-          "type": "array",
-          "maxItems": 4,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^/assets/bundle-[0-9]{8}_[0-9]{4}\\.js$"
-          }
-        }
-      }
-    },
-    "crossOriginAstResponseObservation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "profile",
-        "profile_binding_sha256",
-        "analysis"
-      ],
-      "properties": {
-        "profile": {
-          "const": "credible-cross-origin-js-ast-v1"
-        },
-        "profile_binding_sha256": {
-          "$ref": "#/$defs/sha256"
-        },
-        "analysis": {
-          "$ref": "#/$defs/crossOriginAstAnalysis"
-        }
-      }
-    },
-    "crossOriginAstAnalysis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "analysis_complete",
-        "message_listeners",
-        "post_message_calls",
-        "token_like_flows"
-      ],
-      "properties": {
-        "analysis_complete": { "const": true },
-        "message_listeners": {
-          "$ref": "#/$defs/messageListenerAnalysis"
-        },
-        "post_message_calls": {
-          "$ref": "#/$defs/postMessageAnalysis"
-        },
-        "token_like_flows": {
-          "$ref": "#/$defs/tokenLikeFlowAnalysis"
-        }
-      }
-    },
-    "boundedAnalysisCount": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 4096
-    },
-    "messageListenerAnalysis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "count",
-        "inline_handler_count",
-        "resolved_handler_count",
-        "unresolved_handler_count",
-        "origin_guard_candidate_count",
-        "source_guard_candidate_count",
-        "both_guard_candidate_count",
-        "without_origin_guard_candidate_count",
-        "without_source_guard_candidate_count",
-        "has_resolved_handler_without_origin_guard_candidate",
-        "has_resolved_handler_without_source_guard_candidate"
-      ],
-      "properties": {
-        "count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "inline_handler_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "resolved_handler_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "unresolved_handler_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "origin_guard_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "source_guard_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "both_guard_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "without_origin_guard_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "without_source_guard_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "has_resolved_handler_without_origin_guard_candidate": { "type": "boolean" },
-        "has_resolved_handler_without_source_guard_candidate": { "type": "boolean" }
-      }
-    },
-    "postMessageTargetAnalysis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "wildcard_literal_count",
-        "same_origin_expression_count",
-        "static_origin_literal_count",
-        "opaque_or_null_literal_count",
-        "other_static_literal_count",
-        "dynamic_expression_count",
-        "missing_count"
-      ],
-      "properties": {
-        "wildcard_literal_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "same_origin_expression_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "static_origin_literal_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "opaque_or_null_literal_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "other_static_literal_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "dynamic_expression_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "missing_count": { "$ref": "#/$defs/boundedAnalysisCount" }
-      }
-    },
-    "postMessageAnalysis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "count",
-        "targets",
-        "has_wildcard_target",
-        "has_dynamic_target"
-      ],
-      "properties": {
-        "count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "targets": { "$ref": "#/$defs/postMessageTargetAnalysis" },
-        "has_wildcard_target": { "type": "boolean" },
-        "has_dynamic_target": { "type": "boolean" }
-      }
-    },
-    "tokenLikeFlowAnalysis": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "reference_count",
-        "message_listener_candidate_count",
-        "message_input_to_token_sink_candidate_count",
-        "post_message_payload_candidate_count",
-        "candidate_count",
-        "present"
-      ],
-      "properties": {
-        "reference_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "message_listener_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "message_input_to_token_sink_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "post_message_payload_candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "candidate_count": { "$ref": "#/$defs/boundedAnalysisCount" },
-        "present": { "type": "boolean" }
       }
     },
     "network": {

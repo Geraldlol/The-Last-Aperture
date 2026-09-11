@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-08-03
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0001 (executable audit platform), ADR 0003 (deterministic coverage closure)
 
 ## The gap
@@ -30,7 +30,7 @@ it without challenge on whether the cited code exists.
 
 ### What the corpus shows
 
-Measured against `peerstar-audit-run/run_2026-08-02T22-39-37-802Z_39ed224a0cbd`,
+Measured against `reference-audit-run/run_2026-08-02T22-39-37-802Z_39ed224a0cbd`,
 31 findings, schema 6.0.0:
 
 | Property | Count |
@@ -41,14 +41,14 @@ Measured against `peerstar-audit-run/run_2026-08-02T22-39-37-802Z_39ed224a0cbd`,
 And `evidence` is prose, not quoted code:
 
 > `cand:cicd:002` — "The npm entries list 13 directory patterns including the
-> /react-apps/* glob, but /apploi-mcp, /chart-audit-react, /hours-funnel-react
-> and /rd-scorecard-react match none of them."
+> /applications/* glob, but /service-api, /audit-dashboard, /worker-ui and
+> /reporting-ui match none of them."
 
 `_schema.md:146` already forbids exactly this: *"A paraphrase is not evidence —
 it is the reader having to take the auditor's word for the thing most worth
 checking, and it is where a hallucinated finding hides."* Nothing enforces it.
 
-This is the failure class the field notes recorded after the PeerStar run: *"The
+This is the failure class the field notes recorded after the reference production run: *"The
 fan-out is good at locating defects and unreliable about their details."* Two
 file labels inverted so a fix would have landed on the already-correct file. A
 helper claimed absent that exists three files over.
@@ -88,7 +88,7 @@ carries the verbatim span.
 ```json
 "quotes": [
   {
-    "path": "meetingbot/infra/modules/postgres.bicep",
+    "path": "application/infra/modules/postgres.bicep",
     "line": 27,
     "text": "publicNetworkAccess: 'Enabled'"
   }
@@ -109,8 +109,8 @@ is why requiring provider-supplied `source_anchors` was rejected.
 
 ### 2. `absence_claims` — the mirror for "X is not there"
 
-A quote matcher cannot check an absence, and absence is where the sharpest
-PeerStar error landed: *"TwilioInboundReceiver.cls does define
+A quote matcher cannot check an absence, and absence is where the sharpest error
+in the reference production run surfaced: *"WebhookInboundReceiver.cls does define
 constantTimeEquals (line 446). The crypto auditor said it did not."*
 
 ```json
@@ -311,7 +311,7 @@ proof outcomes, and that is a larger change than measuring existence.
 
 ## Constraints
 
-- `skills/red-team-audit/SKILL.md` is **7,995 of 8,000 bytes**. All prose
+- `skills/last-aperture/SKILL.md` is **7,995 of 8,000 bytes**. All prose
   documentation goes to `_schema.md` and `_harness.md`.
 - Lint gates R1–R8, slug ownership at 174 slugs, `gen --check` and
   `gen:benchmarks --check` must stay green.
@@ -343,7 +343,7 @@ outcome.
 
 **Forgery.** A hand-edited verdict in `run.json` fails `validate`.
 
-**Backward compatibility.** The 31-finding PeerStar corpus ingests unchanged
+**Backward compatibility.** The 31-finding reference corpus ingests unchanged
 under 7.0.0, every finding landing at `NOT_APPLICABLE`, and finalizes normally
 so long as the gate is not requested.
 

@@ -907,7 +907,7 @@ git commit -m "feat: digest-pinned credential-sealed registry acquisition"
 ### Task 4: The `registry` adapter document and suite registration
 
 **Files:**
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/registry.md`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/registry.md`
 - Modify: `package.json` — `test:platform`
 - Test: `test/evidence-adapters.test.mjs` (extend)
 
@@ -917,7 +917,7 @@ Append to `test/evidence-adapters.test.mjs`:
 
 ```js
 const REGISTRY_DOC = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/registry.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/registry.md', import.meta.url),
 )
 
 test('the registry adapter document states its authorization requirements', () => {
@@ -938,7 +938,7 @@ test('the registry adapter declares no rule anchors of its own', () => {
 
 - [ ] **Step 2: Write the document**
 
-Create `skills/red-team-audit/lenses/_evidence-adapters/registry.md` stating:
+Create `skills/last-aperture/lenses/_evidence-adapters/registry.md` stating:
 canonical `adapter_id: registry`, `verified_on`, the ten capabilities with the
 values `describe()` returns, the digest-pinning requirement and why a tag is
 not an identity, the `credential_ref` rule ("a bundle carries a credential
@@ -966,7 +966,7 @@ Run: `npm.cmd run gen -- --check` → `PASS ... (174 slugs).`
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_evidence-adapters/registry.md package.json test/evidence-adapters.test.mjs
+git add skills/last-aperture/lenses/_evidence-adapters/registry.md package.json test/evidence-adapters.test.mjs
 git commit -m "docs: registry adapter document and platform suite registration"
 ```
 

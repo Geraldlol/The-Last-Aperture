@@ -1,0 +1,37 @@
+# Local runs, experiments, and generated artifacts never belong in a release.
+/.audit-runs/
+/scratchpad/
+/.superpowers/
+/_tmp_*.mjs
+/validate_tmp.mjs
+/scripts/audit.mjs.bak_diag
+/references/
+/node_modules/
+/**/.gradle/
+/last-aperture-*.tgz
+
+# Operator key material and local configuration.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.asc
+.env
+.env.*
+!.env.example
+
+# Deliberate test fixtures with these names are public synthetic inputs.
+!**/fixtures/**/*.pem
+!**/fixtures/**/*.key
+!**/fixtures/**/*.p12
+!**/fixtures/**/*.pfx
+!**/fixtures/**/*.jks
+!**/fixtures/**/*.asc
+!**/fixtures/**/.env
+!**/fixtures/**/.env.*
+
+# Development-only version-control and editor metadata.
+/.git/
+/.github/
+/.vscode/

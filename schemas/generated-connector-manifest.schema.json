@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/generated-connector-manifest.schema.json",
+  "title": "The Last Aperture generated connector manifest",
+  "description": "A deterministic digest manifest that binds a generated connector package to one validated native interaction contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "generator_protocol",
+    "package_name",
+    "contract_id",
+    "contract_sha256",
+    "generation_status",
+    "runtime_mode",
+    "network_during_generation",
+    "content_sha256",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/generated-connector-manifest" },
+    "generator_protocol": { "const": "native-interaction-connector-generator-v1" },
+    "package_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 214,
+      "pattern": "^(?:@[a-z0-9][a-z0-9._-]{0,212}/[a-z0-9][a-z0-9._-]{0,212}|[a-z0-9][a-z0-9._-]{0,212})$"
+    },
+    "contract_id": { "type": "string", "pattern": "^interaction:[a-f0-9]{32}$" },
+    "contract_sha256": { "$ref": "#/$defs/sha256" },
+    "generation_status": { "const": "GENERATED_REVIEWABLE" },
+    "runtime_mode": { "const": "CONTRACT_BOUND" },
+    "network_during_generation": { "const": "NONE" },
+    "content_sha256": { "$ref": "#/$defs/sha256" },
+    "files": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "$ref": "#/$defs/readmeFile" },
+        { "$ref": "#/$defs/descriptorFile" },
+        { "$ref": "#/$defs/runtimeFile" },
+        { "$ref": "#/$defs/packageFile" }
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "fileBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "readmeFile": {
+      "allOf": [
+        { "$ref": "#/$defs/fileBase" },
+        { "type": "object", "properties": { "path": { "const": "README.md" } } }
+      ]
+    },
+    "descriptorFile": {
+      "allOf": [
+        { "$ref": "#/$defs/fileBase" },
+        { "type": "object", "properties": { "path": { "const": "connector.json" } } }
+      ]
+    },
+    "runtimeFile": {
+      "allOf": [
+        { "$ref": "#/$defs/fileBase" },
+        { "type": "object", "properties": { "path": { "const": "index.mjs" } } }
+      ]
+    },
+    "packageFile": {
+      "allOf": [
+        { "$ref": "#/$defs/fileBase" },
+        { "type": "object", "properties": { "path": { "const": "package.json" } } }
+      ]
+    }
+  }
+}

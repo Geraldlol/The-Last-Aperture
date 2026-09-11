@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-scope.schema.json",
-  "title": "Red Team Audit bounty program scope (bounty-v1)",
+  "title": "The Last Aperture bounty program scope (bounty-v1)",
   "description": "A sealed bug bounty program perimeter. The authorization records an operator declaration of program enrollment; it does not verify enrollment, asset ownership, scope currency, or revocation. This scope is never repository coverage and never an audit clearance.",
   "type": "object",
   "additionalProperties": false,

@@ -31,6 +31,7 @@ const MUTATION_RESPONSE_STOP_REASONS = new Set([
   'UNEXPECTED_REDIRECT',
   'TARGET_HEALTH_DEGRADED',
 ])
+const DEFAULT_MAX_ACTIONS = 10_000
 
 export class HttpAuthedCampaignControllerError extends Error {
   constructor(code, message, options = {}) {
@@ -295,6 +296,19 @@ export async function runHttpAuthedCampaign({
     )
   }
   const initialLedger = ledger.snapshot()
+  const maxActions = scope.limits.max_actions ?? DEFAULT_MAX_ACTIONS
+  const discoveryMaxDepth = scope.discovery?.max_depth ?? maxActions
+  if (
+    !Number.isSafeInteger(maxActions)
+    || maxActions < 1
+    || scope.requests.length > maxActions
+    || initialLedger.next_action_sequence - 1 > maxActions
+  ) {
+    throw campaignError(
+      'HTTP_AUTHED_CAMPAIGN_ACTION_LIMIT_INVALID',
+      'campaign requests or durable action state exceed the sealed action budget',
+    )
+  }
   const authorizationEvidence = httpAuthedAuthorizationEvidence(scope)
   if (
     initialLedger.campaign_grant_sha256 !== expectedCampaignGrantSha256
@@ -341,6 +355,7 @@ export async function runHttpAuthedCampaign({
   const observationFailures = []
   const queue = []
   const queuedIds = new Set()
+  const knownCandidates = new Map()
   let executedActions = 0
   const observeOperatorStop = async () => {
     if (typeof ledger.observeStopRequest === 'function') {
@@ -349,31 +364,56 @@ export async function runHttpAuthedCampaign({
     return ledger.snapshot().stopped === true
   }
 
-  const enqueue = async (candidateDraft, provenance) => {
-    const enqueued = await ledger.enqueueCandidate({ candidateDraft, provenance })
+  const enqueue = async (candidateDraft, provenance, depth = 0) => {
+    const deterministicIdentity = httpAuthedCandidateIdentity({
+      campaignGrantSha256: expectedCampaignGrantSha256,
+      candidateDraft,
+    })
+    const knownCandidate = knownCandidates.get(deterministicIdentity.candidateSha256)
+    const enqueued = knownCandidate === undefined
+      ? await ledger.enqueueCandidate({
+          candidateDraft,
+          provenance,
+          maxActions: provenance === 'DISCOVERED' ? maxActions : undefined,
+        })
+      : {
+          ...knownCandidate,
+          created: false,
+          headSha256: ledger.snapshot().head_sha256,
+        }
+    if (enqueued.limitReached === true) {
+      return { limitReached: true, liveContinuation: false }
+    }
+    if (knownCandidate === undefined) {
+      knownCandidates.set(deterministicIdentity.candidateSha256, enqueued)
+    }
     const state = ledger.actionState(enqueued.actionId)
     if (!enqueued.created) counts.duplicates += 1
     if (state?.terminal) {
       counts.already_terminal += 1
-      return enqueued
+      return { ...enqueued, liveContinuation: false }
     }
     if (!queuedIds.has(enqueued.actionId)) {
       queuedIds.add(enqueued.actionId)
-      queue.push({ candidateDraft, enqueued })
+      queue.push({ candidateDraft, enqueued, depth })
     }
-    return enqueued
+    return {
+      ...enqueued,
+      liveContinuation: state?.state === 'QUEUED' && queuedIds.has(enqueued.actionId),
+    }
   }
 
   await observeOperatorStop()
   if (entryCleanupTarget === null) {
     if (!ledger.snapshot().stopped) {
-      for (const action of scope.requests) await enqueue(action, 'SEALED_PLAN')
+      for (const action of scope.requests) await enqueue(action, 'SEALED_PLAN', 0)
     }
   } else {
     const { action, state } = entryCleanupTarget
     queuedIds.add(state.action_id)
     queue.push({
       candidateDraft: structuredClone(action),
+      depth: 0,
       enqueued: {
         created: false,
         actionId: state.action_id,
@@ -735,7 +775,9 @@ export async function runHttpAuthedCampaign({
         })
       }
 
-      if (settledStopReason !== null) {
+      const discoverableRedirect = settledStopReason === 'UNEXPECTED_REDIRECT'
+        && scope.discovery?.enabled === true
+      if (settledStopReason !== null && !discoverableRedirect) {
         await ledger.terminalizeAction({
           actionId: lease.actionId,
           leaseId: lease.leaseId,
@@ -746,42 +788,82 @@ export async function runHttpAuthedCampaign({
         break
       }
 
+      let locationContinuationAvailable = false
+      let locationLimitReached = false
+      let depthLimitReached = false
       if (scope.discovery?.enabled === true) {
         const transientChunks = execution?.discoveryInput?.bodyChunks ?? []
-        let discovered
-        try {
-          discovered = discoverHttpAuthedCandidates({
-            policy: scope.discovery,
-            sourceAction: action,
-            headers: execution?.discoveryInput?.headers ?? [],
-            bodyChunks: transientChunks,
-          })
-        } finally {
+        if (queued.depth >= discoveryMaxDepth) {
+          depthLimitReached = true
           for (const chunk of transientChunks) {
             if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
           }
-        }
-        let createdCount = 0
-        let duplicateCount = 0
-        for (const candidateDraft of discovered.candidates) {
-          const candidate = await enqueue(candidateDraft, 'DISCOVERED')
-          if (candidate.created) {
-            createdCount += 1
-            counts.discovered += 1
-          } else {
-            duplicateCount += 1
+          counts.rejected += 1
+          await ledger.recordDiscoverySummary({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            acceptedCount: 0,
+            duplicateCount: 0,
+            rejectedCount: 1,
+          })
+        } else {
+          let discovered
+          try {
+            discovered = discoverHttpAuthedCandidates({
+              policy: scope.discovery,
+              sourceAction: action,
+              headers: execution?.discoveryInput?.headers ?? [],
+              bodyChunks: transientChunks,
+            })
+          } finally {
+            for (const chunk of transientChunks) {
+              if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
+            }
           }
+          locationLimitReached = discovered.location_candidate_limit_reached === true
+          const locationCandidateIndexes = new Set(discovered.location_candidate_indexes)
+          let createdCount = 0
+          let duplicateCount = discovered.summary.duplicate_count
+          counts.duplicates += discovered.summary.duplicate_count
+          let controllerRejectedCount = 0
+          for (const [candidateIndex, candidateDraft] of discovered.candidates.entries()) {
+            const locationCandidate = locationCandidateIndexes.has(candidateIndex)
+            const candidate = await enqueue(candidateDraft, 'DISCOVERED', queued.depth + 1)
+            if (candidate.limitReached) {
+              controllerRejectedCount += 1
+              if (locationCandidate) locationLimitReached = true
+              continue
+            }
+            if (locationCandidate && candidate.liveContinuation) locationContinuationAvailable = true
+            if (candidate.created) {
+              createdCount += 1
+              counts.discovered += 1
+            } else {
+              duplicateCount += 1
+            }
+          }
+          const rejectedCount = Object.values(discovered.summary.rejected_by_code)
+            .reduce((sum, value) => sum + value, 0) + controllerRejectedCount
+          counts.rejected += rejectedCount
+          await ledger.recordDiscoverySummary({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            acceptedCount: createdCount,
+            duplicateCount,
+            rejectedCount,
+          })
         }
-        const rejectedCount = Object.values(discovered.summary.rejected_by_code)
-          .reduce((sum, value) => sum + value, 0)
-        counts.rejected += rejectedCount
-        await ledger.recordDiscoverySummary({
+      }
+      if (discoverableRedirect && (!locationContinuationAvailable || depthLimitReached)) {
+        await ledger.terminalizeAction({
           actionId: lease.actionId,
           leaseId: lease.leaseId,
-          acceptedCount: createdCount,
-          duplicateCount,
-          rejectedCount,
+          outcome: 'PROBE_COMPLETED',
         })
+        counts.completed += 1
+        const reason = locationLimitReached || depthLimitReached ? 'LIMIT_REACHED' : 'UNEXPECTED_REDIRECT'
+        if (!ledger.snapshot().stopped) await ledger.stopCampaign(reason)
+        break
       }
       await ledger.terminalizeAction({
         actionId: lease.actionId,

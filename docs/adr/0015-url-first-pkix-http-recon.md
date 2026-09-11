@@ -2,12 +2,12 @@
 
 - Status: Accepted for the v0.11 authorized-reconnaissance slice
 - Date: 2026-08-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Amends: ADR 0014 only for operator-attested TLS identity
 - Amended by: ADR 0021 retires the separate signed authorization mode; this
   ADR's URL-first PKIX and optional SPKI-pin decision remains current
 
-> **Current 0.12.0 execution status: active through the bounded controller.**
+> **Current 0.13.0 execution status: active through the bounded controller.**
 > Operator-directed `go` and the lower-level `run` route use the URL-first PKIX
 > behavior in this ADR. Redirects remain terminal and every resolved destination
 > must satisfy the public-address and sealed-identity checks.

@@ -1,12 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "Red Team Audit Browser Bridge (Disabled)",
-  "version": "0.12.1",
-  "description": "Release-disabled placeholder. It has no host, tab, scripting, background, or network authority.",
-  "permissions": [],
+  "name": "The Last Aperture Browser Bridge",
+  "version": "0.13.0",
+  "minimum_chrome_version": "110",
+  "description": "Runs controller-bound requests in an operator-selected tab without exporting browser-managed request credentials.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
   "host_permissions": [],
+  "optional_host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
   "action": {
-    "default_title": "Red Team Audit browser bridge is disabled",
+    "default_title": "Attach The Last Aperture to this tab",
     "default_popup": "popup.html"
   },
   "content_security_policy": {

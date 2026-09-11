@@ -1,8 +1,9 @@
-# Red Team Audit
+# The Last Aperture
 
-Red Team Audit is an evidence-first, agent-assisted source audit platform with
-separate controllers for bounded HTTPS observation and operator-attested or
-document-bound authenticated campaigns. Its
+The Last Aperture is an evidence-first, agent-assisted security platform with a
+unified engagement controller over repository review, bounded HTTPS observation,
+authenticated campaigns, Burp/HAR capture, Ghidra, Frida, and protocol
+reconstruction. Its
 security lenses supply domain judgment; a deterministic Node.js control plane
 owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
@@ -12,6 +13,25 @@ request; neither proves model comprehension. External HTTP reconnaissance uses
 the same operator-statement authorization with its own execution controller,
 action denominator, stop path, and nonclaims. It never becomes repository coverage.
 
+> **Protocol compatibility:** The Last Aperture is the user-facing name. Stable
+> `red-team-audit/...` IDs, kind strings, cryptographic domains, and producer
+> identities remain unchanged for formats that 0.14 still supports. Compatibility
+> is format-specific; it does not make every 0.12 extension readable by 0.14.
+
+> **0.14 migration:** `engage run` is now the normal entrypoint. It persists one
+> exact operator statement, explicit authority profile, and normalized target, plans every applicable shipped
+> route, records a dispatch permit before execution, and resumes from one shared
+> hash-chained ledger without asking for the statement again. Existing route CLIs
+> remain available as compatibility adapters.
+
+> **0.13 migration:** Target-specific HTTP response-profile formats were retired
+> to keep the shipped platform target-neutral. Existing HTTP-recon 1.2,
+> HTTP-recon-observation 1.1, and HTTP-authed 1.3 artifacts require the 0.12
+> verifier and cannot be resumed with 0.13. Export their final reports with 0.12,
+> then create a new target-neutral 0.13 scope for continued work. Native
+> interaction contracts retain exact read compatibility with the released 1.0
+> shape; new multi-source contracts use 1.1.
+
 At agent/controller ingress, the authenticated operator statement naming target
 and scope is the sole authorization fact for every capability it names, including T2/service
 boots, controller-referenced credentials, and named external services. If
@@ -20,20 +40,45 @@ Never require another consent, RoE, ownership, or legal check. A T1-only
 statement stays narrow, and the operator remains accountable. See
 [ADR 0023](docs/adr/0023-operator-authority-governs-named-capabilities.md).
 
+The statement can be ordinary language. It persists for the named objective
+across route selection and Codex/Claude handoffs, so one engagement does not
+stop for per-action approval. Agents may compose the packaged registered routes
+while keeping the same target, time, evidence, cleanup, and stop bindings. Other
+host-tool actions and evidence remain outside the engagement until a registered
+route supports them; a missing wrapper does not revoke the stored authority.
+
 It is not another regex scanner. Agent and scanner output is provider evidence:
 it is packet-bound, attributed, schema-checked, scope-checked, and capped before
 it enters the run, but its factual accuracy still depends on proof and review.
 
 ## Current release
 
-> **Current boundary:** repository T1 and the narrow Node/npm loopback T2 route
+> **Current boundary:** the unified engagement command starts and tracks the
+> applicable shipped adapters under one durable authority record. Repository T1
+> and the narrow Node/npm loopback T2 route
 > are active through sealed, network-none Docker workers. One exact bounded
-> operator-directed HTTP-recon action and fixed, already-sealed authenticated
-> HTTP campaigns are also active through their protocol controllers. Generic
-> live/L3, other T2/service shapes, provider, remote, bounty/OOB, acquisition,
+> operator-directed HTTP-recon action and adaptive sealed authenticated HTTP
+> campaigns are also active through their protocol controllers. The packaged
+> Chrome bridge can execute campaign actions in an operator-selected logged-in
+> tab without exporting browser-managed request credentials. A declared tool or
+> named host adapter that is temporarily unavailable remains a waiting condition
+> while independent routes continue. Capture, configuration, and credential
+> references omitted from immutable intake require a successor engagement. After authenticated dispatch, failure to
+> attach the selected tab is a settled child-route outcome, not resumable waiting.
+> Other T2/service shapes, semantic providers,
+> remote, bounty/OOB, acquisition,
 > database, transparency, and evidence-bundle import remain technically unavailable. Static repository inventory, source
 > sealing, offline planning/validation, and manual result ingestion are
 > available.
+
+The reverse-engineering route adds Ghidra static export, typed Frida call
+tracing, offline value-redacted HAR and Burp HTTP-items XML import, an optional
+read-only Burp Montoya history exporter, draft native interaction contracts,
+verified live reconnaissance/auth-campaign metadata import, and deterministic
+contract-bound Node connectors. The Chrome bridge can also
+apply a declarative, scope-bound page-managed session value without exporting
+that value. Reverse observations stay outside audit bundles and never become
+security verdicts. See [reverse engineering and protocol reconstruction](docs/reverse-engineering.md).
 
 Manual provider decisions are not semantic authority in this release. The
 controller stamps triage and proof decisions as unauthenticated; reports render
@@ -43,7 +88,14 @@ remove it from proof scheduling. Likewise, comparable-coverage absence is
 `claimed-fixed`; the unqualified `fixed` state is reserved for a future
 authenticated semantic-negative oracle.
 
-The latest assessment updates add read-only `status`, `verdict`, `doctor`,
+The latest passive-check slice adds a standalone JavaScript TLS-configuration
+checker with source locations, repair guidance, and a separately authored
+synthetic evaluation corpus. It reads only explicitly named local files and
+does not execute target code or change audit bundles. Observations remain
+`UNPROVEN`; TypeScript/JSX and uncertain analysis are explicit coverage gaps.
+See [passive source checks](docs/passive-source-checks.md) for usage and limits.
+
+The preceding assessment updates add read-only `status`, `verdict`, `doctor`,
 `capabilities`, and repair/retest briefs; packet-bound review templates and
 result preflight; and per-repeat benchmark measurement. These supporting
 workflows do not perform automated semantic analysis or independently verify
@@ -51,7 +103,30 @@ security conclusions. See [assessment improvements](docs/assessment-improvements
 for commands and [delivery status](docs/delivery-status.md) for the remaining
 work and verification record.
 
-Version 0.12.0 adds authenticated HTTP campaigns to the v0.11
+Version 0.14.0 adds the unified engagement control plane:
+
+- `engage run`, `resume`, `status`, and `stop` bind a canonical target and exact
+  operator statement to one immutable manifest, append-only ledger, and external
+  sibling head chain.
+- A deterministic registry selects fixed `shell:false` adapters for repository,
+  HTTPS/browser, live metadata, HAR/Burp, Ghidra, Frida, protocol, connector, and evidence work.
+- Route grants bind the authority, target, manifest, plan, and invocation digests;
+  successful route results bind every declared output tree before downstream use.
+  Missing material is reported without reauthorization or blocking independent
+  routes.
+
+Version 0.13.0 added target-neutral acquisition and session adapters:
+
+- `web import-burp` reads Burp Save Items XML offline and projects it through
+  the same bounded, value-redacted web evidence contract as HAR import.
+- The optional Montoya extension exports an exact-origin, path-bounded,
+  deterministic sanitized HAR from existing Proxy history. It uses
+  `finalRequest()` and never invokes Scanner, sends traffic, or modifies it.
+- A declarative page-session adapter can read one exact `localStorage` or
+  `sessionStorage` key, optionally extract one strict JSON Pointer string, and
+  apply it to one allowed request header inside the isolated browser dispatch.
+
+Version 0.12.0 added authenticated HTTP campaigns to the v0.11
 authorized-reconnaissance and v0.10 repository-audit foundation:
 
 - A separate `http-authed-v1` protocol and `audit:http-authed` CLI. The
@@ -64,8 +139,8 @@ authorized-reconnaissance and v0.10 repository-audit foundation:
   scope, including body-bearing and write methods. Native transport refuses
   `CONNECT` and protocol upgrades; browser transport also refuses `TRACE`/`TRACK`.
 - A locally append-only, hash-chained external campaign ledger with monotonic
-  sequencing, no redirect or automatic retry, a 256-action public
-  fixed-campaign ceiling, and immediate pre-send authorization revalidation.
+  sequencing, bounded response-derived discovery, no transport redirect or
+  automatic retry, and immediate pre-send authorization revalidation.
   Cross-restart rollback or valid-prefix truncation detection requires a
   separately retained trusted record count and head digest.
 - Declared mutations with credential preflight, before/after JSON observation,
@@ -192,9 +267,11 @@ network-none container as its fixed loopback probe and proof command. Other T2
 shapes retain their authority but remain unavailable without a matching route.
 `http-recon-v1` is not T2 and cannot verify a repository finding. Local
 static mode does not execute target code or intentionally create socket traffic.
-Caller-selected filesystem paths remain trusted endpoints and may
-resolve through symlinks, junctions, mapped drives, or remote-backed volumes;
-the lexical path guard is not local-volume attestation. Public `remote_static`
+Legacy route-CLI caller-selected filesystem paths remain trusted endpoints and
+may resolve through symlinks or junctions. The `engage` controller rejects
+observed aliases and rechecks its bound inputs. Mapped drives and remote-backed
+volumes remain operator-trusted for both paths; lexical locality is not
+local-volume attestation. Public `remote_static`
 and local provider execution are currently
 disabled until their gateway and container-runtime identities are enrolled by a
 trusted controller outside caller-controlled configuration. The retained
@@ -243,6 +320,10 @@ trusted main checkout is part of the maintainer test boundary.
 ## Quick start
 
 Requirements: Node.js 20 or newer for planning and manual `next`/`ingest`.
+The optional SQLite proxy-store tests require `node:sqlite`: all eight execute
+on Node 24; older runtimes without that builtin report eight explicit dependency
+skips. This does not add Node 20 support for that store or waive unrelated test
+failures. A missing SQLite builtin on Node 24 still fails the suite.
 Public T1 and narrow T2 additionally require the controller-owned Docker CLI
 path, a local Docker daemon, and a prebuilt worker image satisfying the external
 worker configuration. Provider and remote execution remain internal conformance
@@ -254,11 +335,156 @@ Bash and ripgrep are available.
 ```powershell
 npm.cmd ci --ignore-scripts
 npm.cmd test
+
+# Normal target-and-go workflow. The UTF-8 statement is stored exactly once.
+npm.cmd run audit -- engage run https://target.example/app `
+  --attestation-file C:\engagement-inputs\authority.txt `
+  --profile full `
+  --out C:\engagements\target-example
+npm.cmd run audit -- engage status C:\engagements\target-example --json
+npm.cmd run audit -- engage resume C:\engagements\target-example
+npm.cmd run audit -- engage stop C:\engagements\target-example --reason "operator stop"
+
+# Add the packaged Chrome bridge for a logged-in browser session.
+npm.cmd run audit -- engage run https://target.example/app `
+  --attestation-file C:\engagement-inputs\authority.txt `
+  --profile full `
+  --credential-reference browser:abcdefghijklmnopabcdefghijklmnop `
+  --input configuration=C:\engagement-inputs\page-session-adapter.json `
+  --out C:\engagements\target-browser
+
+# Continue a repository engagement through its bound analyst work queue.
+npm.cmd run audit -- engage work next C:\engagements\repository --json
+npm.cmd run audit -- engage work status C:\engagements\repository --json
+npm.cmd run audit -- engage work submit C:\engagements\repository `
+  --work-id <repository-work:sha256> --result C:\review\result.json --json
+npm.cmd run audit -- engage work finalize C:\engagements\repository --json
+npm.cmd run audit -- engage work validate C:\engagements\repository --json
+
+# Compatibility repository entrypoint.
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs --require-source-closure
 npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
+
+`--profile full` grants every registered route for the named target. Narrower
+machine profiles are `repository-read`, `web`, `reverse`, and `offline`; the
+stored statement must not contradict the selected profile. The profile is part
+of the durable authority record and is reused on resume without another prompt.
+Repository work envelopes and submitted results are exact-byte bound, and every
+child-bundle checkpoint is anchored into the outer engagement ledger.
+The public browser resolver accepts exactly one
+`browser:<32-character-lowercase-a-p-extension-id>` reference. The optional
+`configuration` input must be a bound `last-aperture/page-session-adapter`
+document. It names a storage location and request carrier; the session value is
+read inside the extension dispatch and is never written into the engagement.
+The stock `engage` CLI accepts HTTPS, repository, artifact, and browser targets.
+Process/device engagement contracts require a host integration that supplies the
+trusted runtime-identity adapter; direct Frida operations remain available through
+the fixed reverse CLI.
+
+### Reverse engineering and application protocols
+
+The reverse CLI turns authorized local artifacts and captures into bounded
+observations. Name every in-scope origin and import a HAR or Burp Save Items XML
+file locally:
+
+```powershell
+npm.cmd run audit:reverse -- web import-har `
+  --har C:\lab\session.har `
+  --origin https://portal.example `
+  --path-prefix / `
+  --path-literal resources `
+  --out C:\lab\session-evidence.json
+
+# Equivalent offline input from Burp Suite: Target or Proxy history -> Save items.
+npm.cmd run audit:reverse -- web import-burp `
+  --burp C:\lab\saved-items.xml `
+  --origin https://portal.example `
+  --path-prefix / `
+  --path-literal resources `
+  --out C:\lab\burp-session-evidence.json
+
+# Offline projection of verified Last Aperture recon and optional settled auth metadata.
+npm.cmd run audit:reverse -- web import-live-metadata `
+  --recon-bundle C:\engagement\routes\https-recon\http-recon `
+  --auth-scope C:\engagement\routes\authenticated-http-browser\scopes\scope-<digest>.json `
+  --auth-ledger C:\engagement\routes\authenticated-http-browser\campaign-ledger `
+  --origin https://portal.example `
+  --path-prefix / `
+  --out C:\lab\live-metadata-evidence
+
+npm.cmd run audit:reverse -- protocol build `
+  --web-evidence C:\lab\session-evidence.json `
+  --out C:\lab\native-interaction-contract.json
+
+npm.cmd run audit:reverse -- protocol generate `
+  --contract C:\lab\native-interaction-contract.json `
+  --out C:\lab\application-connector `
+  --name @example/application-connector
+
+npm.cmd run audit:reverse -- protocol verify `
+  --package C:\lab\application-connector `
+  --manifest-sha256 <digest-returned-by-generate>
+```
+
+`protocol build` also accepts `--reverse-evidence` without web evidence, so a
+Ghidra- or Frida-only target can continue into a gap-preserving draft contract.
+
+Live metadata import is offline. Recon contributes verified method, URL, status,
+header-name, complete-body size-bucket, and timing observations. Auth contributes
+only a settled sealed-plan seed and its status, plus a request-header carrier when
+the sealed page-session adapter named one. It does not claim complete endpoint or
+auth-flow coverage, response shape, redirect semantics, discovered response
+locators, write behavior, replay, pagination, or ambient credential names or
+values. Historical scope verification remains structural and digest-bound after
+expiry; live dispatch still requires a current scope.
+
+Both importers keep methods, stable parameter and field names, type shapes,
+endpoint templates, redirect sequence, status codes, cookie names, and
+credential-carrier names. They remove query, header, cookie, and body values,
+mask unknown path segments and obvious value-shaped names, and retain an
+application route literal only when it is built in or explicitly reviewed
+through `--path-literal`. The resulting contract models
+separate auth request/response transitions, endpoint schemas, pagination,
+observed retries, unique correlation within three same-capture observations,
+and `READ_CANDIDATE`,
+`WRITE_CANDIDATE`, or `UNKNOWN` side-effect assessments. A later same-template
+read may be recorded only as `FOLLOWUP_READ_SAME_TEMPLATE_OBSERVED`. The
+contract remains `DRAFT_OBSERVED` as its provenance statement. `protocol
+generate` validates that contract and emits a deterministic, self-contained
+Node package labeled `GENERATED_REVIEWABLE`. The package can invoke only its
+contract endpoint IDs, origins, methods, request shapes, redirects, and observed
+retry routes. Automatic retry additionally requires a `READ_CANDIDATE`; writes
+and unknown operations run once. It supports typed path values, observed query,
+header, cookie, and body shapes, per-origin in-memory cookie jars, response-body
+timeouts, an asynchronous credential provider, and an optional transient
+receiver for credential fields returned in response bodies. Those fields are
+redacted from ordinary result data and never written to disk. Errors raised
+after transport invocation carry `request_may_have_been_sent: true`, so a write
+or unknown operation with that flag must not be replayed automatically. A `2xx`
+response or a later read does not prove a write succeeded. Keep the generator result's
+manifest digest outside the package when coordinated package modification is in
+scope, and pass it to `protocol verify` before packaging or use.
+
+Ghidra reads a copied artifact without executing it and emits bounded function,
+network API, reference/call-site, sanitized static endpoint, and
+authentication-hint metadata. Native launchers run directly. Windows `.bat`
+and `.cmd` launchers compile the bundled fixed compatibility agent with
+`javac.exe` and `jar.exe`, then run under kill-on-close Job Object supervision.
+Frida v1 preserves the minimal one-symbol local-spawn trace. A
+strict v2 plan adds multiple hooks, local or device attachment, four resolver
+forms, and typed entry/exit argument and return capture with raw/base64,
+SHA-256, or metadata retention. Attached-runtime evidence remains `PARTIAL`
+when the supplied artifact copy cannot prove the bytes already loaded. Neither
+reverse route captures a browser or logs in. Burp Save Items XML is an offline
+input with `BURP_XML` provenance. The optional Montoya extension reads existing
+Proxy history and emits a sanitized HAR with `WEB_HAR` provenance; its build
+requires a caller-supplied local Montoya API JAR and performs no download. The
+separate offline generator emits the runnable connector package. Full command
+syntax, capture handling, and runtime details are in the
+[reverse engineering guide](docs/reverse-engineering.md).
 
 ### Authorized repository T1 proof
 
@@ -464,11 +690,12 @@ with the authorization model in
 
 ### Authorized authenticated HTTP campaign
 
-> **Current release status:** fixed, sealed authenticated campaign execution is
+> **Current release status:** sealed authenticated campaign execution is
 > active. Probe actions run only inside one-action or multi-action campaigns;
 > standalone probe dispatch is not public. Invoking a live campaign is the
 > operator's launch directive, so no second current-authorization flag is
-> required. Adaptive response-derived discovery remains outside this public lane.
+> required. Discovery-enabled scopes can derive and execute additional probes
+> inside their declared origin, path, method, and test-category perimeter.
 
 This path is separate from both repository proof and `http-recon-v1`. The
 operator target/scope statement at agent/controller ingress is its sole
@@ -516,16 +743,40 @@ The plan and validation expose `authorization_binding_sha256`,
 separate evidence, but their digest, issuer, or signature cannot grant a
 different mode, target, action, or limit.
 
-Do not load the companion under `browser/http-authed-chrome`. The packaged
-0.12.1 manifest is a release-disabled placeholder with no host, tab, scripting,
-or background authority, and its popup contains no attach controls. The public
-`--credential-browser` bridge can execute only if the operator separately
-supplies a compatible companion. That browser path enforces exact origin and no
-redirect, but uses the browser's DNS/network stack rather than native all-answer
-DNS validation and socket IP pinning; treat that as a distinct assurance level.
-Anyone who previously loaded version 0.12.0 must remove it from Chrome or reload
-the unpacked directory and verify version 0.12.1; replacing repository files does
-not terminate an already registered service worker by itself.
+Load `browser/http-authed-chrome` as an unpacked extension and copy the extension
+ID shown by Chrome into `--browser-extension-id` when planning. Version 0.13.0
+uses `activeTab` and `scripting` only after the operator selects the target tab,
+`storage` for an extension-owned ephemeral recovery marker, plus an optional
+user-granted `http://127.0.0.1/*` permission for controller pairing. It has no
+persistent target-host, cookie, debugger, tabs, or web-request access. The
+recovery marker is kept in `chrome.storage.session`, restricted to trusted
+extension contexts, and contains no pairing capability, controller session
+capability, target credential, request, or response value.
+When the campaign prints a controller port and one-time pairing capability, open
+the extension in the logged-in target tab, preview the exact origin and campaign
+grant, and attach. Fetch applies ambient browser-managed credentials such as
+same-origin cookies, HTTP authentication, and client certificates without
+exporting those request credential values. It runs in Chrome's extension-isolated
+world so target-page JavaScript cannot replace its fetch implementation or
+protocol state. Response bodies and only the
+discovery allowlist of response-header values (`Allow`, `Content-Encoding`,
+`Content-Type`, `Link`, and `Location`) cross the loopback bridge transiently;
+they are not written to the campaign ledger. Browser dispatch uses the browser's
+DNS/network stack rather than native all-answer DNS validation and socket IP
+pinning.
+
+By default the bridge does not inspect page `localStorage`/`sessionStorage` or
+patch request libraries. For an application-managed session, planning may seal
+one target-neutral descriptor with `--page-session-adapter <absolute.json>`.
+The adapter names one exact storage area/key, `RAW` or strict `JSON_POINTER`
+extraction, one request-header carrier, exact HTTPS origin/method/path-prefix
+constraints, a validity interval, and a value-byte limit. The value is reacquired
+and applied inside each isolated dispatch; it does not cross the extension
+worker, loopback controller, ledger, evidence, or logs. If the Manifest
+V3 worker restarts, it attempts to abort any surviving injected request, clears
+its recovery marker, and requires a fresh controller pairing; it never resumes
+from an old loopback port because the current protocol cannot mutually
+reauthenticate that controller without exposing a reusable capability.
 
 Probe-only plans need no mutation permit. For write-capable probes or declared
 reversible mutations, the controller uses the sealed campaign authority and
@@ -584,18 +835,18 @@ mode and can send only the sealed rollback and rollback-verification requests.
 It writes `CLEANUP_SESSION_CONFIRMED` before cleanup dispatch, does not write a
 new ordinary session confirmation, and never queues or sends new work.
 
-The packaged browser companion is not runnable in this release. A separately
-installed protocol-compatible companion may use the public loopback bridge;
-its actions still pass through the same campaign ledger and sealed action list.
+The packaged browser companion uses the public loopback bridge; every action
+still passes through the same campaign ledger, candidate validation, and sealed
+scope.
 
 Sealed `env:NAME` and redirected `--credential-stdin` remain explicit fallbacks
 for exported credentials. Stdin is read once per process and must match the
 binding at live execution; it does not provide automatic rotation. Never put an
 exported credential in chat, argv, or a file. Validation needs no credential.
 
-Use synthetic non-PHI test data even when the target data class is PHI. Public
-campaign execution sends only the sealed request list (at most 256 actions) and
-does not admit response-derived discovery. See
+Use synthetic non-PHI test data even when the target data class is PHI. A
+discovery-enabled campaign may enqueue only the bounded read probes produced by
+its sealed discovery policy. See
 [`ADR 0016`](docs/adr/0016-authenticated-mutation-actions.md),
 [`ADR 0017`](docs/adr/0017-operator-attested-authenticated-campaigns.md), and
 [`schemas/http-authed-scope.schema.json`](schemas/http-authed-scope.schema.json).
@@ -640,20 +891,22 @@ bundle and seals it for database-lens jobs. Reports keep it in a separate
 reference section. It does not change store coverage, finding proof tier,
 verification status, or target deployment claims.
 
-### Install the development checkout as a Codex skill
+### Install the development checkout as a Codex or Claude Code skill
 
-Link the whole repository, not only `skills/red-team-audit`, because the
+Link the whole repository, not only `skills/last-aperture`, because the
 canonical skill deliberately enters through the executable controller,
 schemas, and package dependencies at the repository root:
 
 ```powershell
-$skillDestination = Join-Path $env:USERPROFILE '.codex\skills\red-team-audit'
-New-Item -ItemType Junction -Path $skillDestination -Target (Resolve-Path .)
+$codexSkill = Join-Path $env:USERPROFILE '.codex\skills\last-aperture'
+$claudeSkill = Join-Path $env:USERPROFILE '.claude\skills\last-aperture'
+New-Item -ItemType Junction -Path $codexSkill -Target (Resolve-Path .)
+New-Item -ItemType Junction -Path $claudeSkill -Target (Resolve-Path .)
 ```
 
-The destination must not already exist. Codex discovers the skill on the next
-turn. CLI entrypoint detection resolves the physical path, so commands invoked
-through the junction execute normally.
+Each chosen destination must not already exist. Codex or Claude Code discovers
+the skill on its next turn. CLI entrypoint detection resolves the physical path,
+so commands invoked through either junction execute normally.
 
 The plan command writes a versioned bundle and prints `State: PLANNED`. A plan
 is not an audit result and cannot be mistaken for one. `next`, `ingest`, and

@@ -503,6 +503,9 @@ async function runHttpAuthedCampaignRuntime({
           cleanupBrowserTransportSession = await browserTransportFactory({
             extensionId: scope.credential.extension_id,
             targetOrigin: scope.credential.origin,
+            ...(scope.credential.session_adapter === undefined
+              ? {}
+              : { pageSessionAdapter: scope.credential.session_adapter }),
             campaignGrantSha256: verified.campaignGrantSha256,
             timeoutMs: scope.limits.request_timeout_ms,
           })
@@ -642,6 +645,9 @@ async function runHttpAuthedCampaignRuntime({
           operation: () => browserTransportFactory({
             extensionId: scope.credential.extension_id,
             targetOrigin: scope.credential.origin,
+            ...(scope.credential.session_adapter === undefined
+              ? {}
+              : { pageSessionAdapter: scope.credential.session_adapter }),
             campaignGrantSha256: verified.campaignGrantSha256,
             timeoutMs: scope.limits.request_timeout_ms,
           }),

@@ -841,7 +841,7 @@ Create `schemas/bounty-scope.schema.json`:
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-scope.schema.json",
-  "title": "Red Team Audit bounty program scope (bounty-v1)",
+  "title": "The Last Aperture bounty program scope (bounty-v1)",
   "description": "A sealed bug bounty program perimeter. The authorization records an operator declaration of program enrollment; it does not verify enrollment, asset ownership, scope currency, or revocation. This scope is never repository coverage and never an audit clearance.",
   "type": "object",
   "additionalProperties": false,
@@ -1841,7 +1841,7 @@ import {
 import { isMainModule } from './lib/main-module.mjs'
 import { PLATFORM_VERSION } from './lib/run-engine.mjs'
 
-const HELP = `red-team-audit bounty-v1 program perimeter ${PLATFORM_VERSION}
+const HELP = `last-aperture bounty-v1 program perimeter ${PLATFORM_VERSION}
 
 Usage:
   bounty plan --platform <yeswehack|hackerone|intigriti|direct> --program <handle> --engagement-id <id> --policy-url <https-url> --policy-file <snapshot> --operator-id <id> --authorized-by <text> --allow <spec> [--allow <spec>...] [--deny <spec>...] --rate-limit-rps <n> --not-before <iso8601> --not-after <iso8601> --attest-enrolled --out <parent> [--active-testing] [--mutation] [--automation] [--intensity <normal|aggressive|ham>] [--desync] [--non-production] [--json]

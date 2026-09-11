@@ -27,6 +27,11 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'The reference byte consumer checks transport behavior; it does not analyze security.',
     },
     {
+      id: 'source-pattern-checks', status: 'AVAILABLE_NARROW', commands: ['npm run audit:source-check', 'npm run evaluate:source-check'],
+      description: 'Standalone passive JavaScript checks for two literal Node TLS configuration patterns, with source coordinates and repair guidance.',
+      limitation: 'Observations remain UNPROVEN; no target execution, automatic ingestion, semantic security verdict, TypeScript/JSX support, or independent quality validation.',
+    },
+    {
       id: 'status', status: 'AVAILABLE', commands: ['status'],
       description: 'Read saved progress, coverage gaps, failures, and interrupted attempts.',
       limitation: 'Saved state is not evidence that a target remains unchanged.',
@@ -57,6 +62,11 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Static checks do not inspect a Docker daemon, verify an image, or prove runtime readiness.',
     },
     {
+      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
+      description: 'Durable target-neutral engagement orchestration across applicable registered routes under one operator statement and shared ledger.',
+      limitation: 'Orchestration covers shipped registered routes. Declared tool or named host-adapter unavailability remains explicit; omitted immutable inputs or references require a successor engagement, and route evidence retains its own limits.',
+    },
+    {
       id: 't1-proof', status: 'AVAILABLE_NARROW', commands: ['run-proof'],
       description: 'Sealed, network-denied repository proof through the fixed Docker worker route.',
       limitation: 'Requires a compatible immutable Node/npm worker, sealed inputs, and the existing proof contract; no arbitrary runtime support.',
@@ -73,8 +83,33 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     },
     {
       id: 'authenticated-http', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested', 'http-authed campaign-stop'],
-      description: 'Fixed sealed authenticated HTTP requests through the existing campaign controller.',
-      limitation: 'No generic live probing or automatic scope expansion is provided.',
+      description: 'Adaptive sealed authenticated HTTP discovery and actions through the durable campaign controller.',
+      limitation: 'Every request remains bound to the campaign authority, scope policy, action limits, retained receipt, and stop/cleanup state.',
+    },
+    {
+      id: 'ghidra-static-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse ghidra analyze'],
+      description: 'Fixed Ghidra headless static export for one copied native artifact with bounded function, network API/reference/call-site, sanitized static endpoint, and authentication-hint metadata.',
+      limitation: 'Native launchers run directly; Windows .bat and .cmd launchers require javac.exe and jar.exe and run through the bundled fixed compatibility agent and Job Object bridge. Static observations do not execute the target or establish program semantics.',
+    },
+    {
+      id: 'frida-local-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse frida trace'],
+      description: 'Fixed Frida local spawn and enter/leave trace for one exact module and symbol, with an opaque module-relative symbol offset.',
+      limitation: 'This v1 host process route is not a sandbox and records no arguments, return values, memory, or protocol values.',
+    },
+    {
+      id: 'frida-typed-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse frida trace-plan'],
+      description: 'Typed multi-hook Frida call tracing for bounded local spawn, local PID/name attach, USB PID/name/application attach, and explicit-device attach plans.',
+      limitation: 'Only the bundled typed-capture agent and exact plan selectors are accepted. Declared raw captures can contain sensitive values. Attach evidence remains PARTIAL because a supplied local artifact copy cannot prove the attached runtime loaded identical bytes.',
+    },
+    {
+      id: 'web-protocol-reconstruction', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse web import-live-metadata', 'last-aperture-reverse web import-har', 'last-aperture-reverse web import-burp', 'last-aperture-reverse protocol build', 'last-aperture-reverse protocol generate', 'last-aperture-reverse protocol verify'],
+      description: 'Import verified Last Aperture recon and settled sealed-plan auth metadata, an authorized HAR, or Burp HTTP-items XML offline; compile bounded observed protocol shapes; and generate a deterministic contract-bound Node connector.',
+      limitation: 'Live-metadata projection retains no values and does not claim complete endpoint/auth coverage, response-discovered locators, response shape, redirects, writes, replay, or pagination. Generation and verification perform no network I/O. The generated runtime is labeled GENERATED_REVIEWABLE, remains limited to its validated observed contract, and requires the externally retained manifest digest.',
+    },
+    {
+      id: 'burp-proxy-history-export', status: 'AVAILABLE_NARROW', commands: ['integrations/burp-montoya/build.ps1'],
+      description: 'Optional Community-compatible Montoya extension that exports deterministic value-free HAR from existing Burp Proxy history under one exact origin, path prefix, reviewed route-literal set, and item limit.',
+      limitation: 'Requires a caller-supplied local Montoya API JAR, JDK 17 through 21, and Burp. It reads existing history only; Scanner, network dispatch, and traffic modification are disabled.',
     },
     {
       id: 'semantic-oracle', status: 'UNAVAILABLE', commands: [],
@@ -82,20 +117,20 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Process exit differences and cleanup receipts alone cannot establish a vulnerability or a verified fix.',
     },
     {
-      id: 'browser-execution', status: 'UNAVAILABLE', commands: [],
-      description: 'Browser-driven application testing.',
-      limitation: 'Browser configuration can be reviewed as source; a public browser execution route is not shipped.',
+      id: 'browser-execution', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested'],
+      description: 'Selected-tab authenticated request execution through the active browser companion bridge, with an optional declarative Web Storage session-to-header adapter.',
+      limitation: 'The bridge executes authorized actions in the selected tab and does not automate navigation or login. The optional adapter accepts one exact storage source and request-header carrier; its value stays inside the isolated dispatch.',
     },
     {
       id: 'database-stack-execution', status: 'UNAVAILABLE', commands: [],
       description: 'Database-backed and multi-service application execution.',
       limitation: 'Retained conformance kernels are not public target execution capabilities.',
     },
-    {
-      id: 'multi-runtime-execution', status: 'UNAVAILABLE', commands: [],
-      description: 'Python, JVM, .NET, Go, Rust, and native target execution.',
-      limitation: 'A language detected in source does not imply a compatible public proof worker.',
-    },
+  {
+    id: 'multi-runtime-execution', status: 'UNAVAILABLE', commands: [],
+    description: 'Generic proof-worker execution for Python, JVM, .NET, Go, Rust, and native targets beyond the fixed Frida routes.',
+    limitation: 'A language detected in source does not imply a compatible public proof worker.',
+  },
     {
       id: 'deployed-evidence-acquisition', status: 'UNAVAILABLE', commands: [],
       description: 'Acquire and trust current deployment or cloud runtime evidence.',
@@ -103,7 +138,7 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     },
     {
       id: 'generic-live', status: 'UNAVAILABLE', commands: [],
-      description: 'Generic autonomous live assessment, bounty, and out-of-band workflows.',
+      description: 'Unbounded or arbitrary autonomous live assessment, bounty, and out-of-band execution.',
       limitation: 'Only the specific implemented public routes listed above are available.',
     },
     {
@@ -119,7 +154,7 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     { id: 'jvm', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public JVM proof execution profile.' },
     { id: 'go', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public Go proof execution profile.' },
     { id: 'rust-native', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Source review is available; no public Rust or native proof execution profile.' },
-    { id: 'browser', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Browser source and test configuration do not establish browser execution coverage.' },
+    { id: 'browser', source_review: 'AVAILABLE', execution_support: 'AVAILABLE_NARROW', limitation: 'Execution is limited to authorized selected-tab actions through the authenticated browser bridge and its optional declarative Web Storage adapter; navigation, login automation, and general browser capture are not provided.' },
     { id: 'database-stack', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Database or composition indicators require source review; multi-service execution is unavailable.' },
     { id: 'deployment-configuration', source_review: 'AVAILABLE', execution_support: 'UNAVAILABLE', limitation: 'Configuration can be reviewed but does not establish deployed state or active acquisition support.' },
   ],
@@ -131,7 +166,7 @@ export function capabilityRegistry() {
 
 export function renderCapabilities(registry = CAPABILITY_REGISTRY) {
   return [
-    'Red Team Audit capabilities',
+    'The Last Aperture capabilities',
     '',
     ...registry.capabilities.flatMap((item) => [
       `${item.status} ${item.id}${item.commands.length ? ` (${item.commands.join(', ')})` : ''}`,

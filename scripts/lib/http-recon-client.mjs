@@ -8,11 +8,6 @@ import { PLATFORM_SERIES } from './version.mjs'
 import {
   resolveHttpReconRequestHeaders,
 } from './http-recon-request-headers.mjs'
-import {
-  observeHttpReconResponse,
-  resolveHttpReconResponseObservation,
-  validateHttpReconResponseObservationHeaders,
-} from './http-recon-response-observations.mjs'
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
@@ -716,7 +711,6 @@ function validateOptions(options, mode) {
     'signal',
     'beforeSend',
     'requestHeaderProfile',
-    'responseObservationProfile',
     'dependencies',
   ])
   if (mode === 'proof') allowed.add('maxProofBodyBytes')
@@ -752,9 +746,6 @@ function validateOptions(options, mode) {
   if (mode === 'proof' && options.requestHeaderProfile !== undefined) {
     throw invalid('target-control proof HTTPS does not permit diagnostic request-header profiles')
   }
-  if (mode === 'proof' && options.responseObservationProfile !== undefined) {
-    throw invalid('target-control proof HTTPS does not permit response-observation profiles')
-  }
   let requestHeaders = {}
   let requestHeaderProfile
   if (options.requestHeaderProfile !== undefined) {
@@ -787,24 +778,6 @@ function validateOptions(options, mode) {
     HTTP_RECON_LIMITS.default_response_bytes,
     HTTP_RECON_LIMITS.max_response_bytes,
   )
-  let responseObservationProfile
-  if (options.responseObservationProfile !== undefined) {
-    try {
-      resolveHttpReconResponseObservation({
-        descriptor: options.responseObservationProfile,
-        method: options.method,
-        url: options.url,
-        maxResponseBytes,
-      })
-      responseObservationProfile = structuredClone(options.responseObservationProfile)
-    } catch (cause) {
-      throw createError(
-        'HTTP_RECON_RESPONSE_OBSERVATION_PROFILE_INVALID',
-        'response-observation profile failed controller validation',
-        { cause },
-      )
-    }
-  }
   const maxProofBodyBytes = mode === 'proof'
     ? assertBoundedInteger(
         options.maxProofBodyBytes,
@@ -835,7 +808,6 @@ function validateOptions(options, mode) {
     beforeSend: options.beforeSend,
     requestHeaders,
     requestHeaderProfile,
-    responseObservationProfile,
     dependencies: normalizeDependencies(options.dependencies),
   }
 }
@@ -923,15 +895,9 @@ async function runHttps(options, mode) {
       let beforeSendFinishedAt
       const bodyHash = createHash('sha256')
       const retainedChunks = []
-      const responseObservationChunks = []
       let capturedSize = 0
       let retainedSize = 0
       let responseTruncated = false
-
-      const clearResponseObservationChunks = () => {
-        for (const chunk of responseObservationChunks) chunk.fill(0)
-        responseObservationChunks.length = 0
-      }
 
       const cleanup = () => {
         controller.signal.removeEventListener('abort', onAbort)
@@ -940,14 +906,12 @@ async function runHttps(options, mode) {
         if (settled) return
         settled = true
         cleanup()
-        clearResponseObservationChunks()
         resolve(value)
       }
       const finishReject = (error) => {
         if (settled) return
         settled = true
         cleanup()
-        clearResponseObservationChunks()
         reject(wrapRequestError(error, requestMayHaveBeenSent))
       }
       const onAbort = () => {
@@ -972,7 +936,6 @@ async function runHttps(options, mode) {
         bodyBytes,
         bodyTruncated,
         digestScope,
-        responseObservation,
       }) => ({
         schema_version: '1.0.0',
         requested_url: requestOptions.requestedUrl,
@@ -990,9 +953,6 @@ async function runHttps(options, mode) {
           truncated: bodyTruncated,
           digest_scope: digestScope,
         },
-        ...(requestOptions.responseObservationProfile === undefined
-          ? {}
-          : { response_observation: responseObservation ?? null }),
         dns: {
           answer_sha256: dns.answer_sha256,
           answer_count: dns.answer_count,
@@ -1099,39 +1059,6 @@ async function runHttps(options, mode) {
         }
         const headerProjection = projectResponseHeaders(response)
         const contentEncodings = exactHeaderValues(response, 'content-encoding')
-        if (requestOptions.responseObservationProfile !== undefined) {
-          try {
-            validateHttpReconResponseObservationHeaders({
-              descriptor: requestOptions.responseObservationProfile,
-              method: requestOptions.method,
-              url: requestOptions.requestedUrl,
-              maxResponseBytes: requestOptions.maxResponseBytes,
-              status,
-              contentTypes: exactHeaderValues(response, 'content-type'),
-              contentEncodings,
-            })
-          } catch {
-            responseFinishedAt = readClock(now)
-            const result = resultFor({
-              status,
-              headerProjection,
-              digest: sha256(Buffer.alloc(0)),
-              bodyBytes: null,
-              bodyTruncated: true,
-              digestScope: 'captured-prefix',
-              responseObservation: null,
-            })
-            const error = new HttpReconStopCondition(
-              'RESPONSE_OBSERVATION_REJECTED',
-              'HTTP response did not satisfy the sealed response-observation profile',
-              result,
-            )
-            finishReject(error)
-            safeDestroy(response)
-            safeDestroy(request)
-            return
-          }
-        }
         if (
           contentEncodings.length > 1
           || contentEncodings.some((value) => value !== 'identity')
@@ -1156,7 +1083,6 @@ async function runHttps(options, mode) {
             bodyBytes: null,
             bodyTruncated: true,
             digestScope: 'captured-prefix',
-            responseObservation: null,
           })
           const error = new HttpReconStopCondition(
             stopCondition,
@@ -1177,9 +1103,6 @@ async function runHttps(options, mode) {
           if (accepted.length > 0) {
             bodyHash.update(accepted)
             capturedSize += accepted.length
-            if (requestOptions.responseObservationProfile !== undefined) {
-              responseObservationChunks.push(Buffer.from(accepted))
-            }
             if (mode === 'proof' && retainedSize < requestOptions.maxProofBodyBytes) {
               const retain = accepted.subarray(
                 0,
@@ -1204,17 +1127,8 @@ async function runHttps(options, mode) {
               bodyBytes: retainedBody,
               bodyTruncated: true,
               digestScope: 'captured-prefix',
-              responseObservation: null,
             })
-            if (requestOptions.responseObservationProfile === undefined) {
-              finishResolve(result)
-            } else {
-              finishReject(new HttpReconStopCondition(
-                'RESPONSE_OBSERVATION_REJECTED',
-                'HTTP response exceeded the sealed response-observation boundary',
-                result,
-              ))
-            }
+            finishResolve(result)
             safeDestroy(response)
             safeDestroy(request)
           }
@@ -1246,38 +1160,6 @@ async function runHttps(options, mode) {
             : null
           const retentionTruncated = mode === 'proof'
             && retainedSize < capturedSize
-          let responseObservation
-          if (requestOptions.responseObservationProfile !== undefined) {
-            const observedBody = Buffer.concat(responseObservationChunks, capturedSize)
-            try {
-              responseObservation = observeHttpReconResponse({
-                descriptor: requestOptions.responseObservationProfile,
-                method: requestOptions.method,
-                url: requestOptions.requestedUrl,
-                maxResponseBytes: requestOptions.maxResponseBytes,
-                body: observedBody,
-              })
-            } catch {
-              const result = resultFor({
-                status,
-                headerProjection,
-                digest: bodyHash.digest('hex'),
-                bodyBytes: retainedBody,
-                bodyTruncated: false,
-                digestScope: 'complete',
-                responseObservation: null,
-              })
-              observedBody.fill(0)
-              finishReject(new HttpReconStopCondition(
-                'RESPONSE_OBSERVATION_REJECTED',
-                'HTTP response did not satisfy the sealed response-observation profile',
-                result,
-              ))
-              return
-            } finally {
-              observedBody.fill(0)
-            }
-          }
           finishResolve(resultFor({
             status,
             headerProjection,
@@ -1285,7 +1167,6 @@ async function runHttps(options, mode) {
             bodyBytes: retainedBody,
             bodyTruncated: responseTruncated || retentionTruncated,
             digestScope: responseTruncated ? 'captured-prefix' : 'complete',
-            responseObservation,
           }))
         })
       }

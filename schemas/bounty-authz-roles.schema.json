@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-authz-roles.schema.json",
-  "title": "Red Team Audit bounty-v1 authorization role registry",
+  "title": "The Last Aperture bounty-v1 authorization role registry",
   "description": "Roles used to replay captured requests. Credential values are referenced by environment variable name and are never stored in this file, so a registry is safe to commit and a bundle safe to share. There is no property for an inline secret.",
   "type": "object",
   "additionalProperties": false,

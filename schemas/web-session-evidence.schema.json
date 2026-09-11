@@ -1,0 +1,418 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://red-team-audit.dev/schemas/web-session-evidence.schema.json",
+  "title": "The Last Aperture sanitized web session evidence",
+  "description": "Value-free protocol-shape evidence imported from one bounded, explicitly scoped web capture. Runtime validation additionally enforces canonical origins, path templates, ordering, source provenance, and the 64 MiB document limit.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "protocol",
+    "capture_id",
+    "source",
+    "origins",
+    "path_literals",
+    "limits",
+    "redaction",
+    "entries",
+    "skipped",
+    "gaps",
+    "security_verdict",
+    "applied_to_audit_bundle"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0", "1.1.0", "1.2.0"] },
+    "kind": { "const": "red-team-audit/web-session-evidence" },
+    "protocol": { "const": "web-session-evidence-v1" },
+    "capture_id": { "type": "string", "pattern": "^web:[a-f0-9]{32}$" },
+    "source": { "$ref": "#/$defs/source" },
+    "origins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/origin" }
+    },
+    "path_literals": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/pathLiteral" }
+    },
+    "limits": { "$ref": "#/$defs/limits" },
+    "redaction": { "$ref": "#/$defs/redaction" },
+    "entries": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/entry" }
+    },
+    "skipped": { "$ref": "#/$defs/skipped" },
+    "gaps": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/gap" }
+    },
+    "security_verdict": { "const": "NOT_ASSESSED" },
+    "applied_to_audit_bundle": { "const": false }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.0.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": { "kind": { "const": "HAR" } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.1.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": { "kind": { "enum": ["BURP_XML", "HAR"] } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "schema_version": { "const": "1.2.0" } },
+        "required": ["schema_version"]
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": { "kind": { "enum": ["HTTP_AUTHED_CAMPAIGN", "HTTP_RECON"] } }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "plainText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028-\\u202e\\u2066-\\u2069]+$"
+    },
+    "origin": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 2048,
+      "pattern": "^https?://[^/?#@]+(?::[0-9]+)?$"
+    },
+    "pathLiteral": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+    },
+    "fieldName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_$@.:\\[\\]-]{1,128}$"
+    },
+    "headerName": {
+      "type": "string",
+      "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$"
+    },
+    "method": {
+      "type": "string",
+      "pattern": "^[!#$%&'*+.^_`|~0-9A-Z-]{1,32}$"
+    },
+    "valueType": {
+      "enum": ["array", "boolean", "integer", "null", "number", "object", "string", "unknown"]
+    },
+    "semanticClass": {
+      "enum": ["OTHER_ACTION", "READ_ACTION", "WRITE_ACTION"]
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "semantic_classes", "sensitive", "types"],
+      "properties": {
+        "name": { "$ref": "#/$defs/fieldName" },
+        "semantic_classes": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/semanticClass" }
+        },
+        "sensitive": { "type": "boolean" },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/valueType" }
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "semantic_classes", "sensitive", "types"],
+      "properties": {
+        "name": { "$ref": "#/$defs/fieldName" },
+        "path": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 1024 }
+          ]
+        },
+        "semantic_classes": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/semanticClass" }
+        },
+        "sensitive": { "type": "boolean" },
+        "types": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/valueType" }
+        }
+      }
+    },
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["byte_bucket", "content_type", "fields", "fields_truncated", "format", "shape_status"],
+      "properties": {
+        "byte_bucket": {
+          "enum": ["EMPTY", "LE_1_KIB", "LE_4_KIB", "LE_16_KIB", "LE_64_KIB", "LE_256_KIB", "LE_1_MIB", "OVER_1_MIB", "UNKNOWN"]
+        },
+        "content_type": {
+          "type": ["string", "null"]
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/field" }
+        },
+        "fields_truncated": { "type": "boolean" },
+        "format": {
+          "enum": ["FORM", "JSON", "MULTIPART", "NONE", "OPAQUE"]
+        },
+        "shape_status": {
+          "enum": ["MALFORMED", "NOT_OBSERVED", "OBSERVED", "OMITTED_SIZE_LIMIT"]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "cookie_names", "credential_carriers", "header_names", "method", "origin", "path_action_class", "path_template", "query_parameters"],
+      "properties": {
+        "body": { "$ref": "#/$defs/body" },
+        "cookie_names": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/fieldName" }
+        },
+        "credential_carriers": {
+          "type": "array",
+          "maxItems": 2048,
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/plainText" },
+              { "type": "string", "maxLength": 1024 }
+            ]
+          }
+        },
+        "header_names": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/headerName" }
+        },
+        "method": { "$ref": "#/$defs/method" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "path_action_class": { "enum": ["NONE", "OTHER_ACTION", "READ_ACTION", "WRITE_ACTION"] },
+        "path_template": { "$ref": "#/$defs/pathTemplate" },
+        "query_parameters": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/parameter" }
+        }
+      }
+    },
+    "redirect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin", "path_template", "query_parameters"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/origin" },
+        "path_template": { "$ref": "#/$defs/pathTemplate" },
+        "query_parameters": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/parameter" }
+        }
+      }
+    },
+    "destination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_path", "origin", "path_template", "query_parameters"],
+      "properties": {
+        "field_path": {
+          "allOf": [
+            { "$ref": "#/$defs/plainText" },
+            { "type": "string", "maxLength": 1024 }
+          ]
+        },
+        "origin": { "$ref": "#/$defs/origin" },
+        "path_template": { "$ref": "#/$defs/pathTemplate" },
+        "query_parameters": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/parameter" }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "cookie_names", "credential_carriers", "destinations", "destinations_truncated", "header_names", "redirect", "status"],
+      "properties": {
+        "body": { "$ref": "#/$defs/body" },
+        "cookie_names": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/fieldName" }
+        },
+        "credential_carriers": {
+          "type": "array",
+          "maxItems": 2048,
+          "uniqueItems": true,
+          "items": {
+            "allOf": [
+              { "$ref": "#/$defs/plainText" },
+              { "type": "string", "maxLength": 1024 }
+            ]
+          }
+        },
+        "destinations": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/destination" }
+        },
+        "destinations_truncated": { "type": "boolean" },
+        "header_names": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/headerName" }
+        },
+        "redirect": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/redirect" }
+          ]
+        },
+        "status": { "type": "integer", "minimum": 0, "maximum": 999 }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "observed_at", "request", "response", "sequence", "total_ms"],
+      "properties": {
+        "observation_id": { "type": "string", "pattern": "^webobs:[a-f0-9]{32}$" },
+        "observed_at": {
+          "type": ["string", "null"],
+          "pattern": "^(?:[0-9]{4}|[+-][0-9]{6})-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+        },
+        "request": { "$ref": "#/$defs/request" },
+        "response": { "$ref": "#/$defs/response" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "total_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 86400000
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sha256"],
+      "properties": {
+        "kind": { "enum": ["BURP_XML", "HAR", "HTTP_AUTHED_CAMPAIGN", "HTTP_RECON"] },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_aggregate_metadata_items", "max_body_bytes", "max_cookie_names", "max_credential_carriers", "max_destinations", "max_entries", "max_fields", "max_header_names", "max_parameter_pairs"],
+      "properties": {
+        "max_aggregate_metadata_items": { "const": 100000 },
+        "max_body_bytes": { "const": 1048576 },
+        "max_cookie_names": { "const": 512 },
+        "max_credential_carriers": { "const": 2048 },
+        "max_destinations": { "const": 64 },
+        "max_entries": { "const": 10000 },
+        "max_fields": { "const": 1024 },
+        "max_header_names": { "const": 512 },
+        "max_parameter_pairs": { "const": 4096 }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body_values_removed", "cookie_values_removed", "header_values_removed", "url_values_removed", "value_like_names_masked"],
+      "properties": {
+        "body_values_removed": { "const": true },
+        "cookie_values_removed": { "const": true },
+        "header_values_removed": { "const": true },
+        "url_values_removed": { "const": true },
+        "value_like_names_masked": { "const": true }
+      }
+    },
+    "skipped": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["malformed", "non_http", "off_scope"],
+      "properties": {
+        "malformed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "non_http": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "off_scope": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,95}$" },
+        "message": { "$ref": "#/$defs/plainText" }
+      }
+    },
+    "pathTemplate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^/[^\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028-\\u202e\\u2066-\\u2069]*$"
+    }
+  }
+}

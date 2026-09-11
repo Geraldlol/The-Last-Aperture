@@ -2,14 +2,21 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isBuiltin } from 'node:module'
 import { test } from 'node:test'
-import {
+
+// Node 20 supports the manual/static controller, not this optional SQLite store.
+// Keep every assertion active on the full-test Node 24 lane: a missing builtin
+// or another import error there must still fail instead of becoming a skip.
+const unsupportedSqliteRuntime = Number(process.versions.node.split('.')[0]) < 24 && !isBuiltin('node:sqlite')
+const sqliteOptions = { skip: unsupportedSqliteRuntime ? 'Optional proxy store requires node:sqlite; covered in full on Node 24' : false }
+const {
   FLOW_KIND,
   flowsToAuthzRequests,
   ingestFlows,
   parseFlowLines,
   queryFlows,
-} from '../scripts/lib/bounty-proxy-ingest.mjs'
+} = unsupportedSqliteRuntime ? {} : await import('../scripts/lib/bounty-proxy-ingest.mjs')
 
 function flow(overrides = {}) {
   return {
@@ -47,7 +54,7 @@ async function bundleWith(records) {
   return dir
 }
 
-test('parses well formed flow lines and reports the rest', () => {
+test('parses well formed flow lines and reports the rest', sqliteOptions, () => {
   const { flows, skipped } = parseFlowLines([
     JSON.stringify(flow()),
     'not json at all',
@@ -59,7 +66,7 @@ test('parses well formed flow lines and reports the rest', () => {
   assert.deepEqual(skipped.map((s) => s.reason), ['not-json', 'not-a-bounty-flow', 'flow-missing-request'])
 })
 
-test('ingests flows into a queryable store', async () => {
+test('ingests flows into a queryable store', sqliteOptions, async () => {
   const dir = await bundleWith([
     flow(),
     flow({ request: { ...flow().request, url: 'https://api.acme.example/api/me' }, response: { ...flow().response, status: 403 } }),
@@ -78,7 +85,7 @@ test('ingests flows into a queryable store', async () => {
   }
 })
 
-test('the store is queryable by host and decision', async () => {
+test('the store is queryable by host and decision', sqliteOptions, async () => {
   const dir = await bundleWith([
     flow(),
     flow({
@@ -101,7 +108,7 @@ test('the store is queryable by host and decision', async () => {
   }
 })
 
-test('a missing capture file is reported, not thrown', async () => {
+test('a missing capture file is reported, not thrown', sqliteOptions, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'bounty-proxy-'))
   try {
     const result = await ingestFlows({ bundlePath: dir })
@@ -112,7 +119,7 @@ test('a missing capture file is reported, not thrown', async () => {
   }
 })
 
-test('re-ingesting the same capture does not duplicate rows', async () => {
+test('re-ingesting the same capture does not duplicate rows', sqliteOptions, async () => {
   const dir = await bundleWith([flow()])
   try {
     await ingestFlows({ bundlePath: dir })
@@ -123,7 +130,7 @@ test('re-ingesting the same capture does not duplicate rows', async () => {
   }
 })
 
-test('only forwarded in-scope flows become authz requests', async () => {
+test('only forwarded in-scope flows become authz requests', sqliteOptions, async () => {
   const dir = await bundleWith([
     flow(),
     flow({ forwarded: false, scope_decision: 'DENY', request: { ...flow().request, url: 'https://evil.example/x' } }),
@@ -140,7 +147,7 @@ test('only forwarded in-scope flows become authz requests', async () => {
   }
 })
 
-test('captured requests are redacted on the way to the grinder', async () => {
+test('captured requests are redacted on the way to the grinder', sqliteOptions, async () => {
   const dir = await bundleWith([flow({
     request: {
       ...flow().request,
@@ -156,7 +163,7 @@ test('captured requests are redacted on the way to the grinder', async () => {
   }
 })
 
-test('duplicate captured requests collapse by signature', async () => {
+test('duplicate captured requests collapse by signature', sqliteOptions, async () => {
   const dir = await bundleWith([flow(), flow(), flow()])
   try {
     const result = await flowsToAuthzRequests({ bundlePath: dir, ownerRole: 'alice' })

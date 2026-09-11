@@ -7,7 +7,7 @@ import {
 } from './helpers/evidence-adapter-conformance.mjs'
 
 const VALID_REQUEST = {
-  evidence_id: 'peerstar-api-image',
+  evidence_id: 'sample-api-image',
   target_identity: 'sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c',
   detection_evidence: 'shell-in-the-ghost.tar.gz sha256:4aaff082',
   target_class: 'LAB',

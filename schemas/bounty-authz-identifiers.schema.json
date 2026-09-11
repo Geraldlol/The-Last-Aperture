@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-authz-identifiers.schema.json",
-  "title": "Red Team Audit bounty-v1 declared object identifiers",
+  "title": "The Last Aperture bounty-v1 declared object identifiers",
   "description": "Object identifiers the operator declares and controls, used for horizontal IDOR testing. Every identifier must name an owning role the operator holds, or be explicitly marked absent. There is no wildcard, range, or pattern form: enumerating undeclared identifiers would mean reading a stranger's data to prove a bug, which is out of bounds on every program and produces a weaker report than demonstrating access to your own second account's object.",
   "type": "object",
   "additionalProperties": false,

@@ -21,7 +21,7 @@ import {
 import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-16T12:00:00.000Z')
-const OPERATOR_ID = 'peerstar-security-operator'
+const OPERATOR_ID = 'example-security-operator'
 const CREDENTIAL = Buffer.from('SYNTHETIC_SECRET_CREDENTIAL_VALUE')
 const MUTATION_BODY = Buffer.alloc(64, 0x78)
 const ROLLBACK_BODY = Buffer.alloc(64, 0x79)

@@ -9,10 +9,10 @@ import { checkSkill, MAX_SKILL_BYTES } from './lib/skill.mjs'
 import { terminalSafeJson, terminalSafeText } from './lib/terminal-text.mjs'
 
 const DEFAULTS = {
-  lensDir: 'skills/red-team-audit/lenses',
-  topicsFile: 'skills/red-team-audit/lenses/_topics.md',
+  lensDir: 'skills/last-aperture/lenses',
+  topicsFile: 'skills/last-aperture/lenses/_topics.md',
   ledgerFile: 'docs/migration-ledger.tsv',
-  skillFile: 'skills/red-team-audit/SKILL.md',
+  skillFile: 'skills/last-aperture/SKILL.md',
 }
 
 // Underscore-prefixed files are contracts and generated artifacts, not lenses.

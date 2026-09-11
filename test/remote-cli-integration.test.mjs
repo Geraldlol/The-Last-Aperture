@@ -104,7 +104,7 @@ test('run-remote durably binds one signed request and gateway acceptance', async
     )
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       policy: remotePolicy(root),
       sealSource: true,
       createdAt: new Date('2026-07-30T18:00:00.000Z'),

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/transparency-publish-request.schema.json",
-  "title": "Red Team Audit transparency publication request",
+  "title": "The Last Aperture transparency publication request",
   "description": "Canonical exact-byte publication request for one signed root-manifest attestation.",
   "type": "object",
   "additionalProperties": false,

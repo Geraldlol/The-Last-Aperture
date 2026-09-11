@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-30
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0001 and the run schema 3 database authority model
 
 ## Context

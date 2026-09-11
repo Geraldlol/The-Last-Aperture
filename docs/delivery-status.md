@@ -1,5 +1,89 @@
 # Assessment improvement delivery status
 
+## Timeout stop-state fix (2026-09-05)
+
+The abort deadline now keeps the process alive until the pending operation
+settles, so early event-loop exit cannot bypass abort and durable terminal-stop
+bookkeeping. The existing settlement cleanup still clears the timer and removes
+the cancellation listener. Scope, authorization, activation, adapters, and action
+selection are unchanged.
+
+Two new isolated-process regressions cover abort with no other active handles
+and prompt exit after successful settlement despite a long deadline. Before the
+fix, the isolated abort test failed on Node 24 with an unsettled top-level await;
+the existing durable-stop test was cancelled on Node 20. After the fix, all six
+focused lifecycle tests and the release-wiring check pass on both Node 20.20.2
+and Node 24.13.0, with no failures or cancellations among the selected tests.
+The durable-stop test also verifies zero repeat dispatches after reopening.
+Lens lint passes. All runtime tests used stubbed operations, without real target
+execution or network access.
+
+Full-suite and Linux GitHub CI confirmation remain pending; no push or merge
+has been performed. These focused results do not establish green CI. The earlier
+sections below record the state at each preceding local slice.
+
+## Earlier: CI compatibility follow-up (2026-09-05)
+
+The optional proxy-store test module no longer crashes Node 20 during import.
+Its eight tests now report explicit unsupported-dependency skips when a runtime
+older than Node 24 lacks `node:sqlite`; Node 24 still imports the module normally
+and executes all eight unchanged test bodies. Missing SQLite or other import
+errors on Node 24 remain failures. Production modules and CI gates are unchanged.
+
+Verification: the original Node 20.20.2 import crash was reproduced, followed
+by eight named skips and zero failures after the test-only correction. On Node
+24.13.0 all eight tests pass with zero skips. Review confirmed that the Node 20
+public support promise covers planning/manual ingestion, not this optional store.
+
+This is a partial CI fix. Campaign-timeout failures remain unchanged, no full
+suite or new GitHub run is claimed, and no changes have been pushed or merged.
+The fixture portability fix described below is already in the local history.
+
+## Earlier: Passive-check slice (2026-09-05)
+
+The next additive slice introduces a standalone, explicitly scoped JavaScript
+TLS-pattern checker, fixed-text repair guidance, and synthetic evaluation.
+See [passive source checks](passive-source-checks.md). This does not supply the
+still-unavailable semantic provider/oracle or independently validated quality
+measurement. Existing finding repair records and dependency-aware result reuse
+remain open.
+
+The post-merge Linux CI run
+[33972298641](https://github.com/Geraldlol/red-team-audit/actions/runs/33972298641)
+failed despite the earlier local Windows result below. The fixture builder now
+normalizes gzip OS metadata; its 47 focused tests pass on Windows Node 20.20.2
+and Node 24.13.0, including a simulated Unix/Windows-header regression. Actual
+Linux CI confirmation is still pending.
+
+Two Node 20 failures remain visible and unchanged: the optional proxy-ingest
+suite imports unavailable `node:sqlite`, and campaign timeout tests can lose
+their event-loop handles before pending promises settle. The latter is a real
+runtime lifecycle assumption, not 52 independent assertion failures. No
+test-only keepalive, hidden skip, campaign-runtime fix, push, or merge is
+included in this slice. CI must not be described as green.
+
+Verification for this slice:
+
+- 53 distinct source-check, input-reader, CLI, evaluation, and capability tests
+  pass on Windows Node 20.20.2 and Node 24.13.0. Following the final binding
+  review, the 32 affected checker/CLI/evaluation tests were rerun successfully;
+  the unchanged input-reader and registry checks had already passed.
+- The 47 fixture/normalizer/evidence regressions pass on both Node versions.
+- 27 adjacent readiness and release-wiring tests pass on Node 24.
+- Lens lint and generated topic, benchmark, and capability drift checks pass.
+- All 24 synthetic case expectations match, including 8 expected abstentions.
+  The first run exposed a scalar-read classification bug; the checker was
+  corrected without changing the corpus. These are now regression cases,
+  not held-out accuracy evidence.
+- Test-first regressions and the final code review also corrected Unicode
+  path disagreement, loop/destructuring writes, assignment-based namespace
+  escapes, and extra-rule precision accounting. No dependencies were added.
+
+This is focused local verification, not a fresh full-suite or Linux CI pass.
+The prior full-suite result below describes the earlier tree only.
+
+## Preceding assessment-support slice
+
 This pass adds reporting, measurement, and review handoffs across the six
 recommendations. It does **not** complete all six recommendations or add a new
 automated security analyzer. The table distinguishes implemented support from

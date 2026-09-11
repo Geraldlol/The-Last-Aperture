@@ -3,7 +3,7 @@
 - Status: Superseded for authorization mechanics by ADR 0021; retained as a
   historical record of the v0.11 externally signed route
 - Date: 2026-08-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0001; does not extend the repository proof tiers
 - Amended by: ADR 0014 added an operator-attested one-action mode; ADR 0015 made
   that mode URL-first under PKIX; ADR 0021 retired `EXTERNAL_SIGNED` as an
@@ -15,7 +15,7 @@
 > primitive. Transport, redirect, evidence, budget, stop, and uncertain-delivery
 > mechanics remain relevant where the current controller retains them.
 >
-> **Current 0.12.0 execution status: active through the bounded
+> **Current 0.13.0 execution status: active through the bounded
 > operator-statement controller.** This status does not reactivate the historical
 > signed authority path.
 

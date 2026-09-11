@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-29
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes: none
 - Extends: ADR 0001 and ADR 0002
 

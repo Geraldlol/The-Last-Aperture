@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/engagement-ledger-record.schema.json",
+  "title": "The Last Aperture unified engagement ledger record",
+  "description": "One canonical append-only record bound to an engagement, its durable operator authority, and its normalized target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "sequence",
+    "previous_sha256",
+    "binding",
+    "event"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/engagement-ledger-record" },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "previous_sha256": { "$ref": "#/$defs/sha256" },
+    "binding": { "$ref": "#/$defs/binding" },
+    "event": {
+      "oneOf": [
+        { "$ref": "#/$defs/engagementStarted" },
+        { "$ref": "#/$defs/engagementResumed" },
+        { "$ref": "#/$defs/routePlanned" },
+        { "$ref": "#/$defs/routeWaiting" },
+        { "$ref": "#/$defs/routeDispatchPermitted" },
+        { "$ref": "#/$defs/routeOutcomeRecorded" },
+        { "$ref": "#/$defs/repositoryChildCheckpointed" },
+        { "$ref": "#/$defs/repositoryWorkIssued" },
+        { "$ref": "#/$defs/repositoryIngestDispatched" },
+        { "$ref": "#/$defs/repositoryIngestReconciled" },
+        { "$ref": "#/$defs/repositoryWorkResultRecorded" },
+        { "$ref": "#/$defs/engagementStopRequested" },
+        { "$ref": "#/$defs/engagementTerminal" }
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engagement_id", "authority_sha256", "target_sha256"],
+      "properties": {
+        "engagement_id": { "$ref": "#/$defs/id" },
+        "authority_sha256": { "$ref": "#/$defs/sha256" },
+        "target_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "engagementStarted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "manifest_sha256", "started_at"],
+      "properties": {
+        "type": { "const": "ENGAGEMENT_STARTED" },
+        "manifest_sha256": { "$ref": "#/$defs/sha256" },
+        "started_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "engagementResumed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "resume_count", "resumed_at"],
+      "properties": {
+        "type": { "const": "ENGAGEMENT_RESUMED" },
+        "resume_count": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "resumed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "routePlanned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "route_id", "plan_sha256", "planned_at"],
+      "properties": {
+        "type": { "const": "ROUTE_PLANNED" },
+        "route_id": { "$ref": "#/$defs/id" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "planned_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "routeWaiting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "route_id", "plan_sha256", "reason_code", "waiting_at"],
+      "properties": {
+        "type": { "const": "ROUTE_WAITING" },
+        "route_id": { "$ref": "#/$defs/id" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "reason_code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[A-Z][A-Z0-9_]{2,127}$"
+        },
+        "waiting_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "routeDispatchPermitted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "route_id", "plan_sha256", "permit_sha256", "permitted_at"],
+      "properties": {
+        "type": { "const": "ROUTE_DISPATCH_PERMITTED" },
+        "route_id": { "$ref": "#/$defs/id" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "permit_sha256": { "$ref": "#/$defs/sha256" },
+        "permitted_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "routeOutcomeRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "route_id",
+        "plan_sha256",
+        "status",
+        "result_sha256",
+        "request_may_have_been_sent",
+        "completed_at"
+      ],
+      "properties": {
+        "type": { "const": "ROUTE_OUTCOME_RECORDED" },
+        "route_id": { "$ref": "#/$defs/id" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "status": {
+          "enum": [
+            "SUCCEEDED",
+            "PARTIAL",
+            "FAILED",
+            "CANCELLED_BEFORE_SEND",
+            "UNCERTAIN",
+            "STOPPED"
+          ]
+        },
+        "result_sha256": { "$ref": "#/$defs/sha256" },
+        "request_may_have_been_sent": { "type": "boolean" },
+        "completed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "repositoryChildCheckpointed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "route_id",
+        "operation",
+        "child_bundle_sha256",
+        "child_tree_sha256",
+        "status_sha256",
+        "checkpoint_sha256",
+        "child_state",
+        "terminal",
+        "checkpointed_at"
+      ],
+      "properties": {
+        "type": { "const": "REPOSITORY_CHILD_CHECKPOINTED" },
+        "route_id": { "const": "repository-audit" },
+        "operation": { "enum": ["INITIAL", "NEXT", "STATUS", "INGEST", "FINALIZE", "VALIDATE"] },
+        "child_bundle_sha256": { "$ref": "#/$defs/sha256" },
+        "child_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "status_sha256": { "$ref": "#/$defs/sha256" },
+        "checkpoint_sha256": { "$ref": "#/$defs/sha256" },
+        "child_state": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]{2,127}$" },
+        "terminal": { "type": "boolean" },
+        "checkpointed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "repositoryWorkIssued": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "work_id", "envelope_sha256", "child_tree_sha256", "issued_at"],
+      "properties": {
+        "type": { "const": "REPOSITORY_WORK_ISSUED" },
+        "work_id": { "$ref": "#/$defs/id" },
+        "envelope_sha256": { "$ref": "#/$defs/sha256" },
+        "child_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "issued_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "repositoryWorkResultRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "work_id", "envelope_sha256", "receipt_sha256", "child_tree_sha256", "status", "recorded_at"],
+      "properties": {
+        "type": { "const": "REPOSITORY_WORK_RESULT_RECORDED" },
+        "work_id": { "$ref": "#/$defs/id" },
+        "envelope_sha256": { "$ref": "#/$defs/sha256" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "child_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "const": "RESULT_INGESTED" },
+        "recorded_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "repositoryIngestDispatched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "work_id", "envelope_sha256", "attempt", "pre_child_tree_sha256",
+        "staged_relative_path", "result_sha256", "result_size_bytes", "result_state", "dispatched_at"
+      ],
+      "properties": {
+        "type": { "const": "REPOSITORY_INGEST_DISPATCHED" },
+        "work_id": { "$ref": "#/$defs/id" },
+        "envelope_sha256": { "$ref": "#/$defs/sha256" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "pre_child_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "staged_relative_path": { "type": "string", "pattern": "^[a-f0-9]{64}-[a-f0-9]{64}\\.json$" },
+        "result_sha256": { "$ref": "#/$defs/sha256" },
+        "result_size_bytes": { "type": "integer", "minimum": 0, "maximum": 8388608 },
+        "result_state": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]{2,127}$" },
+        "dispatched_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "repositoryIngestReconciled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "work_id", "envelope_sha256", "attempt", "outcome",
+        "observed_child_tree_sha256", "reconciled_at"
+      ],
+      "properties": {
+        "type": { "const": "REPOSITORY_INGEST_RECONCILED" },
+        "work_id": { "$ref": "#/$defs/id" },
+        "envelope_sha256": { "$ref": "#/$defs/sha256" },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "outcome": { "enum": ["APPLIED", "NOT_APPLIED", "CONFLICT"] },
+        "observed_child_tree_sha256": { "$ref": "#/$defs/sha256" },
+        "reconciled_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "engagementStopRequested": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reason", "requested_at"],
+      "properties": {
+        "type": { "const": "ENGAGEMENT_STOP_REQUESTED" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "\\S" },
+        "requested_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "engagementTerminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "status", "result_sha256", "terminal_at"],
+      "properties": {
+        "type": { "const": "ENGAGEMENT_TERMINAL" },
+        "status": { "enum": ["COMPLETED", "COMPLETED_WITH_GAPS", "FAILED", "STOPPED"] },
+        "result_sha256": { "$ref": "#/$defs/sha256" },
+        "terminal_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

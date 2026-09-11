@@ -1,4 +1,4 @@
-# Red Team Audit: security lens modernization
+# The Last Aperture: security lens modernization
 
 Research snapshot: 2026-09-03; implementation status updated 2026-09-04
 Decision status: implemented and contract-validated
@@ -6,7 +6,7 @@ Scope: evidence-first repository audits; deployed-state and live-runtime conclus
 
 ## CTO-ready summary
 
-Red Team Audit is an evidence-first security review system for source repositories. It inventories the codebase, activates domain lenses supported by the repository's files and technologies, runs the always-on and triage lenses at their defined stages, assigns every registered security topic to one domain owner, and requires findings to show a concrete source, reachable path, unsafe decision or side effect, and testable impact. It then deduplicates cross-domain findings, challenges likely false positives, composes proven attack chains, and reports what was not examined as explicitly as what was found.
+The Last Aperture is an evidence-first security review system for source repositories. It inventories the codebase, activates domain lenses supported by the repository's files and technologies, runs the always-on and triage lenses at their defined stages, assigns every registered security topic to one domain owner, and requires findings to show a concrete source, reachable path, unsafe decision or side effect, and testable impact. It then deduplicates cross-domain findings, challenges likely false positives, composes proven attack chains, and reports what was not examined as explicitly as what was found.
 
 Its core value is defensible precision: a risky keyword is only a lead, a framework category is not a severity, and an absent repository control is not proof that an external control does not exist. Static findings are kept separate from executed proofs, deployment assumptions, and live operational claims. The result is a report engineering and leadership can act on without treating scanner noise as fact or silence as assurance.
 

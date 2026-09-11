@@ -7,7 +7,7 @@ import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 const WORKFLOW_PATH = '.github/workflows/lint-lenses.yml'
 const CHECKOUT_SHA = '08eba0b27e820071cde6df949e0beb9ba4906955'
 const SETUP_NODE_SHA = '49933ea5288caeca8642d1e84afbd3f7d6820020'
-const RELEASE_VERSION = '0.12.0'
+const RELEASE_VERSION = '0.14.0'
 
 function workflowJobBlock(workflow, name) {
   const marker = `  ${name}:\n`
@@ -20,7 +20,7 @@ function workflowJobBlock(workflow, name) {
 }
 
 test('shared proof recipes expose sealed public T1 and narrow loopback T2 controller routes', () => {
-  const harness = readFileSync('skills/red-team-audit/lenses/_harness.md', 'utf8')
+  const harness = readFileSync('skills/last-aperture/lenses/_harness.md', 'utf8')
   const publicT1Decision = readFileSync(
     'docs/adr/0022-public-sealed-t1-proof.md',
     'utf8',
@@ -52,7 +52,7 @@ test('shared proof recipes expose sealed public T1 and narrow loopback T2 contro
 
 test('internal audit command exports are documented as privileged non-API kernels', () => {
   const security = readFileSync('SECURITY.md', 'utf8')
-  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
+  const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
   const design = readFileSync('docs/design/2026-09-03-adversarial-validation-engine.md', 'utf8')
   assert.match(security, /command\/package-interface boundary, not an in-process JavaScript[\s\S]*sandbox/i)
   assert.match(security, /Directly importing those exports is privileged maintainer code/i)
@@ -196,12 +196,13 @@ test('CI runs the digest-pinned multi-engine database conformance gate', () => {
   assert.doesNotMatch(databaseJob, /continue-on-error:\s*true/)
 })
 
-test('the disabled Chrome companion has an explicit revocation version and no host authority', () => {
+test('the Chrome companion has selected-tab, ephemeral recovery, and optional loopback authority', () => {
   const manifest = JSON.parse(readFileSync('browser/http-authed-chrome/manifest.json', 'utf8'))
-  assert.equal(manifest.version, '0.12.1')
-  assert.deepEqual(manifest.permissions, [])
+  assert.equal(manifest.version, '0.13.0')
+  assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage'])
   assert.deepEqual(manifest.host_permissions, [])
-  assert.equal(Object.hasOwn(manifest, 'background'), false)
+  assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*'])
+  assert.equal(manifest.background.service_worker, 'service-worker.js')
 })
 
 test('the database Docker gate refuses to skip without its trusted runtime', () => {
@@ -225,7 +226,7 @@ test('the database Docker gate refuses to skip without its trusted runtime', () 
   )
 })
 
-test('release metadata exposes the 0.12 controller and conformance commands', () => {
+test('release metadata exposes the 0.14 controller and conformance commands', () => {
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   const lockDocument = JSON.parse(readFileSync('package-lock.json', 'utf8'))
 
@@ -246,7 +247,7 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
       windowsHide: true,
     })
     assert.equal(help.status, 0, `${cli} --help must succeed`)
-    assert.match(help.stdout, /0\.12\.0/, `${cli} must expose the release version`)
+    assert.match(help.stdout, /0\.14\.0/, `${cli} must expose the release version`)
     assert.doesNotMatch(readFileSync(cli, 'utf8'), /0\.11\.0/)
   }
   assert.equal(
@@ -267,7 +268,7 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
   )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
-    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
+    /last-aperture run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
   )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
@@ -417,7 +418,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     'docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md',
   ]) {
     const adr = readFileSync(adrPath, 'utf8')
-    assert.match(adr, /Current 0\.12\.0 execution status: active/i, adrPath)
+    assert.match(adr, /Current 0\.13\.0 execution status: active/i, adrPath)
     assert.doesNotMatch(adr, /HTTP_RECON_LIVE_IO_DISABLED/, adrPath)
   }
   assert.match(cli, /Planning by itself performs no network activity/i)
@@ -428,7 +429,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     /plan-signed|--roe|--authorization-document|--owner-public-key/,
   )
   assert.doesNotMatch(cli, /HTTP_RECON_LIVE_IO_DISABLED/)
-  assert.match(protocol, /Current 0\.12\.0 execution status: active/i)
+  assert.match(protocol, /Current 0\.13\.0 execution status: active/i)
   assert.doesNotMatch(protocol, /HTTP_RECON_LIVE_IO_DISABLED/)
   assert.match(protocol, /go <exact-https-url>/i)
   assert.match(protocol, /plans one exact action, executes it, finalizes the bundle/i)
@@ -517,14 +518,14 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     windowsHide: true,
   })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /red-team-audit authenticated HTTP campaigns 0\.12\.0/)
+  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.14\.0/)
   assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
   assert.doesNotMatch(
     help.stdout,
     /plan-written|validate-written|campaign-written|probe-written|authorization-document|approver-public-key|countersignature/i,
   )
   assert.match(help.stdout, /standalone probes are not public/i)
-  assert.match(help.stdout, /fixed sealed request list/i)
+  assert.match(help.stdout, /sealed adaptive[\s\S]*response-derived discovery/i)
   assert.match(help.stdout, /http-authed campaign-stop/i)
   assert.match(
     help.stdout,
@@ -548,8 +549,8 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(help.stdout, /--credential-stdin/)
   assert.match(help.stdout, /--credential-browser/)
   assert.match(help.stdout, /--browser-extension-id/)
-  assert.match(help.stdout, /packaged browser companion is release-disabled/i)
-  assert.match(help.stdout, /separately supplied.*protocol-compatible companion/is)
+  assert.match(help.stdout, /packaged Chrome companion pairs[\s\S]*active tab/i)
+  assert.match(help.stdout, /without exporting cookies or[\s\S]*authorization values/i)
   assert.match(help.stdout, /browser-managed DNS/i)
   assert.match(help.stdout, /--requests/)
   assert.match(help.stdout, /--cleanup-not-after defaults to --not-after/i)
@@ -603,26 +604,25 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(schema.title, /http-authed-v1/)
   assert.doesNotMatch(schema.description, /draft/i)
 
-  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
-  assert.match(skill, /Four target-I\/O paths are public/i)
+  const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
+  assert.match(skill, /Packaged target-I\/O paths include/i)
   assert.match(
     skill,
-    /Fixed sealed authenticated HTTP work[\s\S]*campaign-attested[\s\S]*route executes its sealed requests without reconfirmation/i,
+    /Adaptive authenticated HTTP work[\s\S]*campaign-attested[\s\S]*scope-valid discovered[\s\S]*without reconfirmation/i,
   )
-  assert.match(
-    skill,
-    /standalone\s+probes(?:(?:\s+and\s+response-derived\s+discovery)|\/discovery)?\s+are\s+not\s+public/i,
-  )
+  assert.match(skill, /campaign-stop[\s\S]*consumed before another send/i)
+  assert.match(skill, /Reverse engineering and protocol reconstruction[\s\S]*Ghidra[\s\S]*Frida/i)
   assert.match(skill, /L3_MAXIMUM_AUTHORIZED/)
-  assert.match(skill, /Other T2\/service shapes[\s\S]*generic live\/L3[\s\S]*remain\s+technically unavailable/i)
-  assert.match(skill, /not an authorization denial[\s\S]*authorized-but-unavailable/i)
+  assert.match(skill, /natural-language operator statement[\s\S]*sole authorization step/i)
+  assert.match(skill, /without ownership proof[\s\S]*per-action confirmation/i)
+  assert.match(skill, /Compose only available registered controller routes[\s\S]*same attestation/i)
+  assert.match(skill, /host tools remain outside the public engagement[\s\S]*registered route/i)
   assert.match(skill, /Offline validation/)
-  assert.match(skill, /(?:authenticated )?operator statement is the sole\s+authorization fact for every named capability/i)
   assert.match(
     skill,
     /sealed Docker implements T1 and narrow[\s\S]*loopback T2[\s\S]*Unsupported T2 stays `UNPROVEN`/i,
   )
-  assert.match(skill, /Never improvise a network\/process path/)
+  assert.match(skill, /Process\/device engagement targets require an enrolled host runtime-identity adapter/i)
   assert.doesNotMatch(skill, /Copy value/)
 
   const readme = readFileSync('README.md', 'utf8')
@@ -633,8 +633,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(readme, /authorization_binding_sha256/)
   assert.match(readme, /independently_verified: false/)
   assert.match(readme, /declared authorizer and reference are audit fields, not proof/i)
-  assert.match(readme, /manifest is a release-disabled placeholder/i)
-  assert.match(readme, /no host, tab, scripting,\s+or background authority/i)
+  assert.match(readme, /Version 0\.13\.0[\s\S]*activeTab[\s\S]*scripting/i)
+  assert.match(readme, /storage[^\n]*extension-owned ephemeral recovery marker/i)
+  assert.match(readme, /no\s+persistent target-host, cookie, debugger, tabs, or web-request access/i)
   assert.match(readme, /--credential-stdin/)
   assert.doesNotMatch(readme, /automatically prepares and executes/i)
   assert.match(readme, /--requests C:\\trusted\\requests\.json/)
@@ -646,9 +647,9 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const security = readFileSync('SECURITY.md', 'utf8')
   assert.match(security, /--credential-stdin/)
   assert.match(security, /--credential-browser/)
-  assert.match(security, /separately supplied protocol-compatible companion/i)
+  assert.match(security, /one-time pairing capability/i)
   assert.match(security, /browser-managed DNS/i)
-  assert.doesNotMatch(security, /uses only `activeTab`/)
+  assert.match(security, /activeTab[\s\S]*scripting/i)
   assert.match(security, /OPERATOR_ATTESTED_AUTHED/)
   assert.match(security, /authorization_binding_sha256/)
   assert.match(
@@ -661,14 +662,15 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   )
   assert.match(security, /validity\.cleanup_not_after/)
   assert.match(security, /CLEANUP_SESSION_CONFIRMED/)
-  assert.match(security, /exact origin and rejects redirects/i)
+  assert.match(security, /exact origin\s+and rejects redirects/i)
   const rootSkill = readFileSync('SKILL.md', 'utf8')
-  assert.match(rootSkill, /one exact, bounded live HTTP-recon action/i)
-  assert.match(rootSkill, /single action uses a campaign ledger/i)
+  assert.match(rootSkill, /target <HTTPS URL> and go` authorizes the exact bounded\s+HTTP-recon action/i)
+  assert.match(rootSkill, /Even one\s+action uses a campaign ledger/i)
   assert.match(
     rootSkill,
-    /Generic live\/L3, provider\/remote, bounty\/OOB, and acquisition transports remain\s+unavailable where not implemented/i,
+    /Use available registered controllers[\s\S]*same authority and evidence chain/i,
   )
+  assert.match(rootSkill, /missing dedicated wrapper[\s\S]*execution and evidence stay[\s\S]*outside the engagement/i)
 })
 
 test('the v0.8 remote gateway protocol foundation is release-wired', () => {
@@ -721,7 +723,7 @@ test('the v0.9 transparency publication protocol is release-wired', () => {
   }
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
-    /red-team-audit publish <run\.json\|bundle-directory> <transparency-log-config\.json>/,
+    /last-aperture publish <run\.json\|bundle-directory> <transparency-log-config\.json>/,
   )
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
   assert.match(workflow, /^\s{2}transparency-https-conformance:$/m)

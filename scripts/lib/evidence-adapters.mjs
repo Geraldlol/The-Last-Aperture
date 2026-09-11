@@ -4,7 +4,7 @@ import { compareCanonicalStrings } from './canonical-order.mjs'
 import { EVIDENCE_CLASS_ORDER, isEvidenceClass } from './evidence-classes.mjs'
 
 export const EVIDENCE_ADAPTER_MANIFEST_URL = new URL(
-  '../../skills/red-team-audit/lenses/_evidence-adapters/manifest.json',
+  '../../skills/last-aperture/lenses/_evidence-adapters/manifest.json',
   import.meta.url,
 )
 

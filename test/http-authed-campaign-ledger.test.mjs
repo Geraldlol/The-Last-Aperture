@@ -70,7 +70,7 @@ async function openLedger(directory, additions = {}) {
     authorizationBindingSha256: AUTHORIZATION_BINDING,
     authorizationMode: 'OPERATOR_ATTESTED_AUTHED',
     independentlyVerified: false,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
     initialize: true,
     now: () => NOW,
     limits: { lockTimeoutMs: 100, staleLockMs: 1, lockPollMs: 1 },
@@ -183,7 +183,7 @@ test('ACTION_LEASED operator is immutably bound to the campaign genesis operator
   )
   await ledger.leaseAction({
     candidateDraft: action,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.close()
 
@@ -192,7 +192,7 @@ test('ACTION_LEASED operator is immutably bound to the campaign genesis operator
     .map(async (name) => JSON.parse(await readFile(join(directory, name), 'utf8'))))
   const genesis = records.find(({ event }) => event.type === 'CAMPAIGN_OPENED')
   const leases = records.filter(({ event }) => event.type === 'ACTION_LEASED')
-  assert.equal(genesis.event.operator_id, 'peerstar-security-operator')
+  assert.equal(genesis.event.operator_id, 'example-security-operator')
   assert.equal(leases.length, 1)
   assert.equal(leases[0].event.operator_id, genesis.event.operator_id)
 })
@@ -249,6 +249,46 @@ test('discovered candidate identities are ledger-private while same-process dedu
     assert.notEqual(persisted.action_id, `http-authed-action:${digest}`)
   }
   assert.equal(firstRecordText.includes(sentinel), false)
+})
+
+test('candidate budget resolution admits a private duplicate before rejecting a new action', async (t) => {
+  const directory = await directoryFor(t, 'private-candidate-budget')
+  const ledger = await openLedger(directory)
+  const firstCandidate = candidate({
+    url: 'https://synthetic.example.test/discovered/first',
+  })
+
+  const first = await ledger.enqueueCandidate({
+    candidateDraft: firstCandidate,
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const duplicate = await ledger.enqueueCandidate({
+    candidateDraft: firstCandidate,
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const rejected = await ledger.enqueueCandidate({
+    candidateDraft: candidate({
+      url: 'https://synthetic.example.test/discovered/second',
+    }),
+    provenance: 'DISCOVERED',
+    maxActions: 1,
+  })
+  const privateIdentityCount = ledger._discoveredCandidateIdentities.size
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(first.created, true)
+  assert.equal(duplicate.created, false)
+  assert.equal(duplicate.actionId, first.actionId)
+  assert.deepEqual(rejected, {
+    created: false,
+    limitReached: true,
+    headSha256: first.headSha256,
+  })
+  assert.equal(privateIdentityCount, 1)
+  assert.equal(snapshot.next_action_sequence, 2)
 })
 
 test('concurrent candidate enqueue is serialized and content-deduplicated', async (t) => {
@@ -374,7 +414,7 @@ test('ledger leases and terminalizes one exact candidate without replay', async 
   })
   const leased = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   assert.equal(leased.actionId, queued.actionId)
 
@@ -409,7 +449,7 @@ test('ledger leases and terminalizes one exact candidate without replay', async 
   await assert.rejects(
     () => ledger.leaseAction({
       candidateDraft: candidate(),
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     }),
     /terminal|replay|completed/i,
   )
@@ -422,7 +462,7 @@ test('only shape-bearing ledger records use v1.3 and replay schema metadata with
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -470,7 +510,7 @@ test('settled observation failure uses v1.4 bounded telemetry and cannot replay'
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -562,7 +602,7 @@ test('settled observation failure uses v1.4 bounded telemetry and cannot replay'
   await assert.rejects(
     () => reopened.leaseAction({
       candidateDraft: candidate(),
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     }),
     /terminal|replay/i,
   )
@@ -575,7 +615,7 @@ test('ledger rejects value-bearing shape extensions before append', async (t) =>
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -612,7 +652,7 @@ test('lease identity and action kind enforce legal dispatch transitions', async 
   })
   const leased = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
 
   await assert.rejects(
@@ -671,7 +711,7 @@ test('mutation phases require their exact predecessor state and verification can
   await ledger.enqueueCandidate({ candidateDraft: mutation, provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: mutation,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
 
   for (const phase of ['BEFORE_READ', 'AFTER_READ', 'ROLLBACK', 'ROLLBACK_VERIFY']) {
@@ -717,7 +757,7 @@ test('durable mutation pre-dispatch reopens only for cleanup and is never resent
   await ledger.enqueueCandidate({ candidateDraft: mutation, provenance: 'SEALED_PLAN' })
   const leased = await ledger.leaseAction({
     candidateDraft: mutation,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await recordVerifiedBeforeState(ledger, leased)
   await ledger.consumeAuthorization({
@@ -743,7 +783,7 @@ test('durable mutation pre-dispatch reopens only for cleanup and is never resent
   await assert.rejects(
     () => recovered.leaseAction({
       candidateDraft: mutation,
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     }),
     /stopped|state|replay|leased|dispatched/i,
   )
@@ -763,7 +803,7 @@ test('a crash after leasing but before dispatch terminalizes without replay', as
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const leased = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.close()
 
@@ -772,7 +812,7 @@ test('a crash after leasing but before dispatch terminalizes without replay', as
   await assert.rejects(
     () => recovered.leaseAction({
       candidateDraft: candidate(),
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     }),
     /terminal|failed|replay/i,
   )
@@ -785,7 +825,7 @@ test('a failed settled probe recovers as uncertain instead of completed', async 
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -820,7 +860,7 @@ test('a settled observation failure recovers terminally without retry or uncerta
   await ledger.enqueueCandidate({ candidateDraft: candidate(), provenance: 'SEALED_PLAN' })
   const lease = await ledger.leaseAction({
     candidateDraft: candidate(),
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: lease.actionId,
@@ -852,7 +892,7 @@ test('a settled observation failure recovers terminally without retry or uncerta
   await assert.rejects(
     () => recovered.leaseAction({
       candidateDraft: candidate(),
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     }),
     /terminal|replay/i,
   )
@@ -894,11 +934,11 @@ test('mutation authorization permits are durably consumed once before write disp
   await ledger.enqueueCandidate({ candidateDraft: second, provenance: 'SEALED_PLAN' })
   const firstLease = await ledger.leaseAction({
     candidateDraft: first,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   const secondLease = await ledger.leaseAction({
     candidateDraft: second,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await recordVerifiedBeforeState(ledger, firstLease, '4'.repeat(64))
   await recordVerifiedBeforeState(ledger, secondLease, '5'.repeat(64))
@@ -966,7 +1006,7 @@ test('ledger records contain no raw candidate, body, credential, or header value
   })
   const leased = await ledger.leaseAction({
     candidateDraft: secretCandidate,
-    operatorId: 'peerstar-security-operator',
+    operatorId: 'example-security-operator',
   })
   await ledger.markPreDispatch({
     actionId: queued.actionId,
@@ -1089,7 +1129,7 @@ for (const terminalizedBeforeCrash of [false, true]) {
     await ledger.enqueueCandidate({ candidateDraft: secondCandidate, provenance: 'SEALED_PLAN' })
     const first = await ledger.leaseAction({
       candidateDraft: firstCandidate,
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     })
     await ledger.markPreDispatch({
       actionId: first.actionId,
@@ -1126,7 +1166,7 @@ for (const terminalizedBeforeCrash of [false, true]) {
     await assert.rejects(
       () => recovered.leaseAction({
         candidateDraft: secondCandidate,
-        operatorId: 'peerstar-security-operator',
+        operatorId: 'example-security-operator',
       }),
       /stopped|current state/i,
     )
@@ -1152,7 +1192,7 @@ for (const terminalizedBeforeCrash of [false, true]) {
     await ledger.enqueueCandidate({ candidateDraft: secondCandidate, provenance: 'SEALED_PLAN' })
     const first = await ledger.leaseAction({
       candidateDraft: mutation,
-      operatorId: 'peerstar-security-operator',
+      operatorId: 'example-security-operator',
     })
     await ledger.markPreDispatch({
       actionId: first.actionId,
@@ -1190,7 +1230,7 @@ for (const terminalizedBeforeCrash of [false, true]) {
     await assert.rejects(
       () => recovered.leaseAction({
         candidateDraft: secondCandidate,
-        operatorId: 'peerstar-security-operator',
+        operatorId: 'example-security-operator',
       }),
       /stopped|current state/i,
     )

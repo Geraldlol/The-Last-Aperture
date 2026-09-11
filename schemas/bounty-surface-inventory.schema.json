@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-surface-inventory.schema.json",
-  "title": "Red Team Audit bounty-v1 surface inventory",
+  "title": "The Last Aperture bounty-v1 surface inventory",
   "description": "Attack surface observed inside a sealed program perimeter. Status is OBSERVED or PARTIAL and there is deliberately no COMPLETE: any source that failed is recorded in gaps, and an inventory built with a failed source is not a full picture of the surface. Refusals are retained because a refused candidate is evidence about the perimeter's shape, not noise.",
   "type": "object",
   "additionalProperties": false,

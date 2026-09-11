@@ -9,6 +9,7 @@ const SYNTHETIC_VALUE = /^SYNTHETIC_[A-Z0-9_-]{4,128}$/
 const AMBIGUOUS_PATH_ENCODING = /(?:\\|%(?:25)*(?:2e|2f|5c))/i
 const MAX_HEADER_VALUE_BYTES = 64 * 1024
 const MAX_RESPONSE_BYTES = 1024 * 1024
+const DEFAULT_DISCOVERY_BUDGET = 10_000
 // Response-derived write methods are hints, not executable actions. They need a
 // predeclared mutation envelope (before/after reads, inverse, and controller permit)
 // and therefore cannot be synthesized from untrusted response content.
@@ -112,6 +113,8 @@ function validatePolicy(policy) {
   assertOnlyKeys(policy, new Set([
     'candidate_methods',
     'enabled',
+    'max_candidates',
+    'max_depth',
     'max_response_bytes',
     'origin',
     'path_prefixes',
@@ -238,8 +241,25 @@ function validatePolicy(policy) {
     )
   }
 
+  const maxCandidates = policy.max_candidates ?? DEFAULT_DISCOVERY_BUDGET
+  if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 1_000_000) {
+    throw discoveryError(
+      'HTTP_AUTHED_DISCOVERY_POLICY_INVALID',
+      'discovery candidate budget must be between one and 1000000',
+    )
+  }
+  const maxDepth = policy.max_depth ?? DEFAULT_DISCOVERY_BUDGET
+  if (!Number.isSafeInteger(maxDepth) || maxDepth < 1 || maxDepth > 1_000_000) {
+    throw discoveryError(
+      'HTTP_AUTHED_DISCOVERY_POLICY_INVALID',
+      'discovery depth budget must be between one and 1000000',
+    )
+  }
+
   return {
     ...policy,
+    max_candidates: maxCandidates,
+    max_depth: maxDepth,
     origin: origin.origin,
     candidateMethodSet: new Set(policy.candidate_methods),
     sourceSet: new Set(policy.sources),
@@ -638,27 +658,30 @@ export function discoverHttpAuthedCandidates({
   const bodyChunks = normalizeBodyChunks(bodyChunkInput)
   const candidates = []
   const seen = new Set()
+  const candidateIndexes = new Map()
+  const locationCandidateIndexes = new Set()
   const rejected = new Map()
   let duplicateCount = 0
+  let locationCandidateLimitReached = false
 
   const reject = (code) => rejected.set(code, (rejected.get(code) ?? 0) + 1)
   const addCandidate = (reference, method = 'GET') => {
     if (!HTTP_TOKEN.test(method)) {
       reject('METHOD_INVALID')
-      return
+      return { created: false, index: null }
     }
     if (!policy.candidateMethodSet.has(method)) {
       reject('METHOD_NOT_ALLOWED')
-      return
+      return { created: false, index: null }
     }
     if (!AUTOMATIC_SAFE_METHODS.has(method)) {
       reject('METHOD_REQUIRES_DECLARED_ACTION')
-      return
+      return { created: false, index: null }
     }
     const normalized = normalizeReference(policy, reference, sourceAction.normalizedUrl)
     if (!normalized.accepted) {
       reject(normalized.code)
-      return
+      return { created: false, index: null }
     }
     const candidate = {
       kind: 'probe',
@@ -670,10 +693,17 @@ export function discoverHttpAuthedCandidates({
     const key = candidateKey(candidate)
     if (seen.has(key)) {
       duplicateCount += 1
-      return
+      return { created: false, index: candidateIndexes.get(key) ?? null }
     }
+    if (candidates.length >= policy.max_candidates) {
+      reject('CANDIDATE_LIMIT_REACHED')
+      return { created: false, index: null, limitReached: true }
+    }
+    const index = candidates.length
     seen.add(key)
+    candidateIndexes.set(key, index)
     candidates.push(candidate)
+    return { created: true, index }
   }
 
   if (policy.candidateMethodSet.has(sourceAction.method)) {
@@ -691,7 +721,9 @@ export function discoverHttpAuthedCandidates({
       if (name === 'link' && policy.sourceSet.has('link_header')) {
         for (const reference of extractLinkHeaderReferences(value)) addCandidate(reference)
       } else if (name === 'location' && policy.sourceSet.has('location_header')) {
-        addCandidate(value.trim())
+        const locationCandidate = addCandidate(value.trim())
+        if (locationCandidate.limitReached === true) locationCandidateLimitReached = true
+        if (locationCandidate.index !== null) locationCandidateIndexes.add(locationCandidate.index)
       } else if (name === 'allow' && policy.sourceSet.has('allow_header')) {
         for (const method of value.split(',').map((entry) => entry.trim()).filter(Boolean)) {
           addCandidate(sourceAction.url, method)
@@ -804,6 +836,9 @@ export function discoverHttpAuthedCandidates({
     .reduce((total, count) => total + count, 0)
   return {
     candidates,
+    accepted_location_count: locationCandidateIndexes.size,
+    location_candidate_indexes: [...locationCandidateIndexes].sort((left, right) => left - right),
+    location_candidate_limit_reached: locationCandidateLimitReached,
     summary: {
       accepted_count: candidates.length,
       duplicate_count: duplicateCount,

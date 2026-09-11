@@ -221,7 +221,7 @@ test('run-provider uses sealed bytes, commits observed coverage, and signs one e
     )
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       sealSource: true,
       createdAt: new Date('2026-07-29T09:59:00.000Z'),
     })
@@ -530,7 +530,7 @@ test('bundle verification rejects scope and closure-round sidecar forgeries', as
         await writeFile(join(root, 'package.json'), '{"name":"sidecar-fixture"}\n')
         const plan = await createRunPlan({
           targetRoot: root,
-          lensDirectory: resolve('skills/red-team-audit/lenses'),
+          lensDirectory: resolve('skills/last-aperture/lenses'),
           maxClosureRounds: 2,
           createdAt: new Date('2026-07-29T12:30:00.000Z'),
         })
@@ -575,7 +575,7 @@ test('observed database work cannot omit the sealed discovery control', {
     )
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       sealSource: true,
       createdAt: new Date('2026-07-29T11:59:00.000Z'),
     })

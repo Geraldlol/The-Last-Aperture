@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/adversarial-break-glass.schema.json",
-  "title": "Red Team Audit sealed break-glass preflight override",
+  "title": "The Last Aperture sealed break-glass preflight override",
   "description": "A one-use, short-lived operator decision that can waive only specifically disclosed health-monitoring or cleanup readiness failures for a READ_ONLY L3 plan. It cannot waive scope, impact classification, exact controller authorization, finite budgets, revocation, evidence custody, credential isolation, control-plane loss handling, or the operator kill switch.",
   "type": "object",
   "additionalProperties": false,

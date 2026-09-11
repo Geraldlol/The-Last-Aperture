@@ -3,18 +3,52 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Red Team Audit browser bridge disabled</title>
+    <title>The Last Aperture browser bridge</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main>
-      <h1>Browser bridge disabled</h1>
-      <p class="lede">This release cannot attach to a tab or execute target requests.</p>
-      <p id="notice" role="status">
-        HTTP_AUTHED_BROWSER_BRIDGE_DISABLED: controller enrollment, detached
-        signed plans, freshness enforcement, and campaign-wide caps are required
-        before this transport can be enabled.
-      </p>
+      <h1>The Last Aperture</h1>
+      <p class="lede">Use the current authenticated tab for one controller-bound campaign.</p>
+
+      <dl>
+        <dt>Extension ID</dt>
+        <dd id="extension-id" class="binding-value"></dd>
+      </dl>
+
+      <form id="pairing-form">
+        <label for="controller-port">Controller port</label>
+        <input id="controller-port" name="controller-port" type="number"
+          min="1024" max="65535" inputmode="numeric" required>
+
+        <label for="pairing-code">One-time pairing capability</label>
+        <input id="pairing-code" name="pairing-code" type="password"
+          minlength="43" maxlength="43" autocomplete="off" spellcheck="false" required>
+
+        <button id="preview" type="submit">Preview controller binding</button>
+      </form>
+
+      <section id="binding" class="hidden" aria-labelledby="binding-heading">
+        <h2 id="binding-heading">Controller binding</h2>
+        <dl>
+          <dt>Target</dt>
+          <dd id="target-origin" class="binding-value"></dd>
+          <dt>Active tab</dt>
+          <dd id="active-origin" class="binding-value"></dd>
+          <dt>Campaign</dt>
+          <dd id="campaign-grant" class="binding-value"></dd>
+          <dt>Expires</dt>
+          <dd id="expires-at"></dd>
+        </dl>
+        <p class="warning">Attach only when the target and active tab match the campaign you launched.</p>
+        <div class="actions">
+          <button id="attach" type="button">Attach active tab</button>
+          <button id="close" class="danger hidden" type="button">Close bridge</button>
+        </div>
+      </section>
+
+      <p id="notice" role="status" aria-live="polite">Enter the controller pairing values.</p>
     </main>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

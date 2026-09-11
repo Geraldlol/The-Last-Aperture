@@ -145,7 +145,7 @@ export function renderAuthzReport({ result, scope, ownerRole, testerRole, reques
     '',
     '---',
     '',
-    `Drafted ${generatedAt} by red-team-audit bounty-v1. Not submitted automatically; review before sending.`,
+    `Drafted ${generatedAt} by last-aperture bounty-v1. Not submitted automatically; review before sending.`,
   ]
 
   return sections.join('\n')

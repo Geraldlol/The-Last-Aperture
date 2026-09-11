@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const SCHEMA_DOC = 'skills/red-team-audit/lenses/_schema.md'
+const SCHEMA_DOC = 'skills/last-aperture/lenses/_schema.md'
 
 function doc() {
   return readFileSync(SCHEMA_DOC, 'utf8')
@@ -37,7 +37,7 @@ test('the Stage 1 table declares evidence_context and evidence_claim', () => {
 
 test('the location section documents the evidence-qualified form', () => {
   const text = doc()
-  assert.match(text, /peerstar-api-image:layer\/02\//)
+  assert.match(text, /sample-api-image:layer\/02\//)
   assert.match(text, /prod-cluster:v1\/Namespace\//)
 })
 

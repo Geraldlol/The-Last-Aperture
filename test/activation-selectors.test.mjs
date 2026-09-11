@@ -6,7 +6,7 @@ import { signalActivatorMatches } from '../scripts/lib/activation.mjs'
 import { parseLens } from '../scripts/lib/frontmatter.mjs'
 import { checkShapes } from '../scripts/lib/registry.mjs'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 
 function lensWithSignals(signals) {
   return {

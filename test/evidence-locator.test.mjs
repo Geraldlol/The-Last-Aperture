@@ -15,22 +15,22 @@ const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
 async function bundle() {
   const out = join(await mkdtemp(join(tmpdir(), 'rta-locator-')), 'ev')
   const planned = await adapter.plan({
-    evidence_id: 'peerstar-api-image',
+    evidence_id: 'sample-api-image',
     source_path: 'test/fixtures/evidence/vulnerable-image.tar',
     target_class: 'LAB',
     phi_scope: 'none',
   })
   const written = await adapter.run(planned, { out })
-  return { directory: written.directory, id: 'peerstar-api-image' }
+  return { directory: written.directory, id: 'sample-api-image' }
 }
 
 test('the two location forms are told apart without guessing', () => {
-  assert.deepEqual(parseEvidenceLocation('peerstar-api-image:layer/00/build-secret.txt'), {
-    evidence_id: 'peerstar-api-image',
+  assert.deepEqual(parseEvidenceLocation('sample-api-image:layer/00/build-secret.txt'), {
+    evidence_id: 'sample-api-image',
     locator: 'layer/00/build-secret.txt',
   })
   assert.equal(parseEvidenceLocation('src/routes/invoices.ts:88'), null)
-  assert.equal(parseEvidenceLocation('peerstar-api-image:88'), null)
+  assert.equal(parseEvidenceLocation('sample-api-image:88'), null)
 })
 
 test('a layer entry locator resolves to its bytes', async () => {
@@ -74,9 +74,9 @@ test('located: the quoted evidence is present at the locator', async () => {
   const b = await bundle()
   const result = await verifyEvidenceExistence(
     {
-      location: ['peerstar-api-image:layer/00/build-secret.txt'],
+      location: ['sample-api-image:layer/00/build-secret.txt'],
       evidence: 'FIXTURE-NOT-A-REAL-SECRET-layer-below-whiteout',
-      evidence_context: { evidence_id: 'peerstar-api-image' },
+      evidence_context: { evidence_id: 'sample-api-image' },
     },
     new Map([[b.id, b.directory]]),
   )
@@ -87,9 +87,9 @@ test('located: the quoted evidence is present at the locator', async () => {
 test('not_located: the bundle is absent from the run', async () => {
   const result = await verifyEvidenceExistence(
     {
-      location: ['peerstar-api-image:layer/00/build-secret.txt'],
+      location: ['sample-api-image:layer/00/build-secret.txt'],
       evidence: 'anything',
-      evidence_context: { evidence_id: 'peerstar-api-image' },
+      evidence_context: { evidence_id: 'sample-api-image' },
     },
     new Map(),
   )
@@ -101,9 +101,9 @@ test('not_located: the locator does not resolve inside the bundle', async () => 
   const b = await bundle()
   const result = await verifyEvidenceExistence(
     {
-      location: ['peerstar-api-image:layer/00/imaginary.txt'],
+      location: ['sample-api-image:layer/00/imaginary.txt'],
       evidence: 'anything',
-      evidence_context: { evidence_id: 'peerstar-api-image' },
+      evidence_context: { evidence_id: 'sample-api-image' },
     },
     new Map([[b.id, b.directory]]),
   )
@@ -114,9 +114,9 @@ test('located with a contradicting observation: the premise is falsified', async
   const b = await bundle()
   const result = await verifyEvidenceExistence(
     {
-      location: ['peerstar-api-image:layer/00/build-secret.txt'],
+      location: ['sample-api-image:layer/00/build-secret.txt'],
       evidence: 'AKIA_SOMETHING_THAT_IS_NOT_THERE',
-      evidence_context: { evidence_id: 'peerstar-api-image' },
+      evidence_context: { evidence_id: 'sample-api-image' },
     },
     new Map([[b.id, b.directory]]),
   )

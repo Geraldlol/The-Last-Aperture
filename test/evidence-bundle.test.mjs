@@ -22,7 +22,7 @@ function baseProfile() {
   return {
     schema: 'evidence-bundle-v1',
     evidence_context: {
-      evidence_id: 'peerstar-api-image',
+      evidence_id: 'sample-api-image',
       evidence_class: 'built-artifact',
       adapter_id: 'artifact',
       target_identity: 'sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c',
@@ -86,7 +86,7 @@ test('a sealed bundle round-trips through read and verify', async () => {
   const { directory, written } = await sealedBundle()
   const read = await readEvidenceBundle(directory)
   assert.equal(read.root_sha256, written.root_sha256)
-  assert.equal(read.evidence_context.evidence_id, 'peerstar-api-image')
+  assert.equal(read.evidence_context.evidence_id, 'sample-api-image')
   assert.equal(read.evidence_context.evidence_class, 'built-artifact')
 
   const verification = await verifyEvidenceBundle(directory)

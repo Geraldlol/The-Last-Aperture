@@ -645,7 +645,7 @@ export function renderMarkdownReport(run) {
       : 'NOT ASSESSED'
   }
   const lines = [
-    '# Red Team Audit Report',
+    '# The Last Aperture Report',
     '',
     `Run: ${inlineCode(run.run_id)}`,
     '',
@@ -1386,7 +1386,7 @@ export function renderSarif(run, options = {}) {
     rulesByTopic.set(finding.topic, {
       id: finding.topic,
       name: finding.topic,
-      shortDescription: { text: `Red Team Audit: ${finding.topic}` },
+      shortDescription: { text: `The Last Aperture: ${finding.topic}` },
       properties: {
         lens: finding.lens,
         ...(finding.cwe ? { tags: [finding.cwe] } : {}),

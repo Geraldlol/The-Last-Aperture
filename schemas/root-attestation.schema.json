@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/root-attestation.schema.json",
-  "title": "Red Team Audit root manifest attestation",
+  "title": "The Last Aperture root manifest attestation",
   "description": "A detached Ed25519 signature over the exact bytes and terminal identity of one run.json manifest.",
   "type": "object",
   "additionalProperties": false,

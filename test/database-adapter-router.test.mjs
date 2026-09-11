@@ -14,7 +14,7 @@ import {
 } from '../scripts/lib/database-adapters.mjs'
 
 const ADAPTER_DIRECTORY = new URL(
-  '../skills/red-team-audit/lenses/_database-adapters/',
+  '../skills/last-aperture/lenses/_database-adapters/',
   import.meta.url,
 )
 

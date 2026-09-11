@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/transparency-signed-checkpoint.schema.json",
-  "title": "Red Team Audit signed transparency checkpoint",
+  "title": "The Last Aperture signed transparency checkpoint",
   "description": "A standalone Ed25519-signed transparency-log tree head projected independently of any inclusion receipt.",
   "type": "object",
   "additionalProperties": false,

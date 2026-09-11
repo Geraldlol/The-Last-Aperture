@@ -1,0 +1,444 @@
+// Controller-owned compatibility agent for Ghidra Java scripts on Windows.
+//
+// It normalizes GhidraSourceBundle's Felix location to a valid file URI and
+// ignores only the JDK ZipFS AccessDeniedException that can be raised after a
+// Java compiler file manager has already closed a classpath JAR. Other close
+// failures retain their original behavior.
+
+package lastaperture.ghidra;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.lang.instrument.ClassFileTransformer;
+import java.lang.instrument.IllegalClassFormatException;
+import java.lang.instrument.Instrumentation;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.Path;
+import java.security.ProtectionDomain;
+import java.util.Locale;
+
+public final class GhidraBundleLocationAgent {
+    private static final String TARGET_CLASS =
+        "ghidra/app/plugin/core/osgi/GhidraSourceBundle";
+    private static final String PATH_CLASS = "java/nio/file/Path";
+    private static final String PATH_METHOD = "toString";
+    private static final String PATH_DESCRIPTOR = "()Ljava/lang/String;";
+    private static final String HELPER_CLASS =
+        "lastaperture/ghidra/GhidraBundleLocationAgent";
+    private static final String HELPER_METHOD = "uriPath";
+    private static final String HELPER_DESCRIPTOR =
+        "(Ljava/nio/file/Path;)Ljava/lang/String;";
+    private static final String SAFE_CLOSE_METHOD = "safeClose";
+    private static final String SAFE_CLOSE_DESCRIPTOR = "(Ljava/lang/Object;)V";
+    private static final String FILE_URI_PREFIX = "file://";
+
+    private GhidraBundleLocationAgent() {
+    }
+
+    public static void premain(String ignored, Instrumentation instrumentation) {
+        if (File.separatorChar != '\\') {
+            return;
+        }
+        instrumentation.addTransformer(new BundleLocationTransformer(), false);
+    }
+
+    public static String uriPath(Path path) {
+        String uri = path.toUri().toASCIIString();
+        if (!uri.startsWith("file:///")) {
+            throw new IllegalArgumentException("Ghidra bundle path is not a local file URI");
+        }
+        return uri.substring(FILE_URI_PREFIX.length());
+    }
+
+    public static void safeClose(Object closeable) throws Exception {
+        try {
+            ((AutoCloseable) closeable).close();
+        }
+        catch (AccessDeniedException error) {
+            String deniedFile = error.getFile();
+            boolean zipFileClose = false;
+            for (StackTraceElement frame : error.getStackTrace()) {
+                if (frame.getClassName().equals("jdk.nio.zipfs.ZipFileSystemProvider")
+                        && frame.getMethodName().equals("removeFileSystem")) {
+                    zipFileClose = true;
+                    break;
+                }
+            }
+            if (zipFileClose && deniedFile != null
+                    && deniedFile.toLowerCase(Locale.ROOT).endsWith(".jar")) {
+                return;
+            }
+            throw error;
+        }
+    }
+
+    private static final class BundleLocationTransformer implements ClassFileTransformer {
+        @Override
+        public byte[] transform(
+            ClassLoader loader,
+            String className,
+            Class<?> classBeingRedefined,
+            ProtectionDomain protectionDomain,
+            byte[] classfileBuffer
+        ) throws IllegalClassFormatException {
+            if (!TARGET_CLASS.equals(className)) {
+                return null;
+            }
+            byte[] patched = patchBundlePathConversion(classfileBuffer);
+            return patchCompilerClosures(patched);
+        }
+    }
+
+    private static byte[] patchCompilerClosures(byte[] input)
+            throws IllegalClassFormatException {
+        ConstantPool pool = ConstantPool.parse(input);
+        int bundleManagerClose = pool.findMethodRef(
+            "org/phidias/compile/BundleJavaManager", "close", "()V"
+        );
+        int standardFileManagerClose = pool.findInterfaceMethodRef(
+            "javax/tools/StandardJavaFileManager", "close", "()V"
+        );
+        if (bundleManagerClose < 0 || standardFileManagerClose < 0) {
+            throw invalid("target class does not reference the expected compiler close methods");
+        }
+
+        int helperClassName = pool.count;
+        int helperClass = helperClassName + 1;
+        int helperMethodName = helperClass + 1;
+        int helperDescriptor = helperMethodName + 1;
+        int helperNameAndType = helperDescriptor + 1;
+        int helperMethodRef = helperNameAndType + 1;
+        int newPoolCount = helperMethodRef + 1;
+        if (newPoolCount > 0xffff) {
+            throw invalid("target class constant pool cannot be extended");
+        }
+
+        ByteArrayOutputStream additions = new ByteArrayOutputStream();
+        writeUtf8(additions, HELPER_CLASS);
+        writeEntry(additions, 7, helperClassName);
+        writeUtf8(additions, SAFE_CLOSE_METHOD);
+        writeUtf8(additions, SAFE_CLOSE_DESCRIPTOR);
+        writeEntry(additions, 12, helperMethodName, helperDescriptor);
+        writeEntry(additions, 10, helperClass, helperNameAndType);
+        byte[] addedPoolEntries = additions.toByteArray();
+
+        byte[] output = new byte[input.length + addedPoolEntries.length];
+        System.arraycopy(input, 0, output, 0, 8);
+        writeU2(output, 8, newPoolCount);
+        System.arraycopy(input, 10, output, 10, pool.endOffset - 10);
+        System.arraycopy(addedPoolEntries, 0, output, pool.endOffset, addedPoolEntries.length);
+        System.arraycopy(input, pool.endOffset, output, pool.endOffset + addedPoolEntries.length,
+            input.length - pool.endOffset);
+
+        int bundleManagerReplacements = 0;
+        int standardManagerReplacements = 0;
+        for (int offset = pool.endOffset + addedPoolEntries.length;
+                offset <= output.length - 5; offset++) {
+            int opcode = output[offset] & 0xff;
+            int methodRef = readU2(output, offset + 1);
+            if (opcode == 0xb6 && methodRef == bundleManagerClose) {
+                output[offset] = (byte) 0xb8;
+                writeU2(output, offset + 1, helperMethodRef);
+                bundleManagerReplacements++;
+            }
+            else if (opcode == 0xb9 && methodRef == standardFileManagerClose
+                    && (output[offset + 3] & 0xff) == 1 && output[offset + 4] == 0) {
+                output[offset] = (byte) 0xb8;
+                writeU2(output, offset + 1, helperMethodRef);
+                output[offset + 3] = 0;
+                output[offset + 4] = 0;
+                standardManagerReplacements++;
+            }
+        }
+        if (bundleManagerReplacements < 1 || bundleManagerReplacements > 16
+                || standardManagerReplacements < 1 || standardManagerReplacements > 16) {
+            throw invalid("target class compiler close sites did not match expectations");
+        }
+        return output;
+    }
+
+    private static byte[] patchBundlePathConversion(byte[] input)
+            throws IllegalClassFormatException {
+        ConstantPool pool = ConstantPool.parse(input);
+        int pathToStringRef = pool.findInterfaceMethodRef(
+            PATH_CLASS,
+            PATH_METHOD,
+            PATH_DESCRIPTOR
+        );
+        if (pathToStringRef < 0) {
+            throw invalid("target class does not reference Path.toString()");
+        }
+
+        int invocationOffset = -1;
+        for (int offset = pool.endOffset; offset <= input.length - 13; offset++) {
+            if (
+                (input[offset] & 0xff) == 0xb9
+                && readU2(input, offset + 1) == pathToStringRef
+                && (input[offset + 3] & 0xff) == 1
+                && input[offset + 4] == 0
+                && (input[offset + 5] & 0xff) == 0xba
+                && input[offset + 8] == 0
+                && input[offset + 9] == 0
+                && (input[offset + 10] & 0xff) == 0xb5
+            ) {
+                if (invocationOffset >= 0) {
+                    throw invalid("target class has multiple bundle path conversion sites");
+                }
+                invocationOffset = offset;
+            }
+        }
+        if (invocationOffset < 0) {
+            throw invalid("target class bundle path conversion site was not found");
+        }
+
+        int helperClassName = pool.count;
+        int helperClass = helperClassName + 1;
+        int helperMethodName = helperClass + 1;
+        int helperDescriptor = helperMethodName + 1;
+        int helperNameAndType = helperDescriptor + 1;
+        int helperMethodRef = helperNameAndType + 1;
+        int newPoolCount = helperMethodRef + 1;
+        if (newPoolCount > 0xffff) {
+            throw invalid("target class constant pool cannot be extended");
+        }
+
+        ByteArrayOutputStream additions = new ByteArrayOutputStream();
+        writeUtf8(additions, HELPER_CLASS);
+        writeEntry(additions, 7, helperClassName);
+        writeUtf8(additions, HELPER_METHOD);
+        writeUtf8(additions, HELPER_DESCRIPTOR);
+        writeEntry(additions, 12, helperMethodName, helperDescriptor);
+        writeEntry(additions, 10, helperClass, helperNameAndType);
+        byte[] addedPoolEntries = additions.toByteArray();
+
+        byte[] output = new byte[input.length + addedPoolEntries.length];
+        System.arraycopy(input, 0, output, 0, 8);
+        writeU2(output, 8, newPoolCount);
+        System.arraycopy(input, 10, output, 10, pool.endOffset - 10);
+        System.arraycopy(addedPoolEntries, 0, output, pool.endOffset, addedPoolEntries.length);
+        System.arraycopy(
+            input,
+            pool.endOffset,
+            output,
+            pool.endOffset + addedPoolEntries.length,
+            input.length - pool.endOffset
+        );
+
+        int patchedInvocation = invocationOffset + addedPoolEntries.length;
+        output[patchedInvocation] = (byte) 0xb8; // invokestatic
+        writeU2(output, patchedInvocation + 1, helperMethodRef);
+        output[patchedInvocation + 3] = 0; // nop
+        output[patchedInvocation + 4] = 0; // nop
+        return output;
+    }
+
+    private static final class ConstantPool {
+        private final int count;
+        private final int endOffset;
+        private final int[] tags;
+        private final int[] first;
+        private final int[] second;
+        private final String[] utf8;
+
+        private ConstantPool(
+            int count,
+            int endOffset,
+            int[] tags,
+            int[] first,
+            int[] second,
+            String[] utf8
+        ) {
+            this.count = count;
+            this.endOffset = endOffset;
+            this.tags = tags;
+            this.first = first;
+            this.second = second;
+            this.utf8 = utf8;
+        }
+
+        private static ConstantPool parse(byte[] input) throws IllegalClassFormatException {
+            if (input == null || input.length < 10 || readU4(input, 0) != 0xcafebabeL) {
+                throw invalid("target class is not a valid Java class file");
+            }
+            int count = readU2(input, 8);
+            if (count < 1) {
+                throw invalid("target class has an invalid constant pool");
+            }
+
+            int[] tags = new int[count];
+            int[] first = new int[count];
+            int[] second = new int[count];
+            String[] utf8 = new String[count];
+            int offset = 10;
+
+            for (int index = 1; index < count; index++) {
+                require(input, offset, 1);
+                int tag = input[offset] & 0xff;
+                tags[index] = tag;
+                offset += 1;
+
+                switch (tag) {
+                    case 1: {
+                        int length = readU2(input, offset);
+                        offset += 2;
+                        require(input, offset, length);
+                        utf8[index] = new String(input, offset, length, StandardCharsets.UTF_8);
+                        offset += length;
+                        break;
+                    }
+                    case 3:
+                    case 4:
+                        offset = advance(input, offset, 4);
+                        break;
+                    case 5:
+                    case 6:
+                        offset = advance(input, offset, 8);
+                        index += 1;
+                        break;
+                    case 7:
+                    case 8:
+                    case 16:
+                    case 19:
+                    case 20:
+                        first[index] = readU2(input, offset);
+                        offset += 2;
+                        break;
+                    case 9:
+                    case 10:
+                    case 11:
+                    case 12:
+                    case 17:
+                    case 18:
+                        first[index] = readU2(input, offset);
+                        second[index] = readU2(input, offset + 2);
+                        offset += 4;
+                        break;
+                    case 15:
+                        require(input, offset, 3);
+                        first[index] = input[offset] & 0xff;
+                        second[index] = readU2(input, offset + 1);
+                        offset += 3;
+                        break;
+                    default:
+                        throw invalid("target class has an unsupported constant-pool tag");
+                }
+            }
+            return new ConstantPool(count, offset, tags, first, second, utf8);
+        }
+
+        private int findInterfaceMethodRef(String owner, String name, String descriptor)
+                throws IllegalClassFormatException {
+            return findMethodRef(11, owner, name, descriptor);
+        }
+
+        private int findMethodRef(String owner, String name, String descriptor)
+                throws IllegalClassFormatException {
+            return findMethodRef(10, owner, name, descriptor);
+        }
+
+        private int findMethodRef(int expectedTag, String owner, String name, String descriptor)
+                throws IllegalClassFormatException {
+            int match = -1;
+            for (int index = 1; index < count; index++) {
+                if (tags[index] != expectedTag) {
+                    continue;
+                }
+                int ownerIndex = first[index];
+                int nameAndTypeIndex = second[index];
+                if (
+                    owner.equals(className(ownerIndex))
+                    && name.equals(name(nameAndTypeIndex))
+                    && descriptor.equals(descriptor(nameAndTypeIndex))
+                ) {
+                    if (match >= 0) {
+                        throw invalid("target class has multiple Path.toString() references");
+                    }
+                    match = index;
+                }
+            }
+            return match;
+        }
+
+        private String className(int index) throws IllegalClassFormatException {
+            requireIndex(index, 7);
+            return utf8(first[index]);
+        }
+
+        private String name(int index) throws IllegalClassFormatException {
+            requireIndex(index, 12);
+            return utf8(first[index]);
+        }
+
+        private String descriptor(int index) throws IllegalClassFormatException {
+            requireIndex(index, 12);
+            return utf8(second[index]);
+        }
+
+        private String utf8(int index) throws IllegalClassFormatException {
+            requireIndex(index, 1);
+            return utf8[index];
+        }
+
+        private void requireIndex(int index, int expectedTag)
+                throws IllegalClassFormatException {
+            if (index <= 0 || index >= count || tags[index] != expectedTag) {
+                throw invalid("target class has an invalid constant-pool reference");
+            }
+        }
+    }
+
+    private static void writeUtf8(ByteArrayOutputStream output, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        output.write(1);
+        writeU2(output, bytes.length);
+        output.writeBytes(bytes);
+    }
+
+    private static void writeEntry(ByteArrayOutputStream output, int tag, int... values) {
+        output.write(tag);
+        for (int value : values) {
+            writeU2(output, value);
+        }
+    }
+
+    private static void writeU2(ByteArrayOutputStream output, int value) {
+        output.write((value >>> 8) & 0xff);
+        output.write(value & 0xff);
+    }
+
+    private static void writeU2(byte[] output, int offset, int value) {
+        output[offset] = (byte) (value >>> 8);
+        output[offset + 1] = (byte) value;
+    }
+
+    private static int advance(byte[] input, int offset, int count)
+            throws IllegalClassFormatException {
+        require(input, offset, count);
+        return offset + count;
+    }
+
+    private static int readU2(byte[] input, int offset) throws IllegalClassFormatException {
+        require(input, offset, 2);
+        return ((input[offset] & 0xff) << 8) | (input[offset + 1] & 0xff);
+    }
+
+    private static long readU4(byte[] input, int offset) throws IllegalClassFormatException {
+        require(input, offset, 4);
+        return ((long) (input[offset] & 0xff) << 24)
+            | ((long) (input[offset + 1] & 0xff) << 16)
+            | ((long) (input[offset + 2] & 0xff) << 8)
+            | (long) (input[offset + 3] & 0xff);
+    }
+
+    private static void require(byte[] input, int offset, int count)
+            throws IllegalClassFormatException {
+        if (offset < 0 || count < 0 || offset > input.length - count) {
+            throw invalid("target class has a truncated constant pool");
+        }
+    }
+
+    private static IllegalClassFormatException invalid(String message) {
+        return new IllegalClassFormatException(message);
+    }
+}

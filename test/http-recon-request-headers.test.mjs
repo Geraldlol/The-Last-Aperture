@@ -8,10 +8,6 @@ import {
 
 const CASES = [
   ['cors-hostile-origin-get-v1', 'GET', { origin: 'https://red-team-audit.invalid' }],
-  ['x-original-url-order-programs-v1', 'GET', { 'x-original-url': '/api/Order/GetPrograms' }],
-  ['x-rewrite-url-order-programs-v1', 'GET', { 'x-rewrite-url': '/api/Order/GetPrograms' }],
-  ['x-original-url-tabaccess-getall-v1', 'GET', { 'x-original-url': '/api/TabAccess/GetAll' }],
-  ['x-rewrite-url-tabaccess-getall-v1', 'GET', { 'x-rewrite-url': '/api/TabAccess/GetAll' }],
   ['x-forwarded-for-loopback-v1', 'GET', { 'x-forwarded-for': '127.0.0.1' }],
   ['x-real-ip-loopback-v1', 'GET', { 'x-real-ip': '127.0.0.1' }],
   ['forwarded-loopback-https-v1', 'GET', { forwarded: 'for=127.0.0.1;proto=https' }],

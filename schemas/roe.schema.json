@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.local/schemas/roe.schema.json",
-  "title": "Red Team Audit Rules of Engagement Policy",
+  "title": "The Last Aperture Rules of Engagement Policy",
   "description": "A dependency-light, machine-readable action policy supplied by the operator outside the repository under audit. This schema is a foundation, not an OWASP APTS conformance claim.",
   "type": "object",
   "additionalProperties": false,

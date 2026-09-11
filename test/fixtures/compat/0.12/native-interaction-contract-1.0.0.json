@@ -1,0 +1,122 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "red-team-audit/native-interaction-contract",
+  "protocol": "native-interaction-contract-v1",
+  "contract_id": "interaction:ae5103a34e43e84ace97eda12439dfb3",
+  "generated_at": "2026-09-11T12:01:00.000Z",
+  "basis": {
+    "web_session_evidence_sha256": [
+      "73b897d74e7fbcb8c888d4b9baf9b83b8e281bbd6415aac57f4a19164716efa2"
+    ],
+    "reverse_evidence_sha256": []
+  },
+  "subjects": {
+    "origins": [
+      "https://portal.example"
+    ],
+    "artifact_sha256": [],
+    "path_literals": [
+      "api",
+      "resources"
+    ]
+  },
+  "auth_flows": [],
+  "endpoints": [
+    {
+      "endpoint_id": "endpoint:5132968514d6888a6884c52a70fee41e",
+      "origin": "https://portal.example",
+      "path_template": "/api/resources/{integer}",
+      "method": "GET",
+      "protocol_role": "APPLICATION",
+      "side_effect": {
+        "classification": "UNKNOWN",
+        "basis": "UNCLASSIFIED"
+      },
+      "observations": 1,
+      "request": {
+        "query_parameters": [
+          {
+            "name": "page",
+            "path": "page",
+            "types": [
+              "integer"
+            ],
+            "sensitive": false,
+            "semantic_classes": []
+          }
+        ],
+        "fields": [],
+        "content_types": [],
+        "header_names": [],
+        "path_action_classes": [
+          "NONE"
+        ]
+      },
+      "response": {
+        "statuses": [
+          200
+        ],
+        "fields": [],
+        "content_types": [
+          "application/json"
+        ]
+      },
+      "auth": {
+        "request_carriers": [],
+        "response_carriers": [],
+        "request_cookie_names": [],
+        "response_cookie_names": []
+      },
+      "redirects": [],
+      "pagination": "OFFSET_OR_PAGE_PARAMETERS_OBSERVED",
+      "retry": "NOT_OBSERVED",
+      "write_verification": "NOT_APPLICABLE",
+      "discovered_via": [
+        "WEB_HAR"
+      ],
+      "evidence_refs": [
+        "webobs:e8a0bd48a0bcf2a2310406c975dfe556"
+      ],
+      "exchanges": [
+        {
+          "evidence_ref": "webobs:e8a0bd48a0bcf2a2310406c975dfe556",
+          "capture_id": "web:452c660f379ecc9630f5c640fb4c8e53",
+          "sequence": 1,
+          "request": {
+            "action": "APPLICATION_REQUEST",
+            "action_basis": "UNCLASSIFIED",
+            "credential_carriers": []
+          },
+          "response": {
+            "status": 200,
+            "credential_carriers": [],
+            "destinations": []
+          }
+        }
+      ]
+    }
+  ],
+  "redaction": {
+    "protocol_values_removed": true,
+    "credentials_removed": true,
+    "bodies_removed": true,
+    "value_like_names_masked": true
+  },
+  "status": "DRAFT_OBSERVED",
+  "generated_client_status": "CONTRACT_ONLY",
+  "security_verdict": "NOT_ASSESSED",
+  "gaps": [
+    {
+      "code": "CONTRACT_REQUIRES_OPERATOR_REVIEW",
+      "message": "Observed shapes and inferred auth stages require review before implementing or replaying a connector."
+    },
+    {
+      "code": "WRITE_SUCCESS_PREDICATES_UNPROVEN",
+      "message": "A status code or read-back sequence alone does not prove a write succeeded; define record-specific success, failure, and rollback predicates."
+    },
+    {
+      "code": "TEMPLATE_VARIANCE_UNCONFIRMED",
+      "message": "Capture at least two synthetic sessions before treating path placeholders, cardinality, or optional fields as stable."
+    }
+  ]
+}

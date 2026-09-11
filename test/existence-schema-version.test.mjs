@@ -196,7 +196,7 @@ test('a 7.0.0 run survives plan through finalize to a terminal state', {
     )
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       sealSource: true,
       createdAt: new Date('2026-08-03T09:00:00.000Z'),
     })
@@ -316,7 +316,7 @@ before(async () => {
   )
   const plan = await createRunPlan({
     targetRoot: existenceFixtureRoot,
-    lensDirectory: resolve('skills/red-team-audit/lenses'),
+    lensDirectory: resolve('skills/last-aperture/lenses'),
     sealSource: true,
     createdAt: new Date('2026-08-03T10:00:00.000Z'),
   })
