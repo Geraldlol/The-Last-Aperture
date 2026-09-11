@@ -11,7 +11,7 @@ import {
   checkShapes,
 } from '../scripts/lib/registry.mjs'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 
 const EXPECTED_TOPICS = {
   'embedded-iot-ot-security': [

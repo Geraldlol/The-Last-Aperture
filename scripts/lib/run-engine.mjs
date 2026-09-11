@@ -503,7 +503,7 @@ function jobSidecar(job, repositoryRoot, completenessInputs) {
 export async function createRunPlan(options) {
   const {
     targetRoot,
-    lensDirectory = resolve('skills/red-team-audit/lenses'),
+    lensDirectory = resolve('skills/last-aperture/lenses'),
     policy,
     createdAt = new Date(),
     inventoryOptions,

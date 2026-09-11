@@ -2,7 +2,7 @@
 
 **Nothing in this directory runs, and nothing in it is meant to.**
 
-This is how anyone — including the author — finds out whether the `red-team-audit`
+This is how anyone — including the author — finds out whether the `last-aperture`
 skill works. A skill made of ten prose lenses can be graded only against code
 whose answer is known in advance, so this directory holds that code and
 `EXPECTED.md` holds the answers.

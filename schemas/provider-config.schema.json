@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/provider-config.schema.json",
-  "title": "Red Team Audit provider execution configuration",
+  "title": "The Last Aperture provider execution configuration",
   "description": "Trusted controller configuration for an immutable Docker stdio provider. Repository content must never populate this contract.",
   "type": "object",
   "additionalProperties": false,

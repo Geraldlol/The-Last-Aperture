@@ -146,7 +146,7 @@ export async function inspectReadiness({
   try {
     await checkedEndpoint(root, fileSystem, 'directory')
     manifest = await boundedJson(join(root, 'package.json'), READINESS_INPUT_LIMITS.json_bytes, fileSystem)
-    if (manifest.name !== 'red-team-audit' || !manifest.dependencies || typeof manifest.dependencies !== 'object' || Array.isArray(manifest.dependencies)) {
+    if (manifest.name !== 'last-aperture' || !manifest.dependencies || typeof manifest.dependencies !== 'object' || Array.isArray(manifest.dependencies)) {
       throw new Error('not a controller installation manifest')
     }
     const dependencies = Object.entries(manifest.dependencies)
@@ -158,11 +158,11 @@ export async function inspectReadiness({
     checks.push(check('installation-manifest', 'PASS', 'Controller package manifest is structurally valid and declares pinned dependencies.'))
   } catch {
     manifest = null
-    checks.push(check('installation-manifest', 'BLOCKED', 'Controller package manifest is missing, unsafe, oversized, or structurally invalid.', 'Use a complete local red-team-audit installation.'))
+    checks.push(check('installation-manifest', 'BLOCKED', 'Controller package manifest is missing, unsafe, oversized, or structurally invalid.', 'Use a complete local installation of The Last Aperture.'))
   }
   for (const [id, path] of [
     ['controller-entrypoint', 'scripts/audit.mjs'],
-    ['canonical-skill', 'skills/red-team-audit/SKILL.md'],
+    ['canonical-skill', 'skills/last-aperture/SKILL.md'],
     ['dependency-lockfile', 'package-lock.json'],
     ['proof-worker-schema', 'schemas/proof-worker.schema.json'],
   ]) {
@@ -241,7 +241,7 @@ export function renderReadiness(report) {
     ...report.environment_coverage.limitations.map((item) => `  ${terminalSafeText(item, 2048)}`),
   ] : []
   return [
-    'Red Team Audit doctor: static inspection only', '',
+    'The Last Aperture doctor: static inspection only', '',
     ...report.checks.flatMap((item) => [
       `${item.status} ${item.id}: ${item.detail}`,
       ...(item.action && item.status !== 'PASS' ? [`  Next: ${item.action}`] : []),

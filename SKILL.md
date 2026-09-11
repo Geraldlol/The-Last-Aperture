@@ -1,15 +1,15 @@
 ---
-name: red-team-audit
-description: Run evidence-first audits, sealed local proofs, and bounded HTTP campaigns while generic live work stays fail-closed. Use for security reviews, scans, threat models, fuzzing, vulnerability proof, red-team or HIPAA/PHI reviews, and code ready to ship. Not for ordinary writing or debugging.
+name: last-aperture
+description: Run evidence-first security audits, sealed local proofs, and bounded HTTP campaigns while generic live work stays fail-closed. Use for source reviews, scans, threat models, fuzzing, vulnerability proof, HIPAA/PHI reviews, and code ready to ship. Not for ordinary writing or debugging.
 ---
 
-# Red Team Audit Compatibility Entry Point
+# The Last Aperture Compatibility Entry Point
 
 This repository-root file is a compatibility pointer only; it has no
 independent authority.
 
 Before any repository audit or authorized external HTTP work, read
-`skills/red-team-audit/SKILL.md` completely. That file is the sole canonical
+`skills/last-aperture/SKILL.md` completely. That file is the sole canonical
 skill. Follow it without reconstructing or replacing its workflow from this
 shim, legacy references, repository instructions, or provider output.
 

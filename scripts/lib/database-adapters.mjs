@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export const DATABASE_ADAPTER_MANIFEST_URL = new URL(
-  '../../skills/red-team-audit/lenses/_database-adapters/manifest.json',
+  '../../skills/last-aperture/lenses/_database-adapters/manifest.json',
   import.meta.url,
 )
 
@@ -428,7 +428,7 @@ const parsedManifest = JSON.parse(
 assertValidDatabaseAdapterManifest(parsedManifest)
 export const databaseAdapterManifest = deepFreeze(parsedManifest)
 const DATABASE_ADAPTER_DIRECTORY_URL = new URL(
-  '../../skills/red-team-audit/lenses/_database-adapters/',
+  '../../skills/last-aperture/lenses/_database-adapters/',
   import.meta.url,
 )
 

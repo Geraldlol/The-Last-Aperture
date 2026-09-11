@@ -94,7 +94,7 @@ async function planStatic() {
   const out = mkdtempSync(join(tmpdir(), 'rta-rp-'))
   const plan = await createRunPlan({
     targetRoot: join(WORKSPACE, 'fixtures', 'vulnerable'),
-    lensDirectory: join(WORKSPACE, 'skills', 'red-team-audit', 'lenses'),
+    lensDirectory: join(WORKSPACE, 'skills', 'last-aperture', 'lenses'),
     sealSource: true,
   })
   return (await writeRunPlanBundle(plan, out)).directory
@@ -222,7 +222,7 @@ async function proofReadyBundle() {
   }, { workspaceRoot: target, policySource: 'external' })
   const plan = await createRunPlan({
     targetRoot: target,
-    lensDirectory: join(WORKSPACE, 'skills', 'red-team-audit', 'lenses'),
+    lensDirectory: join(WORKSPACE, 'skills', 'last-aperture', 'lenses'),
     policy,
     sealSource: true,
   })

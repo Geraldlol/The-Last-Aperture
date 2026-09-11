@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 const CICD = join(LENS_DIR, 'cicd-and-supply-chain.md')
 
 const CONTROL_OPERATORS = new Set(['|', '|&', '&&', '||', ';', '(', ')', '{', '}', '$(', '<('])

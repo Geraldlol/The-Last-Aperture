@@ -2,7 +2,7 @@
 
 - Status: Accepted for the v0.11 authorized-reconnaissance slice
 - Date: 2026-08-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Amends: ADR 0013; amended by ADR 0021, which retains operator-statement
   authority and retires the externally signed authorization mode
 - Amended by: ADR 0015, which removes the mandatory advance SPKI pin from

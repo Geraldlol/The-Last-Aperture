@@ -2079,7 +2079,7 @@ git commit -m "feat: SARIF reports an unreached evidence class as a notification
 ### Task 7: The `artifact` adapter document
 
 **Files:**
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/artifact.md`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/artifact.md`
 - Test: `test/evidence-adapters.test.mjs` (extend)
 
 **Interfaces:**
@@ -2094,7 +2094,7 @@ Append to `test/evidence-adapters.test.mjs`:
 
 ```js
 const ARTIFACT_DOC = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/artifact.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/artifact.md', import.meta.url),
 )
 
 test('the artifact adapter document declares its five rule anchors', () => {
@@ -2129,7 +2129,7 @@ Expected: FAIL — the document does not exist.
 
 - [ ] **Step 3: Write the document**
 
-Create `skills/red-team-audit/lenses/_evidence-adapters/artifact.md`. It states:
+Create `skills/last-aperture/lenses/_evidence-adapters/artifact.md`. It states:
 the canonical `adapter_id` and `verified_on`; the ten canonical capabilities
 with the values `describe()` returns; the exact bundle payload layout from
 Task 3; the three locator forms from Task 5; and, under
@@ -2197,7 +2197,7 @@ test/oci-normalizer.test.mjs test/evidence-fixtures.test.mjs test/evidence-artif
 - [ ] **Step 6: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_evidence-adapters/artifact.md test/evidence-adapters.test.mjs package.json
+git add skills/last-aperture/lenses/_evidence-adapters/artifact.md test/evidence-adapters.test.mjs package.json
 git commit -m "docs: artifact adapter document with the five OCI rule anchors Phase 1 will fill"
 ```
 

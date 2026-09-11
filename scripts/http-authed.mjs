@@ -32,7 +32,7 @@ import {
   terminalSafeText,
 } from './lib/terminal-text.mjs'
 
-const HELP = `red-team-audit authenticated HTTP campaigns ${PLATFORM_VERSION}
+const HELP = `last-aperture authenticated HTTP campaigns ${PLATFORM_VERSION}
 
 Usage:
   http-authed plan-attested --scope <absolute-new-scope.json> --engagement-id <id> --authorization-id <id> --operator-id <id> --authorized-by <declared-authorizer> --authorization-reference <reference> --not-before <timestamp> --not-after <timestamp> [--cleanup-not-after <timestamp>] --target-origin <https-origin> --environment <production|non_production> --data-class <phi|non_phi|unknown> --ownership <operator_owned|third_party_owned> ((--credential-env <ENV_NAME>|--credential-stdin) --credential-kind <bearer|cookie>|--credential-browser --browser-extension-id <id>) --path-prefix <prefix> --method <METHOD> --test-category <category> (--seed-url <https-url>|--requests <absolute-requests.json>) [--enable-discovery] [--observe-json-shape [--json-shape-aspnet-d] --json-shape-key <safe-key> [--json-shape-max-depth <1-4>]] [--response-observation-profile <controller-profile>] [--json]
@@ -615,7 +615,7 @@ function renderBrowserPairing(pairing) {
     `controller port: ${port}`,
     `one-time pairing capability: ${pairing.pairing_code}`,
     'In the logged-in target tab, use your separately supplied protocol-compatible companion to verify the origin and grant, then attach.',
-    'The packaged Red Team Audit browser companion is disabled and cannot perform this step.',
+    'The packaged browser companion for The Last Aperture is disabled and cannot perform this step.',
     'Chrome will apply its current session to every sealed action; do not export or paste a cookie.',
     '',
   ])

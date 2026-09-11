@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-08-03
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0001 (executable audit platform), ADR 0003 (deterministic coverage closure)
 
 ## The gap
@@ -311,7 +311,7 @@ proof outcomes, and that is a larger change than measuring existence.
 
 ## Constraints
 
-- `skills/red-team-audit/SKILL.md` is **7,995 of 8,000 bytes**. All prose
+- `skills/last-aperture/SKILL.md` is **7,995 of 8,000 bytes**. All prose
   documentation goes to `_schema.md` and `_harness.md`.
 - Lint gates R1–R8, slug ownership at 174 slugs, `gen --check` and
   `gen:benchmarks --check` must stay green.

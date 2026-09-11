@@ -48,7 +48,7 @@ const TRUSTED_CONTROLLER_ROOT = join(
   'adversarial-v1',
 )
 
-const HELP = `red-team-audit adversarial validation ${PLATFORM_VERSION}
+const HELP = `last-aperture adversarial validation ${PLATFORM_VERSION}
 
 Usage:
   adversarial go <target> [--out <directory>] [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--response-observation-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]

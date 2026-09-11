@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/transparency-consistency-proof.schema.json",
-  "title": "Red Team Audit transparency consistency proof",
+  "title": "The Last Aperture transparency consistency proof",
   "description": "A self-contained RFC 6962/9162 consistency path between two independently signed checkpoints.",
   "type": "object",
   "additionalProperties": false,

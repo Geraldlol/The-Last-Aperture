@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0022's sealed Docker proof boundary
 - Applies: ADR 0023's operator-authority rule to one implemented T2 route
 

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-30
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes: the unsigned-root boundary in ADR 0001
 - Extends: ADR 0001, ADR 0002, and ADR 0003
 
@@ -30,7 +30,7 @@ The stable signing point is the existing terminal boundary. `COMPLETED`,
 The controller exposes:
 
 ```text
-red-team-audit attest <bundle>
+last-aperture attest <bundle>
   --signing-key <external-ed25519-private.pem>
   --out <external-attestation.json>
 ```
@@ -58,7 +58,7 @@ canonical paths after reading.
 Verification requires both:
 
 ```text
-red-team-audit validate <bundle>
+last-aperture validate <bundle>
   --root-attestation <external-attestation.json>
   --root-public-key <external-ed25519-public.pem>
 ```

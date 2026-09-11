@@ -1,4 +1,4 @@
-﻿# red-team-audit OSS restructure: recon punch list
+﻿# last-aperture OSS restructure: recon punch list
 
 Synthesized from a 13-agent recon pass over the ten existing reference files plus three external verification agents (framework versions, Claude Code plugin schema, competitive positioning).
 
@@ -257,7 +257,7 @@ severity_floor: low
 
 <!-- END MALFORMED FRAGMENT -->
 
-**The blocks below this line were well-formed and complete.** They were the source Task 9 copied the eleven surviving lens frontmatter blocks from, and the six normalisation transforms were applied on the way. They are retained as provenance and are **superseded by the committed lens files** under `skills/red-team-audit/lenses/`, which are now the single source of truth. Read them to understand where a value came from; never edit them expecting an effect.
+**The blocks below this line were well-formed and complete.** They were the source Task 9 copied the eleven surviving lens frontmatter blocks from, and the six normalisation transforms were applied on the way. They are retained as provenance and are **superseded by the committed lens files** under `skills/last-aperture/lenses/`, which are now the single source of truth. Read them to understand where a value came from; never edit them expecting an effect.
 
 ```yaml
 ---
@@ -1499,7 +1499,7 @@ severity_floor: info   # Phase 6 output is coverage and process gaps: an activat
 ---
 ```
 
-<!-- END SUPERSEDED PROVENANCE — canonical values live in skills/red-team-audit/lenses/ -->
+<!-- END SUPERSEDED PROVENANCE — canonical values live in skills/last-aperture/lenses/ -->
 
 ## 4. Known-false-positives seed content
 
@@ -1833,8 +1833,8 @@ After the full checklist is applied, the prose is clean but the *shape* of the c
 Ship the repo as a **single-plugin repo that is also its own marketplace**: repo root = plugin root = marketplace root, with `.claude-plugin/` holding both manifests and `skills/` at the root. This is the shape verified against three real installs on this machine (`superpowers`, `superpowers-extended-cc-marketplace`, `claude-md-management`), and it lets a user install with two commands:
 
 ```
-/plugin marketplace add GH-OWNER/red-team-audit
-/plugin install red-team-audit@red-team-audit-marketplace
+/plugin marketplace add GH-OWNER/last-aperture
+/plugin install last-aperture@last-aperture-marketplace
 ```
 
 Two substitutions before publish: `GH-OWNER` -> the real GitHub account, and confirm the author name you want public. The recon did not verify maintainer identity, and `author.email` / `owner.email` are optional in both schemas, so they are deliberately omitted rather than guessed.
@@ -1844,14 +1844,14 @@ Two substitutions before publish: `GH-OWNER` -> the real GitHub account, and con
 ```json
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "red-team-audit",
+  "name": "last-aperture",
   "description": "Adversarial security audit: lens fan-out, tiered proof, and patches. Local repo and localhost only.",
   "author": {
     "name": "Gerald Maida",
     "url": "https://github.com/GH-OWNER"
   },
-  "homepage": "https://github.com/GH-OWNER/red-team-audit",
-  "repository": "https://github.com/GH-OWNER/red-team-audit",
+  "homepage": "https://github.com/GH-OWNER/last-aperture",
+  "repository": "https://github.com/GH-OWNER/last-aperture",
   "license": "MIT",
   "keywords": ["security", "audit", "red-team", "appsec", "hipaa", "skills"]
 }
@@ -1859,25 +1859,25 @@ Two substitutions before publish: `GH-OWNER` -> the real GitHub account, and con
 
 Field status, per the plugins reference:
 
-- **Required: `name` only.** It must be kebab-case with no spaces; it becomes the namespace prefix (`/red-team-audit:...`). The manifest file itself is optional â€” Claude Code would derive the name from the directory and auto-discover `skills/` â€” but an MIT release needs `license`, `repository`, and `description` to be machine-readable, so ship it.
+- **Required: `name` only.** It must be kebab-case with no spaces; it becomes the namespace prefix (`/last-aperture:...`). The manifest file itself is optional â€” Claude Code would derive the name from the directory and auto-discover `skills/` â€” but an MIT release needs `license`, `repository`, and `description` to be machine-readable, so ship it.
 - **No `"skills"` key.** `skills/` at the plugin root is *always* scanned. The official `superpowers` plugin ships 14 skills with no `skills` key at all. Declaring it buys nothing and risks the v2.1.140+ "ignored folder" warning.
 - **`version` intentionally absent.** With no `version`, Claude Code falls back to the git commit SHA, so every push reaches users. Setting `"version": "1.0.0"` and then forgetting to bump it makes `/plugin update` report "already at the latest version" forever. Add `version` only at the first tagged stable release, and note that plugin.json's `version` **wins** over the marketplace entry's.
-- **Deliberately not included:** `displayName` (v2.1.143+ only, and adds nothing over `red-team-audit`), `defaultEnabled` (leaving it unset means installed-and-enabled; `false` would make the skill silently absent until `claude plugin enable`), `dependencies`, `hooks`, `mcpServers`, `commands`, `agents`. This plugin has no components outside `skills/`.
+- **Deliberately not included:** `displayName` (v2.1.143+ only, and adds nothing over `last-aperture`), `defaultEnabled` (leaving it unset means installed-and-enabled; `false` would make the skill silently absent until `claude plugin enable`), `dependencies`, `hooks`, `mcpServers`, `commands`, `agents`. This plugin has no components outside `skills/`.
 - The source data is silent on any length cap for plugin.json's `description`; the conservative choice is one short line, since the SKILL.md `description` is what actually drives invocation.
 
 ### `.claude-plugin/marketplace.json` (ship literally)
 
 ```json
 {
-  "name": "red-team-audit-marketplace",
-  "description": "Marketplace for the red-team-audit skill plugin.",
+  "name": "last-aperture-marketplace",
+  "description": "Marketplace for the last-aperture skill plugin.",
   "owner": {
     "name": "Gerald Maida",
     "url": "https://github.com/GH-OWNER"
   },
   "plugins": [
     {
-      "name": "red-team-audit",
+      "name": "last-aperture",
       "source": "./",
       "description": "Adversarial security audit: lens fan-out, tiered proof, and patches. Local repo and localhost only.",
       "category": "security",
@@ -1891,7 +1891,7 @@ Field status, per the plugin-marketplaces reference:
 
 - **Required top level: `name`, `owner`, `plugins`.** `owner` requires only `owner.name`; `email` and `url` are optional. Each `plugins[]` entry requires `name` and `source`.
 - **`"source": "./"`** because the plugin *is* the repo. Relative sources resolve against the marketplace root â€” the directory *containing* `.claude-plugin/` â€” not against `.claude-plugin/` itself. Never `"../"`. No `github`/`git-subdir`/`npm` source object is needed here.
-- **Marketplace `name` must differ from the plugin name** in practice because it becomes the `@suffix` on install, and each user can register only one marketplace per name â€” a same-named add silently replaces the previous one. `red-team-audit-marketplace` is distinctive and is not on the reserved list (which includes `agent-skills`, `healthcare`, `claude-plugins-official`, `anthropic-plugins`, and impersonating variants; reserved names are re-validated on **every** load, not just on add).
+- **Marketplace `name` must differ from the plugin name** in practice because it becomes the `@suffix` on install, and each user can register only one marketplace per name â€” a same-named add silently replaces the previous one. `last-aperture-marketplace` is distinctive and is not on the reserved list (which includes `agent-skills`, `healthcare`, `claude-plugins-official`, `anthropic-plugins`, and impersonating variants; reserved names are re-validated on **every** load, not just on add).
 - **`$schema` omitted here on purpose.** The verification confirms `$schema` is an accepted optional top-level marketplace key and that Anthropic's own catalog uses it, but it never records the marketplace schema URL. Rather than invent one, omit it; plugin.json's schema URL is the one that was actually verified.
 - **`strict` left unset** (defaults to `true`), which makes plugin.json the authority and the marketplace entry a supplement. Do not set `strict: false` â€” combined with any component declaration in plugin.json it hard-fails with "conflicting manifests".
 - **No `version` in the entry**, matching plugin.json, so the commit SHA governs updates. `category` and `tags` are documented marketplace-only optional keys and are safe to include.
@@ -1899,12 +1899,12 @@ Field status, per the plugin-marketplaces reference:
 ### Directory layout for skill discovery
 
 ```
-red-team-audit/                          # git repo root = plugin root = marketplace root
+last-aperture/                          # git repo root = plugin root = marketplace root
 â”œâ”€â”€ .claude-plugin/
 â”‚   â”œâ”€â”€ plugin.json                      # ONLY these two files may ever live here
 â”‚   â””â”€â”€ marketplace.json
 â”œâ”€â”€ skills/                              # AT THE ROOT. auto-scanned. no manifest key.
-â”‚   â””â”€â”€ red-team-audit/                  # dir name -> /red-team-audit:red-team-audit
+â”‚   â””â”€â”€ last-aperture/                  # dir name -> /last-aperture:last-aperture
 â”‚       â”œâ”€â”€ SKILL.md                     # exact filename, exact case
 â”‚       â””â”€â”€ lenses/                      # supporting files: no manifest entry needed
 â”‚           â”œâ”€â”€ _topics.md               # canonical topic-slug registry
@@ -1939,12 +1939,12 @@ Decisions embedded in that tree:
 1. **Keep the skill nested under `skills/` even though there is only one.** The root-`SKILL.md` single-skill layout is legal (v2.1.142+) but the verified precedent for a one-skill plugin is `frontend-design`, which still nests at `skills/frontend-design/SKILL.md`. Nesting also leaves room to split the cross-cutting lenses into their own skills later without a repackaging.
 2. **`lenses/` lives inside the skill directory** because SKILL.md references the lens files by relative path, and supporting subdirectories inside a skill dir need no manifest declaration â€” verified by `claude-md-improver`, which ships `skills/claude-md-improver/references/`.
 3. **`fixtures/` lives at the repo root, not inside the skill.** They are CI inputs, not material an auditor subagent should ever be handed, and root placement keeps CI paths stable. If a later decision moves them beside the skill, they still must not land in `.claude-plugin/`.
-4. **The invocation name is `/red-team-audit:red-team-audit`** (bare `/red-team-audit` also resolves unless another command claims it). This is accepted rather than worked around; `frontend-design:frontend-design` is the same shape in the shipped official plugin.
+4. **The invocation name is `/last-aperture:last-aperture`** (bare `/last-aperture` also resolves unless another command claims it). This is accepted rather than worked around; `frontend-design:frontend-design` is the same shape in the shipped official plugin.
 5. **No `CLAUDE.md` at the plugin root.** A plugin-root CLAUDE.md is not loaded as context â€” all instructions must live in SKILL.md or the lenses.
 
 ### SKILL.md `description`: verified cap and required action
 
-There is a hard cap and the current description **already violates it**. `description` + `when_to_use` combined are truncated at **1,536 characters** in the skill listing, cut **from the end** (`skillListingMaxDescChars`). The current red-team-audit description measures 1,534 characters up to the point where the listing renders an ellipsis â€” i.e. it is being clipped at the cap right now, and whatever follows is already invisible to the matcher. There is also a softer second budget: the whole skill listing is capped at ~1% of the context window (`skillListingBudgetFraction` / `SLASH_COMMAND_TOOL_CHAR_BUDGET`), and on overflow Claude Code **drops descriptions entirely**, starting with least-invoked skills â€” so a verbose description is a liability in a user's populated skill directory, not just in this repo.
+There is a hard cap and the current description **already violates it**. `description` + `when_to_use` combined are truncated at **1,536 characters** in the skill listing, cut **from the end** (`skillListingMaxDescChars`). The current last-aperture description measures 1,534 characters up to the point where the listing renders an ellipsis â€” i.e. it is being clipped at the cap right now, and whatever follows is already invisible to the matcher. There is also a softer second budget: the whole skill listing is capped at ~1% of the context window (`skillListingBudgetFraction` / `SLASH_COMMAND_TOOL_CHAR_BUDGET`), and on overflow Claude Code **drops descriptions entirely**, starting with least-invoked skills â€” so a verbose description is a liability in a user's populated skill directory, not just in this repo.
 
 Action items:
 
@@ -1955,25 +1955,25 @@ Action items:
   ```
 
 - **Do not move the overflow into `when_to_use`** â€” it counts toward the same 1,536-character cap. Move the exhaustive rationale and the full phrase inventory into the SKILL.md **body**, which is not part of the listing.
-- **Quote the scalar.** The text contains `:` and `-` and embedded double quotes; use a single-quoted YAML scalar (doubling any internal apostrophe) as above. Malformed frontmatter does not hard-fail â€” Claude Code loads the body with *empty* metadata, so `/red-team-audit` keeps working while auto-invocation silently dies forever.
+- **Quote the scalar.** The text contains `:` and `-` and embedded double quotes; use a single-quoted YAML scalar (doubling any internal apostrophe) as above. Malformed frontmatter does not hard-fail â€” Claude Code loads the body with *empty* metadata, so `/last-aperture` keeps working while auto-invocation silently dies forever.
 - **No other frontmatter field is required.** Every SKILL.md key is optional; `description` is merely "recommended". Deliberately do not set `disable-model-invocation` or `user-invocable: false` (either would look exactly like a broken install), and do not set `paths` on SKILL.md â€” path gating belongs in each lens's `activates_on.paths`, not on the skill entry point, or the skill stops firing on the commit/deploy phrases that have no file context.
 - Frontmatter booleans only reliably accept `true`/`false` before v2.1.218; if any lens tooling emits `yes`/`no`, normalize to `true`/`false`.
 
 ### Pitfalls to avoid
 
 - **`skills/` inside `.claude-plugin/`.** The #1 documented failure: the plugin loads, zero skills appear. Only `plugin.json` and `marketplace.json` belong in `.claude-plugin/`. Everything else â€” `skills/`, `scripts/`, `fixtures/`, `.github/` â€” sits at the plugin root.
-- **`skill.md` / `Skill.md` / `skills/red-team-audit.md`.** The filename must be exactly `SKILL.md` inside a per-skill directory. Flat markdown under `skills/` is not discovered.
+- **`skill.md` / `Skill.md` / `skills/last-aperture.md`.** The filename must be exactly `SKILL.md` inside a per-skill directory. Flat markdown under `skills/` is not discovered.
 - **Malformed YAML frontmatter fails silently.** No error surfaces; the skill just never auto-invokes. Add `claude --debug` to the release checklist and `claude plugin validate ./ --strict` to CI.
 - **Adding `"skills": ["./skills/"]` "for clarity."** It is redundant, triggers shadowing warnings, and if the path is ever wrong you get nothing.
 - **Assuming other component keys behave like `skills`.** `commands`, `agents`, `workflows`, `outputStyles`, `experimental.themes`, `experimental.monitors` **replace** their default directory instead of adding to it. Not an issue today because none are declared â€” it becomes one the moment someone adds a `commands/` entry.
 - **Wrong JSON *type* in plugin.json is a hard load error**, unlike an unrecognized field, which is only a warning. `"keywords": "security"` as a string instead of an array kills the plugin. CI must run `claude plugin validate ./ --strict`.
 - **Absolute paths anywhere in either manifest.** All component paths must be relative and begin with `./`.
 - **Setting `version` and then not bumping it.** Users receive no updates from new commits. Omit it during the restructure.
-- **Telling users to add a raw `marketplace.json` URL.** Only that one file is fetched, so `"source": "./"` cannot resolve. The README must say `/plugin marketplace add GH-OWNER/red-team-audit` (or `claude plugin marketplace add ...` for non-interactive use), never a raw file link.
-- **Renaming the plugin after release without a `renames` entry.** If `red-team-audit` is ever renamed, add `"renames": { "red-team-audit": "<new-name>" }` to marketplace.json (v2.1.193+) so existing installs migrate instead of breaking.
+- **Telling users to add a raw `marketplace.json` URL.** Only that one file is fetched, so `"source": "./"` cannot resolve. The README must say `/plugin marketplace add GH-OWNER/last-aperture` (or `claude plugin marketplace add ...` for non-interactive use), never a raw file link.
+- **Renaming the plugin after release without a `renames` entry.** If `last-aperture` is ever renamed, add `"renames": { "last-aperture": "<new-name>" }` to marketplace.json (v2.1.193+) so existing installs migrate instead of breaking.
 - **`strict: false` plus components in plugin.json** â†’ "conflicting manifests" load failure. Leave `strict` at its default.
 - **Blaming packaging for the project-scope trust gate.** A plugin checked into a teammate's repo loads only after the same trust prompt that governs `.claude/settings.json`, with extra restrictions on code-running components. "Works for me, not for my teammate" is usually that gate, not the manifest.
-- **Expecting a bare `/red-team-audit`.** The namespaced form `/red-team-audit:red-team-audit` is the guaranteed one; the bare form works only while no other command claims the name. Document the namespaced form in the README.
+- **Expecting a bare `/last-aperture`.** The namespaced form `/last-aperture:last-aperture` is the guaranteed one; the bare form works only while no other command claims the name. Document the namespaced form in the README.
 
 ### Sources
 
@@ -2047,7 +2047,7 @@ Against SAST, this is the weaker tool on every axis SAST is built for. CodeQL do
 
 ### Draft README opening
 
-> **red-team-audit** is a Claude Code skill that reviews a repository for security defects and proposes patches. Mechanically: a recon pass inventories the repo and activates a subset of thirteen *lens* files â€” self-contained domain briefs for web/API, mobile, LLM/AI, cloud/IaC, CI/CD and supply chain, cryptography, Salesforce/Apex, HIPAA/PHI, privacy, threat modeling, plus three cross-cutting lenses that run over the merged results. Each activated lens is handed verbatim to an independent auditor. Their findings are merged, deduplicated, put through reachability triage and a false-positive sweep, and then Critical and High findings must ship a repo-local test that fails on the vulnerable code and passes after the patch. A finding whose test passes *before* the patch is dropped as disproved; a finding that cannot be tested is labelled UNPROVEN and capped at Medium. The report always states which lenses ran and which did not. It reads code and runs tests against your local repo and localhost â€” it does not attack running systems, and it is not a penetration test.
+> **last-aperture** is a Claude Code skill that reviews a repository for security defects and proposes patches. Mechanically: a recon pass inventories the repo and activates a subset of thirteen *lens* files â€” self-contained domain briefs for web/API, mobile, LLM/AI, cloud/IaC, CI/CD and supply chain, cryptography, Salesforce/Apex, HIPAA/PHI, privacy, threat modeling, plus three cross-cutting lenses that run over the merged results. Each activated lens is handed verbatim to an independent auditor. Their findings are merged, deduplicated, put through reachability triage and a false-positive sweep, and then Critical and High findings must ship a repo-local test that fails on the vulnerable code and passes after the patch. A finding whose test passes *before* the patch is dropped as disproved; a finding that cannot be tested is labelled UNPROVEN and capped at Medium. The report always states which lenses ran and which did not. It reads code and runs tests against your local repo and localhost â€” it does not attack running systems, and it is not a penetration test.
 >
 > If you already know this space, your first question is why not use `anthropics/claude-security`, and the honest answer is that you probably should: it fans out per component and category, verifies every finding through three independent verifiers with a 2-of-3 quorum and confidence computed in code, and writes reviewed patches. Its license permits modification for internal use only and forbids redistribution, sublicensing, third-party availability, or use in developing a non-Anthropic product. `anthropics/defending-code-reference-harness` is MIT with a stronger proof gate, but it is C/C++ memory safety via ASAN, needs Docker and gVisor, and says it is unmaintained and not accepting contributions. `3stoneBrother/code-audit` and `briiirussell/cybersecurity-skills` already do parallel domain agents and broad domain coverage respectively, both MIT. This project exists for four specific reasons: it is MIT and forkable, so you can vendor it and add private lenses; it treats Salesforce/Apex, HIPAA/PHI, and CI/CD as dispatchable auditors rather than generic categories; the proof gate needs nothing but a working test runner; and the lens registry and fixture corpus are published as the extensible part. It is nondeterministic â€” two runs surface different findings â€” it does not replace SAST, SCA, dependency scanning, or human review, it is not hardened against prompt injection, it adds no isolation of its own, and it publishes no detection percentages. **Read [LIMITATIONS.md](LIMITATIONS.md) before you read the feature list.**
 

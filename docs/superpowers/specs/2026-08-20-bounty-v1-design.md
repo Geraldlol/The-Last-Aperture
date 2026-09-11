@@ -16,7 +16,7 @@
 
 ## 1. Problem
 
-`red-team-audit` ships two external HTTP protocols. Neither can carry bug bounty work.
+The Last Aperture ships two external HTTP protocols. Neither can carry bug bounty work.
 
 `http-recon-v1` seals exactly one URL, defaults to `HEAD`, and refuses body,
 redirect, retry, discovery, and mutation. That restraint is correct when a

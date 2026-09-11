@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-03
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes in policy: ADR 0019's approval-free active-request decision;
   migration of every legacy network-capable path is a release requirement
 - Amends: the proof-status semantics of the 2026-08-02 `TEST_EXECUTION` design

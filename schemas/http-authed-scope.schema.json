@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-authed-scope.schema.json",
-  "title": "Red Team Audit authenticated HTTP action scope (http-authed-v1)",
+  "title": "The Last Aperture authenticated HTTP action scope (http-authed-v1)",
   "description": "The released http-authed-v1 controller scope for authenticated operator-statement HTTP campaigns and declared reversible mutations.",
   "type": "object",
   "additionalProperties": false,

@@ -2,7 +2,7 @@
 
 - Status: Accepted - implemented in v0.12.0
 - Date: 2026-08-17
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Amends: ADR 0016 authorization routing, runtime command names, and reporting
   nonclaims. ADR 0016 still governs transport, discovery, mutation, rollback,
   browser-session, evidence, and ledger mechanics.

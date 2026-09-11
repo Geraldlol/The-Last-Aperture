@@ -6,7 +6,7 @@ import { compareCanonicalStrings } from './lib/canonical-order.mjs'
 import { terminalSafeJson, terminalSafeText } from './lib/terminal-text.mjs'
 import { PLATFORM_VERSION } from './lib/version.mjs'
 
-const HELP = `red-team-audit evidence acquisition ${PLATFORM_VERSION}
+const HELP = `last-aperture evidence acquisition ${PLATFORM_VERSION}
 
 Usage:
   audit:acquire artifact plan --source <path> --evidence-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json] [DISABLED]

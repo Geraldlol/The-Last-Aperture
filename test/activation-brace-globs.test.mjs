@@ -28,7 +28,7 @@ test('an unmatched brace stays a literal instead of leaking regex syntax', () =>
 })
 
 test('no shipped lens declares a brace pattern this expansion cannot resolve', async () => {
-  const lenses = await loadLenses('skills/red-team-audit/lenses')
+  const lenses = await loadLenses('skills/last-aperture/lenses')
   const declared = lenses.flatMap((lens) => lens.frontmatter.activates_on?.paths ?? [])
   assert.ok(declared.length > 0, 'expected the lens corpus to declare path activators')
   for (const pattern of declared) {

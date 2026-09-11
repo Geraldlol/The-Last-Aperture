@@ -4,8 +4,8 @@ import { test } from 'node:test'
 
 const SURFACE_PATHS = Object.freeze({
   rootSkill: 'SKILL.md',
-  canonicalSkill: 'skills/red-team-audit/SKILL.md',
-  harness: 'skills/red-team-audit/lenses/_harness.md',
+  canonicalSkill: 'skills/last-aperture/SKILL.md',
+  harness: 'skills/last-aperture/lenses/_harness.md',
   readme: 'README.md',
   security: 'SECURITY.md',
   adr21: 'docs/adr/0021-operator-statement-authorization.md',

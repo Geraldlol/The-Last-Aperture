@@ -22,7 +22,7 @@ import {
 import { PLATFORM_VERSION, stableJson } from './lib/run-engine.mjs'
 import { terminalSafeSerializedJson, terminalSafeText } from './lib/terminal-text.mjs'
 
-const HELP = `red-team-audit authorized HTTP reconnaissance ${PLATFORM_VERSION}
+const HELP = `last-aperture authorized HTTP reconnaissance ${PLATFORM_VERSION}
 
 Usage:
   http-recon go <exact-https-url> [--out <bundle>] [--method <HEAD|GET|OPTIONS>] [--safe-to-get] [--request-header-profile <controller-profile>] [--response-observation-profile <controller-profile>] [--tls-spki-sha256 <hex>] [--json]

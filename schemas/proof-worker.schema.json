@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/proof-worker.schema.json",
-  "title": "Red Team Audit Docker proof worker",
+  "title": "The Last Aperture Docker proof worker",
   "description": "External controller configuration for a digest-pinned, network-denied local Docker proof worker.",
   "type": "object",
   "additionalProperties": false,

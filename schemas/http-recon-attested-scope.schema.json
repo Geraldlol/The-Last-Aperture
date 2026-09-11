@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-recon-attested-scope.schema.json",
-  "title": "Red Team Audit operator-attested HTTP reconnaissance scope",
+  "title": "The Last Aperture operator-attested HTTP reconnaissance scope",
   "description": "A controller-created, locally sealed scope for one operator-attested HTTPS reconnaissance action.",
   "type": "object",
   "additionalProperties": false,

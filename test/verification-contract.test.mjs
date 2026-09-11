@@ -13,12 +13,12 @@ import { readFileSync } from 'node:fs'
 // removed. A checker that only passes on the good input proves it runs, not that
 // it fires.
 
-const SCHEMA = 'skills/red-team-audit/lenses/_schema.md'
-const HARNESS = 'skills/red-team-audit/lenses/_harness.md'
-const SKILL = 'skills/red-team-audit/SKILL.md'
-const CHAINING = 'skills/red-team-audit/lenses/attack-chaining.md'
-const THREAT_MODEL = 'skills/red-team-audit/lenses/threat-modeling.md'
-const DATABASE = 'skills/red-team-audit/lenses/database-and-data-stores.md'
+const SCHEMA = 'skills/last-aperture/lenses/_schema.md'
+const HARNESS = 'skills/last-aperture/lenses/_harness.md'
+const SKILL = 'skills/last-aperture/SKILL.md'
+const CHAINING = 'skills/last-aperture/lenses/attack-chaining.md'
+const THREAT_MODEL = 'skills/last-aperture/lenses/threat-modeling.md'
+const DATABASE = 'skills/last-aperture/lenses/database-and-data-stores.md'
 
 const read = (p) => readFileSync(p, 'utf8')
 

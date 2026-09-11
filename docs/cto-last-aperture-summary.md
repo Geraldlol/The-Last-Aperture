@@ -1,8 +1,8 @@
-# Red Team Audit: CTO brief
+# The Last Aperture: CTO brief
 
 ## What it does
 
-Red Team Audit is an evidence-first security assessment system for codebases and
+The Last Aperture is an evidence-first security assessment system for codebases and
 operator-authorized runtime targets. It inventories a target, selects the
 security lenses that actually apply, traces suspected weaknesses to reachable
 security impact, challenges false positives, combines proven weaknesses into

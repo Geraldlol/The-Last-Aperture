@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Clarifies: ADR 0021's sole-authorization primitive
 - Amends: ADR 0022's T1-only capability boundary
 

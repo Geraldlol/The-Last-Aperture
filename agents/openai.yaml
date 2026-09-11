@@ -1,0 +1,4 @@
+interface:
+  display_name: "The Last Aperture"
+  short_description: "Evidence-first security audits and bounded proofs"
+  default_prompt: "Use $last-aperture to audit this repository and preserve explicit evidence, coverage, and gaps."

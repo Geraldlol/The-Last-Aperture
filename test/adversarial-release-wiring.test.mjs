@@ -24,7 +24,7 @@ test('generic adversarial validation CLI is release-wired with its trust contrac
   }
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
-  assert.equal(packageDocument.bin['red-team-adversarial'], './scripts/adversarial.mjs')
+  assert.equal(packageDocument.bin['last-aperture-adversarial'], './scripts/adversarial.mjs')
   assert.equal(packageDocument.scripts['audit:adversarial'], 'node scripts/adversarial.mjs')
   const focusedGateEntries = new Set(packageDocument.scripts['test:adversarial'].split(/\s+/))
   for (const path of [
@@ -38,7 +38,7 @@ test('generic adversarial validation CLI is release-wired with its trust contrac
 
   const cli = readFileSync('scripts/adversarial.mjs', 'utf8')
   const controller = readFileSync('scripts/lib/adversarial-cli-controller.mjs', 'utf8')
-  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
+  const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
   assert.doesNotMatch(cli, /eval\s*\(|execSync|spawnSync|child_process/)
   assert.doesNotMatch(cli, /process\.env.*CONTROLLER|--controller-root/)
   assert.match(controller, /trusted append-only campaign ledger/i)

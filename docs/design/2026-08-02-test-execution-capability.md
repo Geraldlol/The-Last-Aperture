@@ -2,9 +2,9 @@
 
 - Status: Historical proposal; public execution superseded by ADR 0020
 - Date: 2026-08-02
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Relates to: ADR 0002 (sealed provider execution), ADR 0006 (disposable
-  conformance lab), `skills/red-team-audit/lenses/_harness.md`
+  conformance lab), `skills/last-aperture/lenses/_harness.md`
 
 > **Current 0.12.0 execution status: disabled.** This document records the
 > earlier `TEST_EXECUTION` design; it is not an active capability statement.
@@ -109,7 +109,7 @@ and one more provider claim, and it is the only split consistent with a platform
 whose premise is not trusting provider assertions.
 
 ```
-red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
+last-aperture run-proof <run.json|bundle-directory> <proof-config.json>
 ```
 
 `proof-config.json` names the target job, the authored files and their content

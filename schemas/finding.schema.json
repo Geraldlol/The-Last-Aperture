@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/finding.schema.json",
-  "title": "Red Team Audit candidate finding",
+  "title": "The Last Aperture candidate finding",
   "description": "An append-only candidate record accumulated through fan-out, triage, and proof.",
   "type": "object",
   "additionalProperties": false,

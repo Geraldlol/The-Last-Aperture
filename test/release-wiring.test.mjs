@@ -20,7 +20,7 @@ function workflowJobBlock(workflow, name) {
 }
 
 test('shared proof recipes expose sealed public T1 and narrow loopback T2 controller routes', () => {
-  const harness = readFileSync('skills/red-team-audit/lenses/_harness.md', 'utf8')
+  const harness = readFileSync('skills/last-aperture/lenses/_harness.md', 'utf8')
   const publicT1Decision = readFileSync(
     'docs/adr/0022-public-sealed-t1-proof.md',
     'utf8',
@@ -52,7 +52,7 @@ test('shared proof recipes expose sealed public T1 and narrow loopback T2 contro
 
 test('internal audit command exports are documented as privileged non-API kernels', () => {
   const security = readFileSync('SECURITY.md', 'utf8')
-  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
+  const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
   const design = readFileSync('docs/design/2026-09-03-adversarial-validation-engine.md', 'utf8')
   assert.match(security, /command\/package-interface boundary, not an in-process JavaScript[\s\S]*sandbox/i)
   assert.match(security, /Directly importing those exports is privileged maintainer code/i)
@@ -267,7 +267,7 @@ test('release metadata exposes the 0.12 controller and conformance commands', ()
   )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
-    /red-team-audit run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
+    /last-aperture run-remote <run\.json\|bundle-directory> <remote-gateway-config\.json>\s+\[DISABLED\]/,
   )
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
@@ -517,7 +517,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     windowsHide: true,
   })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /red-team-audit authenticated HTTP campaigns 0\.12\.0/)
+  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.12\.0/)
   assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
   assert.doesNotMatch(
     help.stdout,
@@ -603,7 +603,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   assert.match(schema.title, /http-authed-v1/)
   assert.doesNotMatch(schema.description, /draft/i)
 
-  const skill = readFileSync('skills/red-team-audit/SKILL.md', 'utf8')
+  const skill = readFileSync('skills/last-aperture/SKILL.md', 'utf8')
   assert.match(skill, /Four target-I\/O paths are public/i)
   assert.match(
     skill,
@@ -721,7 +721,7 @@ test('the v0.9 transparency publication protocol is release-wired', () => {
   }
   assert.match(
     readFileSync('scripts/audit.mjs', 'utf8'),
-    /red-team-audit publish <run\.json\|bundle-directory> <transparency-log-config\.json>/,
+    /last-aperture publish <run\.json\|bundle-directory> <transparency-log-config\.json>/,
   )
   const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
   assert.match(workflow, /^\s{2}transparency-https-conformance:$/m)

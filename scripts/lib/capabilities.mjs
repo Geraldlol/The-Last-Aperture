@@ -136,7 +136,7 @@ export function capabilityRegistry() {
 
 export function renderCapabilities(registry = CAPABILITY_REGISTRY) {
   return [
-    'Red Team Audit capabilities',
+    'The Last Aperture capabilities',
     '',
     ...registry.capabilities.flatMap((item) => [
       `${item.status} ${item.id}${item.commands.length ? ` (${item.commands.join(', ')})` : ''}`,

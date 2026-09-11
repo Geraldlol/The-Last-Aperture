@@ -287,7 +287,7 @@ test('run planning reads text up to the selected work-shard byte limit by defaul
 
     const plan = await createRunPlan({
       targetRoot: root,
-      lensDirectory: resolve('skills/red-team-audit/lenses'),
+      lensDirectory: resolve('skills/last-aperture/lenses'),
       createdAt: new Date('2026-07-29T00:00:00.000Z'),
       shardOptions: {
         maxFiles: 64,
@@ -564,7 +564,7 @@ test('planning writes a provenance bundle without embedding repository contents'
     try {
       const plan = await createRunPlan({
         targetRoot: root,
-        lensDirectory: resolve('skills/red-team-audit/lenses'),
+        lensDirectory: resolve('skills/last-aperture/lenses'),
         createdAt: new Date('2026-07-28T20:00:00.000Z'),
       })
       const validation = validateRun(plan.run)

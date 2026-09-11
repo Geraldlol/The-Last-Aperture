@@ -212,7 +212,7 @@ import {
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = resolve(SCRIPT_DIRECTORY, '..')
-const DEFAULT_LENS_DIRECTORY = join(PROJECT_ROOT, 'skills', 'red-team-audit', 'lenses')
+const DEFAULT_LENS_DIRECTORY = join(PROJECT_ROOT, 'skills', 'last-aperture', 'lenses')
 const DEFAULT_THRESHOLDS = join(PROJECT_ROOT, 'benchmarks', 'thresholds.json')
 const DEFAULT_BENCHMARK_CASES = join(PROJECT_ROOT, 'benchmarks', 'cases.json')
 // context, version, image, create, profile inspect, attached start/exit,
@@ -247,33 +247,33 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
   | fsConstants.O_EXCL
   | (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
 
-const HELP = `red-team-audit ${PLATFORM_VERSION}
+const HELP = `last-aperture ${PLATFORM_VERSION}
 
 Usage:
-  red-team-audit plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
-  red-team-audit next <run.json|bundle-directory>
-  red-team-audit status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit capabilities [--json]
-  red-team-audit doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
-  red-team-audit review-template <bundle> --job <job-id>
-  red-team-audit check-result <bundle> <job-result.json> [--json]
-  red-team-audit verdict <bundle> [--candidate <candidate-id>] [--json]
-  red-team-audit repair-brief <bundle> [--candidate <candidate-id>] [--baseline <bundle>] [--json]
-  red-team-audit run-provider <run.json|bundle-directory> <provider-config.json>  [DISABLED]
-  red-team-audit run-remote <run.json|bundle-directory> <remote-gateway-config.json>  [DISABLED]
-  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json> --worker <proof-worker.json>
-  red-team-audit run-service-proof <run.json|bundle-directory> <service-proof-config.json> --worker <proof-worker.json>
-  red-team-audit ingest <run.json|bundle-directory> <job-result.json>
-  red-team-audit ingest-batch <run.json|bundle-directory> <job-result.json>...
-  red-team-audit finalize <run.json|bundle-directory>
-  red-team-audit abort <run.json|bundle-directory> --reason <text>
-  red-team-audit unlock <run.json|bundle-directory>
-  red-team-audit attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]  [DISABLED]
-  red-team-audit validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
-  red-team-audit report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
-  red-team-audit compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
-  red-team-audit benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
+  last-aperture plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
+  last-aperture next <run.json|bundle-directory>
+  last-aperture status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
+  last-aperture capabilities [--json]
+  last-aperture doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
+  last-aperture review-template <bundle> --job <job-id>
+  last-aperture check-result <bundle> <job-result.json> [--json]
+  last-aperture verdict <bundle> [--candidate <candidate-id>] [--json]
+  last-aperture repair-brief <bundle> [--candidate <candidate-id>] [--baseline <bundle>] [--json]
+  last-aperture run-provider <run.json|bundle-directory> <provider-config.json>  [DISABLED]
+  last-aperture run-remote <run.json|bundle-directory> <remote-gateway-config.json>  [DISABLED]
+  last-aperture run-proof <run.json|bundle-directory> <proof-config.json> --worker <proof-worker.json>
+  last-aperture run-service-proof <run.json|bundle-directory> <service-proof-config.json> --worker <proof-worker.json>
+  last-aperture ingest <run.json|bundle-directory> <job-result.json>
+  last-aperture ingest-batch <run.json|bundle-directory> <job-result.json>...
+  last-aperture finalize <run.json|bundle-directory>
+  last-aperture abort <run.json|bundle-directory> --reason <text>
+  last-aperture unlock <run.json|bundle-directory>
+  last-aperture attest <run.json|bundle-directory> --signing-key <ed25519-private.pem> --out <external-attestation.json> [--receipt-public-key <ed25519-public.pem>]
+  last-aperture publish <run.json|bundle-directory> <transparency-log-config.json> --root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem> --out <external-inclusion-receipt.json> [--receipt-public-key <ed25519-public.pem>] [--transparency-checkpoint-journal <external-directory> [--initialize-transparency-checkpoint-journal]]  [DISABLED]
+  last-aperture validate <run.json|bundle-directory> [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  last-aperture report <run.json|bundle-directory> [--out <report.md>] [--sarif <results.sarif>] [--receipt-public-key <ed25519-public.pem>] [--root-attestation <external-attestation.json> --root-public-key <ed25519-public.pem>] [--transparency-receipt <external-inclusion-receipt.json> --transparency-log-public-key <ed25519-public.pem> --transparency-log-origin <origin> [--transparency-checkpoint-journal <external-directory>]]
+  last-aperture compare <baseline-run> <current-run> [--out <comparison.json>] [--receipt-public-key <ed25519-public.pem>]
+  last-aperture benchmark <evaluation.json> [--cases <cases.json>] [--thresholds <thresholds.json>] [--out <scorecard.json>]
 
 Safety:
   Static/read-only planning is the default. Repository content is untrusted data.
@@ -999,7 +999,7 @@ async function persistRun(path, run, expectedDigest, hooks = {}) {
     if (error.code === 'EEXIST') {
       throw new Error(
         `run is locked by another update: ${lockPath}; ` +
-        `if its owner exited, run red-team-audit unlock ${JSON.stringify(directory)}`,
+        `if its owner exited, run last-aperture unlock ${JSON.stringify(directory)}`,
       )
     }
     throw error

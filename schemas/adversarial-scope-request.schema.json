@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/adversarial-scope-request.schema.json",
-  "title": "Red Team Audit adversarial scope expansion request",
+  "title": "The Last Aperture adversarial scope expansion request",
   "description": "An inert, provider-authored request for an exact change to a predecessor-bound scope. This document grants no authority and cannot authorize target I/O.",
   "type": "object",
   "additionalProperties": false,

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/provider-execution.schema.json",
-  "title": "Red Team Audit controller-observed provider execution",
+  "title": "The Last Aperture controller-observed provider execution",
   "description": "One raw version 1 provider job result paired with a controller-derived byte-delivery receipt. The receipt deliberately makes no claim that semantic analysis occurred.",
   "type": "object",
   "additionalProperties": false,

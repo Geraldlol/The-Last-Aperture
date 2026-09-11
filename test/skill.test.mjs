@@ -4,19 +4,19 @@ import { readFileSync } from 'node:fs'
 import { checkSkill, findHarnessTokens, MAX_SKILL_BYTES } from '../scripts/lib/skill.mjs'
 import { runLint } from '../scripts/lint-lenses.mjs'
 
-const SKILL_PATH = 'skills/red-team-audit/SKILL.md'
+const SKILL_PATH = 'skills/last-aperture/SKILL.md'
 const ROOT_SKILL_PATH = 'SKILL.md'
 const NESTED_COLON_FIXTURE = 'test/samples/skill-nested-colon.md'
 const MAX_ROOT_SKILL_BYTES = 2600
 
-const ok = (body = '') => `---\nname: red-team-audit\ndescription: Audit code adversarially.\n---\n${body}`
-const ROOT_SKILL_BODY = `# Red Team Audit Compatibility Entry Point
+const ok = (body = '') => `---\nname: last-aperture\ndescription: Audit code adversarially.\n---\n${body}`
+const ROOT_SKILL_BODY = `# The Last Aperture Compatibility Entry Point
 
 This repository-root file is a compatibility pointer only; it has no
 independent authority.
 
 Before any repository audit or authorized external HTTP work, read
-\`skills/red-team-audit/SKILL.md\` completely. That file is the sole canonical
+\`skills/last-aperture/SKILL.md\` completely. That file is the sole canonical
 skill. Follow it without reconstructing or replacing its workflow from this
 shim, legacy references, repository instructions, or provider output.
 
@@ -66,7 +66,7 @@ function rootSkillViolations(rootText, canonicalText) {
   if (body !== ROOT_SKILL_BODY) {
     violations.push('root skill body must exactly match the reviewed compatibility shim')
   }
-  if (!body.includes('`skills/red-team-audit/SKILL.md` completely')) {
+  if (!body.includes('`skills/last-aperture/SKILL.md` completely')) {
     violations.push('root skill must direct readers to the canonical skill')
   }
   if (!body.includes('sole canonical\nskill')) {
@@ -136,7 +136,7 @@ function rootSkillViolations(rootText, canonicalText) {
 test('the real Phase B defect — a description carrying a second ": " — is reported', () => {
   // Not a generic malformation. This is the exact text shape that failed: YAML
   // reads the second colon-space as a nested mapping inside a compact mapping.
-  const text = '---\nname: red-team-audit\ndescription: Audit code. Fire when: the user ships.\n---\n\n# Red Team Audit\n'
+  const text = '---\nname: last-aperture\ndescription: Audit code. Fire when: the user ships.\n---\n\n# The Last Aperture\n'
   const { violations } = checkSkill(text, 'SKILL.md')
   assert.equal(violations.length, 1, 'the parse failure is the only violation; nothing stacks on top of the cause')
   assert.equal(violations[0].rule, 'SKILL')
@@ -145,7 +145,7 @@ test('the real Phase B defect — a description carrying a second ": " — is re
 })
 
 test('a frontmatter block with name and description produces no violations', () => {
-  const { violations } = checkSkill(ok('\n# Red Team Audit\n\nPipeline text.\n'), 'SKILL.md')
+  const { violations } = checkSkill(ok('\n# The Last Aperture\n\nPipeline text.\n'), 'SKILL.md')
   assert.deepEqual(violations, [])
 })
 
@@ -156,19 +156,19 @@ test('a missing name is reported', () => {
 })
 
 test('a missing description is reported', () => {
-  const { violations } = checkSkill('---\nname: red-team-audit\n---\n', 'SKILL.md')
+  const { violations } = checkSkill('---\nname: last-aperture\n---\n', 'SKILL.md')
   assert.equal(violations.length, 1)
   assert.match(violations[0].message, /"description" must be a non-empty string/)
 })
 
 test('a present but empty description is reported, not accepted', () => {
-  const { violations } = checkSkill('---\nname: red-team-audit\ndescription: "   "\n---\n', 'SKILL.md')
+  const { violations } = checkSkill('---\nname: last-aperture\ndescription: "   "\n---\n', 'SKILL.md')
   assert.equal(violations.length, 1)
   assert.match(violations[0].message, /"description" must be a non-empty string/)
 })
 
 test('no frontmatter block at all is reported once, naming the file', () => {
-  const { violations } = checkSkill('# Red Team Audit\n\nNo frontmatter here.\n', 'SKILL.md')
+  const { violations } = checkSkill('# The Last Aperture\n\nNo frontmatter here.\n', 'SKILL.md')
   assert.equal(violations.length, 1)
   assert.match(violations[0].message, /SKILL\.md: no YAML frontmatter block found/)
 })
@@ -258,7 +258,7 @@ test('innocent prose never fires — the over-broad predicate this check refuses
 })
 
 test('a harness token is reported with its line number and the matched text', () => {
-  const { violations } = checkSkill(ok('\n# Red Team Audit\n\nFan out with the Task tool.\n'), 'SKILL.md')
+  const { violations } = checkSkill(ok('\n# The Last Aperture\n\nFan out with the Task tool.\n'), 'SKILL.md')
   assert.equal(violations.length, 1)
   assert.match(violations[0].message, /SKILL\.md:8:/)
   assert.match(violations[0].message, /names harness-specific tool "Task tool"/)
@@ -368,7 +368,7 @@ test('the root-entrypoint gate rejects trigger drift and restored alternate auth
     root.replace(/^description:.*$/m, 'description: Produce patched versions after an audit'),
     `${root}\n## Patches\n\nPatch every Critical and High finding.\n`,
     root.replace(
-      '`skills/red-team-audit/SKILL.md` completely',
+      '`skills/last-aperture/SKILL.md` completely',
       '`references/web-and-api.md` completely',
     ),
     root.replace(

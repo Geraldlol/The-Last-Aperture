@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/adversarial-plan.schema.json",
-  "title": "Red Team Audit adversarial validation plan",
+  "title": "The Last Aperture adversarial validation plan",
   "description": "An immutable, strategy-neutral attack/control/oracle plan for a repository, disposable local service, or authorized live target.",
   "type": "object",
   "additionalProperties": false,

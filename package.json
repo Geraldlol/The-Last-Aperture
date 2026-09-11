@@ -1,12 +1,12 @@
 {
-  "name": "red-team-audit",
+  "name": "last-aperture",
   "version": "0.12.0",
   "private": true,
   "license": "MIT",
   "type": "module",
   "bin": {
-    "red-team-audit": "./scripts/audit.mjs",
-    "red-team-adversarial": "./scripts/adversarial.mjs"
+    "last-aperture": "./scripts/audit.mjs",
+    "last-aperture-adversarial": "./scripts/adversarial.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

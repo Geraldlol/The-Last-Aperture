@@ -1,6 +1,6 @@
-# Red Team Audit
+# The Last Aperture
 
-Red Team Audit is an evidence-first, agent-assisted source audit platform with
+The Last Aperture is an evidence-first, agent-assisted source audit platform with
 separate controllers for bounded HTTPS observation and operator-attested or
 document-bound authenticated campaigns. Its
 security lenses supply domain judgment; a deterministic Node.js control plane
@@ -11,6 +11,11 @@ and the optional remote gateway can prove acceptance of one signed provider
 request; neither proves model comprehension. External HTTP reconnaissance uses
 the same operator-statement authorization with its own execution controller,
 action denominator, stop path, and nonclaims. It never becomes repository coverage.
+
+> **Protocol compatibility:** The Last Aperture is the user-facing name. Existing
+> `red-team-audit/...` schema IDs, kind strings, cryptographic domains, and
+> producer identities remain unchanged so earlier bundles and signatures retain
+> their meaning and continue to validate.
 
 At agent/controller ingress, the authenticated operator statement naming target
 and scope is the sole authorization fact for every capability it names, including T2/service
@@ -653,12 +658,12 @@ verification status, or target deployment claims.
 
 ### Install the development checkout as a Codex skill
 
-Link the whole repository, not only `skills/red-team-audit`, because the
+Link the whole repository, not only `skills/last-aperture`, because the
 canonical skill deliberately enters through the executable controller,
 schemas, and package dependencies at the repository root:
 
 ```powershell
-$skillDestination = Join-Path $env:USERPROFILE '.codex\skills\red-team-audit'
+$skillDestination = Join-Path $env:USERPROFILE '.codex\skills\last-aperture'
 New-Item -ItemType Junction -Path $skillDestination -Target (Resolve-Path .)
 ```
 

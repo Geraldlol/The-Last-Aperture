@@ -76,7 +76,7 @@ test('the internal planning kernel yields TEST_EXECUTION for a test RoE', async 
   )
   const plan = await createRunPlan({
     targetRoot: target,
-    lensDirectory: join(WORKSPACE, 'skills', 'red-team-audit', 'lenses'),
+    lensDirectory: join(WORKSPACE, 'skills', 'last-aperture', 'lenses'),
     policy,
     sealSource: true,
   })

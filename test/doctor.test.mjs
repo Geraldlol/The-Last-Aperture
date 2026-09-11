@@ -24,10 +24,10 @@ async function fixture(t) {
   const root = await fs.mkdtemp(join(tmpdir(), 'rta-doctor-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const files = {
-    'package.json': JSON.stringify({ name: 'red-team-audit', dependencies: { acorn: '8.15.0' } }),
+    'package.json': JSON.stringify({ name: 'last-aperture', dependencies: { acorn: '8.15.0' } }),
     'package-lock.json': '{}',
     'scripts/audit.mjs': 'throw new Error("controller must not execute during doctor")',
-    'skills/red-team-audit/SKILL.md': '# fixture',
+    'skills/last-aperture/SKILL.md': '# fixture',
     'schemas/proof-worker.schema.json': await fs.readFile(schemaSource, 'utf8'),
     'node_modules/acorn/package.json': JSON.stringify({ name: 'acorn', version: '8.15.0' }),
     'node_modules/acorn/index.js': 'throw new Error("dependency must not execute during doctor")',

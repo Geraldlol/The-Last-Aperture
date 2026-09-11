@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/transparency-checkpoint-journal-record.schema.json",
-  "title": "Red Team Audit external checkpoint-journal record",
+  "title": "The Last Aperture external checkpoint-journal record",
   "description": "One immutable controller-owned record anchoring a signed transparency checkpoint and its continuity from the preceding record.",
   "type": "object",
   "additionalProperties": false,

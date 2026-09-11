@@ -17,7 +17,7 @@ import {
 } from '../scripts/lib/evidence-classes.mjs'
 
 const CONTRACT_PATH = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/contract.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/contract.md', import.meta.url),
 )
 
 test('four adapters plus the inventory-only fallback are declared', () => {
@@ -107,7 +107,7 @@ test('a rule anchor is recognised only where the contract declares it', () => {
 })
 
 const ARTIFACT_DOC = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/artifact.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/artifact.md', import.meta.url),
 )
 
 test('the artifact adapter document declares its five rule anchors', () => {
@@ -135,7 +135,7 @@ test('the adapter document names every locator form the resolver supports', () =
 })
 
 const REGISTRY_DOC = fileURLToPath(
-  new URL('../skills/red-team-audit/lenses/_evidence-adapters/registry.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_evidence-adapters/registry.md', import.meta.url),
 )
 
 test('the registry adapter document states its authorization requirements', () => {
@@ -156,7 +156,7 @@ test('the registry adapter declares no rule anchors of its own', () => {
 for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runtime.md']]) {
   test(`the ${adapterId} adapter document states its safety envelope`, () => {
     const doc = readFileSync(
-      fileURLToPath(new URL(`../skills/red-team-audit/lenses/_evidence-adapters/${file}`, import.meta.url)),
+      fileURLToPath(new URL(`../skills/last-aperture/lenses/_evidence-adapters/${file}`, import.meta.url)),
       'utf8',
     )
     assert.match(doc, /read-only/i)
@@ -170,7 +170,7 @@ for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runti
 
 test('the runtime document states it is not an exploitation tier', () => {
   const doc = readFileSync(
-    fileURLToPath(new URL('../skills/red-team-audit/lenses/_evidence-adapters/runtime.md', import.meta.url)),
+    fileURLToPath(new URL('../skills/last-aperture/lenses/_evidence-adapters/runtime.md', import.meta.url)),
     'utf8',
   )
   assert.match(doc, /Phase 3|exploitation/i)
@@ -197,7 +197,7 @@ for (const [file, expected] of [
 ]) {
   test(`${file} declares its Phase 2 rule anchors, all well-formed`, () => {
     const doc = readFileSync(
-      fileURLToPath(new URL(`../skills/red-team-audit/lenses/_evidence-adapters/${file}`, import.meta.url)),
+      fileURLToPath(new URL(`../skills/last-aperture/lenses/_evidence-adapters/${file}`, import.meta.url)),
       'utf8',
     )
     const anchors = [...declaredEvidenceRuleAnchors(doc)].sort()
@@ -212,7 +212,7 @@ for (const [file, expected] of [
 
 test('no rule anchor is declared by two documents', () => {
   const directory = fileURLToPath(
-    new URL('../skills/red-team-audit/lenses/_evidence-adapters/', import.meta.url),
+    new URL('../skills/last-aperture/lenses/_evidence-adapters/', import.meta.url),
   )
   const seen = new Map()
   for (const file of ['contract.md', 'artifact.md', 'registry.md', 'deployed.md', 'runtime.md']) {

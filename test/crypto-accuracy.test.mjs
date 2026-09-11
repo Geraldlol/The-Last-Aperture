@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const LENS_PATH = 'skills/red-team-audit/lenses/crypto-and-key-management.md'
+const LENS_PATH = 'skills/last-aperture/lenses/crypto-and-key-management.md'
 const EXPECTED_PATH = 'fixtures/EXPECTED.md'
 const CLEAN_APEX_PATH = 'fixtures/clean/ApexWebhookVerifier.cls'
 const VULNERABLE_APEX_PATH = 'fixtures/vulnerable/WebhookSignatureEquals.cls'

@@ -22,7 +22,7 @@ const DATABASE_TOPICS = [
 ]
 
 const topicRegistry = readFileSync(
-  new URL('../skills/red-team-audit/lenses/_topics.md', import.meta.url),
+  new URL('../skills/last-aperture/lenses/_topics.md', import.meta.url),
   'utf8',
 )
 const registeredDatabaseTopics = topicRegistry

@@ -27,7 +27,7 @@ proof routes do not grant execution authority to source-review packets.
 ## Discovering work
 
 ```text
-red-team-audit next <bundle>
+last-aperture next <bundle>
 ```
 
 Only jobs executable in the current phase are returned.
@@ -48,7 +48,7 @@ requires an externally pinned public key.
 
 ```text
 # Historical provider command shape; currently fail-closed.
-red-team-audit run-provider <bundle> <external-provider-config.json>
+last-aperture run-provider <bundle> <external-provider-config.json>
 ```
 
 Before launch the controller persists a one-use lease containing the attempt
@@ -434,8 +434,8 @@ Embedded public-key material proves envelope integrity only. Historical
 verification should pin an external Ed25519 public key:
 
 ```text
-red-team-audit validate <bundle> --receipt-public-key <external-public.pem>
-red-team-audit report <bundle> --receipt-public-key <external-public.pem>
+last-aperture validate <bundle> --receipt-public-key <external-public.pem>
+last-aperture report <bundle> --receipt-public-key <external-public.pem>
 ```
 
 Failure is explicit:
@@ -532,7 +532,7 @@ a finding look stronger or cleaner.
 
 ## Ingestion guarantees
 
-`red-team-audit ingest`:
+`last-aperture ingest`:
 
 1. Validates the strict result envelope.
 2. Validates the job belongs to the run and current phase.

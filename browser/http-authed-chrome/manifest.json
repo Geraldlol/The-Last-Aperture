@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Red Team Audit Browser Bridge (Disabled)",
+  "name": "The Last Aperture Browser Bridge (Disabled)",
   "version": "0.12.1",
   "description": "Release-disabled placeholder. It has no host, tab, scripting, background, or network authority.",
   "permissions": [],
   "host_permissions": [],
   "action": {
-    "default_title": "Red Team Audit browser bridge is disabled",
+    "default_title": "The Last Aperture browser bridge is disabled",
     "default_popup": "popup.html"
   },
   "content_security_policy": {

@@ -1618,8 +1618,8 @@ git commit -m "feat: wire the live adapters, a mid-run kill switch and deployed-
 ### Task 6: Adapter documents, PHI reporting and suite registration
 
 **Files:**
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/deployed.md`
-- Create: `skills/red-team-audit/lenses/_evidence-adapters/runtime.md`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/deployed.md`
+- Create: `skills/last-aperture/lenses/_evidence-adapters/runtime.md`
 - Modify: `scripts/lib/report.mjs`
 - Modify: `package.json` — `test:platform`
 - Test: `test/evidence-adapters.test.mjs` and `test/evidence-report.test.mjs` (extend)
@@ -1636,7 +1636,7 @@ Append to `test/evidence-adapters.test.mjs`:
 for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runtime.md']]) {
   test(`the ${adapterId} adapter document states its safety envelope`, () => {
     const doc = readFileSync(
-      fileURLToPath(new URL(`../skills/red-team-audit/lenses/_evidence-adapters/${file}`, import.meta.url)),
+      fileURLToPath(new URL(`../skills/last-aperture/lenses/_evidence-adapters/${file}`, import.meta.url)),
       'utf8',
     )
     assert.match(doc, /read-only/i)
@@ -1651,7 +1651,7 @@ for (const [adapterId, file] of [['deployed', 'deployed.md'], ['runtime', 'runti
 
 test('the runtime document states it is not an exploitation tier', () => {
   const doc = readFileSync(
-    fileURLToPath(new URL('../skills/red-team-audit/lenses/_evidence-adapters/runtime.md', import.meta.url)),
+    fileURLToPath(new URL('../skills/last-aperture/lenses/_evidence-adapters/runtime.md', import.meta.url)),
     'utf8',
   )
   assert.match(doc, /Phase 3|exploitation/i)
@@ -1769,7 +1769,7 @@ dependency is a failure, never an empty success.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_evidence-adapters scripts/lib/report.mjs package.json test/evidence-adapters.test.mjs test/evidence-report.test.mjs
+git add skills/last-aperture/lenses/_evidence-adapters scripts/lib/report.mjs package.json test/evidence-adapters.test.mjs test/evidence-report.test.mjs
 git commit -m "docs: deployed and runtime adapter documents, and PHI-bearing evidence in the report"
 ```
 

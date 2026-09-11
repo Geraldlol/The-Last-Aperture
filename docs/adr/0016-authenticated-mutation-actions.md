@@ -2,7 +2,7 @@
 
 - Status: Accepted - implemented in v0.12.0
 - Date: 2026-08-16
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Extends: ADR 0013, which reserved authenticated/mutation actions for a separate
   typed tier; relates to ADR 0014 (operator-attested lower-assurance mode) and
   ADR 0015 (PKIX defaults). Does NOT extend `http-recon-v1` or the repository

@@ -7,7 +7,7 @@ import {
 } from '../scripts/lib/activation.mjs'
 import { discoverDatabaseGraph } from '../scripts/lib/database-discovery.mjs'
 
-const lenses = await loadLenses('skills/red-team-audit/lenses')
+const lenses = await loadLenses('skills/last-aperture/lenses')
 
 function databaseActivation(path, content) {
   const inventory = {

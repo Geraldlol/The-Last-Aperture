@@ -22,7 +22,7 @@
 - Baseline: 2 permanently failing tests in `cloud-iac-fixtures.test.mjs` (ripgrep absent, exit 127). Environmental. Not regressions, not to be fixed.
 - `npm.cmd run lint` must end `PASS: R1-R9, SKILL and ledger gate clean.` from Task 1 onward — note the rule range changes, and `lint-lenses.mjs`'s final `console.log` must change with it.
 - `npm.cmd run gen -- --check` must stay `PASS ... (174 slugs)`. `evidence_classes` introduces no slugs; if the count moves, something was mis-edited.
-- `skills/red-team-audit/SKILL.md` is at 7,995 of 8,000 bytes. **Add no prose to it.**
+- `skills/last-aperture/SKILL.md` is at 7,995 of 8,000 bytes. **Add no prose to it.**
 - Run commands with `npm.cmd`, not `npm`.
 - `"additionalProperties": false` everywhere in `schemas/`.
 - Locale-independent ordering only: `compareCanonicalStrings`, never `localeCompare`.
@@ -34,7 +34,7 @@
 ### Task 1: Lens evidence-class declarations and lint rule R9
 
 **Files:**
-- Modify: all 15 lens files in `skills/red-team-audit/lenses/` — frontmatter only
+- Modify: all 15 lens files in `skills/last-aperture/lenses/` — frontmatter only
 - Modify: `scripts/lib/registry.mjs` (add `checkEvidenceClasses`)
 - Modify: `scripts/lint-lenses.mjs` (call it; update the PASS banner)
 - Modify: `test/samples/corpus-ok/web.md`, `test/samples/corpus-ok/crypto.md`, `test/samples/corpus-bad/*.md`, `test/samples/minimal-lens.md`
@@ -89,7 +89,7 @@ import { parseLens } from '../scripts/lib/frontmatter.mjs'
 import { checkEvidenceClasses, lensEvidenceDeclarations } from '../scripts/lib/registry.mjs'
 import { EVIDENCE_CLASS_ORDER } from '../scripts/lib/evidence-classes.mjs'
 
-const LENS_DIR = 'skills/red-team-audit/lenses'
+const LENS_DIR = 'skills/last-aperture/lenses'
 
 function corpus() {
   return readdirSync(LENS_DIR)
@@ -566,7 +566,7 @@ Expected: `PASS: generated artifacts match frontmatter (174 slugs).`
 - [ ] **Step 8: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses scripts/lib/registry.mjs scripts/lint-lenses.mjs test/samples test/evidence-class-declarations.test.mjs
+git add skills/last-aperture/lenses scripts/lib/registry.mjs scripts/lint-lenses.mjs test/samples test/evidence-class-declarations.test.mjs
 git commit -m "feat: every lens declares the evidence classes it can speak to (R9)"
 ```
 
@@ -909,7 +909,7 @@ git commit -m "feat: evidence-qualified locations, evidence_context and evidence
 ### Task 3: The `_schema.md` amendment and invariant 16
 
 **Files:**
-- Modify: `skills/red-team-audit/lenses/_schema.md`
+- Modify: `skills/last-aperture/lenses/_schema.md`
 - Test: `test/evidence-schema-doc.test.mjs` (create)
 
 **Interfaces:**
@@ -925,7 +925,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const SCHEMA_DOC = 'skills/red-team-audit/lenses/_schema.md'
+const SCHEMA_DOC = 'skills/last-aperture/lenses/_schema.md'
 
 function doc() {
   return readFileSync(SCHEMA_DOC, 'utf8')
@@ -1097,7 +1097,7 @@ Run: `npm.cmd run lint` → `PASS: R1-R9, SKILL and ledger gate clean.` (`_schem
 - [ ] **Step 5: Commit**
 
 ```bash
-git add skills/red-team-audit/lenses/_schema.md test/evidence-schema-doc.test.mjs
+git add skills/last-aperture/lenses/_schema.md test/evidence-schema-doc.test.mjs
 git commit -m "docs: evidence context, evidence-qualified location and invariant 16"
 ```
 
@@ -1916,7 +1916,7 @@ git commit -m "feat: lens x topic x evidence-class coverage matrix pinned into t
 
 **Interfaces:**
 - Consumes: `loadEvidenceBundle` (Plan 1, Task 3); `run.evidence_coverage` (Task 5); `evidenceConflicts` (Task 4).
-- Produces: `red-team-audit plan <repository> --evidence-bundle <path>` (repeatable), an `### Evidence-class coverage` section in `report.md`, and a `Precedence conflicts` table when two classes disagree.
+- Produces: `last-aperture plan <repository> --evidence-bundle <path>` (repeatable), an `### Evidence-class coverage` section in `report.md`, and a `Precedence conflicts` table when two classes disagree.
 
 `--evidence-bundle` follows `--database-conformance` exactly: resolved outside the target repository, `realpath`-checked before and after the read so the path cannot be swapped mid-read, verified, and refused on any integrity failure. `parseArguments` in `audit.mjs` rejects a duplicate option, so repeatability needs the option to accept a comma-separated list rather than being repeated — which is also how it stays one immutable string in the plan digest.
 
@@ -2449,4 +2449,4 @@ its own ten files — `test/skill.test.mjs:288`, as a *negative* fixture asserti
 that a root entrypoint pointing at `references/web-and-api.md` must fail. No
 script, schema, lens, or npm script reads it. The ten files need no
 `evidence_classes` block and R9 never sees them, because `runLint` loads lenses
-only from `skills/red-team-audit/lenses`.
+only from `skills/last-aperture/lenses`.

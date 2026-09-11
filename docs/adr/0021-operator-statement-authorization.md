@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-04
-- Owners: Red Team Audit platform
+- Owners: The Last Aperture platform
 - Supersedes for authorization mechanics: ADR 0013's caller-signed RoE path,
   ADR 0014's retention of that path, ADR 0015 and ADR 0018's signed-mode
   clauses, ADR 0016's signed/document routing and external mutation-

@@ -26,7 +26,7 @@
 - **The real target is never written to.** Every write goes to the disposable mirror. This is verified, not asserted.
 - The mirror is **not** a sandbox and must never be described as one, in code comments, errors, or docs.
 
-## Hard rails (from `skills/red-team-audit/lenses/_harness.md`)
+## Hard rails (from `skills/last-aperture/lenses/_harness.md`)
 
 These bind every task and are not negotiable by mode or consent.
 
@@ -1347,7 +1347,7 @@ Dispatch it in `main`, after `run-remote`:
 Add the `HELP` line after the `run-remote` line:
 
 ```
-  red-team-audit run-proof <run.json|bundle-directory> <proof-config.json>
+  last-aperture run-proof <run.json|bundle-directory> <proof-config.json>
 ```
 
 Add `spawn` from `node:child_process`, `mkdtemp` from `node:fs/promises`, and
@@ -1390,7 +1390,7 @@ Expected before committing: 751 tests, 748 passing, 1 skipped, 2 failing.
 `SKILL.md` drives the agent. Without a rule there nothing will author a proof and the feature stays dormant.
 
 **Files:**
-- Modify: `skills/red-team-audit/SKILL.md`
+- Modify: `skills/last-aperture/SKILL.md`
 - Test: `node scripts/lint-lenses.mjs`
 
 **Interfaces:**
@@ -1400,7 +1400,7 @@ Expected before committing: 751 tests, 748 passing, 1 skipped, 2 failing.
 - [ ] **Step 1: Check the byte budget first**
 
 ```bash
-wc -c skills/red-team-audit/SKILL.md
+wc -c skills/last-aperture/SKILL.md
 grep -n "MAX_SKILL_BYTES" scripts/lint-lenses.mjs
 ```
 
@@ -1422,7 +1422,7 @@ means `UNPROVEN`, capped at Medium, which is a legitimate outcome.
 - [ ] **Step 3: Verify the budget and lint gate**
 
 ```bash
-wc -c skills/red-team-audit/SKILL.md
+wc -c skills/last-aperture/SKILL.md
 node scripts/lint-lenses.mjs
 ```
 
@@ -1432,7 +1432,7 @@ Expected: under 8000 bytes, and `PASS: R1-R8, SKILL and ledger gate clean.`
 
 ```bash
 node --test 2>&1 | tail -20
-git add skills/red-team-audit/SKILL.md
+git add skills/last-aperture/SKILL.md
 git commit -m "docs: require controller-run proofs for test-mode audits"
 ```
 

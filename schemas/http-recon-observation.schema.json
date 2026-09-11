@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/http-recon-observation.schema.json",
-  "title": "Red Team Audit bounded HTTP reconnaissance observation",
+  "title": "The Last Aperture bounded HTTP reconnaissance observation",
   "description": "A redacted record of one authorized HTTPS probe with no retained response body.",
   "type": "object",
   "additionalProperties": false,

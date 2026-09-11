@@ -1473,7 +1473,7 @@ Expected: FAIL — module not found.
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://red-team-audit.dev/schemas/bounty-oob-session.schema.json",
-  "title": "Red Team Audit bounty-v1 out-of-band session",
+  "title": "The Last Aperture bounty-v1 out-of-band session",
   "description": "An OOB interaction session and its mint ledger. The backend is recorded as evidence of where callbacks were observed; a hosted backend means callback data transited a third party. Absence of a callback is NO_INTERACTION_OBSERVED and never proof that a target is not vulnerable.",
   "type": "object",
   "additionalProperties": false,

@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
-const LENS_PATH = new URL('../skills/red-team-audit/lenses/cloud-and-iac.md', import.meta.url)
+const LENS_PATH = new URL('../skills/last-aperture/lenses/cloud-and-iac.md', import.meta.url)
 const LENS_LINES = readFileSync(LENS_PATH, 'utf8').split(/\r?\n/)
 
 function extractFunction(name) {

@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const SCHEMA_DOC = 'skills/red-team-audit/lenses/_schema.md'
+const SCHEMA_DOC = 'skills/last-aperture/lenses/_schema.md'
 
 function doc() {
   return readFileSync(SCHEMA_DOC, 'utf8')
