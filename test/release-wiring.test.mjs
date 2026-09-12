@@ -68,9 +68,16 @@ test('CI pins third-party actions and exercises the advertised Node floor', () =
   assert.doesNotMatch(workflow, /actions\/(?:checkout|setup-node)@v\d+/)
   assert.match(workflow, /node:\s*\['20', '24'\]/)
   assert.match(workflow, /node-version:\s*\$\{\{\s*matrix\.node\s*\}\}/)
-  assert.doesNotMatch(workflow, /^\s{2}pull_request:/m)
+  assert.match(workflow, /^\s{2}pull_request:$/m)
+  assert.match(workflow, /^\s{4}branches: \[main\]$/m)
   assert.match(workflow, /^\s{2}workflow_dispatch:/m)
-  assert.match(workflow, /^\s{4}if: github\.ref == 'refs\/heads\/main'$/m)
+  assert.match(
+    workflow,
+    /^\s{4}if: github\.event_name == 'pull_request' \|\| github\.ref == 'refs\/heads\/main'$/m,
+  )
+  assert.match(workflow, /^concurrency:$/m)
+  assert.match(workflow, /^\s{2}cancel-in-progress: true$/m)
+  assert.match(workflow, /^\s{4}timeout-minutes: 30$/m)
   assert.match(workflow, /- run: npm ci --ignore-scripts/)
   assert.match(workflow, /- run: npm test/)
   assert.doesNotMatch(workflow, /sudo apt-get install --yes ripgrep/)
