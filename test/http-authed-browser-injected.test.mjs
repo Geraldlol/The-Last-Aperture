@@ -509,6 +509,45 @@ test('injected fetch distinguishes exact, bounded, and incomplete response obser
   assert.equal(Buffer.from(incomplete.response.body_base64, 'base64').toString(), 'ab')
 })
 
+test('injected fetch keeps a bounded observation when response cancellation rejects', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const encoder = new TextEncoder()
+  let cancelCalls = 0
+  let requestSignal
+  const fetchImpl = async (_url, options) => {
+    requestSignal = options.signal
+    return {
+      status: 200,
+      redirected: false,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return { done: false, value: encoder.encode('abcdef') }
+            },
+            async cancel() {
+              cancelCalls += 1
+              throw new Error('synthetic cancellation failure')
+            },
+          }
+        }
+      },
+    }
+  }
+
+  const bounded = await executeHttpAuthedInjectedFetch(
+    command({ max_response_bytes: 3 }),
+    runtime({ fetchImpl }, { fetchImpl }),
+  )
+
+  assert.equal(cancelCalls, 1)
+  assert.equal(requestSignal.aborted, true)
+  assert.equal(bounded.outcome, 'RESPONSE_BOUNDED')
+  assert.equal(bounded.response_truncated, true)
+  assert.equal(Buffer.from(bounded.response.body_base64, 'base64').toString(), 'abc')
+})
+
 test('injected fetch rechecks cancellation and the absolute deadline after asynchronous preflight', async () => {
   const { executeHttpAuthedInjectedFetch } = await injectedApi()
   const body = Buffer.from('synthetic-write-body')
