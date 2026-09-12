@@ -24,6 +24,7 @@ import {
   sanitizeHttpAuthedHeaderNames,
 } from './http-authed-response-metadata.mjs'
 import { sanitizeHttpAuthedJsonShape } from './http-authed-json-shape.mjs'
+import { httpAuthedResponseStopReason } from './http-authed-response-stop.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const RECORD_KIND = 'red-team-audit/http-authed-campaign-record'
@@ -963,16 +964,6 @@ function emptyProjection() {
   }
 }
 
-function responseStopReason(status) {
-  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
-  if (status === 429) return 'LIMIT_REACHED'
-  if (Number.isSafeInteger(status) && status >= 300 && status <= 399) {
-    return 'UNEXPECTED_REDIRECT'
-  }
-  if (Number.isSafeInteger(status) && status >= 500) return 'TARGET_HEALTH_DEGRADED'
-  return null
-}
-
 function durableActionStopReason(action) {
   const phases = action.action_kind === 'mutate'
     ? [
@@ -987,7 +978,7 @@ function durableActionStopReason(action) {
   for (const phase of phases) {
     const outcome = action.phase_outcomes[phase]
     if (outcome?.outcome !== 'SETTLED') continue
-    const reason = responseStopReason(outcome.status)
+    const reason = httpAuthedResponseStopReason(outcome.status)
     if (reason !== null) return reason
   }
   return null

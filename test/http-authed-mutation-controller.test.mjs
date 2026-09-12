@@ -707,6 +707,32 @@ test('a mutation response stop status survives verified rollback', async (t) => 
   assert.equal(result.stop_reason, 'TARGET_HEALTH_DEGRADED')
 })
 
+for (const status of [304, 305, 306]) {
+  test(`non-redirect HTTP status ${status} does not set a mutation stop reason`, async (t) => {
+    const state = await campaign(t, `mutation-non-redirect-${status}`)
+    const calls = []
+    const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+      transport: async (request) => {
+        calls.push(request.phase)
+        await request.beforeSend()
+        return {
+          status: request.phase === 'MUTATION' ? status : 200,
+          responseBytes: 0,
+          responseHeaderNames: [],
+          body: Buffer.from('{}'),
+        }
+      },
+    }))
+
+    assert.deepEqual(calls, [
+      'CREDENTIAL_PREFLIGHT', 'BEFORE_READ', 'MUTATION', 'AFTER_READ',
+      'ROLLBACK', 'ROLLBACK_VERIFY',
+    ])
+    assert.equal(result.outcome, 'ROLLBACK_VERIFIED_AFTER_FAILURE')
+    assert.equal(result.stop_reason, null)
+  })
+}
+
 test('a linked mutation settlement append fault still completes rollback without replaying the write', async (t) => {
   let injected = false
   const state = await campaign(t, 'linked-settlement-fault', {

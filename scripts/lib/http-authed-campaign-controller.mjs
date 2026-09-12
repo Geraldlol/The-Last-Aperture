@@ -14,6 +14,7 @@ import {
   assertHttpAuthedResponseByteBucket,
   sanitizeHttpAuthedHeaderNames,
 } from './http-authed-response-metadata.mjs'
+import { httpAuthedResponseStopReason } from './http-authed-response-stop.mjs'
 
 const CLEANUP_RECOVERY_STATES = new Set([
   'MUTATION_SETTLED',
@@ -165,14 +166,6 @@ function responseMetadata(response, requestMayHaveBeenSent = true, observation) 
   }
 }
 
-function responseStopReason(status) {
-  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
-  if (status === 429) return 'LIMIT_REACHED'
-  if (status >= 300 && status <= 399) return 'UNEXPECTED_REDIRECT'
-  if (status >= 500) return 'TARGET_HEALTH_DEGRADED'
-  return null
-}
-
 function durableMutationStopReason(state) {
   for (const phase of [
     'CREDENTIAL_PREFLIGHT',
@@ -182,7 +175,7 @@ function durableMutationStopReason(state) {
     'ROLLBACK',
     'ROLLBACK_VERIFY',
   ]) {
-    const reason = responseStopReason(state?.phase_outcomes?.[phase]?.status)
+    const reason = httpAuthedResponseStopReason(state?.phase_outcomes?.[phase]?.status)
     if (reason !== null) return reason
   }
   return null
@@ -744,7 +737,7 @@ export async function runHttpAuthedCampaign({
         outcome: 'SETTLED',
         responseMetadata: settledResponse,
       })
-      const settledStopReason = responseStopReason(settledResponse.status)
+      const settledStopReason = httpAuthedResponseStopReason(settledResponse.status)
       if (settledResponse.failureStageCode !== undefined) {
         observationFailures.push({
           action_sequence: action.sequence,

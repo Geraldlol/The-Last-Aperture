@@ -1238,6 +1238,59 @@ for (const terminalizedBeforeCrash of [false, true]) {
   })
 }
 
+for (const status of [304, 305, 306]) {
+  test(`ledger replay does not reinterpret non-redirect HTTP status ${status} as a campaign stop`, async (t) => {
+    const directory = await directoryFor(t, `non-redirect-${status}`)
+    const ledger = await openLedger(directory)
+    const firstCandidate = candidate({
+      url: `https://synthetic.example.test/NON_REDIRECT_${status}_ROUTE`,
+    })
+    const secondCandidate = candidate({
+      url: 'https://synthetic.example.test/CONTINUATION_ROUTE',
+    })
+    await ledger.enqueueCandidate({ candidateDraft: firstCandidate, provenance: 'SEALED_PLAN' })
+    await ledger.enqueueCandidate({ candidateDraft: secondCandidate, provenance: 'SEALED_PLAN' })
+    const first = await ledger.leaseAction({
+      candidateDraft: firstCandidate,
+      operatorId: 'example-security-operator',
+    })
+    await ledger.markPreDispatch({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'PROBE',
+      requestBindingSha256: 'd'.repeat(64),
+    })
+    await ledger.markOutcome({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      phase: 'PROBE',
+      outcome: 'SETTLED',
+      responseMetadata: {
+        status,
+        bytes: 0,
+        headerNames: [],
+        requestMayHaveBeenSent: true,
+      },
+    })
+    await ledger.terminalizeAction({
+      actionId: first.actionId,
+      leaseId: first.leaseId,
+      outcome: 'PROBE_COMPLETED',
+    })
+    await ledger.close()
+
+    const recovered = await openLedger(directory, { initialize: false })
+    assert.equal(recovered.snapshot().stopped, false)
+    assert.equal(recovered.snapshot().stop_reason, null)
+    const continuation = await recovered.leaseAction({
+      candidateDraft: secondCandidate,
+      operatorId: 'example-security-operator',
+    })
+    assert.equal(continuation.allocatedAction.url, secondCandidate.url)
+    await recovered.close()
+  })
+}
+
 test('ledger rejects unexpected directory entries without deleting them', async (t) => {
   const directory = await directoryFor(t, 'unexpected-entry')
   const ledger = await openLedger(directory)
