@@ -29,6 +29,9 @@
   settlement, response-read failures, and connector callback deadlines.
 - Rejected repeatedly encoded traversal and ambiguous authority statements, and
   bound resumed repository and artifact targets to their original identities.
+- Pinned the patched `fast-uri` 3.1.7 release for clean artifact installs; the
+  prior 3.1.6 override was ignored downstream and is affected by
+  `GHSA-qw65-cvwx-89v3` and `GHSA-58mr-gqgx-xq4g`.
 
 ### Packaging
 
