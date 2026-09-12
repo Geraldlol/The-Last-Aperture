@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
-import { lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, open, opendir, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { compareCanonicalStrings } from './canonical-order.mjs'
 import { assertValidEvidenceProfile, validateEvidenceProfile } from './evidence-contracts.mjs'
@@ -379,35 +379,49 @@ async function assertPublishableExistingRoot(root) {
     '.acquisition-lock',
     '.acquisition-lock-reclaim',
   ])
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (!allowed.has(entry.name)) {
-      throw new EvidenceBundleError(
-        'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
-        `bundle root already contains non-controller output: ${join(root, entry.name)}`,
-        { bundle: root },
-      )
-    }
-    const path = join(root, entry.name)
-    if (entry.name === '.acquisition-lock' || entry.name === '.acquisition-lock-reclaim') {
-      const metadata = await lstat(path, { bigint: true })
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1n
-        || metadata.size < 1n || metadata.size > 4096n) {
+  const entries = await opendir(root)
+  try {
+    while (true) {
+      const entry = await entries.read()
+      if (entry === null) break
+      if (!allowed.has(entry.name)) {
         throw new EvidenceBundleError(
           'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
-          'acquisition lock owner is not one bounded regular file',
+          `bundle root already contains non-controller output: ${join(root, entry.name)}`,
           { bundle: root },
         )
       }
-      continue
+      const path = join(root, entry.name)
+      if (entry.name === '.acquisition-lock' || entry.name === '.acquisition-lock-reclaim') {
+        let metadata
+        try {
+          metadata = await lstat(path, { bigint: true })
+        } catch (error) {
+          if (entry.name === '.acquisition-lock-reclaim' && error?.code === 'ENOENT') continue
+          throw error
+        }
+        const allowedLinks = entry.name === '.acquisition-lock-reclaim' ? [1n, 2n] : [1n]
+        if (!metadata.isFile() || metadata.isSymbolicLink() || !allowedLinks.includes(metadata.nlink)
+          || metadata.size < 1n || metadata.size > 4096n) {
+          throw new EvidenceBundleError(
+            'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
+            'acquisition lock owner is not one bounded regular file',
+            { bundle: root },
+          )
+        }
+        continue
+      }
+      const metadata = await lstat(path, { bigint: true })
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1n) {
+        throw new EvidenceBundleError(
+          'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
+          `controller metadata must be one regular, unlinked file: ${path}`,
+          { bundle: root },
+        )
+      }
     }
-    const metadata = await lstat(path, { bigint: true })
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1n) {
-      throw new EvidenceBundleError(
-        'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
-        `controller metadata must be one regular, unlinked file: ${path}`,
-        { bundle: root },
-      )
-    }
+  } finally {
+    await entries.close()
   }
 }
 

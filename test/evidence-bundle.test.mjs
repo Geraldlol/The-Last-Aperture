@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
-import { access, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { access, copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -230,6 +230,59 @@ test('a failed publication leaves no partial payload and cleans its staged tree'
   assert.equal(await readFile(join(directory, 'manifest.json'), 'utf8'), 'preexisting')
   await assert.rejects(() => access(join(directory, 'payload')))
   assert.deepEqual((await readdir(parent)).filter((name) => name.includes('.evidence-')), [])
+})
+
+test('bundle publication accepts a bounded two-link acquisition reclaim guard', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-evidence-reclaim-transition-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const directory = join(root, 'ev')
+  const guard = join(directory, '.acquisition-lock-reclaim')
+  const privateTail = join(
+    root,
+    `.last-aperture-acquisition-lock-reclaim-${process.pid}-11111111-1111-4111-8111-111111111111.tmp`,
+  )
+  await mkdir(directory)
+  await writeFile(privateTail, JSON.stringify({
+    acquired_at: '2026-09-12T12:00:00.000Z',
+    nonce: '11111111-1111-4111-8111-111111111111',
+    pid: process.pid,
+    schema_version: '1.0.0',
+  }), { flag: 'wx' })
+  await link(privateTail, guard)
+
+  const written = await writeEvidenceBundle({
+    directory,
+    profile: baseProfile(),
+    payload: PAYLOAD,
+  })
+
+  assert.match(written.root_sha256, /^[0-9a-f]{64}$/)
+  assert.equal((await lstat(guard, { bigint: true })).nlink, 2n)
+})
+
+test('bundle publication rejects a reclaim guard with an unexplained third link', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-evidence-reclaim-third-link-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const directory = join(root, 'ev')
+  const guard = join(directory, '.acquisition-lock-reclaim')
+  const firstAlias = join(root, 'first-reclaim-alias')
+  const secondAlias = join(root, 'second-reclaim-alias')
+  await mkdir(directory)
+  await writeFile(firstAlias, JSON.stringify({
+    acquired_at: '2026-09-12T12:00:00.000Z',
+    nonce: '22222222-2222-4222-8222-222222222222',
+    pid: process.pid,
+    schema_version: '1.0.0',
+  }), { flag: 'wx' })
+  await link(firstAlias, guard)
+  await link(firstAlias, secondAlias)
+
+  await assert.rejects(
+    () => writeEvidenceBundle({ directory, profile: baseProfile(), payload: PAYLOAD }),
+    (error) => error instanceof EvidenceBundleError
+      && error.code === 'EVIDENCE_BUNDLE_OUTPUT_UNSAFE',
+  )
+  assert.equal((await lstat(guard, { bigint: true })).nlink, 3n)
 })
 
 test('an absent output below a linked ancestor is refused before directories are created', async (t) => {
