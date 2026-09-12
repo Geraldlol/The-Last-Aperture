@@ -785,10 +785,12 @@ test('the v0.10 externally anchored checkpoint-continuity slice is release-wired
   )
 })
 
-test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship together', () => {
-  const sourcePaths = [
-    'docs/adr/0019-bounty-program-perimeter-protocol.md',
+test('bounty-v1 source design, release inputs, npm scripts, and boundary language stay coherent', () => {
+  const sourceOnlyDesignPaths = [
     'docs/superpowers/specs/2026-08-20-bounty-v1-design.md',
+  ]
+  const releasePaths = [
+    'docs/adr/0019-bounty-program-perimeter-protocol.md',
     'schemas/bounty-scope.schema.json',
     'schemas/bounty-surface-inventory.schema.json',
     'schemas/bounty-authz-roles.schema.json',
@@ -878,11 +880,18 @@ test('bounty-v1 is release-wired: files, npm scripts, and boundary language ship
     'test/bounty-oob-controller.test.mjs',
     'test/bounty-proxy-ingest.test.mjs',
   ]
-  for (const path of [...sourcePaths, ...bountyTests]) {
-    assert.ok(readFileSync(path).length > 0, `${path} must ship with bounty-v1`)
+  for (const path of sourceOnlyDesignPaths) {
+    assert.ok(readFileSync(path).length > 0, `${path} must remain as a source-only design input`)
+  }
+  for (const path of [...releasePaths, ...bountyTests]) {
+    assert.ok(readFileSync(path).length > 0, `${path} must remain present for bounty-v1 release wiring`)
   }
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.ok(
+    packageDocument.files.includes('!docs/superpowers/'),
+    'source-only superpowers design documents must remain excluded from the npm release',
+  )
   assert.equal(packageDocument.scripts['audit:bounty'], 'node scripts/bounty.mjs')
   assert.equal(packageDocument.scripts['conformance:bounty-kernel'], 'py -I -B proxy/conformance.py')
   const platformTests = new Set(packageDocument.scripts['test:platform'].split(/\s+/))
