@@ -1058,6 +1058,58 @@ test('a post-write executor failure enters cleanup recovery without replaying th
   assert.equal(actionState.outcome, 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED')
 })
 
+for (const status of [304, 305, 306]) {
+  test(`non-redirect HTTP status ${status} does not stop remaining sealed probes`, async (t) => {
+    const scope = campaignScope()
+    delete scope.discovery
+    scope.requests.push({
+      ...scope.requests[0],
+      sequence: 2,
+      url: `${scope.target.origin}/approved/node-1`,
+    })
+    const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+    const root = await mkdtemp(join(tmpdir(), `rta-http-authed-non-redirect-${status}-`))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const ledger = await openHttpAuthedCampaignLedger({
+      directory: join(root, 'ledger'),
+      campaignGrantSha256: verified.campaignGrantSha256,
+      authorizationBindingSha256: verified.authorizationBindingSha256,
+      authorizationMode: scope.authorization.mode,
+      operatorId: scope.authorization.operator_id,
+      initialize: true,
+      now: () => NOW,
+    })
+    let sends = 0
+
+    const result = await runHttpAuthedCampaign({
+      scope,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      operatorId: scope.authorization.operator_id,
+      ledger,
+      now: () => NOW,
+      reauthorize: async ({ action }) => action,
+      executeProbe: async ({ beforeSend }) => {
+        await beforeSend()
+        sends += 1
+        return {
+          response: {
+            status: sends === 1 ? status : 204,
+            bytes: 0,
+            header_names: [],
+          },
+        }
+      },
+    })
+    const snapshot = ledger.snapshot()
+    await ledger.close()
+
+    assert.equal(sends, 2)
+    assert.equal(result.actions.completed, 2)
+    assert.equal(snapshot.stopped, false)
+    assert.equal(snapshot.stop_reason, null)
+  })
+}
+
 for (const [status, expectedStopReason] of [
   [401, 'CREDENTIAL_INVALID'],
   [403, 'CREDENTIAL_INVALID'],

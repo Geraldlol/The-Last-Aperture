@@ -763,7 +763,11 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
         bytes += Math.min(remaining, part.value.byteLength)
         if (part.value.byteLength > remaining) {
           truncated = true
-          await reader.cancel()
+          try {
+            await reader.cancel()
+          } catch {
+            abortController.abort()
+          }
           break
         }
       }

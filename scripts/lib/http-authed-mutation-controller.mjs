@@ -11,6 +11,7 @@ import {
   verifyHttpAuthedCleanupCandidate,
 } from './http-authed-contracts.mjs'
 import { sanitizeHttpAuthedHeaderNames } from './http-authed-response-metadata.mjs'
+import { httpAuthedResponseStopReason } from './http-authed-response-stop.mjs'
 import { httpAuthedCandidateIdentity } from './http-authed-campaign-ledger.mjs'
 
 const MAX_CREDENTIAL_BYTES = 64 * 1024
@@ -126,16 +127,6 @@ function responseMetadata(response) {
     bytes: response.responseBytes,
     header_names: headerNames,
   }
-}
-
-function responseStopReason(status) {
-  if (status === 401 || status === 403) return 'CREDENTIAL_INVALID'
-  if (status === 429) return 'LIMIT_REACHED'
-  if (Number.isSafeInteger(status) && status >= 300 && status <= 399) {
-    return 'UNEXPECTED_REDIRECT'
-  }
-  if (Number.isSafeInteger(status) && status >= 500) return 'TARGET_HEALTH_DEGRADED'
-  return null
 }
 
 function requestBinding({ actionId, phase, method, url, body }) {
@@ -695,7 +686,7 @@ export async function runDeclaredHttpAuthedMutation({
         },
       })
       responses[phase] = metadata
-      stopReason ??= responseStopReason(metadata.status)
+      stopReason ??= httpAuthedResponseStopReason(metadata.status)
       if (
         !['BEFORE_READ', 'AFTER_READ', 'ROLLBACK_VERIFY'].includes(phase)
         && (Buffer.isBuffer(rawResponse.body) || rawResponse.body instanceof Uint8Array)

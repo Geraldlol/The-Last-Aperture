@@ -14,14 +14,36 @@ import {
   readTarEntryBytes,
 } from '../scripts/lib/oci-normalizer.mjs'
 
-function tarHeader({ name, size, mode = 0o644, mtime = 1754661730, type = '0', linkname = '' }) {
+function writeBase256(header, offset, length, input) {
+  let value = BigInt(input)
+  header.fill(0, offset, offset + length)
+  for (let index = offset + length - 1; index > offset; index -= 1) {
+    header[index] = Number(value & 0xffn)
+    value >>= 8n
+  }
+  assert.ok(value <= 0x7fn, 'test base-256 value must fit the requested field')
+  header[offset] = 0x80 | Number(value)
+}
+
+function tarHeader({
+  name,
+  size,
+  mode = 0o644,
+  mtime = 1754661730,
+  type = '0',
+  linkname = '',
+  base256Size = false,
+  base256Mtime = false,
+}) {
   const header = Buffer.alloc(512)
   header.write(name, 0, 100, 'utf8')
   header.write(`${mode.toString(8).padStart(7, '0')}\0`, 100, 8, 'ascii')
   header.write('0000000\0', 108, 8, 'ascii')
   header.write('0000000\0', 116, 8, 'ascii')
-  header.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 12, 'ascii')
-  header.write(`${mtime.toString(8).padStart(11, '0')}\0`, 136, 12, 'ascii')
+  if (base256Size) writeBase256(header, 124, 12, size)
+  else header.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 12, 'ascii')
+  if (base256Mtime) writeBase256(header, 136, 12, mtime)
+  else header.write(`${mtime.toString(8).padStart(11, '0')}\0`, 136, 12, 'ascii')
   header.write('        ', 148, 8, 'ascii')
   header.write(type, 156, 1, 'ascii')
   header.write(linkname, 157, 100, 'utf8')
@@ -75,6 +97,27 @@ test('a tar archive round-trips through the entry reader', () => {
   assert.equal(entries[2].type, 'symlink')
   assert.equal(entries[2].link_target, '/bin/busybox')
   assert.equal(readTarEntryBytes(archive, entries[0]).toString('utf8'), 'root:x:0:0\n')
+})
+
+test('the entry reader accepts GNU base-256 numeric fields before enforcing bounds', () => {
+  const mtime = 1754661730
+  const archive = tar([{
+    name: 'app.bin',
+    content: 'x',
+    mtime,
+    base256Mtime: true,
+  }])
+  assert.equal(readTarEntries(archive, DEFAULT_NORMALIZER_LIMITS)[0].mtime, mtime)
+
+  const eightGibibytes = 8 * 1024 * 1024 * 1024
+  const declaredLargeEntry = Buffer.concat([
+    tarHeader({ name: 'layer.tar', size: eightGibibytes, base256Size: true }),
+    Buffer.alloc(1024),
+  ])
+  assert.throws(
+    () => readTarEntries(declaredLargeEntry, DEFAULT_NORMALIZER_LIMITS),
+    /above the bounded limit/i,
+  )
 })
 
 test('the entry reader refuses a path that escapes the archive root', () => {
@@ -254,11 +297,11 @@ function multiPlatformOciLayout({ nested = false, digestlessLayer = false } = {}
   return tar(files)
 }
 
-async function assertArtifactNormalizationFailsClosed(archive, label, expectedError) {
-  assert.throws(
-    () => normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS),
-    expectedError,
-  )
+async function assertArtifactNormalizationIsGapped(archive, label, expectedError) {
+  const normalized = normalizeOciLayout(archive, DEFAULT_NORMALIZER_LIMITS)
+  assert.equal(normalized.format, 'unknown')
+  assert.deepEqual(normalized.layers, [])
+  assert.ok(normalized.gaps.some(({ reason }) => expectedError.test(reason)))
 
   const directory = await mkdtemp(join(tmpdir(), `rta-oci-${label}-`))
   const source = join(directory, 'image.tar')
@@ -271,14 +314,16 @@ async function assertArtifactNormalizationFailsClosed(archive, label, expectedEr
     target_class: 'LAB',
     phi_scope: 'none',
   })
-  await assert.rejects(adapter.run(planned, { out: output }), expectedError)
+  const written = await adapter.run(planned, { out: output })
+  assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => expectedError.test(reason)))
 
   const index = await readEvidenceIndex(output)
-  assert.equal(index.unreadable, true)
+  assert.equal(index.unreadable, false)
   assert.deepEqual(index.entries, [])
 }
 
-test('a duplicate authoritative index.json fails closed before last-wins lookup', async () => {
+test('a duplicate authoritative index.json becomes a gap before last-wins lookup', async () => {
   const layout = ociLayout({
     layers: [[{ name: '.wh.looks-deleted', content: 'still present' }]],
   })
@@ -287,32 +332,32 @@ test('a duplicate authoritative index.json fails closed before last-wins lookup'
     content: JSON.stringify({ schemaVersion: 2, manifests: [] }),
   })
 
-  await assertArtifactNormalizationFailsClosed(
+  await assertArtifactNormalizationIsGapped(
     poisoned,
     'duplicate-index',
     /duplicate normalized path: index\.json/i,
   )
 })
 
-test('nonzero and partial outer OCI trailers fail closed without mandatory matches', async () => {
+test('nonzero and partial outer OCI trailers become gaps without mandatory matches', async () => {
   const layout = ociLayout({
     layers: [[{ name: '.wh.looks-deleted', content: 'still present' }]],
   })
   const nonzeroBlock = Buffer.alloc(512)
   nonzeroBlock[17] = 1
-  await assertArtifactNormalizationFailsClosed(
+  await assertArtifactNormalizationIsGapped(
     Buffer.concat([layout, nonzeroBlock]),
     'nonzero-trailer',
     /nonzero data after the tar terminator/i,
   )
-  await assertArtifactNormalizationFailsClosed(
+  await assertArtifactNormalizationIsGapped(
     Buffer.concat([layout, Buffer.alloc(1)]),
     'partial-trailer',
     /partial trailing block after the tar terminator/i,
   )
 
   const withoutTerminator = layout.subarray(0, layout.length - 1024)
-  await assertArtifactNormalizationFailsClosed(
+  await assertArtifactNormalizationIsGapped(
     Buffer.concat([withoutTerminator, Buffer.from([1])]),
     'unterminated-partial-trailer',
     /partial trailing block without a complete tar header/i,

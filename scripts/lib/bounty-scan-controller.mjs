@@ -165,16 +165,17 @@ export async function runScan({
     profile,
   )
   if (requestPlan.note !== null) coverageNotes.push(requestPlan.note)
-  const unsafeRequest = requestPlan.items.find((request) =>
-    !SAFE_REQUEST_METHODS.has(request.method))
-  if (unsafeRequest !== undefined) {
-    throw new Error(
-      `bounty scan refuses state-changing captured method ${unsafeRequest.method}; use the mutation campaign`,
-    )
-  }
-
   const crafted = activeClasses.includes('error-injection')
     || activeClasses.includes('ssrf-oob')
+  if (crafted) {
+    const unsafeRequest = requestPlan.items.find((request) =>
+      !SAFE_REQUEST_METHODS.has(request.method))
+    if (unsafeRequest !== undefined) {
+      throw new Error(
+        `bounty scan refuses state-changing captured method ${unsafeRequest.method}; use the mutation campaign`,
+      )
+    }
+  }
   if (crafted && scope.authorization.permissions.active_testing !== true) {
     throw new Error(
       'scanning sends crafted payloads and requires active_testing in the sealed permissions',

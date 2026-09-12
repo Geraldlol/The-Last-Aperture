@@ -42,6 +42,27 @@ function readOctal(block, offset, length) {
   return value
 }
 
+function readTarNumber(block, offset, length, { allowNegative = false } = {}) {
+  const field = block.subarray(offset, offset + length)
+  if ((field[0] & 0x80) === 0) return readOctal(block, offset, length)
+
+  // GNU/POSIX tar uses 0x80 plus an unsigned big-endian payload for positive
+  // base-256 values and 0xff plus a two's-complement payload for negatives.
+  // Size fields remain non-negative; mtimes may validly predate the epoch.
+  if (field[0] !== 0x80 && field[0] !== 0xff) {
+    throw new RangeError('tar header contains an unsupported base-256 value')
+  }
+  let value = 0n
+  for (const byte of field.subarray(1)) value = (value << 8n) | BigInt(byte)
+  if (field[0] === 0xff) value -= 1n << BigInt((length - 1) * 8)
+  if ((!allowNegative && value < 0n)
+    || value < BigInt(Number.MIN_SAFE_INTEGER)
+    || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError('tar header base-256 value is outside the supported safe integer range')
+  }
+  return Number(value)
+}
+
 function assertTarHeaderChecksum(header) {
   const expected = readOctal(header, 148, 8)
   let actual = 0
@@ -92,7 +113,7 @@ export function readTarEntries(buffer, limits = DEFAULT_NORMALIZER_LIMITS) {
     const prefix = readString(header, 345, 155)
     const name = readString(header, 0, 100)
     const path = assertContainedPath(prefix ? `${prefix}/${name}` : name)
-    const size = readOctal(header, 124, 12)
+    const size = readTarNumber(header, 124, 12)
 
     if (seenPaths.has(path)) {
       throw new RangeError(`archive contains duplicate normalized path: ${path}`)
@@ -125,7 +146,7 @@ export function readTarEntries(buffer, limits = DEFAULT_NORMALIZER_LIMITS) {
       path,
       mode: readOctal(header, 100, 8) & 0o7777,
       size,
-      mtime: readOctal(header, 136, 12),
+      mtime: readTarNumber(header, 136, 12, { allowNegative: true }),
       type: TYPE_BY_FLAG.get(flag) ?? 'other',
       link_target: readString(header, 157, 100),
       offset: contentOffset,
@@ -547,8 +568,25 @@ export function normalizeOciLayout(buffer, limits = DEFAULT_NORMALIZER_LIMITS) {
     }
   }
   const gaps = []
-  const archive = decompressIfGzipped(buffer)
-  const entries = readTarEntries(archive, effectiveLimits)
+  const unreadable = (area, error) => ({
+    format: 'unknown',
+    config: { digest: null, history: [], diff_ids: [] },
+    layers: [],
+    orphan_blobs: [],
+    gaps: [{ area, reason: `could not read ${area}: ${error?.message ?? String(error)}` }],
+  })
+  let archive
+  try {
+    archive = decompressIfGzipped(buffer)
+  } catch (error) {
+    return unreadable('outer archive compression', error)
+  }
+  let entries
+  try {
+    entries = readTarEntries(archive, effectiveLimits)
+  } catch (error) {
+    return unreadable('outer archive', error)
+  }
   const byPath = new Map(entries.map((entry) => [entry.path, entry]))
 
   if (byPath.has('index.json') && byPath.has('oci-layout')) {
