@@ -70,7 +70,7 @@ test('an uncheckable absence makes the finding UNVERIFIED', () => {
 test('a verdict never carries absolutePath even when inventory entries have one', () => {
   const entries = [{
     ...ENTRIES[0],
-    absolutePath: 'C:\\Users\\geral\\secret-checkout\\src\\routes\\invoices.ts',
+    absolutePath: 'C:\\Users\\example-operator\\secret-checkout\\src\\routes\\invoices.ts',
   }]
   const v = verifyFindingExistence(
     withQuote(2, 'const invoice = await repo.findById(req.params.id)'), entries)

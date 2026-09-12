@@ -275,6 +275,42 @@ test('HAR import preserves field and carrier names needed to reconstruct auth', 
   assert.deepEqual(exchange.response.redirect.query_parameters.map(({ name }) => name), ['view'])
 })
 
+test('HAR import classifies secondary token and API-key headers as credential carriers', () => {
+  const evidence = importWebHarEvidence({ log: { entries: [harEntry({
+    url: 'https://app.example/api',
+    requestHeaders: [
+      { name: 'X-Access-Token', value: 'request-token' },
+      { name: 'X-Goog-Api-Key', value: 'request-key' },
+      { name: 'X-OTP', value: 'request-otp' },
+      { name: 'X-Service-Token', value: 'request-service-token' },
+    ],
+    responseHeaders: [
+      { name: 'Api-Key', value: 'response-key' },
+      { name: 'X-Amz-Security-Token', value: 'response-token' },
+      { name: 'X-Hub-Signature-256', value: 'response-hub-signature' },
+      { name: 'X-Service-Signature', value: 'response-signature' },
+      { name: 'X-Verification-Code', value: 'response-code' },
+    ],
+  })] } }, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+  })
+
+  assert.deepEqual(evidence.entries[0].request.credential_carriers, [
+    'header:x-access-token',
+    'header:x-goog-api-key',
+    'header:x-otp',
+    'header:x-service-token',
+  ])
+  assert.deepEqual(evidence.entries[0].response.credential_carriers, [
+    'header:api-key',
+    'header:x-amz-security-token',
+    'header:x-hub-signature-256',
+    'header:x-service-signature',
+    'header:x-verification-code',
+  ])
+})
+
 test('HAR import requires explicit canonical origins and rejects malformed input bounds', () => {
   assert.throws(
     () => importWebHarEvidence(genericApplicationHar(), {
@@ -320,6 +356,9 @@ test('HAR import enforces an exact raw path-prefix boundary before retaining ent
     harEntry({ url: 'https://app.example/admin' }),
     harEntry({ url: 'https://app.example/app%2Fencoded-boundary' }),
     harEntry({ url: 'https://app.example/app/segment%2F..%2F..%2Fadmin' }),
+    harEntry({ url: 'https://app.example/app/%252e%252e%252fadmin' }),
+    harEntry({ url: 'https://app.example/app/%25252e%25252e%25252fadmin' }),
+    harEntry({ url: 'https://app.example/app/%25%32%65%25%32%65%25%32%66admin' }),
   ] } }, {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
@@ -328,7 +367,7 @@ test('HAR import enforces an exact raw path-prefix boundary before retaining ent
   })
 
   assert.deepEqual(evidence.entries.map(({ sequence }) => sequence), [1, 2])
-  assert.equal(evidence.skipped.off_scope, 4)
+  assert.equal(evidence.skipped.off_scope, 7)
   assert.equal(evidence.entries[0].response.redirect, null)
   assert.deepEqual(evidence.entries[0].response.destinations.map((destination) => ({
     field: destination.field_path,
@@ -347,6 +386,9 @@ test('HAR import rejects non-canonical and ambiguous target path prefixes', () =
     '/app?query=1',
     '/app#fragment',
     '/app%2fadmin',
+    '/app/%252e%252e%252fadmin',
+    '/app/%25252e%25252e%25252fadmin',
+    '/app/%25%32%65%25%32%65%25%32%66admin',
     '/app%',
   ]
   for (const targetPathPrefix of prefixes) {
@@ -528,6 +570,104 @@ test('HAR import derives path action class before path segments are masked', () 
   assert.equal(evidence.entries[0].request.path_action_class, 'WRITE_ACTION')
 })
 
+test('HAR import classifies layered method overrides and compound write routes as writes', () => {
+  let deeplyEncodedName = '%61ction'
+  let deeplyEncodedValue = '%64elete'
+  for (let index = 0; index < 16; index += 1) {
+    deeplyEncodedName = encodeURIComponent(deeplyEncodedName)
+    deeplyEncodedValue = encodeURIComponent(deeplyEncodedValue)
+  }
+  const evidence = importWebHarEvidence({ log: { entries: [
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read?_method=DELETE',
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/delete-item?view=read',
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read?act%2569on=%2564elete',
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read',
+      requestHeaders: [{ name: 'X-HTTP-Method-Override', value: 'DELETE' }],
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read',
+      requestHeaders: [{ name: 'X-Original-URL', value: '/records/delete' }],
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read',
+      requestHeaders: [{ name: 'X-Method-Override', value: 'CUSTOM' }],
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read',
+      requestHeaders: [{ name: 'X-HTTP-Method-Override', value: 'DELETE_STATUS' }],
+    }),
+    harEntry({
+      method: 'GET',
+      url: `https://app.example/records/read?${deeplyEncodedName}=${deeplyEncodedValue}`,
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read',
+      requestHeaders: [{ name: 'X-Forwarded-Prefix', value: '/records/delete' }],
+    }),
+    harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read?action=DELETE_STATUS',
+      requestHeaders: [{ name: 'X-Original-URL', value: '/records/read?action=DELETE_STATUS' }],
+    }),
+  ] } }, {
+    sourceSha256: SOURCE_HASH,
+    targetOrigins: ['https://app.example'],
+    pathLiterals: ['records', 'read', 'delete-item'],
+  })
+
+  assert.deepEqual(evidence.entries[0].request.query_parameters[0].semantic_classes, ['WRITE_ACTION'])
+  assert.equal(evidence.entries[1].request.path_action_class, 'WRITE_ACTION')
+  assert.deepEqual(evidence.entries[2].request.query_parameters[0].semantic_classes, ['WRITE_ACTION'])
+  assert.equal(evidence.entries[3].request.path_action_class, 'WRITE_ACTION')
+  assert.equal(evidence.entries[4].request.path_action_class, 'WRITE_ACTION')
+  assert.equal(evidence.entries[5].request.path_action_class, 'OTHER_ACTION')
+  assert.equal(evidence.entries[6].request.path_action_class, 'OTHER_ACTION')
+  assert.deepEqual(evidence.entries[7].request.query_parameters[0].semantic_classes, ['WRITE_ACTION'])
+  assert.equal(evidence.entries[8].request.path_action_class, 'WRITE_ACTION')
+  assert.equal(evidence.entries[9].request.path_action_class, 'WRITE_ACTION')
+  assert.deepEqual(evidence.entries[9].request.query_parameters[0].semantic_classes, ['WRITE_ACTION'])
+
+  let excessiveName = '%61ction'
+  for (let index = 0; index < 40; index += 1) excessiveName = encodeURIComponent(excessiveName)
+  assert.throws(
+    () => importWebHarEvidence({ log: { entries: [harEntry({
+      method: 'GET',
+      url: `https://app.example/records/read?${excessiveName}=read`,
+    })] } }, {
+      sourceSha256: SOURCE_HASH,
+      targetOrigins: ['https://app.example'],
+    }),
+    (error) => error?.code === 'WEB_SESSION_EVIDENCE_INVALID'
+      && /layered encoding limit/u.test(error.message),
+  )
+  assert.throws(
+    () => importWebHarEvidence({ log: { entries: [harEntry({
+      method: 'GET',
+      url: 'https://app.example/records/read?%ZZaction=read',
+    })] } }, {
+      sourceSha256: SOURCE_HASH,
+      targetOrigins: ['https://app.example'],
+    }),
+    (error) => error?.code === 'WEB_SESSION_EVIDENCE_INVALID'
+      && /layered encoding limit/u.test(error.message),
+  )
+})
+
 test('app-specific path words require explicit structural declarations', () => {
   const appSpecific = ['workspacealpha', 'workspacebeta', 'workspacegamma', 'workspacedelta', 'workspaceepsilon', 'workspacezeta']
   const sample = { log: { entries: [harEntry({
@@ -597,6 +737,21 @@ test('HAR import makes body shape omissions and truncation explicit', () => {
       url: 'https://app.example/api/large',
       postData: { mimeType: 'application/json', text: overLimitJson },
     }),
+    harEntry({
+      method: 'POST',
+      url: 'https://app.example/api/forged-size',
+      postData: { mimeType: 'application/json', size: 1, text: overLimitJson },
+    }),
+    harEntry({
+      method: 'POST',
+      url: 'https://app.example/api/forged-parameter-size',
+      postData: {
+        mimeType: 'application/x-www-form-urlencoded',
+        size: 1,
+        text: 'x=1',
+        params: [{ name: 'payload', value: 'x'.repeat(1_048_577) }],
+      },
+    }),
   ] } }, {
     sourceSha256: SOURCE_HASH,
     targetOrigins: ['https://app.example'],
@@ -610,6 +765,12 @@ test('HAR import makes body shape omissions and truncation explicit', () => {
   assert.equal(evidence.entries[2].request.body.shape_status, 'OMITTED_SIZE_LIMIT')
   assert.equal(evidence.entries[2].request.body.byte_bucket, 'OVER_1_MIB')
   assert.deepEqual(evidence.entries[2].request.body.fields, [])
+  assert.equal(evidence.entries[3].request.body.shape_status, 'OMITTED_SIZE_LIMIT')
+  assert.equal(evidence.entries[3].request.body.byte_bucket, 'OVER_1_MIB')
+  assert.deepEqual(evidence.entries[3].request.body.fields, [])
+  assert.equal(evidence.entries[4].request.body.shape_status, 'OMITTED_SIZE_LIMIT')
+  assert.equal(evidence.entries[4].request.body.byte_bucket, 'OVER_1_MIB')
+  assert.deepEqual(evidence.entries[4].request.body.fields, [])
   assert.deepEqual(evidence.gaps.map(({ code }) => code), [
     'HAR_METADATA_ONLY',
     'BODY_FIELDS_TRUNCATED',

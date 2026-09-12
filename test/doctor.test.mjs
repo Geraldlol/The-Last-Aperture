@@ -3,12 +3,34 @@ import assert from 'node:assert/strict'
 import * as fs from 'node:fs/promises'
 import { join, dirname, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { inspectReadiness, renderReadiness, controllerRuntimePaths, READINESS_INPUT_LIMITS } from '../scripts/lib/doctor.mjs'
 import { assessEnvironmentCoverage } from '../scripts/lib/capabilities.mjs'
 
 const schemaSource = new URL('../schemas/proof-worker.schema.json', import.meta.url)
 const runtime = controllerRuntimePaths()
+const fixtureManifest = Object.freeze({
+  name: 'last-aperture',
+  version: '0.14.0',
+  dependencies: Object.freeze({ acorn: '8.15.0' }),
+})
+
+function fixtureLockfile() {
+  return {
+    name: fixtureManifest.name,
+    version: fixtureManifest.version,
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      '': {
+        name: fixtureManifest.name,
+        version: fixtureManifest.version,
+        dependencies: { ...fixtureManifest.dependencies },
+      },
+      'node_modules/acorn': { version: fixtureManifest.dependencies.acorn },
+    },
+  }
+}
 
 function worker(overrides = {}) {
   return {
@@ -20,23 +42,57 @@ function worker(overrides = {}) {
   }
 }
 
-async function fixture(t) {
-  const root = await fs.mkdtemp(join(tmpdir(), 'rta-doctor-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+async function fixture(t, { installed = false } = {}) {
+  const fixtureRoot = await fs.mkdtemp(join(tmpdir(), 'rta-doctor-'))
+  const root = installed ? join(fixtureRoot, 'host/node_modules/last-aperture') : fixtureRoot
+  await fs.mkdir(root, { recursive: true })
+  t.after(() => fs.rm(fixtureRoot, { recursive: true, force: true }))
   const files = {
-    'package.json': JSON.stringify({ name: 'last-aperture', dependencies: { acorn: '8.15.0' } }),
-    'package-lock.json': '{}',
+    'package.json': JSON.stringify(fixtureManifest),
+    'package-lock.json': JSON.stringify(fixtureLockfile()),
+    'npm-shrinkwrap.json': JSON.stringify(fixtureLockfile()),
     'scripts/audit.mjs': 'throw new Error("controller must not execute during doctor")',
+    'scripts/engage.mjs': 'throw new Error("engagement must not execute during doctor")',
+    'scripts/http-recon.mjs': 'throw new Error("HTTP recon must not execute during doctor")',
+    'scripts/http-authed.mjs': 'throw new Error("authenticated HTTP must not execute during doctor")',
+    'scripts/reverse.mjs': 'throw new Error("reverse routes must not execute during doctor")',
+    'scripts/acquire.mjs': 'throw new Error("acquisition must not execute during doctor")',
+    'scripts/bounty.mjs': 'throw new Error("bounty routes must not execute during doctor")',
+    'scripts/lib/engagement-route-registry.mjs': 'throw new Error("registry must not execute during doctor")',
+    'scripts/ghidra/LastApertureExport.java': 'fixture',
+    'scripts/ghidra/GhidraBundleLocationAgent.java.source': 'fixture',
+    'scripts/ghidra/GhidraBundleLocationAgent.mf': 'fixture',
+    'scripts/frida/native-call-trace-v1.js': 'fixture',
+    'scripts/frida/native-call-trace-v2.js': 'fixture',
+    'browser/http-authed-chrome/manifest.json': '{}',
+    'integrations/burp-montoya/src/main/java/dev/lastaperture/burp/LastApertureBurpExtension.java': 'fixture',
     'skills/last-aperture/SKILL.md': '# fixture',
+    'schemas/engagement-intake.schema.json': '{}',
+    'schemas/engagement-authority.schema.json': '{}',
+    'schemas/engagement-manifest.schema.json': '{}',
+    'schemas/engagement-ledger-record.schema.json': '{}',
     'schemas/proof-worker.schema.json': await fs.readFile(schemaSource, 'utf8'),
     'node_modules/acorn/package.json': JSON.stringify({ name: 'acorn', version: '8.15.0' }),
     'node_modules/acorn/index.js': 'throw new Error("dependency must not execute during doctor")',
     'worker.json': JSON.stringify(worker()),
     'credential-secret.txt': 'DO_NOT_READ_SECRET_MARKER',
+    'tools/analyzeHeadless.bat': '@echo off',
+    'tools/analyzeHeadless': '#!/bin/sh\nexit 0\n',
+    'tools/javac.exe': 'fixture',
+    'tools/jar.exe': 'fixture',
+    'tools/frida.exe': 'fixture',
+    'tools/burpsuite.jar': 'fixture',
+    'tools/last-aperture-burp.jar': 'fixture',
+    'tools/crane.exe': 'fixture',
   }
   for (const [name, content] of Object.entries(files)) {
     await fs.mkdir(dirname(join(root, name)), { recursive: true })
     await fs.writeFile(join(root, name), content)
+  }
+  if (process.platform !== 'win32') {
+    for (const name of ['analyzeHeadless', 'frida.exe', 'crane.exe']) {
+      await fs.chmod(join(root, 'tools', name), 0o755)
+    }
   }
   return root
 }
@@ -52,6 +108,9 @@ async function fakeRuntimes(root, overrides = {}) {
       return fs.lstat(path)
     },
     realpath: async (path) => path === runtime.docker || path === runtime.archive ? path : fs.realpath(path),
+    access: async (path, mode) => path === runtime.docker || path === runtime.archive
+      ? undefined
+      : fs.access(path, mode),
     ...overrides,
   }
 }
@@ -89,6 +148,221 @@ test('missing dependency metadata and worker config produce actionable blockers 
   assert.equal(find(report, 'docker-daemon').status, 'NOT_CHECKED')
 })
 
+test('doctor projects static readiness for every unified host-tool family without executing tools', async (t) => {
+  const root = await fixture(t)
+  const ghidraLauncher = process.platform === 'win32' ? 'analyzeHeadless.bat' : 'analyzeHeadless'
+  const toolPaths = Object.fromEntries([
+    ['ghidra', ghidraLauncher],
+    ['javac', 'javac.exe'],
+    ['jar', 'jar.exe'],
+    ['frida', 'frida.exe'],
+    ['burpDesktop', 'burpsuite.jar'],
+    ['burpExtension', 'last-aperture-burp.jar'],
+    ['crane', 'crane.exe'],
+  ].map(([name, file]) => [name, join(root, 'tools', file)]))
+  const report = await inspectReadiness({
+    projectRoot: root,
+    fileSystem: await fakeRuntimes(root),
+    toolPaths,
+    environment: { Path: join(root, 'tools') },
+  })
+  for (const id of ['ghidra-executable', 'frida-executable', 'burp-desktop', 'burp-extension', 'crane-executable']) {
+    assert.equal(find(report, id).status, 'PASS', id)
+  }
+  for (const id of ['jdk-javac-executable', 'jdk-jar-executable']) {
+    assert.equal(find(report, id).status, process.platform === 'win32' ? 'PASS' : 'NOT_APPLICABLE', id)
+  }
+  for (const id of [
+    'engagement-orchestration', 'ghidra-static-reverse', 'frida-typed-reverse',
+    'frida-local-reverse', 'web-protocol-reconstruction', 'burp-proxy-history-export',
+  ]) assert.equal(report.workflows.find((item) => item.id === id).status, 'STATIC_CHECKS_PASSED', id)
+  assert.equal(report.workflows.find((item) => item.id === 'oci-registry-acquisition').status, 'UNAVAILABLE')
+
+  const unconfigured = await inspectReadiness({ projectRoot: root, fileSystem: await fakeRuntimes(root) })
+  assert.equal(find(unconfigured, 'frida-executable').status, 'NOT_CONFIGURED')
+  assert.equal(unconfigured.workflows.find((item) => item.id === 'frida-typed-reverse').status, 'PREREQUISITES_MISSING')
+})
+
+test('doctor does not report hard-linked route tools or assets as ready', async (t) => {
+  const root = await fixture(t)
+  const fridaPath = join(root, 'tools/frida.exe')
+  await fs.link(fridaPath, join(root, 'tools/frida-alias.exe'))
+  const exporterPath = join(root, 'scripts/ghidra/LastApertureExport.java')
+  await fs.link(exporterPath, join(root, 'scripts/ghidra/LastApertureExport.alias'))
+
+  const report = await inspectReadiness({
+    projectRoot: root,
+    fileSystem: await fakeRuntimes(root),
+    toolPaths: { frida: fridaPath },
+  })
+  assert.equal(find(report, 'frida-executable').status, 'BLOCKED')
+  assert.equal(find(report, 'ghidra-exporter-source').status, 'BLOCKED')
+  assert.equal(report.workflows.find((item) => item.id === 'frida-typed-reverse').status, 'PREREQUISITES_MISSING')
+})
+
+test('doctor does not report an empty shipped route asset as ready', async (t) => {
+  const root = await fixture(t)
+  await fs.writeFile(join(root, 'scripts/frida/native-call-trace-v2.js'), '')
+  const report = await inspectReadiness({
+    projectRoot: root,
+    fileSystem: await fakeRuntimes(root),
+    toolPaths: { frida: join(root, 'tools/frida.exe') },
+  })
+  assert.equal(find(report, 'frida-v2-agent').status, 'BLOCKED')
+  assert.equal(report.workflows.find((item) => item.id === 'frida-typed-reverse').status, 'PREREQUISITES_MISSING')
+})
+
+test('doctor requires the shipped assets that engagement and reverse routes open at runtime', async (t) => {
+  const root = await fixture(t)
+  const toolPaths = Object.fromEntries([
+    ['ghidra', 'analyzeHeadless.bat'],
+    ['javac', 'javac.exe'],
+    ['jar', 'jar.exe'],
+    ['frida', 'frida.exe'],
+  ].map(([name, file]) => [name, join(root, 'tools', file)]))
+  const cases = [
+    ['scripts/http-recon.mjs', 'engagement-orchestration', 'http-recon-entrypoint'],
+    ['scripts/http-authed.mjs', 'engagement-orchestration', 'http-authed-entrypoint'],
+    ['schemas/engagement-intake.schema.json', 'engagement-orchestration', 'engagement-intake-schema'],
+    ['schemas/engagement-authority.schema.json', 'engagement-orchestration', 'engagement-authority-schema'],
+    ['schemas/engagement-manifest.schema.json', 'engagement-orchestration', 'engagement-manifest-schema'],
+    ['schemas/engagement-ledger-record.schema.json', 'engagement-orchestration', 'engagement-ledger-record-schema'],
+    ['scripts/ghidra/LastApertureExport.java', 'ghidra-static-reverse', 'ghidra-exporter-source'],
+    ['scripts/ghidra/GhidraBundleLocationAgent.java.source', 'ghidra-static-reverse', 'ghidra-windows-agent-source'],
+    ['scripts/ghidra/GhidraBundleLocationAgent.mf', 'ghidra-static-reverse', 'ghidra-windows-agent-manifest'],
+    ['scripts/frida/native-call-trace-v1.js', 'frida-local-reverse', 'frida-v1-agent'],
+    ['scripts/frida/native-call-trace-v2.js', 'frida-typed-reverse', 'frida-v2-agent'],
+  ]
+  for (const [relativePath, workflowId, checkId] of cases) {
+    const path = join(root, relativePath)
+    const bytes = await fs.readFile(path)
+    await fs.unlink(path)
+    const report = await inspectReadiness({ projectRoot: root, platform: 'win32', fileSystem: await fakeRuntimes(root), toolPaths })
+    const workflow = report.workflows.find((item) => item.id === workflowId)
+    assert.equal(workflow.status, 'PREREQUISITES_MISSING', relativePath)
+    assert.ok(workflow.blocking_checks.includes(checkId), `${relativePath}: ${workflow.blocking_checks}`)
+    await fs.writeFile(path, bytes)
+  }
+})
+
+test('Ghidra JDK and compatibility-agent prerequisites apply only to Windows batch launchers', async (t) => {
+  const root = await fixture(t)
+  const fileSystem = await fakeRuntimes(root)
+  const batch = join(root, 'tools/analyzeHeadless.bat')
+  const native = join(root, 'tools/frida.exe')
+
+  const windowsBatch = await inspectReadiness({ projectRoot: root, platform: 'win32', fileSystem, toolPaths: { ghidra: batch } })
+  assert.deepEqual(
+    windowsBatch.workflows.find((item) => item.id === 'ghidra-static-reverse').blocking_checks,
+    ['jdk-javac-executable', 'jdk-jar-executable'],
+  )
+
+  for (const [platform, ghidra] of [['win32', native], ['linux', batch], ['darwin', batch]]) {
+    const report = await inspectReadiness({ projectRoot: root, platform, fileSystem, toolPaths: { ghidra } })
+    assert.equal(report.workflows.find((item) => item.id === 'ghidra-static-reverse').status, 'STATIC_CHECKS_PASSED', `${platform}:${ghidra}`)
+    assert.equal(find(report, 'jdk-javac-executable').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:javac`)
+    assert.equal(find(report, 'jdk-jar-executable').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:jar`)
+  }
+})
+
+test('Windows batch Ghidra readiness binds Java tools to the paths runtime discovery will select', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const root = await fixture(t)
+  const runtimeTools = join(root, 'tools')
+  const arbitraryTools = join(root, 'arbitrary-tools')
+  await fs.mkdir(arbitraryTools)
+  await fs.writeFile(join(arbitraryTools, 'javac.exe'), 'unselected compiler')
+  await fs.writeFile(join(arbitraryTools, 'jar.exe'), 'unselected archive builder')
+  const report = await inspectReadiness({
+    projectRoot: root,
+    platform: 'win32',
+    fileSystem: await fakeRuntimes(root),
+    environment: { Path: runtimeTools },
+    toolPaths: {
+      ghidra: join(runtimeTools, 'analyzeHeadless.bat'),
+      javac: join(arbitraryTools, 'javac.exe'),
+      jar: join(arbitraryTools, 'jar.exe'),
+    },
+  })
+  assert.equal(find(report, 'jdk-javac-executable').status, 'BLOCKED')
+  assert.equal(find(report, 'jdk-jar-executable').status, 'BLOCKED')
+  assert.deepEqual(
+    report.workflows.find((item) => item.id === 'ghidra-static-reverse').blocking_checks,
+    ['jdk-javac-executable', 'jdk-jar-executable'],
+  )
+})
+
+test('configured native executables require host execute permission', async (t) => {
+  const root = await fixture(t)
+  const fridaPath = join(root, 'tools/frida.exe')
+  const base = await fakeRuntimes(root)
+  const fileSystem = {
+    ...base,
+    access: async (path, mode) => {
+      if (path === fridaPath) {
+        const error = new Error('execute access denied')
+        error.code = 'EACCES'
+        throw error
+      }
+      return base.access(path, mode)
+    },
+  }
+  const report = await inspectReadiness({
+    projectRoot: root,
+    platform: 'linux',
+    fileSystem,
+    toolPaths: { frida: fridaPath },
+  })
+  assert.equal(find(report, 'frida-executable').status, 'BLOCKED')
+  assert.equal(report.workflows.find((item) => item.id === 'frida-local-reverse').status, 'PREREQUISITES_MISSING')
+})
+
+test('a publishable shrinkwrap satisfies the dependency-lock prerequisite', async (t) => {
+  const root = await fixture(t)
+  await fs.unlink(join(root, 'package-lock.json'))
+  const report = await inspectReadiness({ projectRoot: root, fileSystem: await fakeRuntimes(root) })
+  assert.equal(find(report, 'dependency-lockfile').status, 'PASS')
+  assert.equal(report.workflows.find((item) => item.id === 'source-review').status, 'STATIC_CHECKS_PASSED')
+})
+
+test('an existing malformed shrinkwrap blocks readiness instead of falling through to a source lockfile', async (t) => {
+  const root = await fixture(t)
+  await fs.writeFile(join(root, 'npm-shrinkwrap.json'), '{}')
+  const report = await inspectReadiness({ projectRoot: root, fileSystem: await fakeRuntimes(root) })
+  assert.equal(find(report, 'dependency-lockfile').status, 'BLOCKED')
+  assert.equal(report.workflows.find((item) => item.id === 'source-review').status, 'PREREQUISITES_MISSING')
+})
+
+test('doctor resolves dependency metadata from a normal hoisted package installation', async (t) => {
+  const root = await fixture(t, { installed: true })
+  const nested = join(root, 'node_modules/acorn/package.json')
+  const hoisted = join(dirname(root), 'acorn/package.json')
+  await fs.mkdir(dirname(hoisted), { recursive: true })
+  await fs.rename(nested, hoisted)
+  const report = await inspectReadiness({ projectRoot: root, fileSystem: await fakeRuntimes(root) })
+  assert.equal(find(report, 'dependency:acorn').status, 'PASS')
+  assert.equal(report.workflows.find((item) => item.id === 'source-review').status, 'STATIC_CHECKS_PASSED')
+})
+
+test('the installed root command forwards explicit host-tool paths to doctor', async (t) => {
+  const root = await fixture(t)
+  const report = JSON.parse(execFileSync(process.execPath, [
+    'scripts/audit.mjs', 'doctor', '--json', '--frida', join(root, 'tools/frida.exe'),
+  ], { encoding: 'utf8' }))
+  assert.equal(find(report, 'frida-executable').status, 'PASS')
+})
+
+test('the installed root command validates every doctor path before bundle I/O', () => {
+  const invalidToolPath = resolve(`${'a'.repeat(4096)}.exe`)
+  const child = spawnSync(process.execPath, [
+    'scripts/audit.mjs', 'doctor', '--bundle', 'missing-review-bundle', '--frida', invalidToolPath,
+  ], { encoding: 'utf8', shell: false, windowsHide: true })
+  assert.equal(child.status, 1)
+  assert.match(child.stderr, /absolute local filesystem path is required/i)
+  assert.doesNotMatch(child.stderr, /ENOENT|missing-review-bundle/)
+})
+
 test('worker config validation rejects malformed values, unknown fields, wrong runtime, and missing resource bounds without exposing contents', async (t) => {
   const root = await fixture(t)
   const fileSystem = await fakeRuntimes(root)
@@ -122,6 +396,16 @@ test('doctor rejects remote and relative operator endpoints before filesystem ac
     await assert.rejects(inspectReadiness({ projectRoot, fileSystem }), /local filesystem|absolute/)
   }
   await assert.rejects(inspectReadiness({ projectRoot: resolve('.'), workerConfigPath: '\\\\server\\share\\secret.json', fileSystem }), /local filesystem/)
+  await assert.rejects(inspectReadiness({
+    projectRoot: resolve('.'),
+    toolPaths: { frida: '\\\\server\\share\\frida.exe' },
+    fileSystem,
+  }), /local filesystem/)
+  await assert.rejects(inspectReadiness({
+    projectRoot: resolve('.'),
+    toolPaths: { undeclaredTool: resolve('tool.exe') },
+    fileSystem,
+  }), /declared local tool endpoints/)
   assert.equal(reads, 0)
 })
 
@@ -151,7 +435,7 @@ test('linked worker config is rejected without reading its contents', async (t) 
 
 test('standalone doctor runs with no installed npm dependencies and strict inert arguments', async (t) => {
   const root = await fixture(t)
-  for (const path of ['scripts/doctor.mjs', 'scripts/lib/doctor.mjs', 'scripts/lib/capabilities.mjs', 'scripts/lib/canonical-order.mjs', 'scripts/lib/filesystem-endpoint.mjs', 'scripts/lib/main-module.mjs', 'scripts/lib/terminal-text.mjs']) {
+  for (const path of ['scripts/doctor.mjs', 'scripts/lib/doctor.mjs', 'scripts/lib/capabilities.mjs', 'scripts/lib/canonical-order.mjs', 'scripts/lib/filesystem-endpoint.mjs', 'scripts/lib/main-module.mjs', 'scripts/lib/terminal-text.mjs', 'scripts/lib/windows-java-tool-candidates.mjs']) {
     await fs.mkdir(dirname(join(root, path)), { recursive: true })
     await fs.copyFile(resolve(path), join(root, path))
   }
@@ -160,6 +444,10 @@ test('standalone doctor runs with no installed npm dependencies and strict inert
   const report = JSON.parse(execFileSync(process.execPath, [executable, '--json'], { encoding: 'utf8' }))
   assert.equal(find(report, 'dependency:acorn').status, 'BLOCKED')
   assert.equal(report.assessment, 'STATIC_ONLY')
+  const configured = JSON.parse(execFileSync(process.execPath, [
+    executable, '--json', '--frida', join(root, 'tools/frida.exe'),
+  ], { encoding: 'utf8' }))
+  assert.equal(find(configured, 'frida-executable').status, 'PASS')
   for (const args of [['--execute'], ['--worker'], ['--json', '--json'], ['--worker', '//remote/share.json']]) {
     assert.throws(() => execFileSync(process.execPath, [executable, ...args], { encoding: 'utf8', stdio: 'pipe' }))
   }

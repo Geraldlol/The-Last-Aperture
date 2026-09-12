@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   appendFile,
+  link,
   mkdir,
   mkdtemp,
   readFile,
@@ -18,13 +19,36 @@ import { test } from 'node:test'
 import {
   HTTP_AUTHED_CAMPAIGN_LEDGER_LIMITS,
   openHttpAuthedCampaignLedger,
+  requestHttpAuthedCampaignStop,
 } from '../scripts/lib/http-authed-campaign-ledger.mjs'
 import { canonicalJson, sha256Hex } from '../scripts/lib/http-authed-contracts.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
+import { publishFileCreateOnlyDurably } from '../scripts/lib/durable-file-publication.mjs'
 
 const GRANT = 'a'.repeat(64)
 const AUTHORIZATION_BINDING = 'b'.repeat(64)
 const NOW = new Date('2026-08-17T12:00:00.000Z')
+
+test('Win32 ledger publication uses a real create-only write-through move', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-win32-durable-create-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const source = join(parent, 'record.pending')
+  const destination = join(parent, 'record.json')
+  await writeFile(source, 'new record')
+  await writeFile(destination, 'existing record')
+  await assert.rejects(
+    publishFileCreateOnlyDurably(source, destination),
+    (error) => error.code === 'EEXIST',
+  )
+  assert.equal(await readFile(source, 'utf8'), 'new record')
+  assert.equal(await readFile(destination, 'utf8'), 'existing record')
+  await unlink(destination)
+  await publishFileCreateOnlyDurably(source, destination)
+  assert.equal(await readFile(destination, 'utf8'), 'new record')
+  await assert.rejects(readFile(source), (error) => error.code === 'ENOENT')
+})
 
 function candidate(overrides = {}) {
   return {
@@ -77,6 +101,234 @@ async function openLedger(directory, additions = {}) {
     ...additions,
   })
 }
+
+test('concurrent stop requests never expose a partial final marker', async (t) => {
+  const directory = await directoryFor(t, 'concurrent-stop-publication')
+  const ledger = await openLedger(directory)
+  await ledger.close()
+  const results = await Promise.all(Array.from({ length: 32 }, () => (
+    requestHttpAuthedCampaignStop({
+      directory,
+      campaignGrantSha256: GRANT,
+      operatorId: 'example-security-operator',
+      now: () => NOW,
+    })
+  )))
+  assert.equal(results.filter(({ status }) => status === 'STOP_REQUESTED').length, 1)
+  assert.equal(results.filter(({ status }) => status === 'ALREADY_REQUESTED').length, 31)
+})
+
+test('campaign stop inspection rejects a non-controller hard-link alias', async (t) => {
+  const directory = await directoryFor(t, 'stop-hard-link-alias')
+  const ledger = await openLedger(directory)
+  await requestHttpAuthedCampaignStop({
+    directory,
+    campaignGrantSha256: GRANT,
+    operatorId: 'example-security-operator',
+    now: () => NOW,
+  })
+  await link(
+    join(directory, '.http-authed-campaign-stop.json'),
+    join(directory, '.http-authed-campaign-stop.json.tmp-not-a-controller-publication'),
+  )
+  await assert.rejects(
+    ledger.observeStopRequest(),
+    (error) => error.code === 'HTTP_AUTHED_LEDGER_FILE_UNSAFE',
+  )
+  await ledger.close()
+})
+
+test('campaign stop inspection retries a valid publication link-count transition', async (t) => {
+  const directory = await directoryFor(t, 'stop-publication-link-transition')
+  const temporaryName = `.http-authed-campaign-stop.json.tmp-${process.pid}-cccccccccccccccccccccccc`
+  const temporaryPath = join(directory, temporaryName)
+  const targetPath = join(directory, '.http-authed-campaign-stop.json')
+  let temporaryRemoved = false
+  const ledger = await openLedger(directory, {
+    faultInjector: async (phase, detail) => {
+      if (phase !== 'after-ledger-file-lstat'
+        || detail?.label !== 'campaign stop request'
+        || temporaryRemoved) return
+      temporaryRemoved = true
+      await unlink(temporaryPath)
+    },
+  })
+  await writeFile(temporaryPath, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-authed-campaign-stop-request',
+    campaign_grant_sha256: GRANT,
+    operator_id: 'example-security-operator',
+    requested_at: NOW.toISOString(),
+    reason_code: 'OPERATOR_REQUESTED',
+  }))
+  await link(temporaryPath, targetPath)
+
+  assert.equal(await ledger.observeStopRequest(), true)
+  assert.equal(temporaryRemoved, true)
+  assert.equal(ledger.snapshot().stopped, true)
+  await ledger.close()
+})
+
+test('campaign stop inspection fails closed when the endpoint disappears after lstat', async (t) => {
+  const directory = await directoryFor(t, 'stop-endpoint-disappears')
+  let removed = false
+  const ledger = await openLedger(directory, {
+    faultInjector: async (phase, detail) => {
+      if (phase !== 'after-ledger-file-lstat'
+        || detail?.label !== 'campaign stop request'
+        || removed) return
+      removed = true
+      await unlink(join(directory, '.http-authed-campaign-stop.json'))
+    },
+  })
+  await requestHttpAuthedCampaignStop({
+    directory,
+    campaignGrantSha256: GRANT,
+    operatorId: 'example-security-operator',
+    now: () => NOW,
+  })
+  await assert.rejects(
+    ledger.observeStopRequest(),
+    (error) => error.code === 'HTTP_AUTHED_LEDGER_FILE_CHANGED',
+  )
+  assert.equal(removed, true)
+  await ledger.close()
+})
+
+test('ledger record inspection rejects an oversized endpoint swapped after lstat', async (t) => {
+  const directory = await directoryFor(t, 'bounded-record-swap')
+  const ledger = await openLedger(directory)
+  await ledger.close()
+  const recordPath = join(directory, '0000000000000000.http-authed-campaign.json')
+  let swapped = false
+  await assert.rejects(
+    openLedger(directory, {
+      initialize: false,
+      faultInjector: async (phase, detail) => {
+        if (phase !== 'after-ledger-file-lstat' || detail?.path !== recordPath || swapped) return
+        swapped = true
+        await rm(recordPath)
+        await writeFile(recordPath, 'x'.repeat(HTTP_AUTHED_CAMPAIGN_LEDGER_LIMITS.maxRecordBytes + 1))
+      },
+    }),
+    (error) => error.code === 'HTTP_AUTHED_LEDGER_FILE_UNSAFE',
+  )
+  assert.equal(swapped, true)
+})
+
+test('ledger reopen reconciles a fully published stop marker temporary', async (t) => {
+  const directory = await directoryFor(t, 'stop-publication-recovery')
+  const ledger = await openLedger(directory)
+  await ledger.close()
+  const temporaryName = '.http-authed-campaign-stop.json.tmp-1234-aaaaaaaaaaaaaaaaaaaaaaaa'
+  const temporaryPath = join(directory, temporaryName)
+  const targetPath = join(directory, '.http-authed-campaign-stop.json')
+  await writeFile(temporaryPath, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-authed-campaign-stop-request',
+    campaign_grant_sha256: GRANT,
+    operator_id: 'example-security-operator',
+    requested_at: NOW.toISOString(),
+    reason_code: 'OPERATOR_REQUESTED',
+  }))
+  await link(temporaryPath, targetPath)
+
+  const reopened = await openLedger(directory, { initialize: false })
+  assert.equal(await reopened.observeStopRequest(), true)
+  assert.equal(reopened.snapshot().stopped, true)
+  assert.equal((await readdir(directory)).includes(temporaryName), false)
+  await reopened.close()
+})
+
+test('ledger reopen does not delete a live stop publisher temporary before link', async (t) => {
+  const directory = await directoryFor(t, 'active-stop-publication')
+  const ledger = await openLedger(directory)
+  await ledger.close()
+  const temporaryName = `.http-authed-campaign-stop.json.tmp-${process.pid}-bbbbbbbbbbbbbbbbbbbbbbbb`
+  const temporaryPath = join(directory, temporaryName)
+  const targetPath = join(directory, '.http-authed-campaign-stop.json')
+  await writeFile(temporaryPath, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-authed-campaign-stop-request',
+    campaign_grant_sha256: GRANT,
+    operator_id: 'example-security-operator',
+    requested_at: NOW.toISOString(),
+    reason_code: 'OPERATOR_REQUESTED',
+  }))
+
+  const reopened = await openLedger(directory, { initialize: false })
+  assert.equal((await readdir(directory)).includes(temporaryName), true)
+  await link(temporaryPath, targetPath)
+  assert.equal(await reopened.observeStopRequest(), true)
+  assert.equal(reopened.snapshot().stopped, true)
+  await reopened.close()
+})
+
+test('handled redirect is bound to a continuation and gaps explicitly when it cannot reopen', async (t) => {
+  const directory = await directoryFor(t, 'redirect-continuation-gap')
+  const ledger = await openLedger(directory)
+  const source = candidate({ method: 'GET', url: 'https://synthetic.example.test/source' })
+  const continuation = candidate({ method: 'GET', url: 'https://synthetic.example.test/next' })
+  const sourceEnqueued = await ledger.enqueueCandidate({
+    candidateDraft: source,
+    provenance: 'SEALED_PLAN',
+  })
+  const continuationEnqueued = await ledger.enqueueCandidate({
+    candidateDraft: continuation,
+    provenance: 'DISCOVERED',
+  })
+  const lease = await ledger.leaseAction({
+    candidateDraft: source,
+    operatorId: 'example-security-operator',
+  })
+  await ledger.markPreDispatch({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'PROBE',
+    requestBindingSha256: 'c'.repeat(64),
+  })
+  await ledger.markOutcome({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    phase: 'PROBE',
+    outcome: 'SETTLED',
+    responseMetadata: {
+      status: 302,
+      bytes: 0,
+      headerNames: ['location'],
+      requestMayHaveBeenSent: true,
+    },
+  })
+  await ledger.recordHandledResponseStop({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    continuationActionIds: [continuationEnqueued.actionId],
+  })
+  await ledger.terminalizeAction({
+    actionId: lease.actionId,
+    leaseId: lease.leaseId,
+    outcome: 'PROBE_COMPLETED',
+  })
+  await ledger.close()
+
+  const reopened = await openLedger(directory, { initialize: false })
+  const sourceState = reopened.actionState(sourceEnqueued.actionId)
+  const continuationState = reopened.actionState(continuationEnqueued.actionId)
+  assert.deepEqual(sourceState.handled_response_stop.continuation_action_ids, [
+    continuationEnqueued.actionId,
+  ])
+  assert.equal(continuationState.outcome, 'CAMPAIGN_STOPPED')
+  assert.equal(
+    continuationState.terminal_reason_code,
+    'DISCOVERED_CANDIDATE_UNAVAILABLE_AFTER_RESTART',
+  )
+  assert.equal(reopened.snapshot().stopped, true)
+  assert.equal(
+    reopened.snapshot().stop_reason,
+    'DISCOVERED_CANDIDATE_UNAVAILABLE_AFTER_RESTART',
+  )
+  await reopened.close()
+})
 
 async function recordVerifiedBeforeState(ledger, lease, binding = '4'.repeat(64)) {
   await ledger.markPreDispatch({
@@ -356,6 +608,80 @@ test('an active writer lock cannot be stolen and the owner remains usable', asyn
   assert.equal(queued.created, true)
   assert.equal(owner.snapshot().queued_actions, 1)
   await owner.close()
+})
+
+test('a concurrent opener waits through the lock owner publication window', async (t) => {
+  const directory = await directoryFor(t, 'owner-publication-window')
+  let entered
+  let release
+  const enteredPromise = new Promise((resolvePromise) => { entered = resolvePromise })
+  const releasePromise = new Promise((resolvePromise) => { release = resolvePromise })
+  let held = false
+  const firstPromise = openLedger(directory, {
+    faultInjector: async (phase) => {
+      if (phase !== 'after-lock-directory-created' || held) return
+      held = true
+      entered()
+      await releasePromise
+    },
+  })
+  await enteredPromise
+  const secondPromise = openLedger(directory, {
+    initialize: false,
+    limits: { lockTimeoutMs: 2_000, staleLockMs: 1_000, lockPollMs: 1 },
+  })
+  release()
+  const first = await firstPromise
+  await first.close()
+  const second = await secondPromise
+  await second.close()
+  assert.equal(held, true)
+})
+
+test('a failed lock acquisition removes its controller-created partial directory', async (t) => {
+  const directory = await directoryFor(t, 'failed-owner-publication-cleanup')
+  let injected = false
+  await assert.rejects(
+    openLedger(directory, {
+      faultInjector: async (phase) => {
+        if (phase !== 'after-lock-directory-created' || injected) return
+        injected = true
+        throw new Error('synthetic owner publication failure')
+      },
+    }),
+    /synthetic owner publication failure/,
+  )
+  assert.equal((await readdir(directory)).includes('.http-authed-campaign.lock'), false)
+  const reopened = await openLedger(directory)
+  await reopened.close()
+})
+
+test('campaign ledger close never deletes a replacement live lock owner', async (t) => {
+  const directory = await directoryFor(t, 'release-lock-replacement')
+  const lockPath = join(directory, '.http-authed-campaign.lock')
+  const ownerPath = join(lockPath, 'owner.json')
+  const replacement = stableJson({
+    created_at: NOW.toISOString(),
+    nonce: '9'.repeat(24),
+    pid: process.pid,
+  })
+  let replacementInstalled = false
+  const ledger = await openLedger(directory, {
+    faultInjector: async (phase) => {
+      if (phase !== 'before-lock-release-quarantine' || replacementInstalled) return
+      replacementInstalled = true
+      await rm(lockPath, { recursive: true, force: true })
+      await mkdir(lockPath)
+      await writeFile(ownerPath, replacement)
+    },
+  })
+
+  await assert.rejects(
+    ledger.close(),
+    (error) => error.code === 'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+  )
+  assert.equal(replacementInstalled, true)
+  assert.equal(await readFile(ownerPath, 'utf8'), replacement)
 })
 
 test('stale-lock recovery restores a replacement live lock instead of orphaning its owner', async (t) => {

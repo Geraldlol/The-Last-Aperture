@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
@@ -343,6 +343,10 @@ test('start persists one exact authority and canonical create-only engagement bu
   assert.deepEqual(result.completed_routes, ['https-recon'])
   assert.equal(result.waiting_routes.includes('authenticated-http-browser'), true)
   assert.equal(result.waiting_routes.includes('web-capture-har-import'), true)
+  assert.deepEqual(
+    result.unavailable_routes.find(({ route_id: routeId }) => routeId === 'bounty-recon'),
+    { route_id: 'bounty-recon', reason_code: 'BOUNTY_RECON_LIVE_IO_DISABLED' },
+  )
 
   const intakeBytes = await readFile(join(bundle, 'intake.json'), 'utf8')
   const authorityBytes = await readFile(join(bundle, 'authorization.json'), 'utf8')
@@ -360,7 +364,7 @@ test('start persists one exact authority and canonical create-only engagement bu
   const dispatched = dispatchSnapshot.routes.find(({ route_id: routeId }) => routeId === 'https-recon')
   assert.equal(dispatched.state, 'DISPATCH_PERMITTED')
   assert.match(dispatched.permit_sha256, /^[a-f0-9]{64}$/)
-  assert.equal(dispatchSnapshot.routes.length, 8, 'all applicable routes are planned before dispatch')
+  assert.equal(dispatchSnapshot.routes.length, 18, 'all applicable routes are planned before dispatch')
 
   await assert.rejects(
     startEngagement({
@@ -796,6 +800,68 @@ test('resume verifies canonical bindings and never requests or repeats the origi
   )
 })
 
+test('resume refuses a local target that has become a link or reparse alias', async (t) => {
+  const { parent, bundle } = await fixture(t, 'resume-linked-target')
+  const repository = join(parent, 'repository')
+  await mkdir(repository)
+  await writeFile(join(repository, 'README.md'), 'fixture\n', 'utf8')
+
+  await startEngagement({
+    target: repository,
+    statement: 'Our organization owns this repository and authorizes its full assessment.',
+    authorizationProfile: 'full',
+    objective: 'Audit the repository.',
+    out: bundle,
+  }, dependencies())
+
+  await assert.rejects(
+    resumeEngagement({ bundle }, dependencies({
+      lstatImpl: async (path) => path === repository
+        ? { isSymbolicLink: () => true, isDirectory: () => false, isFile: () => false }
+        : lstat(path),
+      realpathImpl: realpath,
+    })),
+    (error) => error.code === 'ENGAGEMENT_TARGET_CHANGED',
+  )
+})
+
+test('resume refuses repository and artifact objects replaced at the same canonical path', async (t) => {
+  for (const kind of ['repository', 'artifact']) {
+    const { parent, bundle } = await fixture(t, `resume-replaced-${kind}`)
+    const target = join(parent, kind)
+    const replacement = join(parent, `${kind}-replacement`)
+    if (kind === 'repository') {
+      await mkdir(target)
+      await writeFile(join(target, 'README.md'), 'fixture\n', 'utf8')
+      await mkdir(replacement)
+      await writeFile(join(replacement, 'README.md'), 'fixture\n', 'utf8')
+    } else {
+      await writeFile(target, 'identical artifact bytes\n', 'utf8')
+      await writeFile(replacement, 'identical artifact bytes\n', 'utf8')
+    }
+
+    await startEngagement({
+      target,
+      statement: `Our organization owns this ${kind} and authorizes its full assessment.`,
+      authorizationProfile: 'full',
+      objective: `Assess the ${kind}.`,
+      out: bundle,
+    }, dependencies())
+
+    if (kind === 'repository') {
+      await writeFile(join(target, 'new-work.txt'), 'repository contents may evolve\n', 'utf8')
+      await assert.doesNotReject(resumeEngagement({ bundle }, dependencies()))
+    }
+    await rm(target, { recursive: true, force: true })
+    await rename(replacement, target)
+    await assert.rejects(
+      resumeEngagement({ bundle }, dependencies()),
+      (error) => error.code === 'ENGAGEMENT_TARGET_CHANGED',
+      kind,
+    )
+  }
+})
+
 test('completed route outputs remain bound before status or downstream reuse', async (t) => {
   const { bundle } = await fixture(t, 'output-binding')
   await startEngagement({
@@ -1138,7 +1204,7 @@ test('repository work runs next through validated finalization with outer child 
   const started = await startEngagement({
     target: repository,
     statement: 'Our organization owns this repository and authorizes its full assessment.',
-    authorizationProfile: 'full',
+    authorizationProfile: 'repository-read',
     objective: 'Audit the repository completely.',
     out: bundle,
   }, workDependencies)

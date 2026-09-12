@@ -14,6 +14,7 @@ const KIND = /^[a-z][a-z0-9.-]{0,62}$/
 const ALIAS = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/
 const ABSOLUTE_PATH = /^\/[A-Za-z0-9._/-]{0,1023}$/
 const SELECT_ONLY = /^SELECT\s+[A-Za-z0-9_ ,.()*]+\s+FROM\s+[A-Za-z0-9_]+(?:\s+[A-Za-z0-9_ ,.'=<>!()%-]+)?$/i
+const STATEFUL_SOQL = /\b(?:FOR\s+(?:UPDATE|VIEW|REFERENCE)|UPDATE\s+(?:TRACKING|VIEWSTAT))\b/i
 
 function checked(value, pattern, label) {
   const text = String(value ?? '')
@@ -21,6 +22,14 @@ function checked(value, pattern, label) {
     throw new Error(`invalid ${label}: ${JSON.stringify(value)}`)
   }
   return text
+}
+
+function checkedReadOnlySoql(value) {
+  const soql = checked(value, SELECT_ONLY, 'SOQL query; only a single SELECT is permitted')
+  if (STATEFUL_SOQL.test(soql)) {
+    throw new Error('invalid SOQL query: stateful SELECT clauses are not read-only')
+  }
+  return soql
 }
 
 // The read commands a runtime inspection may execute inside a container, and
@@ -85,7 +94,7 @@ export const READ_ONLY_OPERATIONS = Object.freeze(new Map([
     argv: ({ alias, soql }) => [
       'data', 'query', '--json',
       '-o', checked(alias, ALIAS, 'alias'),
-      '-q', checked(soql, SELECT_ONLY, 'SOQL query; only a single SELECT is permitted'),
+      '-q', checkedReadOnlySoql(soql),
     ],
   }],
   ['runtime.read-file', {

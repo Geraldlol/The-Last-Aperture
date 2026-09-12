@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { access, mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
+import { access, link, mkdir, mkdtemp, readFile, readdir, rm, truncate, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -21,6 +21,61 @@ import { attestedScope } from './helpers/http-authed-fixtures.mjs'
 
 const NOW = new Date('2026-08-16T12:00:00.000Z')
 const CREDENTIAL = 'synthetic-runtime-credential'
+
+test('campaign runtime rejects a hard-linked scope before credential or target I/O', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-linked-scope-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  scope.credential.binding_sha256 = sha256Hex(Buffer.from(CREDENTIAL))
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  await writeFile(scopePath, JSON.stringify(scope))
+  await link(scopePath, join(root, 'scope-alias.json'))
+  let sends = 0
+
+  await assert.rejects(
+    runHttpAuthedAttestedCampaign({
+      scopePath,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      ledgerDirectory: join(root, 'ledger'),
+      operatorId: scope.authorization.operator_id,
+      env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
+      clock: () => NOW,
+      protectedTransport: async () => { sends += 1 },
+    }),
+    (error) => error.code === 'HTTP_AUTHED_CAMPAIGN_INPUT_UNSAFE',
+  )
+  assert.equal(sends, 0)
+})
+
+test('campaign scope inspection rejects an oversized endpoint swapped after lstat', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-swapped-scope-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  await writeFile(scopePath, JSON.stringify(scope))
+  let swapped = false
+
+  await assert.rejects(
+    runHttpAuthedAttestedCampaign({
+      scopePath,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      ledgerDirectory: join(root, 'ledger'),
+      operatorId: scope.authorization.operator_id,
+      clock: () => NOW,
+      inputReadFaultInjector: async (phase, detail) => {
+        if (phase !== 'after-campaign-input-lstat' || detail?.path !== scopePath || swapped) return
+        swapped = true
+        await rm(scopePath)
+        await writeFile(scopePath, 'x')
+        await truncate(scopePath, (64 * 1024 * 1024) + 1)
+      },
+    }),
+    (error) => error.code === 'HTTP_AUTHED_CAMPAIGN_INPUT_UNSAFE',
+  )
+  assert.equal(swapped, true)
+})
 
 async function within(promise, milliseconds = 750) {
   let timer
@@ -168,6 +223,61 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
     protectedTransport: async () => { throw new Error('trusted replay must send zero requests') },
   })
   assert.equal(replay.actions.completed, 0)
+})
+
+test('campaign runtime erases observed discovery chunks when transport fails after observation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-runtime-observer-erasure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  scope.limits.min_interval_ms = 0
+  scope.credential.binding_sha256 = sha256Hex(Buffer.from(CREDENTIAL))
+  scope.authorization.authorized_scope.path_prefixes = ['/approved']
+  scope.liveness.credential_preflight.url = `${scope.target.origin}/approved/whoami`
+  scope.requests = [{
+    kind: 'probe',
+    sequence: 1,
+    test_category: 'api_security',
+    method: 'GET',
+    url: `${scope.target.origin}/approved/seed`,
+    expected_effect: 'none',
+  }]
+  scope.discovery = {
+    enabled: true,
+    origin: scope.target.origin,
+    path_prefixes: ['/approved'],
+    sources: ['location_header'],
+    candidate_methods: ['GET'],
+    test_category: 'api_security',
+    synthetic_query_values: {},
+    synthetic_path_values: {},
+    max_response_bytes: scope.limits.max_response_bytes,
+  }
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
+  const retainedChunk = Buffer.from('TRANSIENT_FAILED_TRANSPORT_BODY')
+
+  const result = await runHttpAuthedAttestedCampaign({
+    scopePath,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    ledgerDirectory: join(root, 'ledger'),
+    operatorId: scope.authorization.operator_id,
+    env: { SYNTHETIC_TEST_CREDENTIAL: CREDENTIAL },
+    clock: () => NOW,
+    protectedTransport: async (request) => {
+      await request.beforeSend()
+      await request.responseObserver?.({
+        status: 200,
+        headers: [],
+        bodyChunks: [retainedChunk],
+      })
+      throw new Error('synthetic failure after response observation')
+    },
+  })
+
+  assert.equal(result.actions.failed, 1)
+  assert.equal(result.actions.uncertain, 0)
+  assert.equal(retainedChunk.every((byte) => byte === 0), true)
 })
 
 test('public CLI forwards a retained ledger head and rejects valid-prefix deletion before credential read or transport', async (t) => {
@@ -563,6 +673,187 @@ test('operator stop interrupts browser transport creation and closes a session r
   assert.equal(result.actions.completed, 0)
   assert.equal(result.ledger.stopped, true)
   assert.equal(result.ledger.stop_reason, 'OPERATOR_REQUESTED')
+  assert.equal(result.ledger.startup_cleanup.resource_kind, 'BROWSER_SESSION')
+  assert.equal(result.ledger.startup_cleanup.outcome, 'TIMED_OUT')
+})
+
+test('startup monitor failure closes a browser session returned after rejection', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-browser-monitor-failure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  scope.limits.min_interval_ms = 0
+  scope.credential = {
+    mode: 'CHROME_ACTIVE_TAB_SESSION',
+    extension_id: 'abcdefghijklmnopabcdefghijklmnop',
+    origin: scope.target.origin,
+  }
+  scope.authorization.permissions.mutation = false
+  scope.requests = [{
+    kind: 'probe',
+    sequence: 1,
+    test_category: 'api_security',
+    method: 'GET',
+    url: `${scope.target.origin}/browser-monitor-failure-probe`,
+    expected_effect: 'none',
+  }]
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  const ledgerDirectory = join(root, 'ledger')
+  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
+  let factoryStartedResolve
+  const factoryStarted = new Promise((resolve) => { factoryStartedResolve = resolve })
+  let resolveFactory
+  const factoryResult = new Promise((resolve) => { resolveFactory = resolve })
+  let closedResolve
+  const closed = new Promise((resolve) => { closedResolve = resolve })
+
+  const running = runHttpAuthedAttestedCampaign({
+    scopePath,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    ledgerDirectory,
+    operatorId: scope.authorization.operator_id,
+    browserSessionRequested: true,
+    clock: () => NOW,
+    browserTransportFactory: async () => {
+      factoryStartedResolve()
+      return factoryResult
+    },
+  })
+  await within(factoryStarted)
+  await writeFile(join(ledgerDirectory, '.http-authed-campaign-stop.json'), '')
+  await assert.rejects(within(running), (error) => error.code === 'HTTP_AUTHED_LEDGER_FILE_UNSAFE')
+  resolveFactory({
+    pairing: { port: 43126, capability: 'q'.repeat(43) },
+    waitForAttach: async () => {},
+    transport: async () => {},
+    close: async () => { closedResolve() },
+  })
+  await within(closed)
+  const records = await Promise.all((await readdir(ledgerDirectory))
+    .filter((name) => /^\d{16}\.http-authed-campaign\.json$/.test(name))
+    .sort()
+    .map(async (name) => JSON.parse(await readFile(join(ledgerDirectory, name), 'utf8'))))
+  assert.equal(records.at(-1).event.type, 'STARTUP_CLEANUP_RECORDED')
+  assert.equal(records.at(-1).event.outcome, 'TIMED_OUT')
+})
+
+test('late browser cleanup failure is surfaced and durably recorded', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-browser-cleanup-failure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  scope.limits.min_interval_ms = 0
+  scope.credential = {
+    mode: 'CHROME_ACTIVE_TAB_SESSION',
+    extension_id: 'abcdefghijklmnopabcdefghijklmnop',
+    origin: scope.target.origin,
+  }
+  scope.authorization.permissions.mutation = false
+  scope.requests = [{
+    kind: 'probe',
+    sequence: 1,
+    test_category: 'api_security',
+    method: 'GET',
+    url: `${scope.target.origin}/browser-cleanup-failure-probe`,
+    expected_effect: 'none',
+  }]
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  const ledgerDirectory = join(root, 'ledger')
+  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
+  let factoryStartedResolve
+  const factoryStarted = new Promise((resolve) => { factoryStartedResolve = resolve })
+  let resolveFactory
+  const factoryResult = new Promise((resolve) => { resolveFactory = resolve })
+
+  const running = runHttpAuthedAttestedCampaign({
+    scopePath,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    ledgerDirectory,
+    operatorId: scope.authorization.operator_id,
+    browserSessionRequested: true,
+    startupCleanupTimeoutMs: 2_000,
+    clock: () => NOW,
+    browserTransportFactory: async () => {
+      factoryStartedResolve()
+      return factoryResult
+    },
+  })
+  const rejection = assert.rejects(running, (error) => {
+    assert.equal(error.code, 'HTTP_AUTHED_CAMPAIGN_STARTUP_CLEANUP_FAILED')
+    assert.equal(error.cause instanceof AggregateError, true)
+    assert.equal(error.cause.errors[0].code, 'HTTP_AUTHED_LEDGER_FILE_UNSAFE')
+    assert.match(error.cause.errors[1].message, /synthetic browser close failure/)
+    return true
+  })
+  await within(factoryStarted, 3_000)
+  await writeFile(join(ledgerDirectory, '.http-authed-campaign-stop.json'), '')
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  resolveFactory({
+    pairing: { port: 43127, capability: 'r'.repeat(43) },
+    waitForAttach: async () => {},
+    transport: async () => {},
+    close: async () => { throw new Error('synthetic browser close failure') },
+  })
+  await within(rejection, 3_000)
+
+  const records = await Promise.all((await readdir(ledgerDirectory))
+    .filter((name) => /^\d{16}\.http-authed-campaign\.json$/.test(name))
+    .sort()
+    .map(async (name) => JSON.parse(await readFile(join(ledgerDirectory, name), 'utf8'))))
+  assert.deepEqual(records.at(-1).event, {
+    type: 'STARTUP_CLEANUP_RECORDED',
+    resource_kind: 'BROWSER_SESSION',
+    outcome: 'FAILED',
+    reason_code: 'LATE_RESOURCE_CLEANUP_FAILED',
+  })
+})
+
+test('browser cleanup failure preserves an earlier startup failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-browser-double-failure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const scope = attestedScope({ actionCount: 1 })
+  scope.limits.min_interval_ms = 0
+  scope.credential = {
+    mode: 'CHROME_ACTIVE_TAB_SESSION',
+    extension_id: 'abcdefghijklmnopabcdefghijklmnop',
+    origin: scope.target.origin,
+  }
+  scope.authorization.permissions.mutation = false
+  scope.requests = [{
+    kind: 'probe',
+    sequence: 1,
+    test_category: 'api_security',
+    method: 'GET',
+    url: `${scope.target.origin}/browser-double-failure-probe`,
+    expected_effect: 'none',
+  }]
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const scopePath = join(root, 'scope.json')
+  await writeFile(scopePath, JSON.stringify(scope), 'utf8')
+
+  await assert.rejects(
+    runHttpAuthedAttestedCampaign({
+      scopePath,
+      expectedCampaignGrantSha256: verified.campaignGrantSha256,
+      ledgerDirectory: join(root, 'ledger'),
+      operatorId: scope.authorization.operator_id,
+      browserSessionRequested: true,
+      clock: () => NOW,
+      browserTransportFactory: async () => ({
+        pairing: { port: 43128, capability: 's'.repeat(43) },
+        waitForAttach: async () => { throw new Error('synthetic browser attach failure') },
+        transport: async () => {},
+        close: async () => { throw new Error('synthetic browser final close failure') },
+      }),
+    }),
+    (error) => {
+      assert.equal(error.code, 'HTTP_AUTHED_CAMPAIGN_RUNTIME_CLEANUP_FAILED')
+      assert.equal(error.cause instanceof AggregateError, true)
+      assert.match(error.cause.errors[0].message, /synthetic browser attach failure/)
+      assert.match(error.cause.errors[1].message, /synthetic browser final close failure/)
+      return true
+    },
+  )
 })
 
 test('operator stop interrupts browser pairing and closes the created session exactly once', async (t) => {
@@ -1227,6 +1518,7 @@ test('operator-attested campaign runtime executes a controller-authorized revers
   assert.equal(call, 6)
   assert.equal(result.actions.completed, 1)
   assert.equal(result.actions.failed, 0)
+  assert.equal(bodies.every((body) => body.every((byte) => byte === 0)), true)
   assert.doesNotMatch(JSON.stringify(result), /BEFORE_SENTINEL|AFTER_SENTINEL|SAME|credential/i)
   const ledgerText = (await Promise.all(
     (await readdir(ledgerDirectory))

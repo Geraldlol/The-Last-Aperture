@@ -355,7 +355,9 @@ test('passive-only analysis is operator-authorization-free and performs zero net
 
   assert.equal(sends, 0)
   assert.equal(summary.adversarialValidation, null)
-  assert.equal(summary.passive.status, 'NOTHING_OBSERVED')
+  assert.equal(summary.passive.status, 'NOT_ASSESSED')
+  assert.equal(summary.coverage, 'NOT_ASSESSED_MISSING_RESPONSE_EVIDENCE')
+  assert.ok(summary.coverageNotes.some((note) => /response evidence.*not.*captured|not assessed/i.test(note)))
   await assert.rejects(() => access(join(directory, 'scan-ledger')))
 })
 
@@ -378,7 +380,9 @@ test('passive-only analysis accepts captured state-changing requests without net
 
   assert.equal(sends, 0)
   assert.equal(summary.adversarialValidation, null)
-  assert.equal(summary.passive.status, 'NOTHING_OBSERVED')
+  assert.equal(summary.passive.status, 'NOT_ASSESSED')
+  assert.equal(summary.coverage, 'NOT_ASSESSED_MISSING_RESPONSE_EVIDENCE')
+  assert.ok(summary.coverageNotes.some((note) => /response evidence.*not.*captured|not assessed/i.test(note)))
 })
 
 test('crafted scans still refuse captured state-changing requests before target I/O', async (t) => {
@@ -399,6 +403,23 @@ test('crafted scans still refuse captured state-changing requests before target 
       clock: () => 0,
     }),
     /state-changing.*mutation campaign|use the mutation campaign/i,
+  )
+  assert.equal(sends, 0)
+
+  const stateChangingGet = request()
+  stateChangingGet.url = 'https://api.example.test/session/logout'
+  await assert.rejects(
+    () => runScan({
+      bundlePath: directory,
+      requests: [stateChangingGet],
+      registry: REGISTRY,
+      now: NOW,
+      classes: ['error-injection'],
+      fetchImpl: async () => { sends += 1; return fakeResponse() },
+      sleep: async () => {},
+      clock: () => 0,
+    }),
+    /state-changing.*route|route.*state-changing|use the mutation campaign/i,
   )
   assert.equal(sends, 0)
 })
@@ -584,6 +605,61 @@ test('every authorized send is durably qualified and settled in a hash-linked le
   assert.equal(summary.scanLedger.status, 'SETTLED')
   assert.equal(summary.scanLedger.qualified_sends, sends)
   assert.equal(summary.scanLedger.settled_sends, sends)
+})
+
+test('crafted response-read failures settle as failed observations in the ledger', async (t) => {
+  const sealedScope = scope()
+  const directory = await workspace(t, sealedScope)
+  const requests = [request()]
+  const plan = buildBountyScanPlan({
+    scope: sealedScope,
+    requests,
+    classes: ['error-injection'],
+    role: ANONYMOUS_ROLE,
+    profile: resolveIntensityProfile(sealedScope),
+  })
+  const operatorAuthorizationReceipt = authorizationReceiptFor(plan)
+  let sends = 0
+
+  const summary = await runScan({
+    bundlePath: directory,
+    requests,
+    registry: REGISTRY,
+    now: NOW,
+    classes: ['error-injection'],
+    operatorAuthorizationReceipt,
+    isOperatorStopRequested: async () => false,
+    isAuthorizationRevoked: async () => false,
+    fetchImpl: async () => {
+      sends += 1
+      return {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        body: {
+          getReader() {
+            return {
+              async read() {
+                const error = new Error('synthetic response stream failure')
+                error.name = 'StreamError'
+                throw error
+              },
+              async cancel() {},
+            }
+          },
+        },
+      }
+    },
+    sleep: async () => {},
+    clock: () => 0,
+  })
+
+  const records = await Promise.all((await readdir(join(directory, 'scan-ledger'))).sort()
+    .map(async (name) => JSON.parse(await readFile(join(directory, 'scan-ledger', name), 'utf8'))))
+  const settlements = records.filter(({ event }) => event.type === 'SEND_SETTLED').map(({ event }) => event)
+  assert.equal(settlements.length, sends)
+  assert.ok(settlements.every((event) => event.outcome === 'THREW'))
+  assert.ok(settlements.every((event) => event.http_status === null && event.error_name === 'StreamError'))
+  assert.equal(summary.scanLedger.status, 'SETTLED')
 })
 
 test('an unmatched durable send qualification is outcome-uncertain and cannot be replayed', async (t) => {

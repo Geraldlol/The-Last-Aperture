@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   parsePinnedImageReference,
   redactForLog,
+  resolveCredentialReference,
   sealCredentialRef,
 } from '../scripts/lib/evidence-image-reference.mjs'
 
@@ -57,6 +58,41 @@ test('a credential reference is sealed; a credential value is refused', () => {
 
 test('a credential reference must name a resolver, not float free', () => {
   assert.throws(() => sealCredentialRef('REGISTRY_TOKEN'), /env:|file:|keychain:/)
+})
+
+test('credential references resolve at run time without placing values in the reference', async () => {
+  const environment = { REGISTRY_TOKEN: 'fixture-secret' }
+  const defaultResolved = await resolveCredentialReference('env:REGISTRY_TOKEN', { env: environment })
+  assert.deepEqual(defaultResolved, {
+    env: { REGISTRY_TOKEN: 'fixture-secret' },
+    secret_values: ['fixture-secret'],
+  })
+  assert.notEqual(defaultResolved.env, environment)
+  const envResolved = await resolveCredentialReference('env:REGISTRY_TOKEN', {
+    env: environment,
+    resolver: async (_reference, context) => ({
+      env: context.env,
+      secret_values: [context.env[context.locator]],
+    }),
+  })
+  assert.deepEqual(envResolved, { env: environment, secret_values: ['fixture-secret'] })
+
+  const resolved = await resolveCredentialReference('vault:registry/team', {
+    env: environment,
+    resolver: async (reference, context) => ({ reference, context }),
+  })
+  assert.equal(resolved.reference, 'vault:registry/team')
+  assert.deepEqual(
+    { mode: resolved.context.mode, locator: resolved.context.locator },
+    { mode: 'vault', locator: 'registry/team' },
+  )
+})
+
+test('the default environment resolver fails closed when its variable is absent', async () => {
+  await assert.rejects(
+    () => resolveCredentialReference('env:REGISTRY_TOKEN', { env: {} }),
+    /unavailable/i,
+  )
 })
 
 test('redaction is applied to anything that reaches a log or an error', () => {

@@ -1,11 +1,11 @@
 import { compareCanonicalStrings } from '../canonical-order.mjs'
 import { writeEvidenceBundle } from '../evidence-bundle.mjs'
 import {
-  DEFAULT_CLI_LIMITS,
   ImpactCapExceededError,
   ImpactCounters,
   probeCli,
   runBoundedCli,
+  validateCliLimits,
 } from '../evidence-cli-runner.mjs'
 import { redactForLog } from '../evidence-image-reference.mjs'
 import { resolvePhiPolicy } from '../evidence-phi.mjs'
@@ -68,6 +68,7 @@ export function assertLivePlannedAuthorization(planned) {
 
 export async function probeRequiredClis(operations, { env, resolver, label }) {
   const cliOptions = resolver ? { resolver } : {}
+  const dependencies = []
   for (const cli of requiredCli(operations)) {
     const probe = await probeCli(cli, { versionArgs: ['version'], env, ...cliOptions })
     if (!probe.present) {
@@ -75,6 +76,147 @@ export async function probeRequiredClis(operations, { env, resolver, label }) {
         `${label} acquisition needs ${cli} on PATH and it is absent (${probe.reason})`,
       )
     }
+    dependencies.push({
+      name: cli,
+      version: probe.version,
+      invocation: probe.invocation,
+    })
+  }
+  return dependencies
+}
+
+export function liveExecutionProfile({ adapterId, adapterVersion, operations, dependencies, limits }) {
+  return {
+    adapter_id: adapterId,
+    adapter_version: adapterVersion,
+    command_policy: 'readonly-allowlist-v1',
+    process_supervision: process.platform === 'win32' ? 'WINDOWS_JOB_OBJECT' : 'POSIX_PROCESS_GROUP',
+    dependencies,
+    commands: operations.map(({ operation_id: operationId, cli, args, objects }) => ({
+      operation_id: operationId,
+      cli,
+      args,
+      estimated_objects: objects,
+    })),
+    limits: { ...limits },
+  }
+}
+
+export function assertLiveExecutionProfile(planned, current) {
+  if (JSON.stringify(planned?.execution_profile) !== JSON.stringify(current)) {
+    throw new Error('live adapter execution profile or executable identity no longer matches the immutable plan')
+  }
+}
+
+export function resolverForProbedDependencies(dependencies) {
+  const byName = new Map(dependencies.map((dependency) => [dependency.name, dependency.invocation]))
+  return (name, args) => {
+    const invocation = byName.get(name)
+    if (typeof invocation?.file !== 'string' || invocation.file === ''
+      || !Array.isArray(invocation.argument_prefix)
+      || invocation.argument_prefix.some((argument) => typeof argument !== 'string')) {
+      throw new Error(`no validated executable invocation is bound for ${name}`)
+    }
+    return { file: invocation.file, args: [...invocation.argument_prefix, ...args] }
+  }
+}
+
+export function createCollectionObjectObserver(maxObjects) {
+  if (!Number.isSafeInteger(maxObjects) || maxObjects < 0) {
+    throw new RangeError('collection object cap must be a non-negative safe integer')
+  }
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let stringValue = ''
+  let lastString = null
+  let pendingKey = null
+  let targetDepth = null
+  let expectingElement = false
+  let count = 0
+
+  const countElement = () => {
+    if (targetDepth === null || depth !== targetDepth || !expectingElement) return
+    count += 1
+    expectingElement = false
+    if (count > maxObjects) {
+      throw new ImpactCapExceededError('objects_touched', count, maxObjects)
+    }
+  }
+
+  return (chunk) => {
+    for (const character of Buffer.from(chunk).toString('utf8')) {
+      if (inString) {
+        if (escaped) {
+          escaped = false
+          continue
+        }
+        if (character === '\\') {
+          escaped = true
+          continue
+        }
+        if (character === '"') {
+          inString = false
+          lastString = stringValue
+        } else {
+          stringValue += character
+        }
+        continue
+      }
+      if (/\s/.test(character)) continue
+      if (character === '"') {
+        countElement()
+        inString = true
+        escaped = false
+        stringValue = ''
+        continue
+      }
+      if (character === ':') {
+        pendingKey = lastString
+        lastString = null
+        continue
+      }
+      if (character === '[') {
+        countElement()
+        depth += 1
+        if (targetDepth === null && (pendingKey === 'items' || pendingKey === 'records')) {
+          targetDepth = depth
+          expectingElement = true
+        }
+        pendingKey = null
+        continue
+      }
+      if (character === '{') {
+        countElement()
+        depth += 1
+        pendingKey = null
+        continue
+      }
+      if (character === ']') {
+        if (targetDepth === depth) {
+          targetDepth = null
+          expectingElement = false
+        }
+        depth -= 1
+        pendingKey = null
+        continue
+      }
+      if (character === '}') {
+        depth -= 1
+        pendingKey = null
+        continue
+      }
+      if (character === ',') {
+        if (targetDepth === depth) expectingElement = true
+        pendingKey = null
+        lastString = null
+        continue
+      }
+      countElement()
+      pendingKey = null
+      lastString = null
+    }
+    return count
   }
 }
 
@@ -92,19 +234,24 @@ export async function runLiveAcquisition({
   adapterVersion,
   capture,
   shouldStop,
+  observeCollectionObjects = false,
 }) {
   assertLivePlannedAuthorization(planned)
-  const cliLimits = { ...DEFAULT_CLI_LIMITS, ...limits }
+  const cliLimits = validateCliLimits(limits)
   const cliOptions = resolver ? { resolver } : {}
   const counters = new ImpactCounters({
     maxCommands: cliLimits.maxCommands,
     maxObjects: cliLimits.maxObjects,
-    maxBytes: cliLimits.maxStdoutBytes,
+    maxBytes: cliLimits.maxTotalOutputBytes,
   })
   const payload = []
   const gaps = []
   const executed = []
   let acquired = 0
+  const verifiedIdentityByCli = new Map(
+    (planned.execution_profile?.dependencies ?? [])
+      .map((dependency) => [dependency.name, dependency.invocation?.identity]),
+  )
 
   for (const [index, operation] of planned.operations.entries()) {
     // The payload prefix is the operation's position, not its ID: two
@@ -116,6 +263,38 @@ export async function runLiveAcquisition({
       break
     }
 
+    let approved
+    try {
+      approved = buildReadOnlyCommand(operation.operation_id, operation.params)
+    } catch (error) {
+      gaps.push({
+        area: operation.operation_id,
+        reason: `sealed operation is no longer allowlisted: ${redactForLog(String(error.message)).slice(0, 400)}`,
+      })
+      break
+    }
+    if (approved.cli !== operation.cli
+      || approved.objects !== operation.objects
+      || JSON.stringify(approved.args) !== JSON.stringify(operation.args)) {
+      gaps.push({
+        area: operation.operation_id,
+        reason: 'sealed operation command does not match the immutable read-only allowlist',
+      })
+      break
+    }
+
+    try {
+      counters.assertCanRecord({ objects: operation.objects })
+    } catch (error) {
+      gaps.push({
+        area: operation.operation_id,
+        reason: error instanceof ImpactCapExceededError
+          ? `acquisition halted before an estimated-object impact cap: ${error.message}`
+          : `operation accounting failed: ${redactForLog(String(error.message)).slice(0, 400)}`,
+      })
+      break
+    }
+
     let result
     try {
       result = await runBoundedCli({
@@ -124,11 +303,38 @@ export async function runLiveAcquisition({
         limits: cliLimits,
         env,
         counters,
+        verifiedInvocationIdentity: verifiedIdentityByCli.get(operation.cli),
+        ...(observeCollectionObjects
+          ? {
+              stdoutObserver: createCollectionObjectObserver(
+                counters.caps.objects_touched - counters.counters.objects_touched,
+              ),
+            }
+          : {}),
         ...cliOptions,
       })
     } catch (error) {
       // A cap is a halt, not a crash: what was already acquired stays, and the
       // stopping point is named.
+      if (error instanceof ImpactCapExceededError && error.command_dispatched === true) {
+        executed.push({
+          index,
+          operation_id: operation.operation_id,
+          payload_prefix: prefix,
+          exit_code: null,
+          failure_code: 'IMPACT_CAP_EXCEEDED',
+          outcome: 'IMPACT_CAP_EXCEEDED',
+          supervision_mode: error.supervision_mode,
+          termination_confirmed: error.termination_confirmed === true,
+          estimated_objects: operation.objects,
+          objects: error.dimension === 'objects_touched'
+            ? error.value
+            : 0,
+          impact_dimension: error.dimension,
+          operation_cap: error.cap,
+          observed_value: error.value,
+        })
+      }
       gaps.push({
         area: operation.operation_id,
         reason: error instanceof ImpactCapExceededError
@@ -143,6 +349,8 @@ export async function runLiveAcquisition({
       operation_id: operation.operation_id,
       payload_prefix: prefix,
       exit_code: result.code,
+      supervision_mode: result.supervision_mode,
+      termination_confirmed: result.termination_confirmed,
       estimated_objects: operation.objects,
       objects: 0,
     }
@@ -150,7 +358,9 @@ export async function runLiveAcquisition({
     if (result.code !== 0) {
       gaps.push({
         area: operation.operation_id,
-        reason: `exited ${result.code}: ${redactForLog(result.stderr).slice(0, 400)}`,
+        reason: result.termination_confirmed === false
+          ? `${result.supervision_mode} cleanup was not confirmed; provider stderr withheld from evidence`
+          : `exited ${result.code}; provider stderr withheld from evidence`,
       })
       continue
     }

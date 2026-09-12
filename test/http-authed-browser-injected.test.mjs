@@ -177,6 +177,18 @@ test('fixed injected fetch uses the current opaque browser session on every requ
   ])
 })
 
+test('injected fetch allows canonical percent-encoded query data', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const network = fakeBrowserNetwork()
+  const result = await executeHttpAuthedInjectedFetch(
+    command({ relative_url: '/approved/seed?literal=%25' }),
+    runtime(network),
+  )
+
+  assert.equal(result.outcome, 'OBSERVED')
+  assert.equal(network.calls[0].url, `${TARGET_ORIGIN}/approved/seed?literal=%25`)
+})
+
 test('injected fetch accepts Chrome-serialized omission of a null request body', async () => {
   const { executeHttpAuthedInjectedFetch } = await injectedApi()
   const network = fakeBrowserNetwork()
@@ -226,6 +238,277 @@ test('injected fetch reacquires an exact local-storage session value for every d
   const rendered = JSON.stringify([first, second, observed])
   assert.equal(rendered.includes('SYNTHETIC_PAGE_TOKEN_V1'), false)
   assert.equal(rendered.includes('SYNTHETIC_PAGE_TOKEN_V2'), false)
+})
+
+test('injected fetch timer cleanup cannot overturn success or retain its session header', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const adapter = pageSessionAdapter()
+  const adapterSha256 = pageSessionAdapterSha256(adapter)
+  let requestHeaders
+  const fetchImpl = async (_url, options) => {
+    requestHeaders = options.headers
+    assert.equal(requestHeaders.authorization, 'Bearer SYNTHETIC_PAGE_TOKEN')
+    return response()
+  }
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.setTimeout = () => Symbol('synthetic-page-timer')
+  globalThis.clearTimeout = () => { throw new Error('synthetic page timer cleanup failure') }
+  try {
+    const result = await executeHttpAuthedInjectedFetch(adapterCommand(adapter), {
+      location: { origin: TARGET_ORIGIN },
+      documentNonce: DOCUMENT_NONCE,
+      preparedActionBindingSha256: ACTION_BINDING,
+      preparedSessionAdapterSha256: adapterSha256,
+      localStorage: { getItem: () => 'SYNTHETIC_PAGE_TOKEN' },
+      fetchImpl,
+    })
+    assert.equal(result.outcome, 'OBSERVED')
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+  }
+  assert.equal(requestHeaders.authorization, undefined)
+})
+
+test('injected fetch success survives a target freezing its session-bearing headers', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const adapter = pageSessionAdapter()
+  const adapterSha256 = pageSessionAdapterSha256(adapter)
+  let fetchCalls = 0
+  const result = await executeHttpAuthedInjectedFetch(adapterCommand(adapter), {
+    location: { origin: TARGET_ORIGIN },
+    documentNonce: DOCUMENT_NONCE,
+    preparedActionBindingSha256: ACTION_BINDING,
+    preparedSessionAdapterSha256: adapterSha256,
+    localStorage: { getItem: () => 'SYNTHETIC_FROZEN_PAGE_TOKEN' },
+    fetchImpl: async (_url, options) => {
+      fetchCalls += 1
+      assert.equal(options.headers.authorization, 'Bearer SYNTHETIC_FROZEN_PAGE_TOKEN')
+      Object.freeze(options.headers)
+      return response()
+    },
+  })
+
+  assert.equal(fetchCalls, 1)
+  assert.equal(result.outcome, 'OBSERVED')
+  assert.equal(JSON.stringify(result).includes('SYNTHETIC_FROZEN_PAGE_TOKEN'), false)
+})
+
+test('injected fetch preserves sent failure when target freezes session-bearing headers', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const adapter = pageSessionAdapter()
+  const adapterSha256 = pageSessionAdapterSha256(adapter)
+  let fetchCalls = 0
+  await assert.rejects(
+    executeHttpAuthedInjectedFetch(adapterCommand(adapter), {
+      location: { origin: TARGET_ORIGIN },
+      documentNonce: DOCUMENT_NONCE,
+      preparedActionBindingSha256: ACTION_BINDING,
+      preparedSessionAdapterSha256: adapterSha256,
+      localStorage: { getItem: () => 'SYNTHETIC_FROZEN_PAGE_TOKEN' },
+      fetchImpl: async (_url, options) => {
+        fetchCalls += 1
+        assert.equal(options.headers.authorization, 'Bearer SYNTHETIC_FROZEN_PAGE_TOKEN')
+        Object.freeze(options.headers)
+        throw new Error('synthetic target fetch failure')
+      },
+    }),
+    (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+      && error.request_may_have_been_sent === true
+      && !String(error.message).includes('synthetic'),
+  )
+  assert.equal(fetchCalls, 1)
+})
+
+test('browser dispatch preserves sent classification when its final clock throws', async (t) => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const stateKey = '__red_team_audit_http_authed_bridge_v1__'
+  const previousState = globalThis[stateKey]
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  let fetchCalls = 0
+  let clockCalls = 0
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { origin: TARGET_ORIGIN },
+  })
+  globalThis[stateKey] = {
+    document_nonce: DOCUMENT_NONCE,
+    prepared_action_binding_sha256: ACTION_BINDING,
+    prepared_session_adapter_sha256: null,
+    abort_controller: null,
+  }
+  t.mock.method(globalThis, 'fetch', async () => {
+    fetchCalls += 1
+    return {
+      body: null,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      status: 200,
+      redirected: false,
+    }
+  })
+  t.mock.method(globalThis.performance, 'now', () => {
+    clockCalls += 1
+    if (clockCalls === 4) throw new Error('synthetic final clock failure')
+    return clockCalls
+  })
+
+  try {
+    const result = await executeHttpAuthedInjectedFetch(command())
+    assert.deepEqual(result, {
+      error_code: 'HTTP_AUTHED_BROWSER_FETCH_FAILED',
+      request_may_have_been_sent: true,
+    })
+  } finally {
+    if (previousState === undefined) delete globalThis[stateKey]
+    else globalThis[stateKey] = previousState
+    if (previousLocation === undefined) delete globalThis.location
+    else Object.defineProperty(globalThis, 'location', previousLocation)
+  }
+  assert.equal(fetchCalls, 1)
+  assert.equal(clockCalls, 4)
+})
+
+test('browser dispatch safely classifies a hostile response-header failure after fetch', async (t) => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const stateKey = '__red_team_audit_http_authed_bridge_v1__'
+  const previousState = globalThis[stateKey]
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location')
+  let fetchCalls = 0
+  const targetError = new Proxy(new Error('synthetic target header failure'), {
+    get(target, property, receiver) {
+      if (property === 'code' || property === 'request_may_have_been_sent') {
+        throw new Error('synthetic hostile error getter')
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  })
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { origin: TARGET_ORIGIN },
+  })
+  globalThis[stateKey] = {
+    document_nonce: DOCUMENT_NONCE,
+    prepared_action_binding_sha256: ACTION_BINDING,
+    prepared_session_adapter_sha256: null,
+    abort_controller: null,
+  }
+  t.mock.method(globalThis, 'fetch', async () => {
+    fetchCalls += 1
+    return {
+      body: null,
+      headers: {
+        *[Symbol.iterator]() { throw targetError },
+      },
+      status: 200,
+      redirected: false,
+    }
+  })
+
+  try {
+    const result = await executeHttpAuthedInjectedFetch(command())
+    assert.deepEqual(result, {
+      error_code: 'HTTP_AUTHED_BROWSER_FETCH_FAILED',
+      request_may_have_been_sent: true,
+    })
+  } finally {
+    if (previousState === undefined) delete globalThis[stateKey]
+    else globalThis[stateKey] = previousState
+    if (previousLocation === undefined) delete globalThis.location
+    else Object.defineProperty(globalThis, 'location', previousLocation)
+  }
+  assert.equal(fetchCalls, 1)
+})
+
+test('injected fetch timer setup failure clears bridge state before dispatch', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const stateKey = '__red_team_audit_http_authed_bridge_v1__'
+  const previousState = globalThis[stateKey]
+  const bridgeState = { abort_controller: null }
+  globalThis[stateKey] = bridgeState
+  const originalSetTimeout = globalThis.setTimeout
+  let fetchCalls = 0
+  try {
+    globalThis.setTimeout = () => { throw new Error('synthetic page timer setup failure') }
+    await assert.rejects(
+      executeHttpAuthedInjectedFetch(command(), runtime({
+        fetchImpl: async () => {
+          fetchCalls += 1
+          return response()
+        },
+      })),
+      (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_TIMER_FAILED'
+        && error.request_may_have_been_sent !== true
+        && !String(error.message).includes('synthetic'),
+    )
+    assert.equal(fetchCalls, 0)
+    assert.equal(bridgeState.abort_controller, null)
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    if (previousState === undefined) delete globalThis[stateKey]
+    else globalThis[stateKey] = previousState
+  }
+})
+
+test('injected fetch clock setup failure clears its exact bridge controller before dispatch', async (t) => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const stateKey = '__red_team_audit_http_authed_bridge_v1__'
+  const previousState = globalThis[stateKey]
+  const bridgeState = { abort_controller: null }
+  globalThis[stateKey] = bridgeState
+  let assignedController
+  let fetchCalls = 0
+  t.mock.method(globalThis.performance, 'now', () => {
+    assignedController = bridgeState.abort_controller
+    throw new Error('synthetic page clock failure')
+  })
+  try {
+    await assert.rejects(
+      executeHttpAuthedInjectedFetch(command(), runtime({
+        fetchImpl: async () => {
+          fetchCalls += 1
+          return response()
+        },
+      })),
+      (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_SETUP_FAILED'
+        && error.request_may_have_been_sent === false
+        && !String(error.message).includes('synthetic'),
+    )
+    assert.ok(assignedController instanceof AbortController)
+    assert.equal(fetchCalls, 0)
+    assert.equal(bridgeState.abort_controller, null)
+  } finally {
+    if (previousState === undefined) delete globalThis[stateKey]
+    else globalThis[stateKey] = previousState
+  }
+})
+
+test('injected fetch synchronous deadline before transport is classified unsent', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  let fetchCalls = 0
+  try {
+    globalThis.setTimeout = (callback) => {
+      callback()
+      return 777
+    }
+    globalThis.clearTimeout = () => {}
+    await assert.rejects(
+      executeHttpAuthedInjectedFetch(command(), runtime({
+        fetchImpl: async () => {
+          fetchCalls += 1
+          return response()
+        },
+      })),
+      (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+        && error.request_may_have_been_sent === false,
+    )
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+  }
+  assert.equal(fetchCalls, 0)
 })
 
 test('injected fetch resolves only a strict session-storage JSON pointer', async () => {
@@ -410,6 +693,12 @@ test('fixed injected fetch refuses origin, document, action, and URL drift befor
       code: 'HTTP_AUTHED_BROWSER_ACTION_INVALID',
     },
     {
+      name: 'mixed-layer encoded separator supplied',
+      command: command({ relative_url: '/approved/%25%32%65%25%32%65%25%32%66escape' }),
+      runtime: {},
+      code: 'HTTP_AUTHED_BROWSER_ACTION_INVALID',
+    },
+    {
       name: 'backslash path supplied',
       command: command({ relative_url: '/approved\\escape' }),
       runtime: {},
@@ -458,6 +747,84 @@ test('fixed injected fetch refuses redirects and never retries an ambiguous disp
     },
   )
   assert.equal(calls, 1)
+})
+
+test('injected fetch preserves its primary transport failure when fetch detaches the request body', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const stateKey = '__red_team_audit_http_authed_bridge_v1__'
+  const previousState = globalThis[stateKey]
+  const body = Buffer.alloc(16 * 1024, 0x64)
+  const bodyCommand = command({
+    method: 'POST',
+    headers: [{ name: 'content-type', value: 'application/octet-stream' }],
+    body: {
+      encoding: 'base64',
+      value: body.toString('base64'),
+      byte_length: body.length,
+      sha256: createHash('sha256').update(body).digest('hex'),
+      content_type: 'application/octet-stream',
+    },
+  })
+  const bridgeState = {
+    document_nonce: DOCUMENT_NONCE,
+    prepared_action_binding_sha256: ACTION_BINDING,
+    prepared_session_adapter_sha256: null,
+    abort_controller: null,
+  }
+  globalThis[stateKey] = bridgeState
+  let fetchCalls = 0
+  try {
+    await assert.rejects(
+      executeHttpAuthedInjectedFetch(bodyCommand, {
+        location: { origin: TARGET_ORIGIN },
+        documentNonce: DOCUMENT_NONCE,
+        preparedActionBindingSha256: ACTION_BINDING,
+        fetchImpl: async (_url, options) => {
+          fetchCalls += 1
+          structuredClone(options.body, { transfer: [options.body.buffer] })
+          throw new Error('synthetic target transport failure')
+        },
+      }),
+      (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+        && error.request_may_have_been_sent === true
+        && !String(error.message).includes('synthetic'),
+    )
+    assert.equal(fetchCalls, 1)
+    assert.equal(bridgeState.abort_controller, null)
+  } finally {
+    if (previousState === undefined) delete globalThis[stateKey]
+    else globalThis[stateKey] = previousState
+  }
+})
+
+test('injected fetch preserves success when fetch detaches the request body', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const body = Buffer.alloc(16 * 1024, 0x65)
+  const bodyCommand = command({
+    method: 'POST',
+    headers: [{ name: 'content-type', value: 'application/octet-stream' }],
+    body: {
+      encoding: 'base64',
+      value: body.toString('base64'),
+      byte_length: body.length,
+      sha256: createHash('sha256').update(body).digest('hex'),
+      content_type: 'application/octet-stream',
+    },
+  })
+  let fetchCalls = 0
+  const result = await executeHttpAuthedInjectedFetch(bodyCommand, {
+    location: { origin: TARGET_ORIGIN },
+    documentNonce: DOCUMENT_NONCE,
+    preparedActionBindingSha256: ACTION_BINDING,
+    fetchImpl: async (_url, options) => {
+      fetchCalls += 1
+      structuredClone(options.body, { transfer: [options.body.buffer] })
+      return new Response(null, { status: 204 })
+    },
+  })
+  assert.equal(fetchCalls, 1)
+  assert.equal(result.status, 204)
+  assert.equal(result.outcome, 'OBSERVED')
 })
 
 test('injected fetch distinguishes exact, bounded, and incomplete response observations', async () => {
@@ -548,6 +915,204 @@ test('injected fetch keeps a bounded observation when response cancellation reje
   assert.equal(Buffer.from(bounded.response.body_base64, 'base64').toString(), 'abc')
 })
 
+test('injected fetch does not await a response cancellation that never settles', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const encoder = new TextEncoder()
+  let cancelCalls = 0
+  let requestSignal
+  const fetchImpl = async (_url, options) => {
+    requestSignal = options.signal
+    return {
+      status: 200,
+      redirected: false,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return { done: false, value: encoder.encode('abcdef') }
+            },
+            cancel() {
+              cancelCalls += 1
+              return new Promise(() => {})
+            },
+          }
+        },
+      },
+    }
+  }
+
+  let watchdog
+  try {
+    const bounded = await Promise.race([
+      executeHttpAuthedInjectedFetch(
+        command({ max_response_bytes: 3, timeout_ms: 100 }),
+        runtime({ fetchImpl }, { fetchImpl }),
+      ),
+      new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('injected cancellation exceeded its bound')), 300)
+      }),
+    ])
+    assert.equal(cancelCalls, 1)
+    assert.equal(requestSignal.aborted, true)
+    assert.equal(bounded.outcome, 'RESPONSE_BOUNDED')
+    assert.equal(bounded.response_truncated, true)
+  } finally {
+    clearTimeout(watchdog)
+  }
+})
+
+test('injected fetch deadline bounds a response reader that ignores abort', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  let requestSignal
+  let cancelCalls = 0
+  const fetchImpl = async (_url, options) => {
+    requestSignal = options.signal
+    return {
+      status: 200,
+      redirected: false,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      body: {
+        getReader() {
+          return {
+            read() { return new Promise(() => {}) },
+            cancel() { cancelCalls += 1; return new Promise(() => {}) },
+          }
+        },
+      },
+    }
+  }
+
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.clearTimeout = () => { throw new Error('synthetic page timer cleanup failure') }
+  let watchdog
+  try {
+    const result = await Promise.race([
+      executeHttpAuthedInjectedFetch(
+        command({ timeout_ms: 100 }),
+        runtime({ fetchImpl }, { fetchImpl }),
+      ),
+      new Promise((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error('response reader exceeded the injected deadline')), 400)
+      }),
+    ])
+    assert.equal(result.outcome, 'OBSERVATION_INCOMPLETE')
+    assert.equal(requestSignal.aborted, true)
+    assert.equal(cancelCalls, 1)
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout
+    originalClearTimeout(watchdog)
+  }
+})
+
+test('injected fetch clears a byte chunk that arrives after the response deadline', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const lateChunk = new Uint8Array(Buffer.from('late-transient-response-secret'))
+  let resolveRead
+  let cancelCalls = 0
+  const fetchImpl = async () => ({
+    status: 200,
+    redirected: false,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    body: {
+      getReader() {
+        return {
+          read() { return new Promise((resolve) => { resolveRead = resolve }) },
+          cancel() { cancelCalls += 1; return new Promise(() => {}) },
+        }
+      },
+    },
+  })
+
+  const result = await executeHttpAuthedInjectedFetch(
+    command({ timeout_ms: 100 }),
+    runtime({ fetchImpl }, { fetchImpl }),
+  )
+  resolveRead({ done: false, value: lateChunk })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(result.outcome, 'OBSERVATION_INCOMPLETE')
+  assert.equal(cancelCalls, 1)
+  assert.deepEqual([...lateChunk], Array(lateChunk.length).fill(0))
+})
+
+test('injected fetch ignores a throwing late response-value getter without an unhandled rejection', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  let resolveRead
+  const fetchImpl = async () => ({
+    status: 200,
+    redirected: false,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    body: {
+      getReader() {
+        return {
+          read() { return new Promise((resolve) => { resolveRead = resolve }) },
+          cancel() {},
+        }
+      },
+    },
+  })
+  const unhandled = []
+  const onUnhandled = (error) => { unhandled.push(error) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const result = await executeHttpAuthedInjectedFetch(
+      command({ timeout_ms: 100 }),
+      runtime({ fetchImpl }, { fetchImpl }),
+    )
+    assert.equal(result.outcome, 'OBSERVATION_INCOMPLETE')
+    resolveRead({
+      done: false,
+      get value() { throw new Error('synthetic late response getter failure') },
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+test('injected fetch bounds the complete response header collection', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const headers = {
+    *[Symbol.iterator]() {
+      for (let index = 0; index < 129; index += 1) yield [`x-field-${index}`, 'value']
+    },
+  }
+  const fetchImpl = async () => ({ status: 200, redirected: false, headers, body: null })
+
+  await assert.rejects(
+    executeHttpAuthedInjectedFetch(
+      command(),
+      runtime({ fetchImpl }, { fetchImpl }),
+    ),
+    (error) => error?.code === 'HTTP_AUTHED_BROWSER_RESPONSE_HEADERS_BOUNDED'
+      && error.request_may_have_been_sent === true,
+  )
+})
+
+test('injected fetch rechecks its deadline after synchronous response finalization', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  let now = 1_000
+  const headers = {
+    *[Symbol.iterator]() {
+      now = 1_101
+      yield ['content-type', 'application/json']
+    },
+  }
+  const fetchImpl = async () => ({ status: 200, redirected: false, headers, body: null })
+
+  await assert.rejects(
+    executeHttpAuthedInjectedFetch(
+      command({ deadline_epoch_ms: 1_100, timeout_ms: 100 }),
+      runtime({ fetchImpl }, { fetchImpl, clockMilliseconds: () => now }),
+    ),
+    (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+      && error.request_may_have_been_sent === true,
+  )
+})
+
 test('injected fetch rechecks cancellation and the absolute deadline after asynchronous preflight', async () => {
   const { executeHttpAuthedInjectedFetch } = await injectedApi()
   const body = Buffer.from('synthetic-write-body')
@@ -584,4 +1149,70 @@ test('injected fetch rechecks cancellation and the absolute deadline after async
     { code: 'HTTP_AUTHED_BROWSER_ACTION_EXPIRED' },
   )
   assert.equal(calls, 0)
+})
+
+test('injected fetch clears decoded body and digest bytes after a digest mismatch', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  const source = Buffer.from('synthetic-body-that-must-be-cleared')
+  const badBody = command({
+    method: 'POST',
+    headers: [{ name: 'content-type', value: 'application/octet-stream' }],
+    body: {
+      encoding: 'base64',
+      value: source.toString('base64'),
+      byte_length: source.length,
+      sha256: '0'.repeat(64),
+      content_type: 'application/octet-stream',
+    },
+  })
+  const subtle = globalThis.crypto.subtle
+  const originalDigest = subtle.digest
+  let decodedBytes
+  let digestBytes
+  subtle.digest = async function digest(algorithm, data) {
+    decodedBytes = data
+    const result = await originalDigest.call(this, algorithm, data)
+    digestBytes = new Uint8Array(result)
+    return result
+  }
+  let fetchCalls = 0
+  try {
+    await assert.rejects(
+      executeHttpAuthedInjectedFetch(
+        badBody,
+        runtime({ fetchImpl: async () => { fetchCalls += 1 } }),
+      ),
+      { code: 'HTTP_AUTHED_BROWSER_ACTION_INVALID' },
+    )
+  } finally {
+    subtle.digest = originalDigest
+  }
+
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual([...decodedBytes], Array(decodedBytes.length).fill(0))
+  assert.deepEqual([...digestBytes], Array(digestBytes.length).fill(0))
+})
+
+test('injected fetch rechecks the absolute deadline after synchronous transport work', async () => {
+  const { executeHttpAuthedInjectedFetch } = await injectedApi()
+  let now = 1_000
+  let fetchCalls = 0
+  let requestSignal
+  const fetchImpl = (_url, options) => {
+    fetchCalls += 1
+    requestSignal = options.signal
+    now = 1_101
+    return response()
+  }
+
+  await assert.rejects(
+    executeHttpAuthedInjectedFetch(
+      command({ deadline_epoch_ms: 1_100, timeout_ms: 100 }),
+      runtime({ fetchImpl }, { fetchImpl, clockMilliseconds: () => now }),
+    ),
+    (error) => error?.code === 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+      && error.request_may_have_been_sent === true,
+  )
+  assert.equal(fetchCalls, 1)
+  assert.equal(requestSignal.aborted, true)
 })

@@ -214,7 +214,7 @@ test('Chrome bridge manifest has active-tab injection, ephemeral recovery, and o
 
   assert.equal(manifest.manifest_version, 3)
   assert.equal(manifest.name, 'The Last Aperture Browser Bridge')
-  assert.equal(manifest.version, '0.13.0')
+  assert.equal(manifest.version, '0.14.1')
   assert.equal(manifest.minimum_chrome_version, '110')
   assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage'])
   assert.deepEqual(manifest.host_permissions, [])
@@ -361,6 +361,90 @@ test('Chrome bridge companion completes preview, open, prepare, ready, result, a
   assert.equal(command.action_binding_sha256, ACTION_SHA256)
   assert.equal(command.deadline_epoch_ms, Date.parse(prepareEnvelope.deadline))
   assert.equal(Object.hasOwn(command, 'credentials'), false)
+})
+
+test('Chrome bridge preserves a controller response when producer byte cleanup is overridden', async () => {
+  const chrome = fakeChrome()
+  const encoded = new TextEncoder().encode(JSON.stringify(previewEnvelope))
+  encoded.fill = () => { throw new Error('synthetic hostile controller fill') }
+  let reads = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    autoPump: false,
+    setTimer: () => ({ kind: 'synthetic-timer' }),
+    clearTimer: () => {},
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => String(encoded.byteLength) },
+      body: {
+        getReader() {
+          return {
+            read() {
+              reads += 1
+              return Promise.resolve(reads === 1
+                ? { done: false, value: encoded }
+                : { done: true })
+            },
+            cancel() {},
+          }
+        },
+      },
+    }),
+  })
+
+  const preview = await companion.preview({ port: 4711, pairingCode: PAIRING_CODE })
+  assert.equal(preview.phase, 'PREVIEWED')
+  assert.equal(encoded.every((byte) => byte === 0), true)
+})
+
+test('Chrome bridge late detached controller cleanup cannot reject unhandled', async () => {
+  const chrome = fakeChrome()
+  let timerCallback
+  let resolveRead
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    autoPump: false,
+    setTimer(callback) {
+      timerCallback = callback
+      return { kind: 'synthetic-timer' }
+    },
+    clearTimer: () => {},
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      body: {
+        getReader() {
+          return {
+            read() {
+              const pending = new Promise((resolve) => { resolveRead = resolve })
+              queueMicrotask(() => timerCallback())
+              return pending
+            },
+            cancel() {},
+          }
+        },
+      },
+    }),
+  })
+  const unhandled = []
+  const onUnhandled = (error) => { unhandled.push(error) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await assert.rejects(
+      companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+      { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT' },
+    )
+    const lateChunk = new Uint8Array(16 * 1024)
+    structuredClone(lateChunk, { transfer: [lateChunk.buffer] })
+    resolveRead({ done: false, value: lateChunk })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
 })
 
 test('Chrome bridge carries only a bound page adapter descriptor into the isolated dispatch', async () => {
@@ -664,6 +748,7 @@ test('Chrome bridge bounds every loopback controller exchange with an abort dead
     },
     clearTimer(handle) {
       cleared.push(handle)
+      throw new Error('synthetic controller timeout cleanup failure')
     },
     autoPump: false,
   })
@@ -673,6 +758,255 @@ test('Chrome bridge bounds every loopback controller exchange with an abort dead
   )
   assert.deepEqual(timerDelays, [15_000])
   assert.deepEqual(cleared, [37])
+})
+
+test('Chrome bridge controller timer setup fails before fetch and can be retried', async () => {
+  const chrome = fakeChrome()
+  let fetchCalls = 0
+  let timerCalls = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return jsonResponse(previewEnvelope)
+    },
+    setTimer() {
+      timerCalls += 1
+      throw new Error('synthetic controller timer setup failure')
+    },
+    clearTimer() {},
+    autoPump: false,
+  })
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+      { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMER_FAILED' },
+    )
+  }
+  assert.equal(timerCalls, 2)
+  assert.equal(fetchCalls, 0)
+  assert.equal(companion.status().phase, 'IDLE')
+})
+
+test('Chrome bridge controller timer cleanup cannot overturn a successful exchange', async () => {
+  const chrome = fakeChrome()
+  let clearTimerCalls = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => jsonResponse(previewEnvelope),
+    setTimer: () => 38,
+    clearTimer() {
+      clearTimerCalls += 1
+      throw new Error('synthetic controller timer cleanup failure')
+    },
+    autoPump: false,
+  })
+
+  const preview = await companion.preview({ port: 4711, pairingCode: PAIRING_CODE })
+  assert.equal(preview.phase, 'PREVIEWED')
+  assert.equal(preview.preview.target_origin, TARGET_ORIGIN)
+  assert.equal(clearTimerCalls, 1)
+})
+
+test('Chrome bridge rechecks its controller deadline after synchronous fetch work', async () => {
+  const chrome = fakeChrome()
+  let now = 0
+  let aborted = false
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: (_url, options) => {
+      options.signal.addEventListener('abort', () => { aborted = true }, { once: true })
+      now = 15_001
+      return jsonResponse(previewEnvelope)
+    },
+    setTimer() { return 51 },
+    clearTimer() {},
+    clock: () => now,
+    autoPump: false,
+  })
+
+  await assert.rejects(
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+    { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT' },
+  )
+  assert.equal(aborted, true)
+})
+
+test('Chrome bridge rechecks its controller deadline after synchronous response metadata', async () => {
+  const chrome = fakeChrome()
+  let now = 0
+  let aborted = false
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async (_url, options) => {
+      options.signal.addEventListener('abort', () => { aborted = true }, { once: true })
+      return {
+        get status() {
+          now = 15_001
+          return 204
+        },
+      }
+    },
+    setTimer() { return 52 },
+    clearTimer() {},
+    clock: () => now,
+    autoPump: false,
+  })
+
+  await assert.rejects(
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+    { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT' },
+  )
+  assert.equal(aborted, true)
+})
+
+test('Chrome bridge rechecks its controller deadline after a synchronous body read', async () => {
+  const chrome = fakeChrome()
+  let now = 0
+  let cancelCalls = 0
+  const responseBytes = new TextEncoder().encode(JSON.stringify(previewEnvelope))
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-length': String(responseBytes.byteLength) }),
+      body: {
+        getReader() {
+          let sent = false
+          return {
+            read() {
+              if (sent) return Promise.resolve({ done: true, value: undefined })
+              sent = true
+              now = 15_001
+              return Promise.resolve({ done: false, value: responseBytes })
+            },
+            cancel() { cancelCalls += 1; return new Promise(() => {}) },
+          }
+        },
+      },
+    }),
+    setTimer() { return 53 },
+    clearTimer() {},
+    clock: () => now,
+    autoPump: false,
+  })
+
+  await assert.rejects(
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+    { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT' },
+  )
+  assert.equal(cancelCalls, 1)
+  assert.deepEqual([...responseBytes], Array(responseBytes.length).fill(0))
+})
+
+test('Chrome bridge deadline bounds a controller body reader and never awaits cancellation', async () => {
+  const chrome = fakeChrome()
+  let fireTimeout
+  let cancelCalls = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read() {
+              queueMicrotask(fireTimeout)
+              return new Promise(() => {})
+            },
+            cancel() {
+              cancelCalls += 1
+              return new Promise(() => {})
+            },
+          }
+        },
+      },
+    }),
+    setTimer(callback) {
+      fireTimeout = callback
+      return 41
+    },
+    clearTimer() {},
+    autoPump: false,
+  })
+
+  const outcome = await Promise.race([
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE })
+      .then(() => 'resolved', (error) => error.code),
+    new Promise((resolve) => setTimeout(() => resolve('hung'), 100)),
+  ])
+  assert.equal(outcome, 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT')
+  assert.equal(cancelCalls, 1)
+})
+
+test('Chrome bridge cancels a controller response whose declared body exceeds the cap', async () => {
+  const chrome = fakeChrome()
+  let cancelCalls = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-length': String((24 * 1024 * 1024) + 1) }),
+      body: {
+        getReader() {
+          return {
+            read() { return new Promise(() => {}) },
+            cancel() { cancelCalls += 1; return new Promise(() => {}) },
+          }
+        },
+      },
+    }),
+    autoPump: false,
+  })
+
+  await assert.rejects(
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+    { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_TOO_LARGE' },
+  )
+  assert.equal(cancelCalls, 1)
+})
+
+test('Chrome bridge clears controller response chunks and cancels after a body read error', async () => {
+  const chrome = fakeChrome()
+  const observedChunk = new Uint8Array(Buffer.from('{"secret":"must-clear"'))
+  let reads = 0
+  let cancelCalls = 0
+  const companion = createBrowserBridgeCompanion({
+    chromeApi: chrome.api,
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      headers: new Headers(),
+      body: {
+        getReader() {
+          return {
+            read() {
+              reads += 1
+              if (reads === 1) return Promise.resolve({ done: false, value: observedChunk })
+              return Promise.reject(new Error('synthetic stream failure'))
+            },
+            cancel() {
+              cancelCalls += 1
+              return Promise.resolve()
+            },
+          }
+        },
+      },
+    }),
+    autoPump: false,
+  })
+
+  await assert.rejects(
+    companion.preview({ port: 4711, pairingCode: PAIRING_CODE }),
+    { code: 'HTTP_AUTHED_BROWSER_CONTROLLER_UNREACHABLE' },
+  )
+  assert.deepEqual([...observedChunk], Array(observedChunk.length).fill(0))
+  assert.equal(cancelCalls, 1)
 })
 
 test('Chrome bridge refuses attachment when recovery storage cannot be checked', async () => {

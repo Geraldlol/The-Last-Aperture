@@ -7,10 +7,15 @@ export function captureHttpAuthedDocument() {
   }
   const random = new Uint8Array(24)
   globalThis.crypto.getRandomValues(random)
-  const documentNonce = globalThis.btoa(String.fromCharCode(...random))
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replace(/=+$/u, '')
+  let documentNonce
+  try {
+    documentNonce = globalThis.btoa(String.fromCharCode(...random))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replace(/=+$/u, '')
+  } finally {
+    random.fill(0)
+  }
   globalThis[STATE_KEY] = {
     document_nonce: documentNonce,
     prepared_action_binding_sha256: null,
@@ -91,6 +96,20 @@ export function abortHttpAuthedInjectedFetch() {
 export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = {}) {
   const browserDispatch = arguments.length === 1
   let validationStage = 'ENVELOPE'
+  let cleanupBodyBytes = null
+  let cleanupBridgeState = null
+  let cleanupAbortController = null
+  let cleanupHeaders = null
+  let cleanupSessionCarrierName = null
+  let requestMayHaveBeenSent = false
+  const intrinsicByteFill = Uint8Array.prototype.fill
+  const eraseBytes = (value) => {
+    try {
+      if (value instanceof Uint8Array) Reflect.apply(intrinsicByteFill, value, [0])
+    } catch {
+      // Target code may detach or resize any byte storage handed to Fetch.
+    }
+  }
   try {
   const STATE_KEY = '__red_team_audit_http_authed_bridge_v1__'
   const PROTOCOL = 'red-team-audit/http-authed-browser-bridge'
@@ -137,6 +156,18 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       return false
     }
   }
+  const ambiguousEncodedPath = (value) => {
+    let current = value
+    for (let pass = 0; pass < 8; pass += 1) {
+      if (/%(?:2e|2f|5c)/iu.test(current)) return true
+      if (!current.includes('%')) return false
+      let decoded
+      try { decoded = decodeURIComponent(current) } catch { return true }
+      if (decoded === current) return false
+      current = decoded
+    }
+    return current.includes('%')
+  }
   const relativeUrl = (value, origin) => {
     if (
       typeof value !== 'string'
@@ -145,7 +176,8 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       || !value.startsWith('/')
       || value.startsWith('//')
       || value.includes('#')
-      || /(?:[\\\u0000-\u0020\u007f]|%(?:25)*(?:2e|2f|5c))/iu.test(value)
+      || /[\\\u0000-\u0020\u007f]/u.test(value)
+      || ambiguousEncodedPath(value.split('?', 1)[0])
     ) return null
     try {
       const parsed = new URL(value, origin)
@@ -180,11 +212,20 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       invalid()
     }
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
-    if (bytes.byteLength !== body.byte_length) invalid()
-    const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
-    const digestHex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
-    if (digestHex !== body.sha256) invalid()
-    return { bytes, contentType: body.content_type }
+    binary = null
+    let digest = null
+    let accepted = false
+    try {
+      if (bytes.byteLength !== body.byte_length) invalid()
+      digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
+      const digestHex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+      if (digestHex !== body.sha256) invalid()
+      accepted = true
+      return { bytes, contentType: body.content_type }
+    } finally {
+      eraseBytes(digest)
+      if (!accepted) eraseBytes(bytes)
+    }
   }
   const requestHeaders = (entries, contentType) => {
     if (entries === undefined) entries = []
@@ -210,6 +251,53 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     }
     return result
   }
+  const boundedResponseHeaders = (headers) => {
+    if (headers === null || typeof headers?.[Symbol.iterator] !== 'function') {
+      throw failure(
+        'HTTP_AUTHED_BROWSER_RESPONSE_HEADERS_BOUNDED',
+        'response headers are not a bounded iterable collection',
+        true,
+      )
+    }
+    const encoder = new TextEncoder()
+    const fields = []
+    let totalBytes = 0
+    for (const field of headers) {
+      if (
+        !Array.isArray(field)
+        || field.length !== 2
+        || typeof field[0] !== 'string'
+        || typeof field[1] !== 'string'
+      ) {
+        throw failure(
+          'HTTP_AUTHED_BROWSER_RESPONSE_HEADERS_BOUNDED',
+          'response headers contain an invalid field',
+          true,
+        )
+      }
+      const normalizedName = field[0].toLowerCase()
+      const valueBytes = encoder.encode(field[1])
+      try {
+        totalBytes += valueBytes.byteLength
+        if (
+          fields.length >= 128
+          || totalBytes > 65_536
+          || !/^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u.test(normalizedName)
+          || valueBytes.byteLength > 8192
+        ) {
+          throw failure(
+            'HTTP_AUTHED_BROWSER_RESPONSE_HEADERS_BOUNDED',
+            'response header observation exceeded the transient bridge boundary',
+            true,
+          )
+        }
+        fields.push([normalizedName, field[1]])
+      } finally {
+        eraseBytes(valueBytes)
+      }
+    }
+    return fields
+  }
   const safeHeaderNames = (headers) => {
     const names = new Set()
     const retained = new Set([
@@ -226,31 +314,20 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       'set-cookie',
       'www-authenticate',
     ])
-    for (const [name] of headers) names.add(retained.has(name.toLowerCase()) ? name.toLowerCase() : 'other')
+    for (const [name] of headers) names.add(retained.has(name) ? name : 'other')
     return [...names].sort()
   }
   const transientHeaders = (headers) => {
     const encoder = new TextEncoder()
     const fields = []
-    let totalBytes = 0
     for (const [name, value] of headers) {
-      const normalizedName = name.toLowerCase()
-      if (!OBSERVABLE_RESPONSE_HEADERS.has(normalizedName)) continue
+      if (!OBSERVABLE_RESPONSE_HEADERS.has(name)) continue
       const valueBytes = encoder.encode(value)
-      totalBytes += valueBytes.byteLength
-      if (
-        fields.length >= 128
-        || totalBytes > 65_536
-        || !/^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u.test(normalizedName)
-        || valueBytes.byteLength > 8192
-      ) {
-        throw failure(
-          'HTTP_AUTHED_BROWSER_RESPONSE_HEADERS_BOUNDED',
-          'response header observation exceeded the transient bridge boundary',
-          true,
-        )
+      try {
+        fields.push({ name, value_base64: bytesToBase64(valueBytes) })
+      } finally {
+        eraseBytes(valueBytes)
       }
-      fields.push({ name: normalizedName, value_base64: bytesToBase64(valueBytes) })
     }
     return fields
   }
@@ -314,11 +391,13 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   }
   const digestAdapter = async (adapter) => {
     const bytes = new TextEncoder().encode(JSON.stringify(stableValue(adapter)))
+    let digest = null
     try {
-      const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
+      digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
       return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
     } finally {
-      bytes.fill(0)
+      eraseBytes(digest)
+      eraseBytes(bytes)
     }
   }
   const validateSessionAdapter = async (adapter, expectedSha256, now, requestUrl) => {
@@ -517,8 +596,8 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       roundTripped = null
       return carried
     } finally {
-      valueBytes.fill(0)
-      carriedBytes.fill(0)
+      eraseBytes(valueBytes)
+      eraseBytes(carriedBytes)
       raw = null
       value = null
     }
@@ -568,9 +647,10 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
         ? 'BODY_DECODE_ARRAY'
         : (typeof command.body === 'object' ? 'BODY_DECODE_OBJECT' : 'BODY_DECODE_TYPE'))
   const { bytes: bodyBytes, contentType } = await decodeBody(command.body)
+  cleanupBodyBytes = bodyBytes ?? null
   validationStage = 'BODY_METHOD'
   if ((command.method === 'GET' || command.method === 'HEAD') && bodyBytes !== undefined) {
-    bodyBytes.fill(0)
+    eraseBytes(bodyBytes)
     invalid()
   }
   validationStage = 'HEADERS'
@@ -578,7 +658,7 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   try {
     headers = requestHeaders(command.headers, contentType)
   } catch (error) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw error
   }
   validationStage = 'LIMITS'
@@ -597,14 +677,14 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     || maxResponseBytes > MAX_RESPONSE_BYTES
     || typeof observeResponse !== 'boolean'
   ) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     invalid()
   }
 
   const currentPreparedBinding = suppliedRuntime.preparedActionBindingSha256
     ?? bridgeState?.prepared_action_binding_sha256
   if (currentPreparedBinding !== command.action_binding_sha256) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_OPERATION_CANCELLED',
       'the prepared action was cancelled before dispatch',
@@ -612,12 +692,12 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   }
   const clockMilliseconds = suppliedRuntime.clockMilliseconds ?? Date.now
   if (typeof clockMilliseconds !== 'function') {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     invalid()
   }
   const deadlineRemainingMs = Math.floor(deadlineEpochMs - clockMilliseconds())
   if (!Number.isFinite(deadlineRemainingMs) || deadlineRemainingMs < 100) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_ACTION_EXPIRED',
       'the committed action expired before dispatch',
@@ -633,7 +713,7 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     (hasSessionAdapter && preparedSessionAdapterSha256 !== command.session_adapter_sha256)
     || (!hasSessionAdapter && preparedSessionAdapterSha256 !== null)
   ) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_SESSION_ADAPTER_BINDING_MISMATCH',
       'the committed page session adapter does not match the prepared action',
@@ -661,7 +741,7 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       ? adapterBindingAfterValidation !== command.session_adapter_sha256
       : adapterBindingAfterValidation !== null)
   ) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_OPERATION_CANCELLED',
       'the prepared action was cancelled before session acquisition',
@@ -671,16 +751,16 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     deadlineEpochMs - clockMilliseconds(),
   )
   if (!Number.isFinite(remainingAfterAdapterValidation) || remainingAfterAdapterValidation < 100) {
-    bodyBytes?.fill(0)
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_ACTION_EXPIRED',
       'the committed action expired before session acquisition',
     )
   }
-  let transientSessionValue = null
   if (sessionAdapter !== null) {
-    transientSessionValue = readSessionValue(sessionAdapter, suppliedRuntime)
-    headers[sessionAdapter.carrier.name] = transientSessionValue
+    headers[sessionAdapter.carrier.name] = readSessionValue(sessionAdapter, suppliedRuntime)
+    cleanupHeaders = headers
+    cleanupSessionCarrierName = sessionAdapter.carrier.name
   }
   const currentBridgeState = globalThis[STATE_KEY]
   const finalPreparedBinding = suppliedRuntime.preparedActionBindingSha256
@@ -701,9 +781,7 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     || !Number.isFinite(finalDeadlineRemainingMs)
     || finalDeadlineRemainingMs < 100
   ) {
-    bodyBytes?.fill(0)
-    if (sessionAdapter !== null) delete headers[sessionAdapter.carrier.name]
-    transientSessionValue = null
+    eraseBytes(bodyBytes)
     throw failure(
       'HTTP_AUTHED_BROWSER_OPERATION_CANCELLED',
       'the prepared action changed during session acquisition',
@@ -711,40 +789,108 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   }
   if (isObject(bridgeState)) bridgeState.prepared_action_binding_sha256 = null
   if (isObject(bridgeState)) bridgeState.prepared_session_adapter_sha256 = null
-  const fetchImpl = suppliedRuntime.fetchImpl ?? globalThis.fetch.bind(globalThis)
-  if (typeof fetchImpl !== 'function') invalid()
-  const abortController = new AbortController()
-  if (isObject(bridgeState)) bridgeState.abort_controller = abortController
-  const timeout = globalThis.setTimeout(
-    () => abortController.abort(),
-    Math.min(timeoutMs, finalDeadlineRemainingMs),
-  )
-  const started = globalThis.performance?.now?.() ?? Date.now()
-  let response
+  let rejectDeadline
+  let deadline
+  let fetchImpl
+  let abortController
+  let started
   try {
-    response = await fetchImpl(url, {
-      method: command.method,
-      headers,
-      ...(bodyBytes === undefined ? {} : { body: bodyBytes }),
-      credentials: 'same-origin',
-      redirect: 'error',
-      cache: 'no-store',
-      referrerPolicy: 'no-referrer',
-      mode: 'same-origin',
-      signal: abortController.signal,
-    })
-  } catch {
-    globalThis.clearTimeout(timeout)
-    bodyBytes?.fill(0)
-    if (sessionAdapter !== null) delete headers[sessionAdapter.carrier.name]
-    transientSessionValue = null
-    if (isObject(bridgeState) && bridgeState.abort_controller === abortController) {
-      bridgeState.abort_controller = null
+    fetchImpl = suppliedRuntime.fetchImpl ?? globalThis.fetch.bind(globalThis)
+    if (typeof fetchImpl !== 'function') invalid()
+    abortController = new AbortController()
+    cleanupBridgeState = isObject(bridgeState) ? bridgeState : null
+    cleanupAbortController = abortController
+    if (cleanupBridgeState !== null) cleanupBridgeState.abort_controller = abortController
+    deadline = new Promise((_, reject) => { rejectDeadline = reject })
+    // Page globals are target-controlled. Observe the deadline before timer
+    // setup and keep the controller/header cleanup boundary active throughout.
+    void deadline.catch(() => {})
+    started = globalThis.performance?.now?.() ?? Date.now()
+  } catch (error) {
+    if (typeof error?.code === 'string' && error.code.startsWith('HTTP_AUTHED_BROWSER_')) {
+      throw error
     }
     throw failure(
+      'HTTP_AUTHED_BROWSER_FETCH_SETUP_FAILED',
+      'the committed request could not initialize its browser transport',
+    )
+  }
+  const committedTimeoutMs = Math.min(timeoutMs, finalDeadlineRemainingMs)
+  const committedDeadline = started + committedTimeoutMs
+  const deadlineError = failure(
+    'HTTP_AUTHED_BROWSER_FETCH_FAILED',
+    'the committed request exceeded its absolute deadline',
+  )
+  let timeout
+  let timeoutCreated = false
+  const clearDeadlineTimer = () => {
+    if (!timeoutCreated) return
+    timeoutCreated = false
+    try {
+      globalThis.clearTimeout(timeout)
+    } catch {
+      // The fetch outcome and transient cleanup remain authoritative.
+    }
+  }
+  try {
+    timeout = globalThis.setTimeout(
+      () => {
+        abortController.abort(deadlineError)
+        rejectDeadline(deadlineError)
+      },
+      committedTimeoutMs,
+    )
+    timeoutCreated = true
+  } catch {
+    eraseBytes(bodyBytes)
+    throw failure(
+      'HTTP_AUTHED_BROWSER_FETCH_TIMER_FAILED',
+      'the committed request could not start its deadline timer',
+    )
+  }
+  const ensureDeadline = () => {
+    const monotonicNow = globalThis.performance?.now?.() ?? Date.now()
+    if (
+      !abortController.signal.aborted
+      && monotonicNow < committedDeadline
+      && clockMilliseconds() < deadlineEpochMs
+    ) return
+    if (!abortController.signal.aborted) abortController.abort(deadlineError)
+    throw deadlineError
+  }
+  const withinDeadline = async (operation) => {
+    ensureDeadline()
+    const value = await Promise.race([Promise.resolve().then(operation), deadline])
+    ensureDeadline()
+    return value
+  }
+  let response
+  try {
+    response = await withinDeadline(() => {
+      requestMayHaveBeenSent = true
+      deadlineError.request_may_have_been_sent = true
+      return fetchImpl(url, {
+        method: command.method,
+        headers,
+        ...(bodyBytes === undefined ? {} : { body: bodyBytes }),
+        credentials: 'same-origin',
+        redirect: 'error',
+        cache: 'no-store',
+        referrerPolicy: 'no-referrer',
+        mode: 'same-origin',
+        signal: abortController.signal,
+      })
+    })
+  } catch (error) {
+    clearDeadlineTimer()
+    eraseBytes(bodyBytes)
+    if (error === deadlineError) throw error
+    throw failure(
       'HTTP_AUTHED_BROWSER_FETCH_FAILED',
-      'the committed request failed after dispatch; it was not retried',
-      true,
+      requestMayHaveBeenSent
+        ? 'the committed request failed after dispatch; it was not retried'
+        : 'the committed request failed before dispatch',
+      requestMayHaveBeenSent,
     )
   }
 
@@ -752,36 +898,63 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
   let truncated = false
   let bodyReadIncomplete = false
   const bodyChunks = []
+  let responseReader = null
   try {
     if (response.body !== null && command.method !== 'HEAD') {
-      const reader = response.body.getReader()
+      responseReader = response.body.getReader()
       while (true) {
-        const part = await reader.read()
-        if (part.done) break
+        const pendingRead = Promise.resolve().then(() => responseReader.read())
+        let part
+        try {
+          part = await withinDeadline(() => pendingRead)
+        } catch (error) {
+          pendingRead.then((latePart) => {
+            try {
+              eraseBytes(latePart?.value)
+            } catch {
+              // Target-controlled late results cannot reject cleanup.
+            }
+          }, () => {})
+          throw error
+        }
+        if (part.done) {
+          eraseBytes(part.value)
+          break
+        }
+        if (!(part.value instanceof Uint8Array)) {
+          throw failure(
+            'HTTP_AUTHED_BROWSER_RESPONSE_INVALID',
+            'the committed request returned a non-byte response chunk',
+            true,
+          )
+        }
         const remaining = Math.max(0, maxResponseBytes - bytes)
         if (observeResponse && remaining > 0) bodyChunks.push(part.value.slice(0, remaining))
         bytes += Math.min(remaining, part.value.byteLength)
         if (part.value.byteLength > remaining) {
+          eraseBytes(part.value)
           truncated = true
+          abortController.abort()
           try {
-            await reader.cancel()
-          } catch {
-            abortController.abort()
-          }
+            Promise.resolve(responseReader.cancel()).catch(() => {})
+          } catch {}
           break
         }
+        eraseBytes(part.value)
       }
     }
   } catch {
     bodyReadIncomplete = true
-  } finally {
-    globalThis.clearTimeout(timeout)
-    if (isObject(bridgeState) && bridgeState.abort_controller === abortController) {
-      bridgeState.abort_controller = null
+    abortController.abort()
+    if (responseReader !== null) {
+      try {
+        Promise.resolve(responseReader.cancel()).catch(() => {})
+      } catch {}
     }
+  } finally {
+    clearDeadlineTimer()
   }
 
-  const finished = globalThis.performance?.now?.() ?? Date.now()
   const capturedBody = new Uint8Array(observeResponse ? bytes : 0)
   let bodyOffset = 0
   for (const chunk of bodyChunks) {
@@ -789,9 +962,15 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
     bodyOffset += chunk.byteLength
   }
   try {
-    const headerNames = safeHeaderNames(response.headers)
-    const responseHeaders = observeResponse ? transientHeaders(response.headers) : []
+    const boundedHeaders = boundedResponseHeaders(response.headers)
+    const headerNames = safeHeaderNames(boundedHeaders)
+    const responseHeaders = observeResponse ? transientHeaders(boundedHeaders) : []
     const bodyBase64 = observeResponse ? bytesToBase64(capturedBody) : null
+    const responseStatus = response.status
+    const status = Number.isInteger(responseStatus) ? responseStatus : null
+    const redirected = response.redirected === true
+    const finished = globalThis.performance?.now?.() ?? Date.now()
+    if (!bodyReadIncomplete && !truncated) ensureDeadline()
     return {
       protocol: PROTOCOL,
       schema_version: '1.0.0',
@@ -802,14 +981,14 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
         ? {}
         : { session_adapter_sha256: command.session_adapter_sha256 }),
       outcome: bodyReadIncomplete ? 'OBSERVATION_INCOMPLETE' : (truncated ? 'RESPONSE_BOUNDED' : 'OBSERVED'),
-      status: Number.isInteger(response.status) ? response.status : null,
+      status,
       bytes,
       response_truncated: truncated,
       header_names: headerNames,
-      redirected: response.redirected === true,
+      redirected,
       elapsed_ms: Math.max(0, Math.min(60_000, Math.round(finished - started))),
       response: {
-        status: Number.isInteger(response.status) ? response.status : null,
+        status,
         response_bytes: bytes,
         response_header_names: headerNames,
         headers: responseHeaders,
@@ -817,23 +996,52 @@ export async function executeHttpAuthedInjectedFetch(command, suppliedRuntime = 
       },
     }
   } finally {
-    bodyBytes?.fill(0)
-    if (sessionAdapter !== null) delete headers[sessionAdapter.carrier.name]
-    transientSessionValue = null
-    capturedBody.fill(0)
-    for (const chunk of bodyChunks) chunk.fill(0)
+    eraseBytes(bodyBytes)
+    eraseBytes(capturedBody)
+    for (const chunk of bodyChunks) eraseBytes(chunk)
+    bodyChunks.length = 0
+    bytes = 0
   }
   } catch (error) {
     if (!browserDispatch) throw error
-    const controlledCode = typeof error?.code === 'string'
-      && /^HTTP_AUTHED_BROWSER_[A-Z0-9_]{3,96}$/u.test(error.code)
-      ? (error.code === 'HTTP_AUTHED_BROWSER_ACTION_INVALID'
-          ? `${error.code}_${validationStage}`
-          : error.code)
-      : 'HTTP_AUTHED_BROWSER_INJECTION_FAILED'
+    let errorCode
+    let errorClaimsSent = false
+    try {
+      errorCode = error?.code
+    } catch {}
+    try {
+      errorClaimsSent = error?.request_may_have_been_sent === true
+    } catch {}
+    const deliveryAmbiguous = requestMayHaveBeenSent || errorClaimsSent
+    const controlledCode = typeof errorCode === 'string'
+      && /^HTTP_AUTHED_BROWSER_[A-Z0-9_]{3,96}$/u.test(errorCode)
+      ? (errorCode === 'HTTP_AUTHED_BROWSER_ACTION_INVALID'
+          ? `${errorCode}_${validationStage}`
+          : errorCode)
+      : (deliveryAmbiguous
+          ? 'HTTP_AUTHED_BROWSER_FETCH_FAILED'
+          : 'HTTP_AUTHED_BROWSER_INJECTION_FAILED')
     return {
       error_code: controlledCode,
-      request_may_have_been_sent: error?.request_may_have_been_sent === true,
+      request_may_have_been_sent: deliveryAmbiguous,
     }
+  } finally {
+    try {
+      if (cleanupHeaders !== null && cleanupSessionCarrierName !== null) {
+        delete cleanupHeaders[cleanupSessionCarrierName]
+      }
+    } catch {}
+    cleanupHeaders = null
+    cleanupSessionCarrierName = null
+    try {
+      if (
+        cleanupBridgeState !== null
+        && cleanupBridgeState.abort_controller === cleanupAbortController
+      ) cleanupBridgeState.abort_controller = null
+    } catch {}
+    cleanupBridgeState = null
+    cleanupAbortController = null
+    eraseBytes(cleanupBodyBytes)
+    cleanupBodyBytes = null
   }
 }

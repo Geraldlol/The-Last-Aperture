@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import {
+  link,
   mkdtemp,
   readFile,
   rm,
@@ -24,6 +26,11 @@ import {
   runHttpReconAction,
   validateHttpReconBundle,
 } from '../scripts/lib/http-recon-controller.mjs'
+import { stableJson } from '../scripts/lib/run-engine.mjs'
+import {
+  replaceFileDurably,
+  syncDirectoryDurably,
+} from '../scripts/lib/durable-file-publication.mjs'
 
 const EMPTY_SHA256 = sha256Hex(Buffer.alloc(0))
 const DNS_ANSWERS = [{ address: '93.184.216.34', family: 4 }]
@@ -32,11 +39,38 @@ const DNS_SHA256 = sha256Hex(Buffer.from(JSON.stringify({
   answers: DNS_ANSWERS,
 })))
 
+test('Win32 durable replacement uses a real write-through move instead of directory fsync', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-win32-durable-replace-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const source = join(directory, 'report.md.pending')
+  const destination = join(directory, 'report.md')
+  await writeFile(source, 'durable replacement')
+  await writeFile(destination, 'old report')
+  await assert.rejects(
+    syncDirectoryDurably(directory),
+    (error) => error.code === 'DIRECTORY_FSYNC_UNSUPPORTED',
+  )
+  await replaceFileDurably(source, destination)
+  assert.equal(await readFile(destination, 'utf8'), 'durable replacement')
+  await assert.rejects(readFile(source), (error) => error.code === 'ENOENT')
+})
+
 test('signed authorization controller entry points are absent', () => {
   assert.equal(Object.hasOwn(httpReconController, 'planHttpReconBundle'), false)
   assert.equal(
     Object.hasOwn(httpReconController.httpReconControllerConstants, 'ROE_FILE'),
     false,
+  )
+})
+
+test('HTTP recon rejects hard-linked bundle artifacts before acting on them', async (t) => {
+  const value = await attestedFixture(t)
+  await link(join(value.out, 'run.json'), join(value.parent, 'run-alias.json'))
+  await assert.rejects(
+    nextHttpReconAction({ bundle: value.out, now: value.clock.now }),
+    (error) => error.code === 'HTTP_RECON_ARTIFACT_NOT_REGULAR',
   )
 })
 
@@ -423,7 +457,7 @@ function appendSyntheticEvent(records, run, type, details, at) {
   return records.at(-1)
 }
 
-async function synthesizeStaleActionPreDispatch(bundle, at) {
+async function synthesizeStaleActionPreDispatch(bundle, at, { includePreDispatch = true } = {}) {
   const runPath = join(bundle, 'run.json')
   const eventPath = join(bundle, 'events.jsonl')
   const run = JSON.parse(await readFile(runPath, 'utf8'))
@@ -457,12 +491,14 @@ async function synthesizeStaleActionPreDispatch(bundle, at) {
     method: action.method,
     tlsVerification: run.target.tls.mode,
   })
-  appendSyntheticEvent(records, run, 'ACTION_REQUEST_PRE_DISPATCH', {
-    action_id: action.action_id,
-    method: action.method,
-    url: action.url,
-    transport_identity: recordedTransportIdentity(metadata),
-  }, at)
+  if (includePreDispatch) {
+    appendSyntheticEvent(records, run, 'ACTION_REQUEST_PRE_DISPATCH', {
+      action_id: action.action_id,
+      method: action.method,
+      url: action.url,
+      transport_identity: recordedTransportIdentity(metadata),
+    }, at)
+  }
   run.event_chain = {
     count: lease.sequence,
     last_sha256: lease.record_sha256,
@@ -1098,6 +1134,25 @@ test('finalize adopts an action pre-dispatch fsynced past a stale run root', asy
   assert.equal(validation.valid, true)
 })
 
+test('finalize treats SENT without durable pre-dispatch as interrupted before send', async (t) => {
+  const value = await attestedFixture(t)
+  await synthesizeStaleActionPreDispatch(
+    value.out,
+    value.clock.now().toISOString(),
+    { includePreDispatch: false },
+  )
+  const finalized = await finalizeHttpReconBundle({
+    bundle: value.out,
+    now: value.clock.now,
+  })
+  assert.equal(finalized.run.state, 'FAILED')
+  assert.equal(finalized.run.actions[0].state, 'FAILED')
+  assert.equal(
+    finalized.run.actions[0].error.code,
+    'INTERRUPTED_BEFORE_ACTION_SEND',
+  )
+})
+
 test('finalize preserves a response stop recovered from an ACTION_COMMITTED crash tail', async (t) => {
   const value = await attestedFixture(t)
   const next = await nextHttpReconAction({
@@ -1224,6 +1279,323 @@ test('finalize adopts an exact fsynced finalization past an active run root', as
     bundle: value.out,
     now: value.clock.now,
   })
+  assert.equal(validation.valid, true)
+})
+
+test('finalize is idempotent after a rooted RUN_FINALIZED and ignores a late stop marker', async (t) => {
+  const value = await attestedFixture(t)
+  const next = await nextHttpReconAction({ bundle: value.out, now: value.clock.now })
+  const transport = attestedTransports()
+  await runHttpReconAction({
+    bundle: value.out,
+    actionId: next.action_id,
+    operatorId: 'operator-001',
+    rationale: 'authorized bounded response metadata observation',
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  const first = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  const eventPath = join(value.out, 'events.jsonl')
+  const firstEvents = await readFile(eventPath, 'utf8')
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'late operator stop after durable finalization',
+    now: value.clock.now,
+  })
+  const second = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.deepEqual(second.run, first.run)
+  assert.equal(await readFile(eventPath, 'utf8'), firstEvents)
+  assert.equal((firstEvents.match(/RUN_FINALIZED/g) ?? []).length, 1)
+})
+
+test('finalize atomically replaces an incomplete report left before its durable root', async (t) => {
+  const value = await attestedFixture(t)
+  const next = await nextHttpReconAction({ bundle: value.out, now: value.clock.now })
+  const transport = attestedTransports()
+  await runHttpReconAction({
+    bundle: value.out,
+    actionId: next.action_id,
+    operatorId: 'operator-001',
+    rationale: 'authorized bounded response metadata observation',
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  await writeFile(join(value.out, 'report.md'), 'incomplete report publication')
+  const finalized = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(finalized.run.state, 'PROBE_PLAN_COMPLETE')
+  const validation = await validateHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(validation.valid, true)
+})
+
+test('finalize does not root RUN_FINALIZED until report directory sync succeeds', async (t) => {
+  const value = await attestedFixture(t)
+  const next = await nextHttpReconAction({ bundle: value.out, now: value.clock.now })
+  const transport = attestedTransports()
+  await runHttpReconAction({
+    bundle: value.out,
+    actionId: next.action_id,
+    operatorId: 'operator-001',
+    rationale: 'authorized bounded response metadata observation',
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  const eventPath = join(value.out, 'events.jsonl')
+  const before = await readFile(eventPath, 'utf8')
+  await assert.rejects(
+    finalizeHttpReconBundle({
+      bundle: value.out,
+      now: value.clock.now,
+      directorySyncImpl: async () => { throw new Error('synthetic directory sync failure') },
+    }),
+    /synthetic directory sync failure/,
+  )
+  assert.equal(await readFile(eventPath, 'utf8'), before)
+  const finalized = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(finalized.run.state, 'PROBE_PLAN_COMPLETE')
+})
+
+test('a dead recon lock owner is recovered before finalization', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish the bounded fixture',
+    now: value.clock.now,
+  })
+  const child = spawn(process.execPath, ['-e', ''])
+  const deadPid = child.pid
+  await once(child, 'exit')
+  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+    schema_version: '1.0.0',
+    pid: deadPid,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'a'.repeat(32),
+  }))
+  const finalized = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(finalized.run.state, 'STOPPED')
+})
+
+test('a dead two-name recon reclaim guard cannot permanently block stale-lock recovery', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish after a crashed reclaim owner',
+    now: value.clock.now,
+  })
+  const child = spawn(process.execPath, ['-e', ''])
+  const deadPid = child.pid
+  await once(child, 'exit')
+  const owner = {
+    schema_version: '1.0.0',
+    pid: deadPid,
+    acquired_at: value.clock.now().toISOString(),
+  }
+  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+    ...owner,
+    nonce: '1'.repeat(32),
+  }))
+  const reclaimTemporary = join(
+    value.out,
+    `.http-recon.lock-reclaim.tmp-${deadPid}-1111111111111111`,
+  )
+  const reclaimPath = join(value.out, '.http-recon.lock-reclaim')
+  await writeFile(reclaimTemporary, stableJson({
+    ...owner,
+    nonce: '2'.repeat(32),
+  }))
+  await link(reclaimTemporary, reclaimPath)
+
+  const finalized = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  assert.equal(finalized.run.state, 'STOPPED')
+  await assert.rejects(
+    readFile(reclaimPath),
+    (error) => error.code === 'ENOENT',
+  )
+  assert.equal(JSON.parse(await readFile(reclaimTemporary, 'utf8')).nonce, '2'.repeat(32))
+})
+
+test('a live recon lock owner remains exclusive', async (t) => {
+  const value = await attestedFixture(t)
+  const lockPath = join(value.out, '.http-recon.lock')
+  await writeFile(lockPath, stableJson({
+    schema_version: '1.0.0',
+    pid: process.pid,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'b'.repeat(32),
+  }))
+  await assert.rejects(
+    finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now }),
+    (error) => error.code === 'HTTP_RECON_RUN_LOCKED',
+  )
+  await rm(lockPath)
+})
+
+test('a lock released after create collision is retried instead of leaking ENOENT', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish after the lock collision race',
+    now: value.clock.now,
+  })
+  const lockPath = join(value.out, '.http-recon.lock')
+  await writeFile(lockPath, stableJson({
+    schema_version: '1.0.0',
+    pid: process.pid,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'c'.repeat(32),
+  }))
+  let collisionExercised = false
+  const finalized = await finalizeHttpReconBundle({
+    bundle: value.out,
+    now: value.clock.now,
+    lockFaultInjector: async (phase) => {
+      if (phase !== 'after-run-lock-collision' || collisionExercised) return
+      collisionExercised = true
+      await rm(lockPath)
+    },
+  })
+  assert.equal(collisionExercised, true)
+  assert.equal(finalized.run.state, 'STOPPED')
+})
+
+test('serialized stale reclaim leaves a replacement live lock in place', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish after replacement lock validation',
+    now: value.clock.now,
+  })
+  const lockPath = join(value.out, '.http-recon.lock')
+  const stale = stableJson({
+    schema_version: '1.0.0',
+    pid: 2_147_483_647,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'd'.repeat(32),
+  })
+  const replacement = stableJson({
+    schema_version: '1.0.0',
+    pid: process.pid,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'e'.repeat(32),
+  })
+  await writeFile(lockPath, stale)
+  let replacementInstalled = false
+  await assert.rejects(
+    finalizeHttpReconBundle({
+      bundle: value.out,
+      now: value.clock.now,
+      lockFaultInjector: async (phase) => {
+        if (phase !== 'after-run-lock-reclaim-guard-acquired' || replacementInstalled) return
+        replacementInstalled = true
+        await rm(lockPath)
+        await writeFile(lockPath, replacement)
+      },
+    }),
+    (error) => error.code === 'HTTP_RECON_RUN_LOCKED',
+  )
+  assert.equal(replacementInstalled, true)
+  assert.equal(await readFile(lockPath, 'utf8'), replacement)
+  await rm(lockPath)
+})
+
+test('recon lock release never deletes a replacement live owner', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish before the release replacement race',
+    now: value.clock.now,
+  })
+  const lockPath = join(value.out, '.http-recon.lock')
+  const replacement = stableJson({
+    schema_version: '1.0.0',
+    pid: process.pid,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: '9'.repeat(32),
+  })
+  let replacementInstalled = false
+
+  await assert.rejects(
+    finalizeHttpReconBundle({
+      bundle: value.out,
+      now: value.clock.now,
+      lockFaultInjector: async (phase) => {
+        if (phase !== 'before-run-lock-release-quarantine' || replacementInstalled) return
+        replacementInstalled = true
+        await rm(lockPath)
+        await writeFile(lockPath, replacement)
+      },
+    }),
+    (error) => error.code === 'HTTP_RECON_RUN_LOCK_CHANGED',
+  )
+  assert.equal(replacementInstalled, true)
+  assert.equal(await readFile(lockPath, 'utf8'), replacement)
+  await rm(lockPath)
+})
+
+test('stale-lock inspection rejects an endpoint swapped after its bounded lstat', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish after bounded stale-lock inspection',
+    now: value.clock.now,
+  })
+  const lockPath = join(value.out, '.http-recon.lock')
+  await writeFile(lockPath, stableJson({
+    schema_version: '1.0.0',
+    pid: 2_147_483_647,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'f'.repeat(32),
+  }))
+  let swapped = false
+  await assert.rejects(
+    finalizeHttpReconBundle({
+      bundle: value.out,
+      now: value.clock.now,
+      lockFaultInjector: async (phase, detail) => {
+        if (phase !== 'after-run-lock-lstat' || detail?.path !== lockPath || swapped) return
+        swapped = true
+        await rm(lockPath)
+        await writeFile(lockPath, 'x'.repeat(4097))
+      },
+    }),
+    (error) => error.code === 'HTTP_RECON_ARTIFACT_CHANGED'
+      || error.code === 'HTTP_RECON_ARTIFACT_TOO_LARGE',
+  )
+  assert.equal(swapped, true)
+})
+
+test('concurrent stale lock reclaim never leaks filesystem races', async (t) => {
+  const value = await attestedFixture(t)
+  await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'finish after concurrent stale lock reclaim',
+    now: value.clock.now,
+  })
+  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+    schema_version: '1.0.0',
+    pid: 2_147_483_647,
+    acquired_at: value.clock.now().toISOString(),
+    nonce: 'f'.repeat(32),
+  }))
+  const results = await Promise.allSettled(Array.from({ length: 24 }, () => (
+    finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
+  )))
+  assert.ok(results.some(({ status }) => status === 'fulfilled'))
+  for (const result of results) {
+    if (result.status === 'fulfilled') continue
+    assert.ok(
+      ['HTTP_RECON_RUN_LOCKED', 'HTTP_RECON_RUN_LOCK_RECLAIM_BUSY'].includes(result.reason?.code),
+      `unexpected stale-reclaim error: ${result.reason?.stack ?? result.reason}`,
+    )
+  }
+  const validation = await validateHttpReconBundle({ bundle: value.out, now: value.clock.now })
   assert.equal(validation.valid, true)
 })
 
@@ -1424,6 +1796,39 @@ test('out-of-band stop is idempotent and prevents target dispatch', async (t) =>
   assert.equal(stopped.run.state, 'STOPPED')
   assert.equal(stopped.action, null)
   assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
+})
+
+test('a concurrent recon stop requester never observes a partially written final marker', async (t) => {
+  const value = await attestedFixture(t)
+  let entered
+  let release
+  const enteredPromise = new Promise((resolvePromise) => { entered = resolvePromise })
+  const releasePromise = new Promise((resolvePromise) => { release = resolvePromise })
+  const firstPromise = requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'first concurrent emergency stop',
+    now: value.clock.now,
+    stopPublicationFaultInjector: async () => {
+      entered()
+      await releasePromise
+    },
+  })
+  await enteredPromise
+  const secondOutcome = await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-002',
+    reason: 'second concurrent emergency stop',
+    now: value.clock.now,
+  }).then(
+    (value) => ({ status: 'fulfilled', value }),
+    (reason) => ({ status: 'rejected', reason }),
+  )
+  release()
+  const first = await firstPromise
+
+  assert.equal(secondOutcome.status, 'fulfilled', secondOutcome.reason?.stack)
+  assert.equal(secondOutcome.value.requested_at, first.requested_at)
 })
 
 test('out-of-band stop aborts an in-flight request and preserves uncertain delivery', async (t) => {

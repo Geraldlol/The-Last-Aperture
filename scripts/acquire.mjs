@@ -13,8 +13,8 @@ Usage:
   audit:acquire registry plan --image <ref@sha256:...> --credential-ref <env:NAME> --evidence-id <id> --operator-id <id> --out <bundle> [--target-class <class>] [--phi-scope <scope>] [--json] [DISABLED]
   audit:acquire deployed plan --context <ctx> --evidence-id <id> --operation "<id>:<k>=<v>;<k>=<v>[,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --out <bundle> [--capture-contents --acknowledge-phi] [--json] [DISABLED]
   audit:acquire runtime  plan --context <ctx> --namespace <ns> --pod <pod> --container <c> --evidence-id <id> --operation "<id>[:<k>=<v>][,...]" --target-class <class> --phi-scope <scope> --operator-id <id> --out <bundle> [--capture-contents --acknowledge-phi] [--json] [DISABLED]
-  audit:acquire <artifact|registry|deployed|runtime> run <bundle> --operator-id <id> [--json] [DISABLED]
-  audit:acquire <adapter> finalize <bundle> [--json] [DISABLED]
+  audit:acquire <artifact|registry|deployed|runtime> run <bundle> --operator-id <id> --plan-sha256 <digest> [--json] [DISABLED]
+  audit:acquire <adapter> finalize <bundle> --plan-sha256 <digest> --receipt-sha256 <digest> [--json] [DISABLED]
   audit:acquire <adapter> validate <bundle> [--json] [DISABLED]
   audit:acquire <adapter> stop <bundle> --operator-id <id> --reason <text> [--json] [DISABLED]
 
@@ -79,6 +79,8 @@ const VALUE_OPTIONS = new Set([
   'pod',
   'container',
   'operation',
+  'plan-sha256',
+  'receipt-sha256',
 ])
 
 const FLAG_OPTIONS = new Set([
@@ -126,8 +128,8 @@ const PLAN_SHAPES = {
 
 const COMMANDS = {
   plan: { positionals: 0 },
-  run: { positionals: 1, required: ['operator-id'], optional: ['confirm-authorization-current', 'json'] },
-  finalize: { positionals: 1, required: [], optional: ['json'] },
+  run: { positionals: 1, required: ['operator-id', 'plan-sha256'], optional: ['confirm-authorization-current', 'json'] },
+  finalize: { positionals: 1, required: ['plan-sha256', 'receipt-sha256'], optional: ['json'] },
   validate: { positionals: 1, required: [], optional: ['json'] },
   stop: { positionals: 1, required: ['operator-id', 'reason'], optional: ['json'] },
 }
@@ -273,12 +275,14 @@ export async function main(
       target_identity: planned.plan.evidence_context_seed.target_identity,
       target_class: planned.plan.target_class,
       phi_scope: planned.plan.phi_scope,
+      plan_sha256: planned.plan_sha256,
     }
     if (options.json) printJson(summary)
     else {
       console.log(terminalSafeText(`Planned ${adapter} acquisition ${summary.evidence_id}`))
       console.log(terminalSafeText(`Bundle: ${summary.bundle}`))
       console.log(terminalSafeText(`Sealed target: ${summary.target_identity}`))
+      console.log(terminalSafeText(`Plan digest: ${summary.plan_sha256}`))
       console.log(terminalSafeText(`Target class: ${summary.target_class}   PHI scope: ${summary.phi_scope}`))
       console.log('No acquisition was performed during planning.')
     }
@@ -294,6 +298,7 @@ export async function main(
     const written = await runAcquisitionImpl({
       bundle: positionals[0],
       expectedAdapterId: adapter,
+      expectedPlanSha256: options['plan-sha256'],
       operatorId: options['operator-id'],
       authorizationConfirmed: options['confirm-authorization-current'] === true,
     })
@@ -301,6 +306,7 @@ export async function main(
       bundle: written.directory,
       coverage_state: written.profile.coverage_state,
       root_sha256: written.root_sha256,
+      receipt_sha256: written.execution_receipt_sha256,
       coverage_gaps: written.profile.coverage_gaps.length,
     }
     if (options.json) printJson(summary)
@@ -308,6 +314,7 @@ export async function main(
       console.log(terminalSafeText(`Acquired: ${summary.coverage_state}`))
       console.log(terminalSafeText(`Bundle: ${summary.bundle}`))
       console.log(terminalSafeText(`Root: ${summary.root_sha256}`))
+      console.log(terminalSafeText(`Receipt digest: ${summary.receipt_sha256}`))
       if (summary.coverage_gaps > 0) {
         console.log(terminalSafeText(`Coverage gaps: ${summary.coverage_gaps}`))
         for (const gap of written.profile.coverage_gaps) {
@@ -325,7 +332,11 @@ export async function main(
       'finalizeAcquisitionImpl',
       'finalizeAcquisition',
     )
-    const finalized = await finalizeAcquisitionImpl(positionals[0])
+    const finalized = await finalizeAcquisitionImpl(positionals[0], {
+      expectedAdapterId: adapter,
+      expectedPlanSha256: options['plan-sha256'],
+      expectedReceiptSha256: options['receipt-sha256'],
+    })
     if (options.json) printJson(finalized)
     else {
       console.log(terminalSafeText(`${finalized.evidence_id} (${finalized.evidence_class}): ${finalized.coverage_state}`))

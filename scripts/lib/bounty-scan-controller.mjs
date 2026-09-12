@@ -6,7 +6,7 @@ import {
   digestAdversarialPlan,
 } from './adversarial-validation-contracts.mjs'
 import { verifyOperatorAuthorizationReceipt } from './operator-authorization.mjs'
-import { normalizeCapturedRequest } from './bounty-authz-request.mjs'
+import { sanitizeCapturedRequest } from './bounty-authz-request.mjs'
 import {
   describeIntensity,
   resolveIntensityProfile,
@@ -34,6 +34,7 @@ import { assertValidOobSession } from './bounty-oob-controller.mjs'
 import { buildPayloadHost } from './bounty-oob-payload.mjs'
 import {
   authorizeBountyScanRequest,
+  bountyScanStateChangingReason,
   bountyScanPayloadCatalog,
   buildBountyScanPlan,
   digestBountyScanScope,
@@ -48,7 +49,6 @@ import {
 const REQUESTS_FILE = 'authz-requests.json'
 const FINDINGS_FILE = 'scan-findings.json'
 const OOB_SESSION_FILE = 'oob-session.json'
-const SAFE_REQUEST_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const OPERATOR_AUTHORIZATION_START_GRACE_MS = 5 * 60 * 1000
 
 // Deliberately narrow, per the design spec. No mass XSS or SQLi fuzzing and no
@@ -161,7 +161,7 @@ export async function runScan({
   const errorProbes = payloadCatalog.error_probes
 
   const requestPlan = selectRequests(
-    requests.map((request) => normalizeCapturedRequest(request)),
+    requests.map((request) => sanitizeCapturedRequest(request)),
     profile,
   )
   if (requestPlan.note !== null) coverageNotes.push(requestPlan.note)
@@ -169,10 +169,11 @@ export async function runScan({
     || activeClasses.includes('ssrf-oob')
   if (crafted) {
     const unsafeRequest = requestPlan.items.find((request) =>
-      !SAFE_REQUEST_METHODS.has(request.method))
+      bountyScanStateChangingReason(request) !== null)
     if (unsafeRequest !== undefined) {
+      const reason = bountyScanStateChangingReason(unsafeRequest)
       throw new Error(
-        `bounty scan refuses state-changing captured method ${unsafeRequest.method}; use the mutation campaign`,
+        `bounty scan refuses state-changing captured ${reason}; use the mutation campaign`,
       )
     }
   }
@@ -259,13 +260,20 @@ export async function runScan({
   }
 
   const finishScan = async () => {
+    const passiveSummary = crafted
+      ? summarizePassive(passive)
+      : { total: 0, byKind: {}, status: 'NOT_ASSESSED' }
     const summaryCore = {
       ...summarizeScan(results),
-      passive: summarizePassive(passive),
+      passive: passiveSummary,
       intensity: describeIntensity(profile),
       // Never silent: a truncated sweep must not read as a complete one.
       coverageNotes,
-      coverage: coverageNotes.length === 0 ? 'FULL_AT_THIS_INTENSITY' : 'CAPPED_BY_INTENSITY',
+      coverage: !crafted
+        ? 'NOT_ASSESSED_MISSING_RESPONSE_EVIDENCE'
+        : coverageNotes.length === 0
+          ? 'FULL_AT_THIS_INTENSITY'
+          : 'CAPPED_BY_INTENSITY',
     }
     const scanLedgerStatus = scanLedger === null
       ? null
@@ -302,6 +310,9 @@ export async function runScan({
   // by replaying it would actually be active reconnaissance. Preserve scope
   // qualification for the artifact, but make this path network-silent.
   if (!crafted) {
+    coverageNotes.push(
+      'passive response evidence was not captured; response analysis was not assessed',
+    )
     for (const request of requestPlan.items) {
       const decision = authorizeBountyScanRequest({ scope, request })
       if (!decision.allowed) {
@@ -424,6 +435,7 @@ export async function runScan({
       }
 
       let ledgerFailure = null
+      let pendingSettlement = null
       const auditedFetch = async (url, options) => {
         const qualification = dispatchQualification
         dispatchQualification = null
@@ -489,19 +501,7 @@ export async function runScan({
           }
           throw error
         }
-        try {
-          scanLedger.settleSend({
-            actionIndex,
-            actionSha256,
-            outcome: 'RETURNED',
-            httpStatus: response?.status,
-            errorName: null,
-            settledAt: ledgerTimestamp(qualifiedAt),
-          })
-        } catch (error) {
-          ledgerFailure = error
-          throw error
-        }
+        pendingSettlement = { actionIndex, actionSha256, qualifiedAt }
         return response
       }
 
@@ -513,8 +513,33 @@ export async function runScan({
         fetchImpl: auditedFetch,
         timeoutMs: exactPlan.limits.max_action_time_ms,
         env,
+        onResponseSettled({ outcome, httpStatus, errorName }) {
+          if (pendingSettlement === null) {
+            const error = new Error('bounty scan response settled without a qualified transport result')
+            ledgerFailure = error
+            throw error
+          }
+          const settlement = pendingSettlement
+          pendingSettlement = null
+          try {
+            scanLedger.settleSend({
+              actionIndex: settlement.actionIndex,
+              actionSha256: settlement.actionSha256,
+              outcome,
+              httpStatus,
+              errorName,
+              settledAt: ledgerTimestamp(settlement.qualifiedAt),
+            })
+          } catch (error) {
+            ledgerFailure = error
+            throw error
+          }
+        },
       })
       if (ledgerFailure !== null) throw ledgerFailure
+      if (pendingSettlement !== null) {
+        throw new Error('bounty scan response observation ended without durable settlement')
+      }
       return replay
     }
 
@@ -653,7 +678,8 @@ export async function runScan({
 
 export async function loadScanRequests(bundlePath) {
   const stored = JSON.parse(await readFile(join(bundlePath, REQUESTS_FILE), 'utf8'))
-  return stored.requests
+  if (!Array.isArray(stored.requests)) throw new Error('scan request bundle must contain a request array')
+  return stored.requests.map((request) => sanitizeCapturedRequest(request))
 }
 
 export async function scanStatus({ bundlePath }) {

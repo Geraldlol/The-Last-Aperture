@@ -76,6 +76,44 @@ export function sealCredentialRef(value) {
   return { credential_ref: reference }
 }
 
+export async function resolveCredentialReference(value, {
+  env = process.env,
+  resolver,
+} = {}) {
+  const { credential_ref: reference } = sealCredentialRef(value)
+  const separator = reference.indexOf(':')
+  const mode = reference.slice(0, separator)
+  const locator = reference.slice(separator + 1)
+  if (mode === 'env' && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(locator)) {
+    throw new Error(`credential reference ${reference} names an invalid environment variable`)
+  }
+  const environment = Object.freeze({ ...(env ?? {}) })
+  if (mode === 'env' && typeof resolver !== 'function') {
+    const secret = environment[locator]
+    if (typeof secret !== 'string' || secret === '') {
+      throw new Error(`credential reference ${reference} is unavailable in the environment`)
+    }
+    return { env: { ...environment }, secret_values: [secret] }
+  }
+  if (typeof resolver !== 'function') {
+    throw new Error(`credential reference ${reference} requires a configured ${mode} resolver`)
+  }
+  const resolved = await resolver(reference, { env: environment, mode, locator })
+  if (mode !== 'env') return resolved
+  if (resolved === null || typeof resolved !== 'object' || Array.isArray(resolved)) return resolved
+  const resolvedEnvironment = resolved.env
+  const secret = resolvedEnvironment?.[locator] ?? environment[locator]
+  if (typeof secret !== 'string' || secret === '') {
+    throw new Error(`credential reference ${reference} is unavailable in the resolved environment`)
+  }
+  const supplied = Array.isArray(resolved.secret_values) ? resolved.secret_values : []
+  return {
+    ...resolved,
+    env: { ...resolvedEnvironment },
+    secret_values: [...new Set([...supplied, secret])],
+  }
+}
+
 export function redactForLog(text) {
   return String(text)
     // The whole userinfo goes, not just the password half. Leaving
@@ -83,5 +121,5 @@ export function redactForLog(text) {
     // redacted string would trip the bundle contract's own last-resort guard.
     .replace(/([a-z]+:\/\/)[^/\s@]+@/gi, '$1[REDACTED]@')
     .replace(/\b(Bearer|Basic)\s+\S+/gi, '$1 [REDACTED]')
-    .replace(/\b((?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*)\S+/gi, '$1[REDACTED]')
+    .replace(/\b(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*\S+/gi, '[REDACTED]')
 }

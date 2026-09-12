@@ -6,6 +6,7 @@ import { test } from 'node:test'
 
 import {
   openHttpAuthedCampaignLedger,
+  readHttpAuthedCampaignProjection,
   requestHttpAuthedCampaignStop,
 } from '../scripts/lib/http-authed-campaign-ledger.mjs'
 import { runHttpAuthedCampaign } from '../scripts/lib/http-authed-campaign-controller.mjs'
@@ -133,14 +134,77 @@ test('campaign uses sealed authority without repeat authorization and replays no
   assert.equal(replay.actions.already_terminal, 1)
 })
 
+test('campaign minimum interval survives ledger close and reopen', async (t) => {
+  const scope = campaignScope()
+  delete scope.discovery
+  scope.limits.min_interval_ms = 1_000
+  scope.requests.push({
+    ...scope.requests[0],
+    sequence: 2,
+    url: `${scope.target.origin}/approved/node-1`,
+  })
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-rate-reopen-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledgerDirectory = join(root, 'ledger')
+  const open = (initialize = false) => openHttpAuthedCampaignLedger({
+    directory: ledgerDirectory,
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize,
+    now: () => NOW,
+  })
+  const first = await open(true)
+  let sends = 0
+  await assert.rejects(runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger: first,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      return { response: { status: 200, bytes: 0, header_names: [] } }
+    },
+    wait: async () => { throw new Error('synthetic process interruption during rate wait') },
+  }), /synthetic process interruption/)
+  await first.close()
+  assert.equal(sends, 1)
+
+  const reopened = await open()
+  const waits = []
+  await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger: reopened,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      return { response: { status: 200, bytes: 0, header_names: [] } }
+    },
+    wait: async (milliseconds) => { waits.push(milliseconds) },
+  })
+  await reopened.close()
+  assert.equal(sends, 2)
+  assert.deepEqual(waits, [1_000])
+})
+
 test('campaign follows an accepted same-origin Location from a settled redirect', async (t) => {
   const scope = campaignScope()
   scope.limits.max_actions = 4
   const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
   const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-discovery-'))
   t.after(() => rm(root, { recursive: true, force: true }))
+  const ledgerDirectory = join(root, 'ledger')
   const ledger = await openHttpAuthedCampaignLedger({
-    directory: join(root, 'ledger'),
+    directory: ledgerDirectory,
     campaignGrantSha256: verified.campaignGrantSha256,
     authorizationBindingSha256: verified.authorizationBindingSha256,
     authorizationMode: scope.authorization.mode,
@@ -178,6 +242,155 @@ test('campaign follows an accepted same-origin Location from a settled redirect'
   assert.equal(result.actions.completed, 2)
   assert.equal(result.actions.discovered, 1)
   assert.equal(snapshot.stopped, false)
+
+  const reopened = await openHttpAuthedCampaignLedger({
+    directory: ledgerDirectory,
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    now: () => NOW,
+  })
+  const replay = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger: reopened,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async () => { throw new Error('terminal redirect chain must not replay') },
+  })
+  assert.equal(reopened.snapshot().stopped, false)
+  assert.equal(replay.actions.completed, 0)
+  await reopened.close()
+})
+
+test('a failed redirect disposition cannot rewrite a settled request as failed before send', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 2
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-redirect-disposition-failure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledgerDirectory = join(root, 'ledger')
+  const ledgerOptions = {
+    directory: ledgerDirectory,
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    now: () => NOW,
+  }
+  const ledger = await openHttpAuthedCampaignLedger({ ...ledgerOptions, initialize: true })
+  ledger.recordHandledResponseStop = async () => {
+    throw new Error('synthetic response-stop disposition persistence failure')
+  }
+  let sends = 0
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      return {
+        response: { status: 302, bytes: 0, header_names: ['location'] },
+        discoveryInput: {
+          headers: [{ name: 'location', value: '/approved/node-1' }],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  assert.equal(sends, 1)
+  assert.equal(result.actions.completed, 1)
+  assert.equal(result.actions.failed, 0)
+  assert.equal(ledger.snapshot().stopped, true)
+  assert.equal(ledger.snapshot().stop_reason, 'UNEXPECTED_REDIRECT')
+  await ledger.close()
+
+  const projection = await readHttpAuthedCampaignProjection(ledgerOptions)
+  const reopened = await openHttpAuthedCampaignLedger(ledgerOptions)
+  assert.equal(projection.actions[0].phase_outcomes.PROBE.status, 302)
+  assert.equal(projection.actions[0].outcome, 'PROBE_COMPLETED')
+  assert.notEqual(projection.actions[0].outcome, 'FAILED_BEFORE_SEND')
+  assert.equal(projection.actions[1].outcome, 'CAMPAIGN_STOPPED')
+  assert.equal(projection.stopped, true)
+  assert.equal(projection.stop_reason, 'UNEXPECTED_REDIRECT')
+  assert.equal(
+    reopened.actionState(projection.actions[0].action_id).outcome,
+    projection.actions[0].outcome,
+  )
+  assert.equal(
+    reopened.actionState(projection.actions[1].action_id).outcome,
+    projection.actions[1].outcome,
+  )
+  await reopened.close()
+})
+
+test('a discovered append that throws after durability is terminal in both live and reopened state', async (t) => {
+  const scope = campaignScope()
+  scope.limits.max_actions = 2
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-durable-discovery-failure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledgerDirectory = join(root, 'ledger')
+  const ledgerOptions = {
+    directory: ledgerDirectory,
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    now: () => NOW,
+  }
+  const ledger = await openHttpAuthedCampaignLedger({ ...ledgerOptions, initialize: true })
+  const enqueueCandidate = ledger.enqueueCandidate.bind(ledger)
+  ledger.enqueueCandidate = async (options) => {
+    const result = await enqueueCandidate(options)
+    if (options.provenance === 'DISCOVERED') {
+      throw new Error('synthetic failure after durable discovered append')
+    }
+    return result
+  }
+  let sends = 0
+  await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      sends += 1
+      return {
+        response: { status: 302, bytes: 0, header_names: ['location'] },
+        discoveryInput: {
+          headers: [{ name: 'location', value: '/approved/node-1' }],
+          bodyChunks: [],
+        },
+      }
+    },
+  })
+  assert.equal(sends, 1)
+  assert.equal(ledger.snapshot().queued_actions, 0)
+  assert.equal(ledger.snapshot().terminal_actions, 2)
+  await ledger.close()
+
+  const projection = await readHttpAuthedCampaignProjection(ledgerOptions)
+  assert.equal(projection.actions.length, 2)
+  assert.equal(projection.actions[0].outcome, 'PROBE_COMPLETED')
+  assert.equal(projection.actions[1].outcome, 'CAMPAIGN_STOPPED')
+  assert.equal(
+    projection.actions[1].terminal_reason_code,
+    'POST_SETTLEMENT_PROCESSING_FAILED',
+  )
+  const reopened = await openHttpAuthedCampaignLedger(ledgerOptions)
+  assert.equal(reopened.snapshot().queued_actions, 0)
+  assert.equal(reopened.snapshot().terminal_actions, 2)
+  await reopened.close()
 })
 
 test('redirect continuation survives an unrelated candidate exhausting the total action budget', async (t) => {
@@ -802,6 +1015,173 @@ test('settled JSON-shape observation failure still honors its response stop stat
   assert.equal(sends, 1)
   assert.equal(replay.actions.already_terminal, 0)
   assert.equal(replay.observation_failures, undefined)
+})
+
+test('recovery after a durable observation-failure stop does not double-count completion', async (t) => {
+  const scope = campaignScope()
+  delete scope.discovery
+  scope.schema_version = '1.2.0'
+  scope.response_observation = {
+    mode: 'ASPNET_D_JSON_SHAPE_ONLY',
+    max_depth: 4,
+    safe_key_names: ['records'],
+  }
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-observation-stop-recovery-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const durableStopCampaign = ledger.stopCampaign.bind(ledger)
+  let injected = false
+  ledger.stopCampaign = async (reasonCode) => {
+    const result = await durableStopCampaign(reasonCode)
+    if (!injected) {
+      injected = true
+      throw new Error('synthetic failure after durable stop append')
+    }
+    return result
+  }
+
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      return {
+        response: {
+          status: 500,
+          header_names: ['content-type'],
+          response_byte_bucket: 'LE_4_KIB',
+          failure_stage_code: 'JSON_SHAPE_OBSERVATION',
+        },
+      }
+    },
+  })
+  await ledger.close()
+
+  assert.equal(injected, true)
+  assert.equal(result.actions.failed, 1)
+  assert.equal(result.actions.completed, 0)
+})
+
+test('a durably settled observation failure recovers as failed when its append reports late', async (t) => {
+  const scope = campaignScope()
+  delete scope.discovery
+  scope.schema_version = '1.2.0'
+  scope.response_observation = {
+    mode: 'ASPNET_D_JSON_SHAPE_ONLY',
+    max_depth: 4,
+    safe_key_names: ['records'],
+  }
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-observation-settlement-recovery-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const durableMarkOutcome = ledger.markOutcome.bind(ledger)
+  let injected = false
+  ledger.markOutcome = async (input) => {
+    const result = await durableMarkOutcome(input)
+    if (input.phase === 'PROBE' && input.responseMetadata.failureStageCode !== undefined && !injected) {
+      injected = true
+      throw new Error('synthetic failure after durable observation settlement')
+    }
+    return result
+  }
+
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      return {
+        response: {
+          status: 500,
+          header_names: ['content-type'],
+          response_byte_bucket: 'LE_4_KIB',
+          failure_stage_code: 'JSON_SHAPE_OBSERVATION',
+        },
+      }
+    },
+  })
+  const snapshot = ledger.snapshot()
+  await ledger.close()
+
+  assert.equal(injected, true)
+  assert.equal(result.actions.failed, 1)
+  assert.equal(result.actions.completed, 0)
+  assert.equal(result.observation_failures?.length, 1)
+  assert.equal(snapshot.stop_reason, 'TARGET_HEALTH_DEGRADED')
+})
+
+test('campaign erases discovery response chunks when settlement reports a late failure', async (t) => {
+  const scope = campaignScope()
+  const verified = verifyHttpAuthedAuthorization({ scope, now: NOW })
+  const root = await mkdtemp(join(tmpdir(), 'rta-http-authed-discovery-erasure-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const ledger = await openHttpAuthedCampaignLedger({
+    directory: join(root, 'ledger'),
+    campaignGrantSha256: verified.campaignGrantSha256,
+    authorizationBindingSha256: verified.authorizationBindingSha256,
+    authorizationMode: scope.authorization.mode,
+    operatorId: scope.authorization.operator_id,
+    initialize: true,
+    now: () => NOW,
+  })
+  const durableMarkOutcome = ledger.markOutcome.bind(ledger)
+  let injected = false
+  ledger.markOutcome = async (input) => {
+    const result = await durableMarkOutcome(input)
+    if (input.phase === 'PROBE' && input.outcome === 'SETTLED' && !injected) {
+      injected = true
+      throw new Error('synthetic failure after durable settlement')
+    }
+    return result
+  }
+  const retainedChunk = Buffer.from('transient-discovery-response')
+
+  const result = await runHttpAuthedCampaign({
+    scope,
+    expectedCampaignGrantSha256: verified.campaignGrantSha256,
+    operatorId: scope.authorization.operator_id,
+    ledger,
+    now: () => NOW,
+    reauthorize: async ({ action }) => action,
+    executeProbe: async ({ beforeSend }) => {
+      await beforeSend()
+      return {
+        response: { status: 200, bytes: retainedChunk.length, header_names: [] },
+        discoveryInput: { headers: [], bodyChunks: [retainedChunk] },
+      }
+    },
+  })
+  await ledger.close()
+
+  assert.equal(injected, true)
+  assert.equal(result.actions.completed, 1)
+  assert.equal(retainedChunk.every((byte) => byte === 0), true)
 })
 
 test('campaign executes a declared mutation through its existing durable lease', async (t) => {

@@ -201,7 +201,9 @@ test('a read that fails inside the container is a named gap', async () => {
     { out, authorizationConfirmed: true },
   )
   assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
-  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /Permission denied/.test(reason)))
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) =>
+    /exited 1.*stderr withheld/i.test(reason)))
+  assert.equal(JSON.stringify(written.profile.coverage_gaps).includes('/etc/shadow'), false)
 })
 
 test('phi_scope confirmed without acknowledgment cannot capture contents', async () => {

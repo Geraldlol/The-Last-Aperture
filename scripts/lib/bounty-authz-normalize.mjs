@@ -32,6 +32,10 @@ const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g
 const ISO_TS = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/g
 const EPOCH = /\b\d{10,13}\b/g
 const LONG_HEX = /\b[0-9a-f]{16,}\b/gi
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u
+const MAX_RESPONSE_HEADER_COUNT = 256
+const MAX_RESPONSE_HEADER_VALUE_BYTES = 64 * 1024
+const MAX_RESPONSE_HEADER_BYTES = 512 * 1024
 
 function scrubText(text) {
   return text
@@ -78,13 +82,28 @@ export function normalizeResponseBody(body, contentType) {
 function normalizeHeaders(headers) {
   const entries = []
   if (headers === null || headers === undefined) return entries
-  const iterable = typeof headers.entries === 'function'
-    ? [...headers.entries()]
-    : Object.entries(headers)
-  for (const [name, value] of iterable) {
+  const iterable = typeof headers.entries === 'function' ? headers.entries() : Object.entries(headers)
+  let count = 0
+  let totalBytes = 0
+  for (const entry of iterable) {
+    count += 1
+    if (!Array.isArray(entry) || entry.length !== 2 || count > MAX_RESPONSE_HEADER_COUNT) {
+      throw new TypeError('response headers exceeded the normalization limit')
+    }
+    const [name, value] = entry
     const key = String(name).toLowerCase()
+    const rendered = String(value)
+    const valueBytes = Buffer.byteLength(rendered, 'utf8')
+    totalBytes += Buffer.byteLength(key, 'ascii') + valueBytes
+    if (
+      !HEADER_NAME.test(key)
+      || valueBytes > MAX_RESPONSE_HEADER_VALUE_BYTES
+      || totalBytes > MAX_RESPONSE_HEADER_BYTES
+    ) {
+      throw new TypeError('response headers exceeded the normalization limit')
+    }
     if (VOLATILE_HEADERS.has(key)) continue
-    entries.push([key, String(value)])
+    entries.push([key, rendered])
   }
   entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
   return entries

@@ -51,6 +51,30 @@ test('refuses an empty role list', () => {
   assert.throws(() => assertValidRoleRegistry(bad))
 })
 
+test('refuses routing and method-override headers as credential carriers', () => {
+  for (const name of [
+    'Host', 'Forwarded', 'X-HTTP-Method-Override', 'X-Original-URL',
+    'X-Forwarded-Prefix', 'X-Original-Method', 'X-Rewrite-URI',
+    'X-Envoy-Original-Path', 'X-HTTP-URL-Override',
+  ]) {
+    const bad = registry()
+    bad.roles[0].auth.name = name
+    assert.throws(() => assertValidRoleRegistry(bad), /forbidden.*header|header.*forbidden/i, name)
+    assert.throws(() => applyRole(captured, bad.roles[0], ENV), /forbidden.*header|header.*forbidden/i, name)
+  }
+})
+
+test('refuses cookie carrier names and values that could append another cookie', () => {
+  const badName = registry().roles[1]
+  badName.auth.name = 'session; admin'
+  assert.throws(() => applyRole(captured, badName, ENV), /cookie.*invalid/i)
+
+  assert.throws(
+    () => applyRole(captured, registry().roles[1], { ...ENV, TB_BOB: 'safe; admin=true' }),
+    /cookie.*invalid/i,
+  )
+})
+
 test('applies a header credential and strips the captured one', () => {
   const prepared = applyRole(captured, registry().roles[0], ENV)
   assert.equal(prepared.headers.authorization, 'Bearer alice')
@@ -66,9 +90,18 @@ test('applies a cookie credential', () => {
 })
 
 test('the anonymous role strips every credential the capture carried', () => {
-  const prepared = applyRole(captured, ANONYMOUS_ROLE, ENV)
+  const prepared = applyRole({
+    ...captured,
+    headers: {
+      ...captured.headers,
+      'x-otp': 'one-time-secret',
+      'x-custom-access-token': 'secondary-secret',
+    },
+  }, ANONYMOUS_ROLE, ENV)
   assert.equal(Object.hasOwn(prepared.headers, 'authorization'), false)
   assert.equal(Object.hasOwn(prepared.headers, 'cookie'), false)
+  assert.equal(Object.hasOwn(prepared.headers, 'x-otp'), false)
+  assert.equal(Object.hasOwn(prepared.headers, 'x-custom-access-token'), false)
   assert.equal(prepared.applied_role, 'anonymous')
 })
 

@@ -69,6 +69,9 @@ function publicLedger(snapshot) {
     terminal_actions: snapshot.terminal_actions,
     stopped: snapshot.stopped,
     stop_reason: snapshot.stop_reason,
+    ...(snapshot.startup_cleanup === null || snapshot.startup_cleanup === undefined
+      ? {}
+      : { startup_cleanup: structuredClone(snapshot.startup_cleanup) }),
   }
 }
 
@@ -349,7 +352,6 @@ export async function runHttpAuthedCampaign({
   const queue = []
   const queuedIds = new Set()
   const knownCandidates = new Map()
-  let executedActions = 0
   const observeOperatorStop = async () => {
     if (typeof ledger.observeStopRequest === 'function') {
       await ledger.observeStopRequest()
@@ -483,11 +485,26 @@ export async function runHttpAuthedCampaign({
       }
       break
     }
-    if (executedActions > 0 && scope.limits.min_interval_ms > 0) {
-      await wait(scope.limits.min_interval_ms)
-      if (await observeOperatorStop()) break
+    const lastRequestAt = ledger.snapshot().last_request_at
+    if (lastRequestAt !== null && lastRequestAt !== undefined
+      && scope.limits.min_interval_ms > 0) {
+      const current = now()
+      const currentMilliseconds = current instanceof Date ? current.getTime() : Number.NaN
+      const lastMilliseconds = Date.parse(lastRequestAt)
+      if (!Number.isFinite(currentMilliseconds) || !Number.isFinite(lastMilliseconds)
+        || currentMilliseconds < lastMilliseconds) {
+        throw campaignError(
+          'HTTP_AUTHED_CAMPAIGN_CLOCK_INVALID',
+          'campaign clock moved behind the last durable request pre-dispatch',
+        )
+      }
+      const remaining = scope.limits.min_interval_ms
+        - (currentMilliseconds - lastMilliseconds)
+      if (remaining > 0) {
+        await wait(remaining)
+        if (await observeOperatorStop()) break
+      }
     }
-    executedActions += 1
     const lease = await ledger.leaseAction({
       candidateDraft: queued.candidateDraft,
       operatorId,
@@ -717,8 +734,9 @@ export async function runHttpAuthedCampaign({
       }
     }
 
+    let execution
     try {
-      const execution = await executeProbe({ action: structuredClone(action), beforeSend })
+      execution = await executeProbe({ action: structuredClone(action), beforeSend })
       if (!preDispatchRecorded) {
         throw campaignError(
           'HTTP_AUTHED_CAMPAIGN_PRE_DISPATCH_MISSING',
@@ -753,11 +771,12 @@ export async function runHttpAuthedCampaign({
           outcome: 'PROBE_OBSERVATION_FAILED',
           reasonCode: 'PROBE_JSON_SHAPE_OBSERVATION_FAILED',
         })
-        counts.failed += 1
         if (settledStopReason !== null) {
           if (!ledger.snapshot().stopped) await ledger.stopCampaign(settledStopReason)
+          counts.failed += 1
           break
         }
+        counts.failed += 1
         continue
       }
       if (settledResponse.jsonShape !== undefined) {
@@ -776,12 +795,13 @@ export async function runHttpAuthedCampaign({
           leaseId: lease.leaseId,
           outcome: 'PROBE_COMPLETED',
         })
-        counts.completed += 1
         if (!ledger.snapshot().stopped) await ledger.stopCampaign(settledStopReason)
+        counts.completed += 1
         break
       }
 
       let locationContinuationAvailable = false
+      const locationContinuationActionIds = new Set()
       let locationLimitReached = false
       let depthLimitReached = false
       if (scope.discovery?.enabled === true) {
@@ -827,7 +847,10 @@ export async function runHttpAuthedCampaign({
               if (locationCandidate) locationLimitReached = true
               continue
             }
-            if (locationCandidate && candidate.liveContinuation) locationContinuationAvailable = true
+            if (locationCandidate && candidate.liveContinuation) {
+              locationContinuationAvailable = true
+              locationContinuationActionIds.add(candidate.actionId)
+            }
             if (candidate.created) {
               createdCount += 1
               counts.discovered += 1
@@ -853,10 +876,23 @@ export async function runHttpAuthedCampaign({
           leaseId: lease.leaseId,
           outcome: 'PROBE_COMPLETED',
         })
-        counts.completed += 1
         const reason = locationLimitReached || depthLimitReached ? 'LIMIT_REACHED' : 'UNEXPECTED_REDIRECT'
         if (!ledger.snapshot().stopped) await ledger.stopCampaign(reason)
+        counts.completed += 1
         break
+      }
+      if (discoverableRedirect && locationContinuationAvailable) {
+        if (typeof ledger.recordHandledResponseStop !== 'function') {
+          throw campaignError(
+            'HTTP_AUTHED_CAMPAIGN_LEDGER_REQUIRED',
+            'redirect discovery requires a durable response-stop disposition API',
+          )
+        }
+        await ledger.recordHandledResponseStop({
+          actionId: lease.actionId,
+          leaseId: lease.leaseId,
+          continuationActionIds: [...locationContinuationActionIds],
+        })
       }
       await ledger.terminalizeAction({
         actionId: lease.actionId,
@@ -867,6 +903,57 @@ export async function runHttpAuthedCampaign({
     } catch (cause) {
       const requestMayHaveBeenSent = cause?.request_may_have_been_sent === true
       const durableState = ledger.actionState(lease.actionId)
+      const durableProbeOutcome = durableState?.phase_outcomes?.PROBE
+      if (durableProbeOutcome?.outcome === 'SETTLED') {
+        const durableStopReason = httpAuthedResponseStopReason(durableProbeOutcome.status)
+        const durableObservationFailed = durableProbeOutcome.failure_stage_code
+          === HTTP_AUTHED_JSON_SHAPE_FAILURE_STAGE
+        const responseStopHandled = durableStopReason !== null
+          && durableState.handled_response_stop?.phase === 'PROBE'
+          && durableState.handled_response_stop.reason_code === durableStopReason
+        if (!durableState.terminal) {
+          await ledger.terminalizeAction({
+            actionId: lease.actionId,
+            leaseId: lease.leaseId,
+            outcome: durableObservationFailed ? 'PROBE_OBSERVATION_FAILED' : 'PROBE_COMPLETED',
+            reasonCode: durableObservationFailed
+              ? 'PROBE_JSON_SHAPE_OBSERVATION_FAILED'
+              : responseStopHandled
+              ? 'RECOVERED_AFTER_DURABLE_RESPONSE_STOP_DISPOSITION'
+              : 'POST_SETTLEMENT_PROCESSING_FAILED',
+          })
+        }
+        if (durableObservationFailed) {
+          if (!observationFailures.some(({ action_sequence: sequence }) => sequence === action.sequence)) {
+            observationFailures.push({
+              action_sequence: action.sequence,
+              method: action.method,
+              status: durableProbeOutcome.status,
+              header_names: [...durableProbeOutcome.header_names],
+              response_byte_bucket: durableProbeOutcome.response_byte_bucket,
+              failure_stage_code: durableProbeOutcome.failure_stage_code,
+            })
+          }
+          counts.failed += 1
+        } else {
+          counts.completed += 1
+        }
+        if (responseStopHandled) continue
+
+        const campaignStopReason = durableStopReason ?? 'POST_SETTLEMENT_PROCESSING_FAILED'
+        if (!ledger.snapshot().stopped) await ledger.stopCampaign(campaignStopReason)
+        if (typeof ledger.reconcilePostSettlementFailure !== 'function') {
+          throw campaignError(
+            'HTTP_AUTHED_CAMPAIGN_LEDGER_REQUIRED',
+            'post-settlement failure recovery requires durable interrupted-dispatch reconciliation',
+          )
+        }
+        // A candidate append can become durable before enqueue returns, so the
+        // local queue is not an authoritative list. Reconcile from the ledger
+        // itself to make live and reopened projections identical.
+        await ledger.reconcilePostSettlementFailure()
+        break
+      }
       const durablePreDispatch = preDispatchRecorded
         || durableState?.pending_phase === 'PROBE'
         || durableState?.phase_outcomes?.PROBE !== undefined
@@ -901,6 +988,13 @@ export async function runHttpAuthedCampaign({
         break
       }
       counts.failed += 1
+    } finally {
+      const transientChunks = execution?.discoveryInput?.bodyChunks
+      if (Array.isArray(transientChunks)) {
+        for (const chunk of transientChunks) {
+          if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
+        }
+      }
     }
   }
 

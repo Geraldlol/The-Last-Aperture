@@ -48,6 +48,9 @@ test('operator-attested plans reject ambiguous URLs, target drift, and spare req
   for (const targetUrl of [
     'https://target.example/?admin=true',
     'https://target.example/%2e%2e/admin',
+    'https://target.example/%252e%252e%252fadmin',
+    'https://target.example/%25252e%25252e%25252fadmin',
+    'https://target.example/%25%32%65%25%32%65%25%32%66admin',
   ]) {
     assert.throws(
       () => createOperatorAttestedHttpReconScope({ ...input, targetUrl }),

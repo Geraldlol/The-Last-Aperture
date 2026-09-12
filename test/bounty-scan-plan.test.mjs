@@ -3,12 +3,16 @@ import { test } from 'node:test'
 import {
   BOUNTY_SCAN_ADAPTER_VERSION,
   BOUNTY_SCAN_PAYLOAD_CATALOG_VERSION,
+  bountyScanStateChangingReason,
   buildBountyScanPlan,
   classifyBountyScanTarget,
   digestBountyScanScope,
 } from '../scripts/lib/bounty-scan-plan.mjs'
 import { ANONYMOUS_ROLE } from '../scripts/lib/bounty-authz-roles.mjs'
-import { normalizeCapturedRequest } from '../scripts/lib/bounty-authz-request.mjs'
+import {
+  normalizeCapturedRequest,
+  sanitizeCapturedRequest,
+} from '../scripts/lib/bounty-authz-request.mjs'
 import { resolveIntensityProfile } from '../scripts/lib/bounty-intensity.mjs'
 import { ERROR_PROBES } from '../scripts/lib/bounty-scan-oracle.mjs'
 import {
@@ -126,6 +130,21 @@ test('scan planning is deterministic and every authority-bearing input changes t
   }
 })
 
+test('scan planning binds the sanitized form of legacy credential-bearing requests', () => {
+  const raw = normalizeCapturedRequest({
+    request_id: 'legacy-plan-request',
+    method: 'GET',
+    url: 'https://api.example.test/search?q=widget&access_token=legacy-query-secret',
+    headers: { accept: 'application/json', 'x-access-token': 'legacy-header-secret' },
+    owner_role: 'alice',
+  })
+
+  assert.deepEqual(
+    plan({ requests: [raw] }),
+    plan({ requests: [sanitizeCapturedRequest(raw)] }),
+  )
+})
+
 test('the approved catalog is isolated from mutable oracle exports', () => {
   const before = digestAdversarialPlan(plan())
   const original = ERROR_PROBES[0].payload
@@ -187,6 +206,49 @@ test('crafted scanning refuses state-changing methods even when mutation is seal
   )
 })
 
+test('crafted scanning refuses safe-method routes with state-changing semantics', () => {
+  let deeplyEncodedName = '%61ction'
+  let deeplyEncodedValue = '%64elete'
+  let deeplyEncodedPath = '%64elete'
+  for (let index = 0; index < 16; index += 1) {
+    deeplyEncodedName = encodeURIComponent(deeplyEncodedName)
+    deeplyEncodedValue = encodeURIComponent(deeplyEncodedValue)
+    deeplyEncodedPath = encodeURIComponent(deeplyEncodedPath)
+  }
+  for (const url of [
+    'https://api.example.test/delete?id=123',
+    'https://api.example.test/session/logout',
+    'https://api.example.test/records/123/delete-item',
+    'https://api.example.test/records?action=delete&id=123',
+    'https://api.example.test/users/1/ban',
+    'https://api.example.test/records?_method=DELETE&id=123',
+    'https://api.example.test/records?op=delete&id=123',
+    'https://api.example.test/records?act%2569on=%2564elete&id=123',
+    'https://api.example.test/records?%ZZaction=read&id=123',
+    `https://api.example.test/records?${deeplyEncodedName}=${deeplyEncodedValue}&id=123`,
+    `https://api.example.test/${deeplyEncodedPath}?id=123`,
+  ]) {
+    assert.throws(
+      () => plan({ requests: [request(url)] }),
+      /state-changing.*route|route.*state-changing|mutation campaign|percent encoding/i,
+      url,
+    )
+  }
+})
+
+test('route mutation classification does not treat read-shaped names as actions', () => {
+  for (const url of [
+    'https://api.example.test/archive',
+    'https://api.example.test/jobs/run-status',
+  ]) {
+    assert.equal(bountyScanStateChangingReason(request(url)), null, url)
+  }
+  assert.match(
+    bountyScanStateChangingReason(request('https://api.example.test/records/123/archive')),
+    /route/i,
+  )
+})
+
 test('the OOB session destination is an exact authority-bearing plan input', () => {
   const aggressiveScope = scope()
   aggressiveScope.authorization.permissions.intensity = 'aggressive'
@@ -243,7 +305,10 @@ test('routing override headers and role credentials cannot bypass URL scope', ()
     () => plan({ requests: [override] }),
     /routing.*header|method-override.*forbidden/i,
   )
-  for (const name of ['x-original-uri', 'x-forwarded-uri', 'x-http-method']) {
+  for (const name of [
+    'x-original-uri', 'x-forwarded-uri', 'x-http-method', 'x-forwarded-prefix',
+    'x-original-method', 'x-rewrite-uri', 'x-envoy-original-path', 'x-http-url-override',
+  ]) {
     const alternate = request()
     alternate.headers[name] = '/admin'
     assert.throws(

@@ -63,8 +63,8 @@ export const CAPABILITY_REGISTRY = deepFreeze({
     },
     {
       id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
-      description: 'Durable target-neutral engagement orchestration across applicable registered routes under one operator statement and shared ledger.',
-      limitation: 'Orchestration covers shipped registered routes. Declared tool or named host-adapter unavailability remains explicit; omitted immutable inputs or references require a successor engagement, and route evidence retains its own limits.',
+      description: 'Durable target-neutral engagement orchestration across registered routes that inventories every applicable packaged controller family under one operator statement and shared ledger.',
+      limitation: 'Only shipped registered routes marked available in the sealed registry can dispatch. Disabled controllers, missing engagement adapters, missing tools, and omitted immutable material remain explicit non-dispatching states.',
     },
     {
       id: 't1-proof', status: 'AVAILABLE_NARROW', commands: ['run-proof'],
@@ -77,14 +77,34 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Lifecycle evidence remains UNPROVEN without a controller-authenticated semantic oracle. Browser and multi-service/database stacks are unsupported.',
     },
     {
-      id: 'https-recon', status: 'AVAILABLE_NARROW', commands: ['http-recon go'],
+      id: 'https-recon', status: 'AVAILABLE_NARROW', commands: ['last-aperture http-recon go'],
       description: 'One bounded HTTPS reconnaissance action through its existing public controller.',
       limitation: 'A URL entry point is not a comprehensive website assessment.',
     },
     {
-      id: 'authenticated-http', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested', 'http-authed campaign-stop'],
+      id: 'authenticated-http', status: 'AVAILABLE_NARROW', commands: ['last-aperture http-authed campaign-attested', 'last-aperture http-authed campaign-stop'],
       description: 'Adaptive sealed authenticated HTTP discovery and actions through the durable campaign controller.',
       limitation: 'Every request remains bound to the campaign authority, scope policy, action limits, retained receipt, and stop/cleanup state.',
+    },
+    {
+      id: 'adversarial-validation', status: 'AVAILABLE_NARROW', commands: ['last-aperture adversarial go', 'last-aperture adversarial scope validate', 'last-aperture adversarial plan seal', 'last-aperture adversarial plan validate', 'last-aperture adversarial plan inspect', 'last-aperture adversarial enrollment status', 'last-aperture adversarial execute'],
+      description: 'Bounded reconnaissance plus sealed-plan adversarial execution through an explicitly enrolled runtime.',
+      limitation: 'The direct controller remains available, but unified engagement dispatch awaits a grant-preserving adapter and therefore records an explicit unavailable route.',
+    },
+    {
+      id: 'bounty-perimeter', status: 'AVAILABLE_NARROW', commands: ['last-aperture bounty plan', 'last-aperture bounty validate', 'last-aperture bounty revalidate', 'last-aperture bounty scope', 'last-aperture bounty authz import', 'last-aperture bounty authz status', 'last-aperture bounty recon status', 'last-aperture bounty scan status', 'last-aperture bounty report draft'],
+      description: 'Seal and inspect one program perimeter, import bounded passive authorization evidence, and render status and draft reports.',
+      limitation: 'Unified engagement intake does not yet construct the required policy snapshot and program enrollment bundle, so its perimeter route cannot dispatch.',
+    },
+    {
+      id: 'bounty-live-work', status: 'UNAVAILABLE', commands: [],
+      description: 'Bounty reconnaissance, authorization replay, crafted scanning, and out-of-band sessions.',
+      limitation: 'Their public live commands fail closed pending trusted scope, transport, prepared-request, and session migrations.',
+    },
+    {
+      id: 'bounty-proxy-capture', status: 'UNAVAILABLE', commands: [],
+      description: 'Direct bounty proxy capture ingestion and flow projection.',
+      limitation: 'Public capture commands fail closed pending bounded no-follow ingestion and trusted capture provenance.',
     },
     {
       id: 'ghidra-static-reverse', status: 'AVAILABLE_NARROW', commands: ['last-aperture-reverse ghidra analyze'],
@@ -117,7 +137,7 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Process exit differences and cleanup receipts alone cannot establish a vulnerability or a verified fix.',
     },
     {
-      id: 'browser-execution', status: 'AVAILABLE_NARROW', commands: ['http-authed campaign-attested'],
+      id: 'browser-execution', status: 'AVAILABLE_NARROW', commands: ['last-aperture http-authed campaign-attested'],
       description: 'Selected-tab authenticated request execution through the active browser companion bridge, with an optional declarative Web Storage session-to-header adapter.',
       limitation: 'The bridge executes authorized actions in the selected tab and does not automate navigation or login. The optional adapter accepts one exact storage source and request-header carrier; its value stays inside the isolated dispatch.',
     },
@@ -133,8 +153,13 @@ export const CAPABILITY_REGISTRY = deepFreeze({
   },
     {
       id: 'deployed-evidence-acquisition', status: 'UNAVAILABLE', commands: [],
-      description: 'Acquire and trust current deployment or cloud runtime evidence.',
-      limitation: 'Repository deployment configuration does not establish what is running. Public evidence-import and acquisition transports remain unavailable.',
+      description: 'Acquire artifact, registry, deployed, and runtime evidence through content-bound adapter plans.',
+      limitation: 'Public acquisition commands fail closed pending detached signed-plan migration through the trusted controller.',
+    },
+    {
+      id: 'evidence-bundle-import', status: 'UNAVAILABLE', commands: [],
+      description: 'Import a verified evidence bundle into repository audit planning.',
+      limitation: 'Public import fails closed pending controller-authenticated manifest semantics and atomic verification.',
     },
     {
       id: 'generic-live', status: 'UNAVAILABLE', commands: [],

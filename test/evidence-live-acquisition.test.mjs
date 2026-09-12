@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -146,11 +146,12 @@ test('the acquisition executable refuses missing and forged plans for every adap
 test('a class requiring attestation refuses to run without the confirmation', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
-  await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+  const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await assert.rejects(
     () => runAcquisition({
       bundle: out,
       expectedAdapterId: 'deployed',
+      expectedPlanSha256: planned.plan_sha256,
       operatorId: 'gmaida',
       resolver: stub.resolver,
     }),
@@ -158,15 +159,42 @@ test('a class requiring attestation refuses to run without the confirmation', as
   )
 })
 
+test('a persisted live command changed after approval is rejected before CLI resolution', async () => {
+  const stub = await kubectlStub()
+  const out = await scratch()
+  const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+  const path = join(out, 'acquisition-plan.json')
+  const record = JSON.parse(await readFile(path, 'utf8'))
+  record.plan.operations[0].args[0] = 'delete'
+  await writeFile(path, `${JSON.stringify(record, null, 2)}\n`)
+  let resolverCalls = 0
+  await assert.rejects(
+    () => runAcquisition({
+      bundle: out,
+      expectedAdapterId: 'deployed',
+      expectedPlanSha256: planned.plan_sha256,
+      operatorId: 'gmaida',
+      authorizationConfirmed: true,
+      resolver: (...args) => {
+        resolverCalls += 1
+        return stub.resolver(...args)
+      },
+    }),
+    (error) => error?.code === 'ACQUISITION_PLAN_DIGEST_MISMATCH',
+  )
+  assert.equal(resolverCalls, 0)
+})
+
 test('the controller rejects truthy non-boolean current-authorization confirmations', async () => {
   const stub = await kubectlStub()
   for (const authorizationConfirmed of ['yes', {}]) {
     const out = await scratch()
-    await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+    const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
     await assert.rejects(
       () => runAcquisition({
         bundle: out,
         expectedAdapterId: 'deployed',
+        expectedPlanSha256: planned.plan_sha256,
         operatorId: 'gmaida',
         authorizationConfirmed,
         resolver: stub.resolver,
@@ -179,7 +207,7 @@ test('the controller rejects truthy non-boolean current-authorization confirmati
 test('stop halts an acquisition that is already planned', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
-  await planAcquisition({
+  const planned = await planAcquisition({
     adapterId: 'deployed',
     request: {
       ...request,
@@ -196,6 +224,7 @@ test('stop halts an acquisition that is already planned', async () => {
     () => runAcquisition({
       bundle: out,
       expectedAdapterId: 'deployed',
+      expectedPlanSha256: planned.plan_sha256,
       operatorId: 'gmaida',
       authorizationConfirmed: true,
       resolver: stub.resolver,
@@ -215,10 +244,11 @@ test('stop is idempotent and needs no still-valid authority artifact', async () 
 test('a deployed-state locator resolves to its acquired object', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
-  await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+  const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
     expectedAdapterId: 'deployed',
+    expectedPlanSha256: planned.plan_sha256,
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,
@@ -231,10 +261,11 @@ test('a deployed-state locator resolves to its acquired object', async () => {
 test('an unresolvable object locator resolves to nothing rather than guessing', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
-  await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+  const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
     expectedAdapterId: 'deployed',
+    expectedPlanSha256: planned.plan_sha256,
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,
@@ -246,10 +277,11 @@ test('an unresolvable object locator resolves to nothing rather than guessing', 
 test('the acquisition plan records what was executed for the report', async () => {
   const stub = await kubectlStub()
   const out = await scratch()
-  await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
+  const planned = await planAcquisition({ adapterId: 'deployed', request, out, resolver: stub.resolver })
   await runAcquisition({
     bundle: out,
     expectedAdapterId: 'deployed',
+    expectedPlanSha256: planned.plan_sha256,
     operatorId: 'gmaida',
     authorizationConfirmed: true,
     resolver: stub.resolver,
@@ -260,8 +292,8 @@ test('the acquisition plan records what was executed for the report', async () =
   assert.equal(executed.length, 1)
   assert.equal(executed[0].operation_id, 'k8s.resource')
   assert.equal(executed[0].payload_prefix, '00')
-  const record = JSON.parse(await readFile(join(out, 'acquisition-plan.json'), 'utf8'))
-  assert.deepEqual(record.run_authorization, {
+  const receipt = JSON.parse(await readFile(join(out, 'execution-receipt.json'), 'utf8'))
+  assert.deepEqual(receipt.run_authorization, {
     mode: 'OPERATOR_ATTESTED',
     current_authorization_confirmed: true,
     third_party_acknowledged: false,

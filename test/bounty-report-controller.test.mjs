@@ -113,6 +113,31 @@ test('no credential value reaches any drafted report', async () => {
   }
 })
 
+test('legacy request and finding credential carriers are redacted before report drafting', async () => {
+  const url = 'https://api.acme.example/api/orders/2?access_token=legacy-query-secret'
+  const dir = await bundle([candidate({ url, method: 'POST' })])
+  await writeFile(join(dir, 'authz-requests.json'), JSON.stringify({
+    schema_version: '1.0.0',
+    requests: [{
+      request_id: '/api/orders/2',
+      method: 'POST',
+      url,
+      headers: { 'content-type': 'application/json', 'x-access-token': 'legacy-header-secret' },
+      body: '{"password":"legacy-body-secret"}',
+      owner_role: 'alice',
+    }],
+  }), 'utf8')
+  try {
+    await draftAuthzReports({ bundlePath: dir, registry: REGISTRY, now: NOW, env: ENV })
+    const files = await readdir(join(dir, 'reports'))
+    const text = await readFile(join(dir, 'reports', files[0]), 'utf8')
+    assert.doesNotMatch(text, /legacy-(?:query|header|body)-secret/)
+    assert.match(text, /%3Credacted%3E|<redacted>/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('a mutated finding reproduces the substituted url', async () => {
   const dir = await bundle([candidate({
     url: 'https://api.acme.example/api/invoices?order=5',
@@ -147,12 +172,17 @@ test('the authorization state at drafting time is reported', async () => {
 })
 
 test('report filenames are stable, ordered, and filesystem safe', async () => {
-  const dir = await bundle([candidate(), candidate({ tester_role: 'anonymous' })])
+  const dir = await bundle([
+    candidate(),
+    candidate({ tester_role: 'anonymous' }),
+    candidate({ tester_role: '../legacy\\role:unsafe' }),
+  ])
   try {
     await draftAuthzReports({ bundlePath: dir, registry: REGISTRY, now: NOW, env: ENV })
     const files = (await readdir(join(dir, 'reports'))).sort()
     assert.match(files[0], /^01-bob-api-orders-2\.md$/)
     assert.match(files[1], /^02-anonymous-api-orders-2\.md$/)
+    assert.match(files[2], /^03-legacy-role-unsafe-api-orders-2\.md$/)
     assert.ok(files.every((file) => !/[^a-zA-Z0-9._-]/.test(file)))
   } finally {
     await rm(dir, { recursive: true, force: true })

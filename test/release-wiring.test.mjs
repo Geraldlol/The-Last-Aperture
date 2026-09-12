@@ -7,7 +7,7 @@ import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 const WORKFLOW_PATH = '.github/workflows/lint-lenses.yml'
 const CHECKOUT_SHA = '08eba0b27e820071cde6df949e0beb9ba4906955'
 const SETUP_NODE_SHA = '49933ea5288caeca8642d1e84afbd3f7d6820020'
-const RELEASE_VERSION = '0.14.0'
+const RELEASE_VERSION = '0.14.1'
 
 function workflowJobBlock(workflow, name) {
   const marker = `  ${name}:\n`
@@ -205,7 +205,7 @@ test('CI runs the digest-pinned multi-engine database conformance gate', () => {
 
 test('the Chrome companion has selected-tab, ephemeral recovery, and optional loopback authority', () => {
   const manifest = JSON.parse(readFileSync('browser/http-authed-chrome/manifest.json', 'utf8'))
-  assert.equal(manifest.version, '0.13.0')
+  assert.equal(manifest.version, RELEASE_VERSION)
   assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage'])
   assert.deepEqual(manifest.host_permissions, [])
   assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*'])
@@ -254,7 +254,7 @@ test('release metadata exposes the 0.14 controller and conformance commands', ()
       windowsHide: true,
     })
     assert.equal(help.status, 0, `${cli} --help must succeed`)
-    assert.match(help.stdout, /0\.14\.0/, `${cli} must expose the release version`)
+    assert.match(help.stdout, /0\.14\.1/, `${cli} must expose the release version`)
     assert.doesNotMatch(readFileSync(cli, 'utf8'), /0\.11\.0/)
   }
   assert.equal(
@@ -425,7 +425,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     'docs/adr/0018-controller-governed-diagnostic-http-recon-headers.md',
   ]) {
     const adr = readFileSync(adrPath, 'utf8')
-    assert.match(adr, /Current 0\.13\.0 execution status: active/i, adrPath)
+    assert.match(adr, /Current 0\.14\.1 execution status: active/i, adrPath)
     assert.doesNotMatch(adr, /HTTP_RECON_LIVE_IO_DISABLED/, adrPath)
   }
   assert.match(cli, /Planning by itself performs no network activity/i)
@@ -436,7 +436,7 @@ test('the v0.11 authorized external HTTP-recon slice is release-wired', () => {
     /plan-signed|--roe|--authorization-document|--owner-public-key/,
   )
   assert.doesNotMatch(cli, /HTTP_RECON_LIVE_IO_DISABLED/)
-  assert.match(protocol, /Current 0\.13\.0 execution status: active/i)
+  assert.match(protocol, /Current 0\.14\.1 execution status: active/i)
   assert.doesNotMatch(protocol, /HTTP_RECON_LIVE_IO_DISABLED/)
   assert.match(protocol, /go <exact-https-url>/i)
   assert.match(protocol, /plans one exact action, executes it, finalizes the bundle/i)
@@ -525,7 +525,7 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
     windowsHide: true,
   })
   assert.equal(help.status, 0)
-  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.14\.0/)
+  assert.match(help.stdout, /last-aperture authenticated HTTP campaigns 0\.14\.1/)
   assert.doesNotMatch(help.stdout, /campaign-attested.*DISABLED/i)
   assert.doesNotMatch(
     help.stdout,
@@ -654,6 +654,10 @@ test('the v0.12 authenticated campaign is release-wired through the governing sk
   const security = readFileSync('SECURITY.md', 'utf8')
   assert.match(security, /--credential-stdin/)
   assert.match(security, /--credential-browser/)
+  assert.match(
+    security,
+    new RegExp(`packaged companion ${RELEASE_VERSION.replaceAll('.', '\\.')} uses`, 'i'),
+  )
   assert.match(security, /one-time pairing capability/i)
   assert.match(security, /browser-managed DNS/i)
   assert.match(security, /activeTab[\s\S]*scripting/i)

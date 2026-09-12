@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   EngagementContractError,
   assertSha256,
+  assertSupportedEngagementCredentialReferences,
   assertValidEngagementAuthority,
   assertValidEngagementManifest,
   canonicalEngagementAuthority,
@@ -89,6 +90,7 @@ export function createEngagementAuthority({
   if (new Set(credentialReferences).size !== credentialReferences.length) {
     fail('ENGAGEMENT_REFERENCE_INVALID', 'credentialReferences cannot contain duplicates')
   }
+  assertSupportedEngagementCredentialReferences(credentialReferences)
   const profile = engagementAuthorizationProfile(authorizationProfile)
   if (profile === undefined) {
     fail('ENGAGEMENT_AUTHORIZATION_PROFILE_INVALID', 'engagement authorization profile is unknown')

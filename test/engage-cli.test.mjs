@@ -94,8 +94,7 @@ test('run accepts one attestation file and starts the full target engagement', a
     '--profile', 'full',
     '--out', 'C:\\engagements\\target',
     '--objective', 'Assess and integrate every reachable application surface.',
-    '--credential-reference', 'browser:active-profile',
-    '--credential-reference', 'vault:target-api',
+    '--credential-reference', 'browser:abcdefghijklmnopabcdefghijklmnop',
     '--json',
   ], { ...operations(calls), ...io })
 
@@ -107,7 +106,7 @@ test('run accepts one attestation file and starts the full target engagement', a
     authorizationProfile: 'full',
     out: 'C:\\engagements\\target',
     objective: 'Assess and integrate every reachable application surface.',
-    credentialReferences: ['browser:active-profile', 'vault:target-api'],
+    credentialReferences: ['browser:abcdefghijklmnopabcdefghijklmnop'],
     inputs: [],
   }])
   const output = JSON.parse(io.stdoutText())

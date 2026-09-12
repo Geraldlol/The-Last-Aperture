@@ -341,10 +341,20 @@ export function resolveHttpReconDns(hostname, {
   assertAbortSignal(signal)
   return new Promise((resolve, reject) => {
     let settled = false
+    let abortListenerBindingAttempted = false
+    const removeAbortListener = () => {
+      if (!abortListenerBindingAttempted) return
+      abortListenerBindingAttempted = false
+      try {
+        signal?.removeEventListener('abort', onAbort)
+      } catch {
+        // Listener cleanup cannot replace the DNS result or primary failure.
+      }
+    }
     const finish = (callback, value) => {
       if (settled) return
       settled = true
-      signal?.removeEventListener('abort', onAbort)
+      removeAbortListener()
       callback(value)
     }
     const onAbort = () => finish(reject, abortError(timedOut()))
@@ -352,7 +362,16 @@ export function resolveHttpReconDns(hostname, {
       onAbort()
       return
     }
-    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal !== undefined) {
+      abortListenerBindingAttempted = true
+      try {
+        signal.addEventListener('abort', onAbort, { once: true })
+      } catch (cause) {
+        finish(reject, cause)
+        return
+      }
+      if (settled) return
+    }
     try {
       lookup(hostname, { all: true, verbatim: true }, (error, answers) => {
         if (settled) return
@@ -837,13 +856,20 @@ async function runHttps(options, mode) {
   if (requestOptions.signal?.aborted) {
     throw abortError(false)
   }
-  requestOptions.signal?.addEventListener('abort', forwardStop, { once: true })
-  const timer = setTimer(() => {
-    timedOut = true
-    controller.abort()
-  }, requestOptions.timeoutMs)
+  let forwardStopBindingAttempted = false
+  let timer
+  let timerCreated = false
 
   try {
+    if (requestOptions.signal !== undefined) {
+      forwardStopBindingAttempted = true
+      requestOptions.signal.addEventListener('abort', forwardStop, { once: true })
+    }
+    timer = setTimer(() => {
+      timedOut = true
+      controller.abort()
+    }, requestOptions.timeoutMs)
+    timerCreated = true
     const dnsStartedAt = readClock(now)
     const dns = await resolveHttpReconDns(requestOptions.hostname, {
       lookup,
@@ -1213,8 +1239,24 @@ async function runHttps(options, mode) {
       request.once('response', onResponse)
     })
   } finally {
-    clearTimer(timer)
-    requestOptions.signal?.removeEventListener('abort', forwardStop)
+    try {
+      if (timerCreated) {
+        try {
+          clearTimer(timer)
+        } catch {
+          // The network result or primary error is already authoritative.
+        }
+      }
+    } finally {
+      if (forwardStopBindingAttempted) {
+        forwardStopBindingAttempted = false
+        try {
+          requestOptions.signal?.removeEventListener('abort', forwardStop)
+        } catch {
+          // Listener cleanup cannot replace the result or primary failure.
+        }
+      }
+    }
   }
 }
 

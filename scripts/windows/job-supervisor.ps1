@@ -57,8 +57,9 @@ namespace LastAperture.WindowsProcess
             get { lock (gate) { return failed; } }
         }
 
-        internal void Drain(IntPtr readHandle, string outputPath)
+        internal void Drain(IntPtr readHandle, string outputPath, long maximumStreamBytes)
         {
+            long streamRemaining = maximumStreamBytes;
             try
             {
                 using (SafeFileHandle safeHandle = new SafeFileHandle(readHandle, true))
@@ -72,11 +73,13 @@ namespace LastAperture.WindowsProcess
                         if (count == 0) break;
                         lock (gate)
                         {
-                            int accepted = (int)Math.Min((long)count, remaining);
+                            int accepted = (int)Math.Min((long)count, Math.Min(remaining, streamRemaining));
                             if (accepted > 0)
                             {
                                 output.Write(buffer, 0, accepted);
                                 remaining -= accepted;
+                                streamRemaining -= accepted;
+                                output.Flush();
                             }
                             if (accepted != count && !exceeded)
                             {
@@ -411,6 +414,8 @@ namespace LastAperture.WindowsProcess
             int timeoutMs,
             string stopMarkerPath,
             long maxOutputBytes,
+            long maxStdoutBytes,
+            long maxStderrBytes,
             string stdoutPath,
             string stderrPath,
             string[] logPaths,
@@ -484,8 +489,8 @@ namespace LastAperture.WindowsProcess
                 capture = new CaptureBudget(job, maxOutputBytes);
                 IntPtr capturedStdoutRead = stdoutRead; stdoutRead = IntPtr.Zero;
                 IntPtr capturedStderrRead = stderrRead; stderrRead = IntPtr.Zero;
-                stdoutTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStdoutRead, stdoutPath); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-                stderrTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStderrRead, stderrPath); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                stdoutTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStdoutRead, stdoutPath, maxStdoutBytes); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                stderrTask = Task.Factory.StartNew(delegate { capture.Drain(capturedStderrRead, stderrPath, maxStderrBytes); }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
                 bool rootExited = false;
                 if (StopMarkerPresent(stopMarkerPath))
@@ -498,7 +503,7 @@ namespace LastAperture.WindowsProcess
 
                     while (true)
                     {
-                        uint wait = WaitForSingleObject(processInfo.hProcess, 25);
+                        uint wait = WaitForSingleObject(processInfo.hProcess, 5);
                         if (wait == WAIT_OBJECT_0) { rootExited = true; break; }
                         if (wait == WAIT_FAILED) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "WaitForSingleObject");
                         if (wait != WAIT_TIMEOUT) throw new InvalidOperationException("unexpected process wait result");
@@ -590,10 +595,10 @@ try {
   if ((Get-Item -LiteralPath $RequestPath).Length -gt 1048576) { throw 'request too large' }
   if (Test-Path -LiteralPath $ResultPath) { throw 'result already exists' }
   $request = Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  $expected = @('args', 'batch_bridge', 'cwd', 'env', 'file', 'log_paths', 'max_log_bytes', 'max_output_bytes', 'request_nonce', 'schema_version', 'stderr_path', 'stdout_path', 'stop_marker_path', 'timeout_ms')
+  $expected = @('args', 'batch_bridge', 'cwd', 'file', 'log_paths', 'max_log_bytes', 'max_output_bytes', 'max_stderr_bytes', 'max_stdout_bytes', 'request_nonce', 'schema_version', 'stderr_path', 'stdout_path', 'stop_marker_path', 'timeout_ms')
   $actual = @($request.PSObject.Properties.Name | Sort-Object)
   if (($actual -join "`n") -ne (($expected | Sort-Object) -join "`n")) { throw 'request shape invalid' }
-  if ($request.schema_version -ne '1.1.0') { throw 'request version invalid' }
+  if ($request.schema_version -ne '1.2.0') { throw 'request version invalid' }
   if ([string]$request.request_nonce -notmatch '^[a-f0-9]{64}$') { throw 'request nonce invalid' }
   if (-not [IO.Path]::IsPathRooted([string]$request.file) -or -not [IO.Path]::IsPathRooted([string]$request.cwd)) { throw 'target path invalid' }
   if (-not [IO.Path]::IsPathRooted([string]$request.stdout_path) -or -not [IO.Path]::IsPathRooted([string]$request.stderr_path)) { throw 'capture path invalid' }
@@ -604,15 +609,17 @@ try {
   if ($null -ne $request.batch_bridge -and -not [IO.Path]::IsPathRooted([string]$request.batch_bridge)) { throw 'batch bridge path invalid' }
   $timeout = [int64]$request.timeout_ms
   $outputLimit = [int64]$request.max_output_bytes
+  $stdoutLimit = [int64]$request.max_stdout_bytes
+  $stderrLimit = [int64]$request.max_stderr_bytes
   $logLimit = [int64]$request.max_log_bytes
-  if ($timeout -lt 1 -or $timeout -gt 1800000 -or $outputLimit -lt 1 -or $outputLimit -gt 67108864 -or $logLimit -lt 1 -or $logLimit -gt 67108864) { throw 'request limits invalid' }
+  if ($timeout -lt 1 -or $timeout -gt 1800000 -or $outputLimit -lt 0 -or $outputLimit -gt 268435456 -or $stdoutLimit -lt 0 -or $stdoutLimit -gt 268435456 -or $stderrLimit -lt 0 -or $stderrLimit -gt 268435456 -or $logLimit -lt 0 -or $logLimit -gt 268435456) { throw 'request limits invalid' }
   $arguments = @($request.args | ForEach-Object { [string]$_ })
   if ($arguments.Count -gt 128) { throw 'argument count invalid' }
   $logs = @($request.log_paths | ForEach-Object { [string]$_ })
   if ($logs.Count -gt 8) { throw 'log path count invalid' }
   $environment = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
-  foreach ($property in $request.env.PSObject.Properties) {
-    $environment.Add([string]$property.Name, [string]$property.Value)
+  foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+    $environment.Add([string]$entry.Key, [string]$entry.Value)
   }
 
   Add-Type -TypeDefinition $nativeSource -Language CSharp
@@ -627,13 +634,15 @@ try {
     [int]$timeout,
     $stopMarker,
     $outputLimit,
+    $stdoutLimit,
+    $stderrLimit,
     [string]$request.stdout_path,
     [string]$request.stderr_path,
     [string[]]$logs,
     $logLimit
   )
   Write-ExclusiveJson -Path $ResultPath -Value ([ordered]@{
-    schema_version = '1.1.0'
+    schema_version = '1.2.0'
     request_nonce = [string]$request.request_nonce
     code = $nativeResult.Code
     timed_out = $nativeResult.TimedOut
@@ -651,7 +660,7 @@ try {
 } catch {
   if (-not (Test-Path -LiteralPath $ResultPath)) {
     Write-ExclusiveJson -Path $ResultPath -Value ([ordered]@{
-      schema_version = '1.1.0'
+      schema_version = '1.2.0'
       request_nonce = if ($null -ne $request -and $null -ne $request.request_nonce) { [string]$request.request_nonce } else { '0' * 64 }
       code = $null
       timed_out = $false

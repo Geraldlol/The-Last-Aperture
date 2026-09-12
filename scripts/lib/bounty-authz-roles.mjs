@@ -1,8 +1,38 @@
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { isSensitiveHeaderName } from './bounty-authz-request.mjs'
 
 const SCHEMA_URL = new URL('../../schemas/bounty-authz-roles.schema.json', import.meta.url)
+const AUTH_CARRIER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u
+const FORBIDDEN_ROLE_HEADERS = new Set([
+  'connection',
+  'content-length',
+  'forwarded',
+  'host',
+  'proxy-authorization',
+  'transfer-encoding',
+  'x-forwarded-host',
+  'x-forwarded-server',
+  'x-forwarded-uri',
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+  'x-original-host',
+  'x-original-url',
+  'x-original-uri',
+  'x-rewrite-url',
+])
+
+function forbiddenRoleHeader(name) {
+  const lower = name.toLowerCase()
+  return FORBIDDEN_ROLE_HEADERS.has(lower)
+    || lower.startsWith('x-forwarded-')
+    || lower.startsWith('x-original-')
+    || lower.startsWith('x-rewrite-')
+    || lower === 'x-envoy-original-path'
+    || lower === 'x-http-url-override'
+}
 
 export const ANONYMOUS_ROLE = Object.freeze({
   id: 'anonymous',
@@ -12,16 +42,29 @@ export const ANONYMOUS_ROLE = Object.freeze({
 
 let compiledValidator = null
 
+function assertSafeRoleCarrier(role) {
+  if (role?.auth?.kind === 'none') return
+  const name = role?.auth?.name
+  if (typeof name !== 'string' || !AUTH_CARRIER_NAME.test(name)) {
+    throw new Error(`role ${role?.id ?? '(unknown)'} ${role?.auth?.kind ?? 'credential'} carrier name is invalid`)
+  }
+  if (role.auth.kind === 'header' && forbiddenRoleHeader(name)) {
+    throw new Error(`role ${role.id} uses forbidden credential header ${name}`)
+  }
+}
+
 export function assertValidRoleRegistry(value) {
   if (compiledValidator === null) {
     const ajv = new Ajv2020({ allErrors: true, strict: false })
     compiledValidator = ajv.compile(JSON.parse(readFileSync(SCHEMA_URL, 'utf8')))
   }
-  if (compiledValidator(value)) return
-  const detail = (compiledValidator.errors ?? [])
-    .map((error) => `${error.instancePath || '/'} ${error.message}`)
-    .join('; ')
-  throw new Error(`role registry failed schema validation: ${detail}`)
+  if (!compiledValidator(value)) {
+    const detail = (compiledValidator.errors ?? [])
+      .map((error) => `${error.instancePath || '/'} ${error.message}`)
+      .join('; ')
+    throw new Error(`role registry failed schema validation: ${detail}`)
+  }
+  value.roles.forEach(assertSafeRoleCarrier)
 }
 
 // Credentials live in the environment, never in the registry file, so a registry
@@ -41,20 +84,26 @@ export function resolveRoleCredential(role, env = process.env) {
 }
 
 export function applyRole(request, role, env = process.env) {
+  assertSafeRoleCarrier(role)
   const headers = { ...request.headers }
   // Strip whatever session the capture carried before applying this role's.
-  delete headers.authorization
-  delete headers.cookie
-  delete headers['x-api-key']
-  delete headers['x-auth-token']
+  for (const name of Object.keys(headers)) {
+    if (isSensitiveHeaderName(name)) delete headers[name]
+  }
 
   if (role.auth.kind === 'none') {
     return { ...request, headers, applied_role: role.id }
   }
   const value = resolveRoleCredential(role, env)
   if (role.auth.kind === 'header') {
+    if (/\p{Cc}/u.test(value)) {
+      throw new Error(`role ${role.id} credential header value is invalid`)
+    }
     headers[role.auth.name.toLowerCase()] = value
   } else if (role.auth.kind === 'cookie') {
+    if (/[\u0000-\u0020\u007f;]/u.test(value)) {
+      throw new Error(`role ${role.id} credential cookie value is invalid`)
+    }
     headers.cookie = `${role.auth.name}=${value}`
   }
   return { ...request, headers, applied_role: role.id }

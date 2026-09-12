@@ -25,6 +25,10 @@ import {
 } from './http-authed-response-metadata.mjs'
 import { sanitizeHttpAuthedJsonShape } from './http-authed-json-shape.mjs'
 import { httpAuthedResponseStopReason } from './http-authed-response-stop.mjs'
+import {
+  publishFileCreateOnlyDurably,
+  syncRecoverableDirectoryChange,
+} from './durable-file-publication.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const RECORD_KIND = 'red-team-audit/http-authed-campaign-record'
@@ -42,6 +46,8 @@ const TEMPORARY_NAME = /^\.(\d{16}\.http-authed-campaign\.json)\.tmp-\d+-[a-f0-9
 const LOCK_DIRECTORY = '.http-authed-campaign.lock'
 const LOCK_OWNER = 'owner.json'
 const STOP_REQUEST_NAME = '.http-authed-campaign-stop.json'
+const STOP_TEMPORARY_PREFIX = `${STOP_REQUEST_NAME}.tmp-`
+const STOP_TEMPORARY_NAME = /^\.http-authed-campaign-stop\.json\.tmp-(\d+)-[a-f0-9]{24}$/
 const STOP_REQUEST_KIND = 'red-team-audit/http-authed-campaign-stop-request'
 const SESSION_CONFIRMATION = 'CURRENT_AUTHORIZATION_CONFIRMED'
 const CLEANUP_SESSION_CONFIRMATION = 'CLEANUP_ONLY_CONFIRMED'
@@ -348,6 +354,28 @@ function validateEvent(event, {
     }
     return event
   }
+  if (event.type === 'STARTUP_CLEANUP_RECORDED') {
+    exactKeys(
+      event,
+      ['type', 'resource_kind', 'outcome', 'reason_code'],
+      'STARTUP_CLEANUP_RECORDED event',
+    )
+    if (
+      !['BROWSER_SESSION', 'CREDENTIAL_BYTES'].includes(event.resource_kind)
+      || !['COMPLETED', 'FAILED', 'TIMED_OUT'].includes(event.outcome)
+      || event.reason_code !== ({
+        COMPLETED: 'LATE_RESOURCE_CLEANUP_COMPLETED',
+        FAILED: 'LATE_RESOURCE_CLEANUP_FAILED',
+        TIMED_OUT: 'LATE_RESOURCE_CLEANUP_TIMED_OUT',
+      })[event.outcome]
+    ) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_RECORD_INVALID',
+        'startup cleanup outcome is invalid',
+      )
+    }
+    return event
+  }
   if (event.type === 'CANDIDATE_ENQUEUED') {
     exactKeys(event, [
       'type', 'action_id', 'candidate_sha256', 'action_sequence', 'action_kind',
@@ -501,6 +529,37 @@ function validateEvent(event, {
     }
     return event
   }
+  if (event.type === 'RESPONSE_STOP_HANDLED') {
+    exactKeys(event, [
+      'type', 'action_id', 'lease_id', 'phase', 'reason_code', 'disposition',
+      'continuation_action_ids',
+    ], 'RESPONSE_STOP_HANDLED event')
+    if (
+      event.phase !== 'PROBE'
+      || event.reason_code !== 'UNEXPECTED_REDIRECT'
+      || event.disposition !== 'DISCOVERY_CONTINUATION'
+    ) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_RECORD_INVALID',
+        'handled response stop disposition is invalid',
+      )
+    }
+    if (
+      !Array.isArray(event.continuation_action_ids)
+      || event.continuation_action_ids.length < 1
+      || event.continuation_action_ids.length > 256
+      || new Set(event.continuation_action_ids).size !== event.continuation_action_ids.length
+      || event.continuation_action_ids.some(
+        (actionId) => !/^http-authed-action:[a-f0-9]{64}$/.test(actionId),
+      )
+    ) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_RECORD_INVALID',
+        'handled response stop continuations are invalid',
+      )
+    }
+    return event
+  }
   if (event.type === 'ACTION_TERMINAL') {
     exactKeys(event, ['type', 'action_id', 'lease_id', 'outcome', 'reason_code'], 'ACTION_TERMINAL event')
     if (!TERMINAL_OUTCOMES.has(event.outcome)) {
@@ -572,38 +631,93 @@ function processIsAlive(pid) {
     process.kill(pid, 0)
     return true
   } catch (error) {
-    return error.code === 'EPERM'
+    return error.code !== 'ESRCH'
   }
 }
 
-async function syncDirectory(path) {
-  let handle
-  try {
-    handle = await open(path, fsConstants.O_RDONLY)
-    await handle.sync()
-  } catch (error) {
-    if (!['EINVAL', 'EISDIR', 'ENOTSUP', 'EPERM'].includes(error.code)) throw error
-  } finally {
-    await handle?.close()
-  }
-}
-
-async function readExactFile(path, maxBytes, label, allowedLinks = [1]) {
+async function readExactFile(path, maxBytes, label, allowedLinks = [1], faultInjector) {
   const before = await lstat(path)
   if (!before.isFile() || before.isSymbolicLink() || !allowedLinks.includes(before.nlink)
     || before.size < 1 || before.size > maxBytes) {
     throw ledgerError('HTTP_AUTHED_LEDGER_FILE_UNSAFE', `${label} is not a safe bounded regular file`)
   }
-  const handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
+  await faultInjector?.('after-ledger-file-lstat', { path, label, maxBytes })
+  let handle
+  try {
+    handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
+  } catch (cause) {
+    if (cause.code === 'ENOENT') {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_FILE_CHANGED',
+        `${label} disappeared before it could be opened`,
+        { cause },
+      )
+    }
+    throw cause
+  }
   try {
     const opened = await handle.stat()
-    const bytes = await handle.readFile()
+    if (
+      !opened.isFile()
+      || !allowedLinks.includes(opened.nlink)
+      || opened.size < 1
+      || opened.size > maxBytes
+      || before.dev !== opened.dev
+      || before.ino !== opened.ino
+      || before.size !== opened.size
+      || before.mtimeMs !== opened.mtimeMs
+      || before.ctimeMs !== opened.ctimeMs
+      || before.nlink !== opened.nlink
+    ) {
+      throw ledgerError('HTTP_AUTHED_LEDGER_FILE_UNSAFE', `${label} is not a safe bounded regular file`)
+    }
+    const buffer = Buffer.alloc(maxBytes + 1)
+    let offset = 0
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
     const after = await handle.stat()
-    if (opened.dev !== after.dev || opened.ino !== after.ino || opened.size !== after.size
-      || before.dev !== after.dev || before.ino !== after.ino || bytes.length !== after.size) {
+    if (offset > maxBytes || after.size < 1 || after.size > maxBytes) {
+      throw ledgerError('HTTP_AUTHED_LEDGER_FILE_UNSAFE', `${label} is not a safe bounded regular file`)
+    }
+    let endpointAfter
+    try {
+      endpointAfter = await lstat(path)
+    } catch (cause) {
+      if (cause.code === 'ENOENT') {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_FILE_CHANGED',
+          `${label} disappeared while it was being read`,
+          { cause },
+        )
+      }
+      throw cause
+    }
+    if (
+      !after.isFile()
+      || !endpointAfter.isFile()
+      || endpointAfter.isSymbolicLink()
+      || !allowedLinks.includes(after.nlink)
+      || !allowedLinks.includes(endpointAfter.nlink)
+      || opened.dev !== after.dev
+      || opened.ino !== after.ino
+      || opened.size !== after.size
+      || opened.mtimeMs !== after.mtimeMs
+      || opened.ctimeMs !== after.ctimeMs
+      || opened.nlink !== after.nlink
+      || after.dev !== endpointAfter.dev
+      || after.ino !== endpointAfter.ino
+      || after.size !== endpointAfter.size
+      || after.mtimeMs !== endpointAfter.mtimeMs
+      || after.ctimeMs !== endpointAfter.ctimeMs
+      || after.nlink !== endpointAfter.nlink
+      || offset !== after.size
+    ) {
       throw ledgerError('HTTP_AUTHED_LEDGER_FILE_CHANGED', `${label} changed while being read`)
     }
-    return { bytes, info: after }
+    return { bytes: buffer.subarray(0, offset), info: after }
   } finally {
     await handle.close()
   }
@@ -669,42 +783,149 @@ async function removeInspectedLock(path, inspected) {
     throw ledgerError('HTTP_AUTHED_LEDGER_LOCK_CHANGED', 'campaign ledger lock changed during recovery')
   }
   await unlink(join(path, LOCK_OWNER))
-  await syncDirectory(path)
+  await syncRecoverableDirectoryChange(path)
   await rmdir(path)
-  await syncDirectory(dirname(path))
+  await syncRecoverableDirectoryChange(dirname(path))
 }
 
-async function recoverStaleLock(ledger, lockPath, inspected) {
-  const quarantine = `${lockPath}.stale-${process.pid}-${randomBytes(12).toString('hex')}`
-  await ledger._inject('before-stale-lock-quarantine', {})
-  try {
-    await rename(lockPath, quarantine)
-  } catch (error) {
-    if (['ENOENT', 'EEXIST'].includes(error.code)) return false
-    throw error
+async function quarantineAndRemoveInspectedLock({
+  ledger,
+  path,
+  inspected,
+  phase,
+  suffix,
+  missingReturnsFalse = false,
+}) {
+  const quarantine = `${path}.${suffix}-${process.pid}-${randomBytes(12).toString('hex')}`
+  await ledger._inject(phase, {})
+  const renameDeadline = Date.now() + ledger.limits.lockTimeoutMs
+  while (true) {
+    try {
+      await rename(path, quarantine)
+      break
+    } catch (error) {
+      if (missingReturnsFalse && ['ENOENT', 'EEXIST'].includes(error.code)) return false
+      if (
+        process.platform === 'win32'
+        && ['EACCES', 'EBUSY', 'EPERM'].includes(error.code)
+        && Date.now() < renameDeadline
+      ) {
+        await sleep(ledger.limits.lockPollMs)
+        continue
+      }
+      throw error
+    }
   }
+  let current
   try {
-    await removeInspectedLock(quarantine, inspected)
+    current = await inspectLock(quarantine)
+    if (!sameLockInspection(current, inspected)) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+        'campaign ledger lock changed before identity-bound quarantine',
+      )
+    }
   } catch (error) {
     try {
-      await rename(quarantine, lockPath)
+      await rename(quarantine, path)
     } catch (restoreError) {
-      throw new AggregateError(
-        [error, restoreError],
-        'stale campaign ledger lock changed and could not be restored',
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+        'campaign ledger replacement lock could not be restored after quarantine',
+        { cause: new AggregateError([error, restoreError]) },
       )
     }
     throw error
   }
+  // No cooperating controller knows the random quarantine name. Once its
+  // exact directory and owner identities are bound, cleanup cannot remove a
+  // subsequently published owner at the well-known lock path.
+  await removeInspectedLock(quarantine, inspected)
   return true
 }
+
+async function recoverStaleLock(ledger, lockPath, inspected) {
+  return quarantineAndRemoveInspectedLock({
+    ledger,
+    path: lockPath,
+    inspected,
+    phase: 'before-stale-lock-quarantine',
+    suffix: 'stale',
+    missingReturnsFalse: true,
+  })
+}
+
+async function discardControllerCreatedLock(lockPath, createdInfo) {
+  const quarantine = `${lockPath}.failed-${process.pid}-${randomBytes(12).toString('hex')}`
+  await rename(lockPath, quarantine)
+  const quarantined = await lstat(quarantine)
+  if (
+    !quarantined.isDirectory()
+    || quarantined.isSymbolicLink()
+    || !sameFileIdentity(quarantined, createdInfo)
+  ) {
+    try {
+      await rename(quarantine, lockPath)
+    } catch (restoreError) {
+      throw new AggregateError(
+        [ledgerError(
+          'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+          'controller-created campaign ledger lock was replaced before cleanup',
+        ), restoreError],
+        'replaced campaign ledger lock could not be restored',
+      )
+    }
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+      'controller-created campaign ledger lock was replaced before cleanup',
+    )
+  }
+  const names = await readdir(quarantine)
+  if (names.length === 1 && names[0] === LOCK_OWNER) {
+    const owner = await lstat(join(quarantine, LOCK_OWNER))
+    if (!owner.isFile() || owner.isSymbolicLink() || owner.nlink !== 1) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+        'controller-created campaign ledger lock changed before cleanup',
+      )
+    }
+    await unlink(join(quarantine, LOCK_OWNER))
+    await syncRecoverableDirectoryChange(quarantine)
+  } else if (names.length !== 0) {
+    throw ledgerError(
+      'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+      'controller-created campaign ledger lock gained unexpected contents',
+    )
+  }
+  await rmdir(quarantine)
+  await syncRecoverableDirectoryChange(dirname(lockPath))
+}
+
+const TRANSIENT_LOCK_INSPECTION_CODES = new Set([
+  'ENOENT',
+  'HTTP_AUTHED_LEDGER_FILE_CHANGED',
+  'HTTP_AUTHED_LEDGER_FILE_UNSAFE',
+  'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
+  'HTTP_AUTHED_LEDGER_LOCK_UNSAFE',
+])
 
 async function acquireLock(ledger) {
   const lockPath = join(ledger.directory, LOCK_DIRECTORY)
   const deadline = Date.now() + ledger.limits.lockTimeoutMs
   while (true) {
+    let created = false
+    let createdInfo
     try {
       await mkdir(lockPath, { recursive: false, mode: 0o700 })
+      created = true
+      createdInfo = await lstat(lockPath)
+      if (!createdInfo.isDirectory() || createdInfo.isSymbolicLink()) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_LOCK_UNSAFE',
+          'controller-created campaign ledger lock is not a real directory',
+        )
+      }
+      await ledger._inject('after-lock-directory-created', {})
       const owner = {
         pid: process.pid,
         nonce: randomBytes(12).toString('hex'),
@@ -718,15 +939,40 @@ async function acquireLock(ledger) {
       } finally {
         await handle.close()
       }
-      await syncDirectory(lockPath)
-      await syncDirectory(ledger.directory)
+      await syncRecoverableDirectoryChange(lockPath)
+      await syncRecoverableDirectoryChange(ledger.directory)
       const inspected = await inspectLock(lockPath)
       return { path: lockPath, ...inspected }
     } catch (error) {
+      if (created) {
+        try {
+          await discardControllerCreatedLock(lockPath, createdInfo)
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'campaign ledger lock acquisition failed and its partial lock could not be removed',
+          )
+        }
+        throw error
+      }
       if (error.code !== 'EEXIST') throw error
     }
 
-    const inspected = await inspectLock(lockPath)
+    let inspected
+    try {
+      inspected = await inspectLock(lockPath)
+    } catch (error) {
+      if (!TRANSIENT_LOCK_INSPECTION_CODES.has(error.code)) throw error
+      if (Date.now() >= deadline) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_LOCK_TIMEOUT',
+          'timed out waiting for a complete campaign ledger lock owner record',
+          { cause: error },
+        )
+      }
+      await sleep(ledger.limits.lockPollMs)
+      continue
+    }
     const age = Date.now() - Date.parse(inspected.owner.created_at)
     if (age >= ledger.limits.staleLockMs && !processIsAlive(inspected.owner.pid)) {
       if (await recoverStaleLock(ledger, lockPath, inspected)) continue
@@ -738,9 +984,15 @@ async function acquireLock(ledger) {
   }
 }
 
-async function releaseLock(lock, directory) {
+async function releaseLock(lock, ledger) {
   try {
-    await removeInspectedLock(lock.path, lock)
+    await quarantineAndRemoveInspectedLock({
+      ledger,
+      path: lock.path,
+      inspected: lock,
+      phase: 'before-lock-release-quarantine',
+      suffix: 'release',
+    })
   } catch (cause) {
     throw ledgerError(
       'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
@@ -805,14 +1057,48 @@ function validateStopRequest(value) {
   return value
 }
 
-async function readCampaignStopRequest(directory) {
+async function readCampaignStopRequestOnce(directory, faultInjector) {
   const path = join(directory, STOP_REQUEST_NAME)
   let bytes
   try {
-    const loaded = await readExactFile(path, 4096, 'campaign stop request')
+    // A stop request is published by hard-linking a fully fsynced temporary.
+    // The target can briefly have two names, but its bytes are complete before
+    // either name becomes visible.
+    const loaded = await readExactFile(
+      path,
+      4096,
+      'campaign stop request',
+      [1, 2],
+      faultInjector,
+    )
+    if (loaded.info.nlink === 2) {
+      const names = await readdir(directory)
+      let publicationTemporaryFound = false
+      for (const name of names.filter((entry) => STOP_TEMPORARY_NAME.test(entry))) {
+        let temporary
+        try {
+          temporary = await lstat(join(directory, name))
+        } catch (error) {
+          if (error.code === 'ENOENT') continue
+          throw error
+        }
+        if (sameFileIdentity(temporary, loaded.info)) {
+          publicationTemporaryFound = true
+          break
+        }
+      }
+      if (!publicationTemporaryFound) {
+        const current = await lstat(path)
+        if (!sameFileIdentity(current, loaded.info) || current.nlink !== 1) {
+          throw ledgerError(
+            'HTTP_AUTHED_LEDGER_FILE_UNSAFE',
+            'campaign stop request has an unexplained hard-link alias',
+          )
+        }
+      }
+    }
     bytes = loaded.bytes
   } catch (error) {
-    if (error.code === 'ENOENT') return null
     throw error
   }
   let value
@@ -835,6 +1121,27 @@ async function readCampaignStopRequest(directory) {
   return value
 }
 
+async function readCampaignStopRequest(directory, faultInjector) {
+  let transitionError
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await readCampaignStopRequestOnce(directory, faultInjector)
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        if (transitionError !== undefined) throw transitionError
+        return null
+      }
+      if (![
+        'HTTP_AUTHED_LEDGER_FILE_CHANGED',
+        'HTTP_AUTHED_LEDGER_FILE_UNSAFE',
+      ].includes(error.code)) throw error
+      transitionError = error
+      if (attempt < 3) await sleep(1)
+    }
+  }
+  throw transitionError
+}
+
 export async function requestHttpAuthedCampaignStop({
   directory,
   campaignGrantSha256,
@@ -851,18 +1158,23 @@ export async function requestHttpAuthedCampaignStop({
     reason_code: 'OPERATOR_REQUESTED',
   })
   const path = join(canonicalDirectory, STOP_REQUEST_NAME)
+  const temporaryPath = join(
+    canonicalDirectory,
+    `${STOP_TEMPORARY_PREFIX}${process.pid}-${randomBytes(12).toString('hex')}`,
+  )
   let handle
   let created = false
   try {
-    handle = await open(path, 'wx', 0o600)
+    handle = await open(temporaryPath, 'wx', 0o600)
     await handle.writeFile(Buffer.from(stableJson(request), 'utf8'))
     await handle.sync()
     await handle.close()
     handle = undefined
-    await syncDirectory(canonicalDirectory)
+    await publishFileCreateOnlyDurably(temporaryPath, path)
     created = true
   } catch (error) {
     await handle?.close().catch(() => {})
+    await unlink(temporaryPath).catch(() => {})
     if (error.code !== 'EEXIST') throw error
   }
   const persisted = await readCampaignStopRequest(canonicalDirectory)
@@ -899,17 +1211,86 @@ async function installRecord(ledger, name, bytes, sequence) {
     throw error
   }
   await ledger._inject('after-temporary-durable', { sequence, name })
-  await link(temporaryPath, targetPath)
-  await ledger._inject('after-record-linked', { sequence, name })
-  await syncDirectory(ledger.directory)
+  await publishFileCreateOnlyDurably(temporaryPath, targetPath, {
+    afterVisible: () => ledger._inject('after-record-linked', { sequence, name }),
+  })
   await ledger._inject('after-record-durable', { sequence, name })
-  await unlink(temporaryPath)
-  await syncDirectory(ledger.directory)
   await ledger._inject('after-temporary-removed', { sequence, name })
 }
 
 async function reconcileTemporaries(ledger) {
   const names = await readdir(ledger.directory)
+  const stopTemporaries = names.filter((name) => name.startsWith(STOP_TEMPORARY_PREFIX))
+  let stopTemporaryRemoved = false
+  if (stopTemporaries.length > 0) {
+    const targetPath = join(ledger.directory, STOP_REQUEST_NAME)
+    let target
+    try {
+      target = await lstat(targetPath)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    if (target !== undefined && (!target.isFile() || target.isSymbolicLink())) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_RESIDUE_UNSAFE',
+        'campaign stop request target is unsafe',
+      )
+    }
+    for (const name of stopTemporaries) {
+      const match = STOP_TEMPORARY_NAME.exec(name)
+      if (match === null) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_RESIDUE_UNSAFE',
+          'campaign stop request temporary name is invalid',
+        )
+      }
+      const temporaryPath = join(ledger.directory, name)
+      let temporary
+      try {
+        temporary = await lstat(temporaryPath)
+      } catch (error) {
+        if (error.code === 'ENOENT') continue
+        throw error
+      }
+      if (!temporary.isFile() || temporary.isSymbolicLink() || ![1, 2].includes(temporary.nlink)) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_RESIDUE_UNSAFE',
+          'campaign stop request temporary is unsafe',
+        )
+      }
+      if (temporary.nlink === 2) {
+        if (target === undefined) {
+          try {
+            target = await lstat(targetPath)
+          } catch (error) {
+            if (error.code !== 'ENOENT') throw error
+          }
+        }
+        if (target === undefined || !sameFileIdentity(temporary, target)) {
+          throw ledgerError(
+            'HTTP_AUTHED_LEDGER_RESIDUE_AMBIGUOUS',
+            'campaign stop request temporary has an unknown linked peer',
+          )
+        }
+        try {
+          await unlink(temporaryPath)
+          stopTemporaryRemoved = true
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error
+        }
+        continue
+      }
+      const publisherPid = Number(match[1])
+      if (processIsAlive(publisherPid)) continue
+      try {
+        await unlink(temporaryPath)
+        stopTemporaryRemoved = true
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+      }
+    }
+    if (stopTemporaryRemoved) await syncRecoverableDirectoryChange(ledger.directory)
+  }
   const temporaries = new Map()
   for (const name of names) {
     const match = TEMPORARY_NAME.exec(name)
@@ -945,7 +1326,7 @@ async function reconcileTemporaries(ledger) {
     }
     await unlink(temporaryPath)
   }
-  if (temporaries.size > 0) await syncDirectory(ledger.directory)
+  if (temporaries.size > 0) await syncRecoverableDirectoryChange(ledger.directory)
 }
 
 function emptyProjection() {
@@ -955,12 +1336,14 @@ function emptyProjection() {
     campaignOperatorId: null,
     lastSessionConfirmation: null,
     lastCleanupSessionConfirmation: null,
+    startupCleanups: [],
     actions: new Map(),
     candidates: new Map(),
     consumedAuthorizations: new Set(),
     nextActionSequence: 1,
     stopped: false,
     stopReason: null,
+    lastRequestAt: null,
   }
 }
 
@@ -979,6 +1362,11 @@ function durableActionStopReason(action) {
     const outcome = action.phase_outcomes[phase]
     if (outcome?.outcome !== 'SETTLED') continue
     const reason = httpAuthedResponseStopReason(outcome.status)
+    if (
+      reason !== null
+      && action.handled_response_stop?.phase === phase
+      && action.handled_response_stop.reason_code === reason
+    ) continue
     if (reason !== null) return reason
   }
   return null
@@ -1141,6 +1529,16 @@ function applyEvent(projection, record) {
     }
     return
   }
+  if (event.type === 'STARTUP_CLEANUP_RECORDED') {
+    projection.startupCleanups.push({
+      record_sequence: record.record_sequence,
+      at: record.at,
+      resource_kind: event.resource_kind,
+      outcome: event.outcome,
+      reason_code: event.reason_code,
+    })
+    return
+  }
   if (event.type === 'CAMPAIGN_STOPPED') {
     if (projection.stopped) {
       throw ledgerError('HTTP_AUTHED_LEDGER_EVENT_INVALID', 'campaign is already stopped')
@@ -1173,6 +1571,7 @@ function applyEvent(projection, record) {
       outcome: null,
       terminal_reason_code: null,
       authorization_consumed: false,
+      handled_response_stop: null,
     }
     projection.actions.set(event.action_id, action)
     projection.candidates.set(event.candidate_sha256, event.action_id)
@@ -1243,6 +1642,7 @@ function applyEvent(projection, record) {
     assertPhasePredecessor(projection, action, event.phase)
     action.pending_phase = event.phase
     action.state = `${event.phase}_PRE_DISPATCH`
+    projection.lastRequestAt = record.at
     return
   }
   if (event.type === 'REQUEST_SETTLED') {
@@ -1315,6 +1715,38 @@ function applyEvent(projection, record) {
     }
     return
   }
+  if (event.type === 'RESPONSE_STOP_HANDLED') {
+    const continuations = event.continuation_action_ids.map(
+      (actionId) => projection.actions.get(actionId),
+    )
+    if (
+      action.action_kind !== 'probe'
+      || action.state !== 'PROBE_SETTLED'
+      || action.phase_outcomes.PROBE?.outcome !== 'SETTLED'
+      || httpAuthedResponseStopReason(action.phase_outcomes.PROBE.status)
+        !== event.reason_code
+      || action.handled_response_stop !== null
+      || event.continuation_action_ids.includes(action.action_id)
+      || continuations.some((continuation) => (
+        continuation === undefined
+        || continuation.action_kind !== 'probe'
+        || continuation.terminal
+        || continuation.state !== 'QUEUED'
+      ))
+    ) {
+      throw ledgerError(
+        'HTTP_AUTHED_LEDGER_EVENT_INVALID',
+        'response stop cannot be handled from the current durable action state',
+      )
+    }
+    action.handled_response_stop = {
+      phase: event.phase,
+      reason_code: event.reason_code,
+      disposition: event.disposition,
+      continuation_action_ids: [...event.continuation_action_ids],
+    }
+    return
+  }
   if (event.type === 'ACTION_TERMINAL') {
     assertTerminalOutcomeAllowed(action, event.outcome)
     action.terminal = true
@@ -1341,6 +1773,15 @@ async function loadProjection(ledger, { readOnly = false } = {}) {
       }
       continue
     }
+    if (STOP_TEMPORARY_NAME.test(name)) {
+      if (readOnly) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_NOT_QUIESCENT',
+          'read-only campaign projection refuses an active stop publication',
+        )
+      }
+      continue
+    }
     if (RECORD_NAME.test(name)) {
       recordNames.push(name)
       continue
@@ -1362,6 +1803,8 @@ async function loadProjection(ledger, { readOnly = false } = {}) {
       join(ledger.directory, expectedName),
       ledger.limits.maxRecordBytes,
       `campaign ledger record ${sequence}`,
+      [1],
+      (phase, details) => ledger._inject(phase, details),
     )
     let record
     try {
@@ -1505,8 +1948,21 @@ export class HttpAuthedCampaignLedger {
       await this._recoverInterruptedDispatches()
     } catch (error) {
       if (this._lock !== null) {
-        await releaseLock(this._lock, this.directory).catch(() => {})
+        let releaseError
+        try {
+          await releaseLock(this._lock, this)
+        } catch (cause) {
+          releaseError = cause
+        }
         this._lock = null
+        if (releaseError !== undefined) {
+          this._open = false
+          this._destroyDiscoveredCandidateIdentityState()
+          throw new AggregateError(
+            [error, releaseError],
+            'campaign ledger initialization and lock cleanup both failed',
+          )
+        }
       }
       this._open = false
       this._destroyDiscoveredCandidateIdentityState()
@@ -1643,7 +2099,9 @@ export class HttpAuthedCampaignLedger {
     return record
   }
 
-  async _recoverInterruptedDispatches() {
+  async _recoverInterruptedDispatches({
+    discoveredCandidateReasonCode = 'DISCOVERED_CANDIDATE_UNAVAILABLE_AFTER_RESTART',
+  } = {}) {
     const actions = [...this._projection.actions.values()]
     // A response-derived stop must survive either crash tail: after the
     // settlement record or after action terminalization. Import the stop
@@ -1714,7 +2172,13 @@ export class HttpAuthedCampaignLedger {
         // discovered action therefore cannot be reconstructed safely after a
         // process restart; record the gap instead of guessing or replaying it.
         outcome = 'CAMPAIGN_STOPPED'
-        reasonCode = 'DISCOVERED_CANDIDATE_UNAVAILABLE_AFTER_RESTART'
+        reasonCode = discoveredCandidateReasonCode
+        if (!this._projection.stopped) {
+          await this._append({
+            type: 'CAMPAIGN_STOPPED',
+            reason_code: reasonCode,
+          })
+        }
       } else if (action.pending_phase !== null) {
         const cleanupUncertain = ['ROLLBACK', 'ROLLBACK_VERIFY'].includes(action.pending_phase)
         outcome = cleanupUncertain ? 'MANUAL_INTERVENTION_REQUIRED' : 'DELIVERY_UNCERTAIN'
@@ -1795,6 +2259,9 @@ export class HttpAuthedCampaignLedger {
       last_cleanup_session_confirmation: this._projection.lastCleanupSessionConfirmation === null
         ? null
         : structuredClone(this._projection.lastCleanupSessionConfirmation),
+      startup_cleanup: this._projection.startupCleanups.length === 0
+        ? null
+        : structuredClone(this._projection.startupCleanups.at(-1)),
       record_count: this._projection.records.length,
       head_sha256: this._projection.headSha256,
       next_action_sequence: this._projection.nextActionSequence,
@@ -1802,6 +2269,7 @@ export class HttpAuthedCampaignLedger {
       terminal_actions: actions.filter((action) => action.terminal).length,
       stopped: this._projection.stopped,
       stop_reason: this._projection.stopReason,
+      last_request_at: this._projection.lastRequestAt,
     }
   }
 
@@ -1852,6 +2320,24 @@ export class HttpAuthedCampaignLedger {
         confirmation: CLEANUP_SESSION_CONFIRMATION,
       })
       return structuredClone(this._projection.lastCleanupSessionConfirmation)
+    })
+  }
+
+  async recordStartupCleanup({ resourceKind, outcome }) {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      const reasonCode = ({
+        COMPLETED: 'LATE_RESOURCE_CLEANUP_COMPLETED',
+        FAILED: 'LATE_RESOURCE_CLEANUP_FAILED',
+        TIMED_OUT: 'LATE_RESOURCE_CLEANUP_TIMED_OUT',
+      })[outcome]
+      await this._append({
+        type: 'STARTUP_CLEANUP_RECORDED',
+        resource_kind: resourceKind,
+        outcome,
+        reason_code: reasonCode,
+      })
+      return structuredClone(this._projection.startupCleanups.at(-1))
     })
   }
 
@@ -2126,6 +2612,22 @@ export class HttpAuthedCampaignLedger {
     })
   }
 
+  async recordHandledResponseStop({ actionId, leaseId, continuationActionIds }) {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      await this._append({
+        type: 'RESPONSE_STOP_HANDLED',
+        action_id: actionId,
+        lease_id: leaseId,
+        phase: 'PROBE',
+        reason_code: 'UNEXPECTED_REDIRECT',
+        disposition: 'DISCOVERY_CONTINUATION',
+        continuation_action_ids: structuredClone(continuationActionIds),
+      })
+      return { headSha256: this._projection.headSha256 }
+    })
+  }
+
   async terminalizeAction({ actionId, leaseId, outcome, reasonCode = null }) {
     return this._runExclusive(async () => {
       this._assertOpen()
@@ -2151,7 +2653,10 @@ export class HttpAuthedCampaignLedger {
   async observeStopRequest() {
     return this._runExclusive(async () => {
       this._assertOpen()
-      const request = await readCampaignStopRequest(this.directory)
+      const request = await readCampaignStopRequest(
+        this.directory,
+        (phase, details) => this._inject(phase, details),
+      )
       if (request === null) return false
       if (
         request.campaign_grant_sha256 !== this.campaignGrantSha256
@@ -2166,6 +2671,22 @@ export class HttpAuthedCampaignLedger {
         await this._append({ type: 'CAMPAIGN_STOPPED', reason_code: request.reason_code })
       }
       return true
+    })
+  }
+
+  async reconcilePostSettlementFailure() {
+    return this._runExclusive(async () => {
+      this._assertOpen()
+      if (!this._projection.stopped) {
+        throw ledgerError(
+          'HTTP_AUTHED_LEDGER_EVENT_INVALID',
+          'post-settlement failure reconciliation requires a stopped campaign',
+        )
+      }
+      await this._recoverInterruptedDispatches({
+        discoveredCandidateReasonCode: 'POST_SETTLEMENT_PROCESSING_FAILED',
+      })
+      return this.snapshot()
     })
   }
 
@@ -2187,7 +2708,7 @@ export class HttpAuthedCampaignLedger {
       const lock = this._lock
       this._lock = null
       try {
-        if (lock !== null) await releaseLock(lock, this.directory)
+        if (lock !== null) await releaseLock(lock, this)
       } finally {
         this._destroyDiscoveredCandidateIdentityState()
       }

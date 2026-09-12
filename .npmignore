@@ -6,8 +6,13 @@
 /validate_tmp.mjs
 /scripts/audit.mjs.bak_diag
 /references/
+/docs/remediation/
 /node_modules/
 /**/.gradle/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 /last-aperture-*.tgz
 
 # Operator key material and local configuration.

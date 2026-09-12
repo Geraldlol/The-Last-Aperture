@@ -258,7 +258,7 @@ same bytes; offline validation needs none.
 
 `--credential-browser` seals
 `{ mode: CHROME_ACTIVE_TAB_SESSION, extension_id, origin }` and starts the public
-loopback bridge. The packaged companion 0.13.0 uses `activeTab` and `scripting`
+loopback bridge. The packaged companion 0.14.1 uses `activeTab` and `scripting`
 after an operator gesture, `storage` for extension-owned ephemeral recovery
 state, and requests only optional IPv4 loopback host access. It has no persistent
 target-host, cookie, debugger, tabs, or web-request permission. Recovery state is

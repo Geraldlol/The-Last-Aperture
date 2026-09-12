@@ -465,11 +465,42 @@ function intakeMatchesAuthority(intake, authority) {
       === canonicalEngagementJson(authority.credential_references)
 }
 
-async function targetIntegrity(target) {
-  return target.kind === 'artifact' ? stableFingerprint(target.locator) : null
+function sameLocalTargetInstance(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.birthtimeNs === right.birthtimeNs
 }
 
-function buildRoutePlan({ descriptor, manifest, intake, artifactIntegrity }) {
+function digestLocalTargetInstance(metadata) {
+  return createHash('sha256')
+    .update(canonicalEngagementJson({
+      birthtime_ns: metadata.birthtimeNs.toString(),
+      device: metadata.dev.toString(),
+      inode: metadata.ino.toString(),
+    }), 'utf8')
+    .digest('hex')
+}
+
+async function targetIntegrity(target) {
+  if (target.kind !== 'repository' && target.kind !== 'artifact') return null
+  const options = target.kind === 'repository'
+    ? { expect: 'directory' }
+    : { maximumBytes: MAX_INPUT_BYTES }
+  const before = (await assertUnlinkedPath(target.locator, options)).metadata
+  const fingerprint = target.kind === 'artifact'
+    ? await stableFingerprint(target.locator)
+    : {}
+  const after = (await assertUnlinkedPath(target.locator, options)).metadata
+  if (!sameLocalTargetInstance(before, after)) {
+    fail('ENGAGEMENT_TARGET_CHANGED', 'local target identity changed while it was inspected')
+  }
+  return {
+    ...fingerprint,
+    instance_sha256: digestLocalTargetInstance(before),
+  }
+}
+
+function buildRoutePlan({ descriptor, manifest, intake, targetIntegrity }) {
   return {
     schema_version: '1.0.0',
     kind: 'last-aperture/engagement-route-plan',
@@ -478,12 +509,14 @@ function buildRoutePlan({ descriptor, manifest, intake, artifactIntegrity }) {
     route_registry_version: manifest.route_registry_version,
     target_sha256: manifest.target_sha256,
     intake_sha256: digestEngagementIntake(intake),
-    target_integrity: artifactIntegrity,
+    target_integrity: targetIntegrity,
     order: descriptor.order,
     dependencies: [...descriptor.dependencies],
     required_material: [...descriptor.required_material],
     optional_material: [...descriptor.optional_material],
     recovery_mode: descriptor.recovery_mode,
+    capability_id: descriptor.capability_id,
+    availability: { ...descriptor.availability },
   }
 }
 
@@ -1468,7 +1501,7 @@ async function validateFridaTarget(context, planPath, dependencies = {}) {
     if (!samePath(artifactPath, target.locator) || plan.target.mode !== 'local-spawn') {
       fail('ENGAGEMENT_ROUTE_SCOPE_INVALID', 'Frida plan must spawn the exact artifact target')
     }
-    artifactBinding = { kind: 'artifact', locator: target.locator, ...context.artifactIntegrity }
+    artifactBinding = { kind: 'artifact', locator: target.locator, ...context.targetIntegrity }
   } else {
     const currentTarget = await normalizeEngagementTarget({ kind: target.kind, locator: target.locator }, dependencies)
     if (canonicalEngagementJson(currentTarget) !== canonicalEngagementJson(target)) {
@@ -1719,7 +1752,7 @@ async function prepareRouteMaterial(context, descriptor, material, dependencies)
   }
   if (descriptor.id === 'ghidra-analysis') {
     const binding = {
-      kind: 'artifact', locator: context.manifest.target.locator, ...context.artifactIntegrity,
+      kind: 'artifact', locator: context.manifest.target.locator, ...context.targetIntegrity,
     }
     const staged = await stageBoundInput(context, descriptor.id, binding, 'target')
     cleanup.push(staged)
@@ -1966,7 +1999,7 @@ async function validateRouteMaterial(context, descriptor, material, dependencies
       fail('ENGAGEMENT_ROUTE_SCOPE_INVALID', 'Ghidra artifact differs from the engagement target')
     }
     const expected = await targetIntegrity(manifest.target)
-    if (canonicalEngagementJson(expected) !== canonicalEngagementJson(context.artifactIntegrity)) {
+    if (canonicalEngagementJson(expected) !== canonicalEngagementJson(context.targetIntegrity)) {
       fail('ENGAGEMENT_TARGET_CHANGED', 'artifact target changed after engagement planning')
     }
   }
@@ -2477,7 +2510,7 @@ async function planAllRoutes(context, ledger, dependencies) {
       descriptor,
       manifest: context.manifest,
       intake: context.intake,
-      artifactIntegrity: context.artifactIntegrity,
+      targetIntegrity: context.targetIntegrity,
     })
     const planSha256 = digestEngagementValue(plan)
     await writeOrVerify(join(directory, 'plan.json'), plan)
@@ -2698,7 +2731,11 @@ async function schedule(context, ledger, dependencies) {
       if (route.outcome !== null || route.permit_sha256 !== null) continue
       const state = finalPlan.find(({ route_id: id }) => id === route.route_id)
       const reason = blocked.get(route.route_id)
-        ?? (state.status === 'WAITING_FOR_DEPENDENCY' ? 'DEPENDENCY_UNSETTLED' : 'MATERIAL_UNAVAILABLE')
+        ?? (state.status === 'UNAVAILABLE'
+          ? state.unavailable_reason
+          : state.status === 'WAITING_FOR_DEPENDENCY'
+            ? 'DEPENDENCY_UNSETTLED'
+            : 'MATERIAL_UNAVAILABLE')
       await recordWaiting(ledger, liveRoute, reason, dependencies)
     }
     break
@@ -2748,7 +2785,10 @@ function statusFromContext(context, snapshot) {
   const failed = []
   const uncertain = []
   const waiting = []
+  const unavailable = []
+  const waitingDetails = []
   const waitingForAgent = []
+  const registry = new Map(getEngagementRouteRegistry().map((route) => [route.id, route]))
   for (const route of snapshot.routes) {
     const status = route.outcome?.status
     if (status === 'SUCCEEDED') completed.push(route.route_id)
@@ -2759,7 +2799,14 @@ function statusFromContext(context, snapshot) {
     }
     else if (status === 'FAILED' || status === 'CANCELLED_BEFORE_SEND') failed.push(route.route_id)
     else if (status === 'UNCERTAIN') uncertain.push(route.route_id)
-    else if (route.outcome === null) waiting.push(route.route_id)
+    else if (route.outcome === null) {
+      waiting.push(route.route_id)
+      const reasonCode = route.waiting?.reason_code ?? null
+      waitingDetails.push({ route_id: route.route_id, reason_code: reasonCode })
+      if (registry.get(route.route_id)?.availability.status === 'UNAVAILABLE') {
+        unavailable.push({ route_id: route.route_id, reason_code: reasonCode })
+      }
+    }
   }
   const status = snapshot.terminal
     ? snapshot.terminal_result.status
@@ -2784,6 +2831,8 @@ function statusFromContext(context, snapshot) {
     failed_routes: failed,
     uncertain_routes: uncertain,
     waiting_routes: waiting,
+    unavailable_routes: unavailable,
+    waiting_route_details: waitingDetails,
     waiting_for_agent_routes: waitingForAgent,
     repository: structuredClone(snapshot.repository),
     ledger: {
@@ -2810,13 +2859,18 @@ async function loadEngagement(bundleValue, dependencies = {}) {
     fail('ENGAGEMENT_BUNDLE_AUTHORITY_MISMATCH', 'engagement intake differs from durable authority')
   }
   verifyEngagementManifest(manifest, { authority, intake })
-  if (['process', 'device'].includes(manifest.target.kind)) {
-    const currentTarget = await normalizeEngagementTarget({
-      kind: manifest.target.kind,
-      locator: manifest.target.locator,
-    }, dependencies)
+  if (['repository', 'artifact', 'process', 'device'].includes(manifest.target.kind)) {
+    let currentTarget
+    try {
+      currentTarget = await normalizeEngagementTarget({
+        kind: manifest.target.kind,
+        locator: manifest.target.locator,
+      }, dependencies)
+    } catch (cause) {
+      fail('ENGAGEMENT_TARGET_CHANGED', 'local or runtime target identity is no longer valid', { cause })
+    }
     if (canonicalEngagementJson(currentTarget) !== canonicalEngagementJson(manifest.target)) {
-      fail('ENGAGEMENT_TARGET_CHANGED', 'runtime target instance changed after engagement intake')
+      fail('ENGAGEMENT_TARGET_CHANGED', 'local or runtime target identity changed after engagement intake')
     }
   }
   for (const input of intake.inputs) {
@@ -2828,12 +2882,21 @@ async function loadEngagement(bundleValue, dependencies = {}) {
   if (manifest.route_registry_version !== ENGAGEMENT_ROUTE_REGISTRY_VERSION) {
     fail('ENGAGEMENT_ROUTE_REGISTRY_DRIFT', 'engagement route registry version differs from this runtime')
   }
+  let currentTargetIntegrity
+  try {
+    currentTargetIntegrity = await targetIntegrity(manifest.target)
+  } catch (cause) {
+    if (manifest.target.kind === 'repository' || manifest.target.kind === 'artifact') {
+      fail('ENGAGEMENT_TARGET_CHANGED', 'local target identity is no longer valid', { cause })
+    }
+    throw cause
+  }
   const context = {
     bundle,
     intake,
     authority,
     manifest,
-    artifactIntegrity: await targetIntegrity(manifest.target),
+    targetIntegrity: currentTargetIntegrity,
     stopRequest: await readDurableStopRequest(bundle, manifest.engagement_id),
   }
   context.stopMarker = context.stopRequest !== null
@@ -2853,13 +2916,19 @@ async function loadEngagement(bundleValue, dependencies = {}) {
     ) {
       fail('ENGAGEMENT_ROUTE_PLAN_DRIFT', `ledger contains an inapplicable route ${route.route_id}`)
     }
-    const expectedPlan = buildRoutePlan({ descriptor, manifest, intake, artifactIntegrity: context.artifactIntegrity })
+    const expectedPlan = buildRoutePlan({ descriptor, manifest, intake, targetIntegrity: context.targetIntegrity })
     const plan = await readCanonicalDocument(
       join(routeDirectory(bundle, route.route_id), 'plan.json'),
       canonicalEngagementJson,
     )
-    if (digestEngagementValue(expectedPlan) !== route.plan_sha256
-      || canonicalEngagementJson(plan) !== canonicalEngagementJson(expectedPlan)) {
+    if (digestEngagementValue(plan) !== route.plan_sha256) {
+      fail('ENGAGEMENT_ROUTE_PLAN_DRIFT', `route plan binding changed for ${route.route_id}`)
+    }
+    if (canonicalEngagementJson(plan) !== canonicalEngagementJson(expectedPlan)) {
+      const reboundPlan = { ...plan, target_integrity: expectedPlan.target_integrity }
+      if (canonicalEngagementJson(reboundPlan) === canonicalEngagementJson(expectedPlan)) {
+        fail('ENGAGEMENT_TARGET_CHANGED', 'local target identity changed after engagement intake')
+      }
       fail('ENGAGEMENT_ROUTE_PLAN_DRIFT', `route plan binding changed for ${route.route_id}`)
     }
     if (route.permit_sha256 !== null) {
@@ -3531,7 +3600,7 @@ export async function startEngagement({
     intake,
     authority,
     manifest,
-    artifactIntegrity: await targetIntegrity(intake.target),
+    targetIntegrity: await targetIntegrity(intake.target),
     stopMarker: false,
     stopRequest: null,
   }

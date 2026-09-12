@@ -10,7 +10,12 @@ import {
   mutationPlan,
   substituteIdentifier,
 } from './bounty-authz-identifier.mjs'
-import { importHarEntries, redactRequest, requestSignature } from './bounty-authz-request.mjs'
+import {
+  importHarEntries,
+  redactRequest,
+  requestSignature,
+  sanitizeCapturedRequest,
+} from './bounty-authz-request.mjs'
 import { createRateLimiter } from './bounty-recon-ratelimit.mjs'
 
 const REQUESTS_FILE = 'authz-requests.json'
@@ -41,7 +46,8 @@ export async function importAuthzRequests({ bundlePath, harPath, ownerRole }) {
 
 export async function loadAuthzRequests(bundlePath) {
   const stored = JSON.parse(await readFile(join(bundlePath, REQUESTS_FILE), 'utf8'))
-  return stored.requests
+  if (!Array.isArray(stored.requests)) throw new Error('authz request bundle must contain a request array')
+  return stored.requests.map((request) => sanitizeCapturedRequest(request))
 }
 
 export async function runAuthzMatrix({
@@ -58,6 +64,7 @@ export async function runAuthzMatrix({
   if (!Array.isArray(requests) || requests.length === 0) {
     throw new Error('no captured requests to grind; import a HAR first')
   }
+  const safeRequests = requests.map((request) => sanitizeCapturedRequest(request))
   const scope = await loadSealedScope(bundlePath)
   // An expired grant makes every replay unauthorized, in scope or not.
   assertScopeCurrent({ scope, now })
@@ -68,7 +75,7 @@ export async function runAuthzMatrix({
   })
 
   const results = []
-  for (const request of requests) {
+  for (const request of safeRequests) {
     const ownerRole = findRole(registry, request.owner_role)
 
     // Two owner replays first: anything that differs between them is volatile by
@@ -124,7 +131,7 @@ export async function runAuthzMatrix({
   // gets. Reusing the original baseline here would compare against the wrong
   // object entirely.
   if (identifierMap !== null) {
-    for (const request of requests) {
+    for (const request of safeRequests) {
       for (const { identifier, occurrence } of identifiersInRequest({
         request,
         identifiers: identifierMap.identifiers,
@@ -200,12 +207,12 @@ export async function runAuthzMatrix({
     engagement_id: scope.engagement_id,
     created_at: now.toISOString(),
     // Every verdict is retained, denials included: the shape of what was refused
-    // is what makes a bypass elsewhere credible.
+    // is what makes a bypass elsewhere defensible.
     results,
     summary,
   }
   await writeFile(join(bundlePath, FINDINGS_FILE), `${JSON.stringify(findings, null, 2)}\n`, 'utf8')
-  return { ...summary, requests: requests.length, paced: limiter.stats() }
+  return { ...summary, requests: safeRequests.length, paced: limiter.stats() }
 }
 
 export async function authzStatus({ bundlePath }) {

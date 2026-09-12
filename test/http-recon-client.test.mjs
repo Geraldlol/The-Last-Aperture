@@ -491,6 +491,78 @@ test('DNS rejects an entire mixed or reserved answer set and supports pinning', 
   assert.equal(rejected.httpsCalls, 0)
 })
 
+test('DNS listener cleanup cannot strand a successful resolution', async () => {
+  let removeCalls = 0
+  let watchdog
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener, options) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      assert.deepEqual(options, { once: true })
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      removeCalls += 1
+      throw new Error('synthetic DNS listener removal failure')
+    },
+  }
+
+  try {
+    const resolved = await Promise.race([
+      resolveHttpReconDns(HOSTNAME, {
+        signal,
+        lookup(hostname, options, callback) {
+          assert.equal(hostname, HOSTNAME)
+          assert.deepEqual(options, { all: true, verbatim: true })
+          callback(null, PUBLIC_ANSWERS)
+        },
+      }),
+      new Promise((resolve) => {
+        watchdog = setTimeout(() => resolve('watchdog'), 100)
+      }),
+    ])
+    assert.notEqual(resolved, 'watchdog')
+    assert.equal(resolved.answer_count, PUBLIC_ANSWERS.length)
+  } finally {
+    clearTimeout(watchdog)
+  }
+  assert.equal(removeCalls, 1)
+})
+
+test('DNS listener setup failure removes a possibly retained binding before lookup', async () => {
+  let retainedListener
+  let removeCalls = 0
+  let lookupCalls = 0
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener, options) {
+      assert.equal(type, 'abort')
+      assert.deepEqual(options, { once: true })
+      retainedListener = listener
+      throw new Error('synthetic DNS listener setup failure')
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      assert.equal(listener, retainedListener)
+      removeCalls += 1
+    },
+  }
+
+  await assert.rejects(
+    resolveHttpReconDns(HOSTNAME, {
+      signal,
+      lookup() {
+        lookupCalls += 1
+      },
+    }),
+    /synthetic DNS listener setup failure/,
+  )
+  assert.equal(removeCalls, 1)
+  assert.equal(lookupCalls, 0)
+})
+
 test('TLS hostname and SPKI failures occur before the request is sent', async () => {
   const badPin = createHarness()
   await assert.rejects(
@@ -645,6 +717,7 @@ test('stop signals and timeouts destroy an in-flight sent request', async () => 
     },
     clearTimeout(handle) {
       assert.equal(handle, 7)
+      throw new Error('synthetic recon timeout cleanup failure')
     },
   }
   const timedOut = probeHttps(baseOptions(timeoutHarness))
@@ -656,6 +729,115 @@ test('stop signals and timeouts destroy an in-flight sent request', async () => 
     return true
   })
   assert.equal(timeoutHarness.request.destroyed, true)
+})
+
+test('recon timer setup failure removes its stop listener before network I/O', async () => {
+  const harness = createHarness()
+  let added = 0
+  let removed = 0
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener, options) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      assert.deepEqual(options, { once: true })
+      added += 1
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      removed += 1
+      throw new Error('synthetic recon listener removal failure')
+    },
+  }
+  harness.dependencies.clock = {
+    now: () => 0,
+    setTimeout() { throw new Error('synthetic recon timer setup failure') },
+    clearTimeout() { assert.fail('an uncreated recon timer cannot be cleared') },
+  }
+
+  await assert.rejects(
+    probeHttps(baseOptions(harness, { signal })),
+    /synthetic recon timer setup failure/,
+  )
+  assert.equal(harness.dnsCalls, 0)
+  assert.equal(harness.httpsCalls, 0)
+  assert.equal(added, 1)
+  assert.equal(removed, 1)
+})
+
+test('recon listener setup failure removes a possibly retained binding before network I/O', async () => {
+  const harness = createHarness()
+  let retainedListener
+  let removeCalls = 0
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener, options) {
+      assert.equal(type, 'abort')
+      assert.deepEqual(options, { once: true })
+      retainedListener = listener
+      throw new Error('synthetic recon listener setup failure')
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      assert.equal(listener, retainedListener)
+      removeCalls += 1
+    },
+  }
+
+  await assert.rejects(
+    probeHttps(baseOptions(harness, { signal })),
+    /synthetic recon listener setup failure/,
+  )
+  assert.equal(removeCalls, 1)
+  assert.equal(harness.dnsCalls, 0)
+  assert.equal(harness.httpsCalls, 0)
+})
+
+test('recon listener cleanup cannot overturn a successful request', async () => {
+  const harness = createHarness({ status: 204, chunks: [] })
+  let removeCalls = 0
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener, options) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      assert.deepEqual(options, { once: true })
+    },
+    removeEventListener(type, listener) {
+      assert.equal(type, 'abort')
+      assert.equal(typeof listener, 'function')
+      removeCalls += 1
+      throw new Error('synthetic recon listener removal failure')
+    },
+  }
+
+  const result = await probeHttps(baseOptions(harness, { signal }))
+  assert.equal(result.status, 204)
+  assert.equal(removeCalls, 1)
+})
+
+test('recon timer cleanup failure cannot overturn a settled response', async () => {
+  const harness = createHarness({ status: 204, chunks: [] })
+  let clearTimerCalls = 0
+  harness.dependencies.clock = {
+    value: 0,
+    now() {
+      this.value += 1
+      return this.value
+    },
+    setTimeout: () => 81,
+    clearTimeout(handle) {
+      assert.equal(handle, 81)
+      clearTimerCalls += 1
+      throw new Error('synthetic recon settled cleanup failure')
+    },
+  }
+
+  const result = await probeHttps(baseOptions(harness))
+  assert.equal(result.status, 204)
+  assert.equal(result.body.size, 0)
+  assert.equal(clearTimerCalls, 1)
 })
 
 test('transformed responses are rejected without decompression', async () => {

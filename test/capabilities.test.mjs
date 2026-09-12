@@ -25,7 +25,7 @@ test('release declarations distinguish integration, lifecycle, semantics, and un
   assert.match(byId.get('t2-service-proof').limitation, /UNPROVEN.*semantic oracle/)
   assert.equal(byId.get('semantic-oracle').status, 'UNAVAILABLE')
   assert.equal(byId.get('browser-execution').status, 'AVAILABLE_NARROW')
-  assert.deepEqual(byId.get('browser-execution').commands, ['http-authed campaign-attested'])
+  assert.deepEqual(byId.get('browser-execution').commands, ['last-aperture http-authed campaign-attested'])
   assert.match(byId.get('browser-execution').limitation, /selected tab.*does not automate navigation or login/i)
   for (const id of ['database-stack-execution', 'multi-runtime-execution', 'deployed-evidence-acquisition', 'generic-live']) {
     assert.equal(byId.get(id).status, 'UNAVAILABLE')

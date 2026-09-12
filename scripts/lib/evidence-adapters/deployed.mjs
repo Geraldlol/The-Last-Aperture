@@ -1,9 +1,13 @@
 import { redactToMetadata } from '../evidence-phi.mjs'
 import { buildReadOnlyCommand } from '../evidence-readonly-allowlist.mjs'
+import { validateCliLimits } from '../evidence-cli-runner.mjs'
 import {
   assertLivePlanAuthorization,
+  assertLiveExecutionProfile,
+  liveExecutionProfile,
   probeRequiredClis,
   requiredCli,
+  resolverForProbedDependencies,
   runLiveAcquisition,
 } from './live-acquisition.mjs'
 
@@ -28,6 +32,7 @@ export function createDeployedAdapter({
   resolver,
   limits = {},
 } = {}) {
+  const effectiveLimits = validateCliLimits(limits)
   return {
     describe: () => ({
       adapter_id: 'deployed',
@@ -48,7 +53,7 @@ export function createDeployedAdapter({
       }))
       if (operations.length === 0) throw new Error('at least one read-only operation is required')
 
-      await probeRequiredClis(operations, { env, resolver, label: 'deployed-state' })
+      const dependencies = await probeRequiredClis(operations, { env, resolver, label: 'deployed-state' })
 
       return {
         plan_id: `deployed:${request.context}:${operations.length}`,
@@ -83,18 +88,39 @@ export function createDeployedAdapter({
         target_class: request.target_class,
         phi_scope: phi.scope,
         dependency: { name: requiredCli(operations).join('|'), present: true, version: null },
+        execution_profile: liveExecutionProfile({
+          adapterId: 'deployed',
+          adapterVersion: ADAPTER_VERSION,
+          operations,
+          dependencies,
+          limits: effectiveLimits,
+        }),
       }
     },
 
-    run: async (planned, { out, shouldStop }) => runLiveAcquisition({
-      planned,
-      out,
-      env,
-      resolver,
-      limits,
-      adapterVersion: ADAPTER_VERSION,
-      shouldStop,
-      capture: (operation, result, phiPolicy, prefix) => {
+    run: async (planned, { out, shouldStop }) => {
+      const dependencies = await probeRequiredClis(planned.operations, {
+        env,
+        resolver,
+        label: 'deployed-state',
+      })
+      assertLiveExecutionProfile(planned, liveExecutionProfile({
+        adapterId: 'deployed',
+        adapterVersion: ADAPTER_VERSION,
+        operations: planned.operations,
+        dependencies,
+        limits: effectiveLimits,
+      }))
+      return runLiveAcquisition({
+        planned,
+        out,
+        env,
+        resolver: resolverForProbedDependencies(dependencies),
+        limits,
+        adapterVersion: ADAPTER_VERSION,
+        observeCollectionObjects: true,
+        shouldStop,
+        capture: (operation, result, phiPolicy, prefix) => {
         let parsed
         try {
           parsed = JSON.parse(result.stdout.toString('utf8'))
@@ -107,7 +133,13 @@ export function createDeployedAdapter({
             }],
           }
         }
-        const objects = Array.isArray(parsed?.items) ? parsed.items : [parsed]
+        const objects = Array.isArray(parsed?.items)
+          ? parsed.items
+          : Array.isArray(parsed?.records)
+            ? parsed.records
+            : Array.isArray(parsed?.result?.records)
+              ? parsed.result.records
+              : [parsed]
         return {
           acquired: objects.length,
           payload: objects.map((object, index) => ({
@@ -119,7 +151,8 @@ export function createDeployedAdapter({
             ), 'utf8'),
           })),
         }
-      },
-    }),
+        },
+      })
+    },
   }
 }
