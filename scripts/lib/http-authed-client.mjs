@@ -54,17 +54,50 @@ function eraseBytes(value) {
   }
 }
 
-function exactBytes(value, label, maxBytes, { minimum = 1 } = {}) {
+function copyToOwnedBuffer(value) {
+  let temporarySource
+  let bytes
+  let copied = false
+  try {
+    const source = typeof value === 'string'
+      ? (temporarySource = Buffer.from(value))
+      : value
+    const storage = new ArrayBuffer(source.byteLength)
+    bytes = Buffer.from(storage)
+    bytes.set(source)
+    copied = true
+    return bytes
+  } finally {
+    eraseBytes(temporarySource)
+    if (!copied) eraseBytes(bytes)
+  }
+}
+
+function exactBytes(value, label, maxBytes, {
+  minimum = 1,
+  dedicated = false,
+} = {}) {
   if (!(typeof value === 'string' || Buffer.isBuffer(value) || value instanceof Uint8Array)) {
     throw clientError('HTTP_AUTHED_BYTES_REQUIRED', `${label} must be supplied as bytes`)
   }
-  const bytes = Buffer.from(value)
-  if (bytes.length < minimum || bytes.length > maxBytes) {
+  const expectedByteLength = typeof value === 'string'
+    ? Buffer.byteLength(value)
+    : value.byteLength
+  const invalidLength = () => clientError(
+    'HTTP_AUTHED_BYTES_INVALID',
+    `${label} must contain ${minimum} to ${maxBytes} bytes`,
+  )
+  if (
+    !Number.isSafeInteger(expectedByteLength)
+    || expectedByteLength < minimum
+    || expectedByteLength > maxBytes
+  ) {
+    throw invalidLength()
+  }
+  const bytes = dedicated ? copyToOwnedBuffer(value) : Buffer.from(value)
+  if (bytes.length !== expectedByteLength) {
     eraseBytes(bytes)
-    throw clientError(
-      'HTTP_AUTHED_BYTES_INVALID',
-      `${label} must contain ${minimum} to ${maxBytes} bytes`,
-    )
+    throw invalidLength()
   }
   return bytes
 }
@@ -101,7 +134,7 @@ function requestBody(action, supplied) {
     supplied,
     'synthetic request body',
     16 * 1024 * 1024,
-    { minimum: 0 },
+    { minimum: 0, dedicated: true },
   )
   if (bytes.length !== metadata.byte_length || sha256Hex(bytes) !== metadata.sha256) {
     eraseBytes(bytes)
@@ -262,7 +295,7 @@ function validateTransportRequest({
       'authenticated probe response observer is invalid',
     )
   }
-  return { parsed, body: body === null ? null : Buffer.from(body) }
+  return { parsed, body: body === null ? null : copyToOwnedBuffer(body) }
 }
 
 export function createHttpAuthedHttpsTransport({

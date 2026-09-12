@@ -453,6 +453,33 @@ test('credential and synthetic body bytes must match their sealed bindings', asy
   assert.doesNotMatch(JSON.stringify(result), /SYNTHETIC_ACTIVE_PROBE_BODY_0001|synthetic-credential/)
 })
 
+test('oversized credential bytes are rejected before any private copy is allocated', async (t) => {
+  const supplied = Buffer.alloc((64 * 1024) + 1, 0x64)
+  const { scope, candidate } = campaign({ method: 'GET' })
+  scope.credential.binding_sha256 = sha256Hex(supplied)
+  const expectedCampaignGrantSha256 = verifyHttpAuthedAuthorization({ scope, now: NOW })
+    .campaignGrantSha256
+  const originalFrom = Buffer.from
+  let suppliedCopies = 0
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    if (value === supplied) suppliedCopies += 1
+    return originalFrom.call(Buffer, value, ...args)
+  })
+  let calls = 0
+  await assert.rejects(dispatchHttpAuthedProbe({
+    scope,
+    action: candidate,
+    expectedCampaignGrantSha256,
+    credentialValue: supplied,
+    now: NOW,
+    beforeSend: VERIFY_BEFORE_SEND,
+    transport: async () => { calls += 1 },
+  }), { code: 'HTTP_AUTHED_BYTES_INVALID' })
+  assert.equal(calls, 0)
+  assert.equal(suppliedCopies, 0)
+  assert.equal(supplied.every((byte) => byte === 0x64), true)
+})
+
 test('a rejected probe body erases its preflight copy before transport dispatch', async (t) => {
   const supplied = Buffer.from('synthetic-mismatched-body')
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
@@ -469,7 +496,10 @@ test('a rejected probe body erases its preflight copy before transport dispatch'
   const originalFrom = Buffer.from
   t.mock.method(Buffer, 'from', function (value, ...args) {
     const copy = originalFrom.call(Buffer, value, ...args)
-    if (value === supplied || value === CREDENTIAL) copies.push(copy)
+    if (
+      value === CREDENTIAL
+      || (value instanceof ArrayBuffer && value.byteLength === supplied.byteLength)
+    ) copies.push(copy)
     return copy
   })
   let calls = 0
@@ -483,6 +513,51 @@ test('a rejected probe body erases its preflight copy before transport dispatch'
     beforeSend: VERIFY_BEFORE_SEND,
     transport: async () => { calls += 1 },
   }), { code: 'HTTP_AUTHED_BODY_BINDING_MISMATCH' })
+  assert.equal(calls, 0)
+  assert.equal(copies.length, 2)
+  assert.equal(copies.every((copy) => copy.every((byte) => byte === 0)), true)
+})
+
+test('a failed dedicated string body copy erases its temporary source and partial destination', async (t) => {
+  const supplied = 'synthetic-partial-body-copy'
+  const expectedBytes = Buffer.from(supplied)
+  const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
+    method: 'POST',
+    action: { request_body: {
+      body_id: 'SYNTHETIC_ACTIVE_PROBE_BODY_0001',
+      sha256: sha256Hex(expectedBytes),
+      byte_length: expectedBytes.byteLength,
+      content_type: 'application/json',
+      data_class: 'synthetic_non_phi',
+    } },
+  })
+  const copies = []
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const copy = originalFrom.call(Buffer, value, ...args)
+    if (value === supplied) copies.push(copy)
+    if (value instanceof ArrayBuffer && value.byteLength === expectedBytes.byteLength) {
+      copies.push(copy)
+      Object.defineProperty(copy, 'set', {
+        value(source) {
+          Reflect.apply(Uint8Array.prototype.set, this, [source.subarray(0, 7)])
+          throw new Error('synthetic partial owned-copy failure')
+        },
+      })
+    }
+    return copy
+  })
+  let calls = 0
+  await assert.rejects(dispatchHttpAuthedProbe({
+    scope,
+    action: candidate,
+    expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    requestBodyBytes: supplied,
+    now: NOW,
+    beforeSend: VERIFY_BEFORE_SEND,
+    transport: async () => { calls += 1 },
+  }), /synthetic partial owned-copy failure/)
   assert.equal(calls, 0)
   assert.equal(copies.length, 2)
   assert.equal(copies.every((copy) => copy.every((byte) => byte === 0)), true)
@@ -654,7 +729,7 @@ test('protected HTTPS transport erases its private body copy when timer setup or
   const originalFrom = Buffer.from
   t.mock.method(Buffer, 'from', function (value, ...args) {
     const copy = originalFrom.call(Buffer, value, ...args)
-    if (value === supplied) copies.push(copy)
+    if (value instanceof ArrayBuffer && value.byteLength === supplied.byteLength) copies.push(copy)
     return copy
   })
   const input = {
@@ -968,6 +1043,7 @@ test('protected HTTPS transport settles when an observer transfers its body copy
 
 test('protected HTTPS transport preserves success when request.end detaches its private body', async () => {
   const certificate = new X509Certificate(REFERENCE_TLS_CERTIFICATE).toLegacyObject()
+  const suppliedBody = Buffer.alloc(257, 0x62)
   const dnsLookup = (_hostname, _options, callback) => queueMicrotask(() => callback(null, [
     { address: '93.184.216.34', family: 4 },
   ]))
@@ -977,7 +1053,10 @@ test('protected HTTPS transport preserves success when request.end detaches its 
     request.destroy = () => { request.destroyed = true }
     request.end = (body) => {
       sentBytes = body.byteLength
-      structuredClone(body, { transfer: [body.buffer] })
+      assert.equal(body.byteOffset, 0)
+      assert.equal(body.buffer.byteLength, body.byteLength)
+      structuredClone(body.buffer, { transfer: [body.buffer] })
+      assert.equal(body.byteLength, 0)
       const response = new EventEmitter()
       response.statusCode = 204
       response.rawHeaders = ['ETag', 'synthetic']
@@ -1012,13 +1091,14 @@ test('protected HTTPS transport preserves success when request.end detaches its 
     url: 'https://reference-log.example.test/detached-request-body',
     method: 'POST',
     headers: { 'content-type': 'application/octet-stream' },
-    body: Buffer.alloc(16 * 1024, 0x62),
+    body: suppliedBody,
     timeoutMs: 5_000,
     maxResponseBytes: 1024,
     tls: { mode: 'PKIX_HOSTNAME' },
     beforeSend: async () => {},
   })
-  assert.equal(sentBytes, 16 * 1024)
+  assert.equal(sentBytes, 257)
+  assert.equal(suppliedBody.every((byte) => byte === 0x62), true)
   assert.deepEqual(result, {
     status: 204,
     responseBytes: 0,
@@ -1027,7 +1107,7 @@ test('protected HTTPS transport preserves success when request.end detaches its 
 })
 
 test('probe dispatch preserves success when an injected transport detaches the request body', async () => {
-  const body = Buffer.alloc(16 * 1024, 0x63)
+  const body = Buffer.alloc(257, 0x63)
   const { scope, candidate, expectedCampaignGrantSha256 } = campaign({
     method: 'POST',
     action: {
@@ -1049,11 +1129,15 @@ test('probe dispatch preserves success when an injected transport detaches the r
     now: NOW,
     beforeSend: VERIFY_BEFORE_SEND,
     transport: async (request) => {
-      structuredClone(request.body, { transfer: [request.body.buffer] })
+      assert.equal(request.body.byteOffset, 0)
+      assert.equal(request.body.buffer.byteLength, request.body.byteLength)
+      structuredClone(request.body.buffer, { transfer: [request.body.buffer] })
+      assert.equal(request.body.byteLength, 0)
       return { status: 204, responseBytes: 0, responseHeaderNames: [] }
     },
   })
   assert.equal(result.response.status, 204)
+  assert.equal(body.every((byte) => byte === 0x63), true)
 })
 
 test('bounded observation cleanup ignores an overridden callback-visible byte fill', async () => {

@@ -250,6 +250,7 @@ test('Ghidra JDK and compatibility-agent prerequisites apply only to Windows bat
   const fileSystem = await fakeRuntimes(root)
   const batch = join(root, 'tools/analyzeHeadless.bat')
   const native = join(root, 'tools/frida.exe')
+  if (process.platform !== 'win32') await fs.chmod(batch, 0o755)
 
   const windowsBatch = await inspectReadiness({ projectRoot: root, platform: 'win32', fileSystem, toolPaths: { ghidra: batch } })
   assert.deepEqual(
@@ -259,9 +260,12 @@ test('Ghidra JDK and compatibility-agent prerequisites apply only to Windows bat
 
   for (const [platform, ghidra] of [['win32', native], ['linux', batch], ['darwin', batch]]) {
     const report = await inspectReadiness({ projectRoot: root, platform, fileSystem, toolPaths: { ghidra } })
+    assert.equal(find(report, 'ghidra-executable').status, 'PASS', `${platform}:${ghidra}:executable`)
     assert.equal(report.workflows.find((item) => item.id === 'ghidra-static-reverse').status, 'STATIC_CHECKS_PASSED', `${platform}:${ghidra}`)
     assert.equal(find(report, 'jdk-javac-executable').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:javac`)
     assert.equal(find(report, 'jdk-jar-executable').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:jar`)
+    assert.equal(find(report, 'ghidra-windows-agent-source').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:agent-source`)
+    assert.equal(find(report, 'ghidra-windows-agent-manifest').status, 'NOT_APPLICABLE', `${platform}:${ghidra}:agent-manifest`)
   }
 })
 

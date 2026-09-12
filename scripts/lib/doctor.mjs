@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { basename, dirname, extname, isAbsolute, join, parse, relative, resolve, win32 } from 'node:path'
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, win32 } from 'node:path'
 
 import { capabilityRegistry } from './capabilities.mjs'
 import { compareCanonicalStrings } from './canonical-order.mjs'
@@ -331,7 +331,7 @@ export async function inspectReadiness({
   const runtimes = controllerRuntimePaths(platform)
   const windowsBatchGhidra = platform === 'win32'
     && tools.ghidra !== undefined
-    && ['.bat', '.cmd'].includes(extname(tools.ghidra).toLowerCase())
+    && ['.bat', '.cmd'].includes(win32.extname(tools.ghidra).toLowerCase())
   const checks = []
   const version = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(nodeVersion)
   checks.push(check('node-runtime', version && Number(version[1]) >= 20 ? 'PASS' : 'BLOCKED',
