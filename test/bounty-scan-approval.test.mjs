@@ -359,7 +359,29 @@ test('passive-only analysis is operator-authorization-free and performs zero net
   await assert.rejects(() => access(join(directory, 'scan-ledger')))
 })
 
-test('live scan preserves the mutation proof and cleanup boundary before target I/O', async (t) => {
+test('passive-only analysis accepts captured state-changing requests without network I/O', async (t) => {
+  const directory = await workspace(t)
+  const stateChanging = request()
+  stateChanging.method = 'POST'
+  let sends = 0
+
+  const summary = await runScan({
+    bundlePath: directory,
+    requests: [stateChanging],
+    registry: REGISTRY,
+    now: NOW,
+    classes: ['passive'],
+    fetchImpl: async () => { sends += 1; return fakeResponse() },
+    sleep: async () => {},
+    clock: () => 0,
+  })
+
+  assert.equal(sends, 0)
+  assert.equal(summary.adversarialValidation, null)
+  assert.equal(summary.passive.status, 'NOTHING_OBSERVED')
+})
+
+test('crafted scans still refuse captured state-changing requests before target I/O', async (t) => {
   const directory = await workspace(t, scope({ mutation: true }))
   const stateChanging = request()
   stateChanging.method = 'POST'
@@ -371,7 +393,7 @@ test('live scan preserves the mutation proof and cleanup boundary before target 
       requests: [stateChanging],
       registry: REGISTRY,
       now: NOW,
-      classes: ['passive'],
+      classes: ['error-injection'],
       fetchImpl: async () => { sends += 1; return fakeResponse() },
       sleep: async () => {},
       clock: () => 0,
