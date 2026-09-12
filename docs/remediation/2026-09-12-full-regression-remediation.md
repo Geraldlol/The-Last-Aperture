@@ -10,7 +10,8 @@ Repair every reproducible correctness, durability, security, packaging, CI, and 
 
 - Repository: `C:\Users\geral\Red Team\last-aperture`
 - Branch: `fix/full-regression-remediation`
-- Base: `1fa73692e9b86cb30e11ebfd7d49f943da1eaf63`
+- Original remediation base: `1fa73692e9b86cb30e11ebfd7d49f943da1eaf63`
+- Rebased release base: `594e50f` (`origin/main`, license-owner update)
 - Base PR: `#8`
 - Review source reconciled: `C:\Users\geral\.codex\attachments\4e191ac4-a3dc-47bc-9023-39ca5a1edad2\pasted-text.txt`
 - Review source SHA-256: `3ff3f1a0255b0fab871f20ca3d996db9357f78e516257a26b8b089feb3c887de`
@@ -272,7 +273,7 @@ These defects were reproduced against the remediation working tree. They are rel
 | PKG-R2 | VERIFIED | Packaging the live remediation ledger would make the release artifact describe and eventually digest itself. | `package.json`, `.npmignore` | The remediation directory is excluded from the npm archive while the public changelog and release documentation remain present. |
 | PKG-R3 | VERIFIED | The shipped package needed an exact target-neutral residue check rather than relying on repository-wide historical material. | `scripts/scan-residue.mjs`, package inventory | The independently byte-scanned package contains zero configured customer, tenant, or product residue terms; historical planning material is excluded from the archive. |
 | PKG-R4 | VERIFIED | A shipped synthetic test fixture retained the local workstation user name in an absolute Windows path. | `test/existence-ingest.test.mjs` | The fixture now uses a generic operator path; its focused regression passes and the rebuilt package byte scan contains no local workstation path or user identity. |
-| REL-01 | OPEN | Bump the package version and build a uniquely named uploadable artifact after all fixes. | `package.json`, version module, release artifact | Pack/verify, contents, size, SHA-256. |
+| REL-01 | VERIFIED | Bump the package version and build a uniquely named uploadable artifact after all fixes. | `package.json`, version module, release artifact | `last-aperture-0.14.1.tgz` contains 817 files and 3,588,153 packed bytes; SHA-256 `86822c6828461a17a3ba554ac3f77f4966a5184cc6c4458f210e7617f21eba05`. A clean registry-backed install resolves every exact direct pin, exposes the installed root CLI, and passes capabilities/doctor smoke checks. |
 | REL-02 | VERIFIED | Public protocol, ADR, and browser-security pages still labeled 0.13.0 as the current platform after the 0.14.1 bump, and the historical test-execution proposal contradicted the current narrow T1/T2 routes. | Current protocol, active-route, and packaged-companion labels now name 0.14.1; the superseded proposal records its 0.13 state as historical and points to the current narrow proof status. Release wiring binds the companion claim to the release version; Independent Node 24.13.0 and portable Node 20.20.2 post-fix review verifies this row. |
 | INST-01 | VERIFIED | Ensure the Codex and Claude skill installations resolve to the repaired package without duplicate skill discovery. | local skill links/layout | Both junctions target only `skills/last-aperture`, expose one `SKILL.md`, hash-match the working tree, and resolve the controller root. |
 | RUN-01 | VERIFIED | Execute a real Ghidra headless analysis through Last Aperture. | local Ghidra 12.1.2 | Completed with 106 observations against a copied Windows binary. |
@@ -331,6 +332,7 @@ These defects were reproduced against the remediation working tree. They are rel
 | 2026-09-12 final local gate | Full supported Node 20 suite | pinned portable Node 20.20.2 `--test`; evidence `C:\Users\geral\Red Team\scratchpad\last-aperture-final-node20-0.14.1.log`, SHA-256 `56b74ac393635a1f258db9259e4ad119d1dc62be45f6465a6476236cf3d6d726` | PASS: 3,232 tests; 3,203 passed; zero failures or cancellations; 29 expected runtime/platform skips. |
 | 2026-09-12 final local gate | Static, conformance, dependency, and release checks | lint; all three generator checks; Python bounty conformance; offline npm audit; five release/provenance suites; 91 changed JavaScript syntax checks; `git diff --check` | PASS: 22 lenses/243 slugs; 84 benchmark cases; capability docs in sync; Python 38/38; audit v2 reports zero vulnerabilities across nine dependencies; release/provenance 30/30; syntax and diff clean. Audit evidence SHA-256 `f2df6f749196936a9ac24a9dee8c3bcc3a8301ad2368644c44b09c77bda3a81e`. |
 | 2026-09-12 final local gate | Rebuilt package content and target-neutral byte scan | actual `npm pack`, clean extraction, inventory scan, configured residue scan, local-identity scan; generic-path focused tests on Node 24 and Node 20 | PASS: 817 files, 3,588,148 packed bytes, 14,052,489 unpacked bytes; zero excluded cache/history/remediation entries, target-specific residue terms, or local workstation identities; generic-path focused matrix 20/20 on each runtime. |
+| 2026-09-12 release candidate | Rebased artifact and clean install | `C:\Users\geral\Red Team\release-artifacts\last-aperture-0.14.1\last-aperture-0.14.1.tgz`; SHA-256 sidecar; clean registry-backed install under `scratchpad`; installed root help, capabilities, doctor, dependency and asset inventory | PASS: final artifact has 817 files, 3,588,153 packed bytes, and SHA-256 `86822c6828461a17a3ba554ac3f77f4966a5184cc6c4458f210e7617f21eba05`; extracted byte scan finds no configured target residue or local identity; exact direct pins are `acorn@8.15.0`, `ajv@8.20.0`, `fast-check@4.9.0`, and `yaml@2.9.0`; installed package is v0.14.1 and every required runtime asset is present. |
 
 ## Completion checklist
 
@@ -340,6 +342,6 @@ These defects were reproduced against the remediation working tree. They are rel
 - [x] Lint, generated-file checks, Python conformance, and dependency audit pass.
 - [ ] GitHub pull-request checks run and pass.
 - [x] Version is unique and consistent in source and package metadata.
-- [ ] Uploadable package is built and its SHA-256 is recorded.
+- [x] Uploadable package is built and its SHA-256 is recorded.
 - [ ] Codex and Claude installations resolve to the final committed tree.
 - [ ] Commits are pushed and the reviewed pull request is merged.
