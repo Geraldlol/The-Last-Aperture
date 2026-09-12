@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { runAuthzMatrix } from '../scripts/lib/bounty-authz-controller.mjs'
+import { importAuthzRequests, loadAuthzRequests, runAuthzMatrix } from '../scripts/lib/bounty-authz-controller.mjs'
 import { normalizeCapturedRequest } from '../scripts/lib/bounty-authz-request.mjs'
 import { TESTBED_TOKENS, startAuthzTestbed } from './fixtures/authz-testbed.mjs'
 
@@ -86,6 +86,56 @@ async function grind(paths) {
 function verdictFor(findings, path, role) {
   return findings.results.find((r) => r.url.endsWith(path) && r.tester_role === role)?.verdict
 }
+
+test('HAR import never persists query, header, or structured-body credentials', async () => {
+  const dir = await workspace()
+  const harPath = join(dir, 'capture.har')
+  await writeFile(harPath, JSON.stringify({ log: { entries: [{ request: {
+    method: 'POST',
+    url: 'https://api.acme.example/login?access_token=query-secret',
+    headers: [
+      { name: 'Authorization', value: 'Bearer header-secret' },
+      { name: 'Content-Type', value: 'application/json' },
+    ],
+    postData: { text: JSON.stringify({ password: 'body-secret', csrfToken: 'csrf-secret' }) },
+  } }] } }), 'utf8')
+  try {
+    await importAuthzRequests({ bundlePath: dir, harPath, ownerRole: 'alice' })
+    const persisted = await readFile(join(dir, 'authz-requests.json'), 'utf8')
+    assert.doesNotMatch(persisted, /query-secret|header-secret|body-secret|csrf-secret/)
+    assert.match(persisted, /<redacted>|%3Credacted%3E/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('legacy persisted requests are sanitized when loaded', async () => {
+  const dir = await workspace()
+  await writeFile(join(dir, 'authz-requests.json'), JSON.stringify({
+    schema_version: '1.0.0',
+    requests: [{
+      request_id: 'legacy',
+      method: 'POST',
+      url: 'https://api.acme.example/login?access_token=legacy-query-secret',
+      headers: {
+        'content-type': 'application/json',
+        'x-access-token': 'legacy-header-secret',
+      },
+      body: '{"password":"legacy-body-secret"}',
+      owner_role: 'alice',
+    }],
+  }), 'utf8')
+  try {
+    const loaded = await loadAuthzRequests(dir)
+    const serialized = JSON.stringify(loaded)
+    assert.doesNotMatch(serialized, /legacy-(?:query|header|body)-secret/)
+    assert.deepEqual(loaded[0].redacted_headers, ['x-access-token'])
+    assert.deepEqual(loaded[0].redacted_query_parameters, ['access_token'])
+    assert.deepEqual(loaded[0].redacted_body_fields, ['password'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
 
 test('finds the planted bypass on the unowned order', async () => {
   const { findings } = await grind(['/api/orders/2'])

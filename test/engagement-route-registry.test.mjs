@@ -11,20 +11,38 @@ import {
 
 const EXPECTED_ROUTE_IDS = [
   'repository-audit',
+  'repository-t1-proof',
+  'repository-t2-service-proof',
   'https-recon',
   'authenticated-http-browser',
+  'adversarial-validation',
+  'bounty-perimeter',
+  'bounty-recon',
+  'bounty-authorization',
+  'bounty-scan',
+  'bounty-oob',
+  'bounty-proxy',
   'web-live-metadata-import',
   'web-capture-har-import',
   'web-capture-burp-import',
   'ghidra-analysis',
   'frida-trace',
+  'evidence-artifact-acquisition',
+  'evidence-registry-acquisition',
+  'evidence-deployed-acquisition',
+  'evidence-runtime-acquisition',
+  'evidence-bundle-import',
   'protocol-build',
   'connector-generate',
   'connector-verify',
+  'provider-execution',
+  'remote-provider-execution',
+  'transparency-publication',
+  'database-conformance',
 ]
 
 test('registry is a deterministic target-neutral DAG with complete route metadata', () => {
-  assert.equal(ENGAGEMENT_ROUTE_REGISTRY_VERSION, '1.3.0')
+  assert.equal(ENGAGEMENT_ROUTE_REGISTRY_VERSION, '2.0.0')
   assert.deepEqual(ENGAGEMENT_ROUTE_REGISTRY.map((route) => route.id), EXPECTED_ROUTE_IDS)
   assert.deepEqual(
     ENGAGEMENT_ROUTE_REGISTRY.map((route) => route.order),
@@ -43,9 +61,17 @@ test('registry is a deterministic target-neutral DAG with complete route metadat
     assert.equal(Array.isArray(route.applicability.target_kinds), true)
     assert.equal(Array.isArray(route.required_material), true)
     assert.equal(typeof route.recovery_mode, 'string')
-    assert.equal(typeof route.invocation.public_entrypoint, 'string')
-    assert.equal(Array.isArray(route.invocation.argument_vector), true)
-    assert.equal(route.invocation.shell, false)
+    assert.equal(typeof route.capability_id, 'string')
+    assert.ok(['AVAILABLE', 'UNAVAILABLE'].includes(route.availability.status))
+    if (route.availability.status === 'AVAILABLE') {
+      assert.equal(route.availability.reason_code, null)
+      assert.equal(typeof route.invocation.public_entrypoint, 'string')
+      assert.equal(Array.isArray(route.invocation.argument_vector), true)
+      assert.equal(route.invocation.shell, false)
+    } else {
+      assert.match(route.availability.reason_code, /^[A-Z][A-Z0-9_]+$/)
+      assert.equal(route.invocation, null)
+    }
     for (const dependency of route.dependencies) {
       assert.equal(byId.has(dependency), true, `${route.id} has an unknown dependency`)
       assert.equal(byId.get(dependency).order < route.order, true, `${route.id} is not topological`)
@@ -187,7 +213,15 @@ test('builders return fixed shell-free argument vectors for every public route w
     }],
   ])
 
-  for (const routeId of EXPECTED_ROUTE_IDS) {
+  assert.deepEqual(
+    [...fixtures.keys()],
+    ENGAGEMENT_ROUTE_REGISTRY
+      .filter(({ availability }) => availability.status === 'AVAILABLE')
+      .map(({ id }) => id),
+    'every available route must have a public fixed-vector builder regression',
+  )
+
+  for (const routeId of fixtures.keys()) {
     const invocation = buildEngagementRouteInvocation(routeId, fixtures.get(routeId))
     assert.equal(typeof invocation.public_entrypoint, 'string')
     assert.equal(Array.isArray(invocation.arguments), true)
@@ -231,7 +265,11 @@ test('builders return fixed shell-free argument vectors for every public route w
     (error) => error?.code === 'ENGAGEMENT_ROUTE_MATERIAL_REQUIRED',
   )
 
-  for (const targetPathPrefix of ['app', '//other.example/app', '/app/../admin', '/app?query=1', '/app%2fadmin']) {
+  for (const targetPathPrefix of [
+    'app', '//other.example/app', '/app/../admin', '/app?query=1', '/app%2fadmin',
+    '/app/%252e%252e%252fadmin', '/app/%25252e%25252e%25252fadmin',
+    '/app/%25%32%65%25%32%65%25%32%66admin',
+  ]) {
     assert.throws(
       () => buildEngagementRouteInvocation('web-capture-har-import', {
         ...fixtures.get('web-capture-har-import'),

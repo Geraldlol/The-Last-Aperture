@@ -109,10 +109,11 @@ function canonicalValueDigest(value) {
   return sha256Hex(Buffer.from(canonicalJson(value), 'utf8'))
 }
 
-async function interruptedMutation(t, suffix) {
+async function interruptedMutation(t, suffix, configureScope) {
   const state = await campaign(t, suffix, {
     configureScope(scope) {
       scope.validity.cleanup_not_after = '2026-08-16T12:10:00.000Z'
+      configureScope?.(scope)
     },
   })
   await state.ledger.enqueueCandidate({
@@ -179,6 +180,146 @@ async function interruptedMutation(t, suffix) {
   await state.ledger.stopCampaign('INTERRUPTED_MUTATION_CLEANUP_REQUIRED')
   return { state, lease }
 }
+
+test('mutation cleanup minimum interval survives ledger close and reopen', async (t) => {
+  const { state, lease } = await interruptedMutation(t, 'recovery-rate-reopen', (scope) => {
+    scope.limits.min_interval_ms = 1_000
+  })
+  const directory = state.ledger.directory
+  await state.ledger.close()
+  const reopened = await openHttpAuthedCampaignLedger({
+    directory,
+    campaignGrantSha256: state.expectedCampaignGrantSha256,
+    authorizationBindingSha256: state.ledger.authorizationBindingSha256,
+    authorizationMode: state.ledger.authorizationMode,
+    independentlyVerified: state.ledger.independentlyVerified,
+    operatorId: OPERATOR_ID,
+    initialize: false,
+    now: () => NOW,
+  })
+  const waits = []
+  const responseBodies = []
+  const requestCopies = []
+  const credentialCopies = []
+  const result = await recoverDeclaredHttpAuthedMutation({
+    ledger: reopened,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    wait: async (milliseconds) => { waits.push(milliseconds) },
+    verifyObservation: observationVerifier(),
+    transport: async (request) => {
+      if (request.body !== null) requestCopies.push(request.body)
+      if (request.credentialValue !== undefined) credentialCopies.push(request.credentialValue)
+      await request.beforeSend()
+      const body = Buffer.from(`recovery-${request.phase}`)
+      responseBodies.push(body)
+      return {
+        status: 200,
+        responseBytes: body.length,
+        responseHeaderNames: [],
+        body,
+      }
+    },
+  })
+  await reopened.close()
+  assert.equal(result.outcome, 'ROLLBACK_RECOVERED_CONTEXT_UNVERIFIED')
+  assert.deepEqual(waits, [1_000, 1_000])
+  assert.equal(responseBodies.every((body) => body.every((byte) => byte === 0)), true)
+  assert.equal(requestCopies.every((body) => body.every((byte) => byte === 0)), true)
+  assert.equal(credentialCopies.every((value) => value.every((byte) => byte === 0)), true)
+})
+
+test('recovery erases a rejected rollback-verification response body', async (t) => {
+  const { state, lease } = await interruptedMutation(t, 'recovery-response-erasure')
+  const bodies = []
+  const result = await recoverDeclaredHttpAuthedMutation({
+    ledger: state.ledger,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    verifyObservation: observationVerifier(),
+    transport: async (request) => {
+      await request.beforeSend()
+      const body = Buffer.from(`recovery-sensitive-${request.phase}`)
+      bodies.push(body)
+      return {
+        status: request.phase === 'ROLLBACK_VERIFY' ? 500 : 200,
+        responseBytes: body.length,
+        responseHeaderNames: [],
+        body,
+      }
+    },
+  })
+  assert.equal(result.outcome, 'MANUAL_INTERVENTION_REQUIRED')
+  assert.equal(bodies.length, 2)
+  assert.equal(bodies.every((body) => body.every((byte) => byte === 0)), true)
+})
+
+test('rejected mutation and recovery preflight erase credential and body copies without dispatch', async (t) => {
+  const { state, lease } = await interruptedMutation(t, 'preflight-copy-erasure')
+  const ordinary = await campaign(t, 'ordinary-preflight-copy-erasure')
+  const invalidBody = Buffer.from('synthetic-invalid-body')
+  const oversizedCredential = Buffer.alloc(64 * 1024 + 1, 0x61)
+  const copies = []
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const copy = originalFrom.call(Buffer, value, ...args)
+    if ([CREDENTIAL, invalidBody, oversizedCredential].includes(value)) copies.push(copy)
+    return copy
+  })
+  let calls = 0
+  const transport = async () => { calls += 1 }
+  await assert.rejects(runDeclaredHttpAuthedMutation(runOptions(ordinary, {
+    requestBodyBytes: invalidBody,
+    transport,
+  })), { code: 'HTTP_AUTHED_MUTATION_BODY_BINDING_MISMATCH' })
+  await assert.rejects(runDeclaredHttpAuthedMutation(runOptions(ordinary, {
+    credentialValue: oversizedCredential,
+    transport,
+  })), { code: 'HTTP_AUTHED_MUTATION_BYTES_INVALID' })
+  await assert.rejects(recoverDeclaredHttpAuthedMutation({
+    ledger: state.ledger,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: CREDENTIAL,
+    rollbackBodyBytes: invalidBody,
+    now: () => NOW,
+    verifyObservation: observationVerifier(),
+    transport,
+  }), { code: 'HTTP_AUTHED_MUTATION_BODY_BINDING_MISMATCH' })
+  assert.equal(calls, 0)
+  assert.equal(copies.length, 5)
+  assert.equal(copies.every((copy) => copy.every((byte) => byte === 0)), true)
+})
+
+test('recovery rejects credential bytes that differ from the sealed credential binding before dispatch', async (t) => {
+  const { state, lease } = await interruptedMutation(t, 'recovery-credential-binding')
+  let calls = 0
+  await assert.rejects(recoverDeclaredHttpAuthedMutation({
+    ledger: state.ledger,
+    scope: state.scope,
+    action: lease.allocatedAction,
+    existingLease: lease,
+    expectedCampaignGrantSha256: state.expectedCampaignGrantSha256,
+    credentialValue: Buffer.from('synthetic-wrong-recovery-credential'),
+    rollbackBodyBytes: ROLLBACK_BODY,
+    now: () => NOW,
+    verifyObservation: observationVerifier(),
+    transport: async () => { calls += 1; throw new Error('unexpected dispatch') },
+  }), { code: 'HTTP_AUTHED_MUTATION_CREDENTIAL_BINDING_MISMATCH' })
+  assert.equal(calls, 0)
+})
 
 test('transient JSON observation verifies one pointer and detects undeclared context drift', () => {
   const beforeBody = Buffer.from(JSON.stringify({
@@ -285,6 +426,31 @@ test('declared mutation verifies before and after, rolls back once, and verifies
   assert.doesNotMatch(durableText, new RegExp(SECRET_RESPONSE))
   assert.doesNotMatch(durableText, new RegExp(SECRET_HEADER))
   assert.doesNotMatch(durableText, /SYNTHETIC_SECRET_CREDENTIAL_VALUE/)
+})
+
+test('declared mutation erases request and credential copies handed to every transport call', async (t) => {
+  const state = await campaign(t, 'transport-copy-erasure')
+  const requestCopies = []
+  const credentialCopies = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      if (request.body !== null) requestCopies.push(request.body)
+      if (request.credentialValue !== undefined) credentialCopies.push(request.credentialValue)
+      await request.beforeSend()
+      return {
+        status: request.phase === 'MUTATION' ? 201 : 200,
+        responseBytes: 2,
+        responseHeaderNames: ['content-type'],
+        body: Buffer.from('{}'),
+      }
+    },
+  }))
+
+  assert.equal(result.outcome, 'MUTATION_VERIFIED_ROLLBACK_VERIFIED')
+  assert.equal(requestCopies.length, 2)
+  assert.equal(credentialCopies.length, 6)
+  assert.equal(requestCopies.every((body) => body.every((byte) => byte === 0)), true)
+  assert.equal(credentialCopies.every((value) => value.every((byte) => byte === 0)), true)
 })
 
 test('an applied mutation keeps cleanup authority when the action window closes mid-run', async (t) => {
@@ -732,6 +898,51 @@ for (const status of [304, 305, 306]) {
     assert.equal(result.stop_reason, null)
   })
 }
+
+test('failed pre-mutation response bodies are erased before terminal return', async (t) => {
+  const state = await campaign(t, 'failed-response-erasure')
+  const bodies = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      await request.beforeSend()
+      const body = Buffer.from(`sensitive-${request.phase}`)
+      bodies.push(body)
+      return {
+        status: request.phase === 'BEFORE_READ' ? 404 : 200,
+        responseBytes: body.length,
+        responseHeaderNames: [],
+        body,
+      }
+    },
+  }))
+  assert.equal(result.outcome, 'FAILED_BEFORE_MUTATION')
+  assert.equal(bodies.length, 2)
+  assert.equal(bodies.every((body) => body.every((byte) => byte === 0)), true)
+})
+
+test('cleanup-path response bodies are erased when later reads are rejected', async (t) => {
+  const state = await campaign(t, 'cleanup-response-erasure')
+  const bodies = []
+  const result = await runDeclaredHttpAuthedMutation(runOptions(state, {
+    transport: async (request) => {
+      await request.beforeSend()
+      const body = Buffer.from(`sensitive-${request.phase}`)
+      bodies.push(body)
+      const status = request.phase === 'AFTER_READ'
+        ? 404
+        : request.phase === 'ROLLBACK_VERIFY' ? 500 : 200
+      return {
+        status: request.phase === 'MUTATION' ? 201 : status,
+        responseBytes: body.length,
+        responseHeaderNames: [],
+        body,
+      }
+    },
+  }))
+  assert.equal(result.outcome, 'MANUAL_INTERVENTION_REQUIRED')
+  assert.equal(bodies.length, 6)
+  assert.equal(bodies.every((body) => body.every((byte) => byte === 0)), true)
+})
 
 test('a linked mutation settlement append fault still completes rollback without replaying the write', async (t) => {
   let injected = false

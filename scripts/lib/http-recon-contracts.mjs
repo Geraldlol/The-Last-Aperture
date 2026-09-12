@@ -115,10 +115,23 @@ function parseExactTimestamp(value, label) {
   return timestamp
 }
 
+function ambiguousEncodedPath(value) {
+  let current = value
+  for (let pass = 0; pass < 8; pass += 1) {
+    if (/%(?:2e|2f|5c)/iu.test(current)) return true
+    if (!current.includes('%')) return false
+    let decoded
+    try { decoded = decodeURIComponent(current) } catch { return true }
+    if (decoded === current) return false
+    current = decoded
+  }
+  return current.includes('%')
+}
+
 function assertNoAmbiguousPath(url, label) {
   if (
     url.pathname.includes('\\')
-    || /%(?:2e|2f|5c)/i.test(url.pathname)
+    || ambiguousEncodedPath(url.pathname)
     || url.pathname.split('/').some((part) => part === '.' || part === '..')
   ) {
     throw contractError(

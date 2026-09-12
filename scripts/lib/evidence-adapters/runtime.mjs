@@ -1,8 +1,12 @@
 import { buildReadOnlyCommand } from '../evidence-readonly-allowlist.mjs'
+import { validateCliLimits } from '../evidence-cli-runner.mjs'
 import {
+  assertLiveExecutionProfile,
   assertLivePlanAuthorization,
+  liveExecutionProfile,
   probeRequiredClis,
   requiredCli,
+  resolverForProbedDependencies,
   runLiveAcquisition,
 } from './live-acquisition.mjs'
 
@@ -38,6 +42,7 @@ export function createRuntimeAdapter({
   resolver,
   limits = {},
 } = {}) {
+  const effectiveLimits = validateCliLimits(limits)
   return {
     describe: () => ({
       adapter_id: 'runtime',
@@ -57,18 +62,21 @@ export function createRuntimeAdapter({
           throw new Error(`runtime acquisition accepts only runtime.* operations; received ${id}`)
         }
       }
-      const operations = (request.operations ?? []).map(({ operation_id: id, params }) => ({
-        ...buildReadOnlyCommand(id, {
+      const operations = (request.operations ?? []).map(({ operation_id: id, params }) => {
+        const boundParams = {
           ...params,
           namespace: request.namespace,
           pod: request.pod,
           container: request.container,
-        }),
-        params,
-      }))
+        }
+        return {
+          ...buildReadOnlyCommand(id, boundParams),
+          params: boundParams,
+        }
+      })
       if (operations.length === 0) throw new Error('at least one read-only operation is required')
 
-      await probeRequiredClis(operations, { env, resolver, label: 'live-runtime' })
+      const dependencies = await probeRequiredClis(operations, { env, resolver, label: 'live-runtime' })
 
       return {
         plan_id: `runtime:${request.namespace}/${request.pod}:${operations.length}`,
@@ -103,6 +111,13 @@ export function createRuntimeAdapter({
         target_class: request.target_class,
         phi_scope: phi.scope,
         dependency: { name: requiredCli(operations).join('|'), present: true, version: null },
+        execution_profile: liveExecutionProfile({
+          adapterId: 'runtime',
+          adapterVersion: ADAPTER_VERSION,
+          operations,
+          dependencies,
+          limits: effectiveLimits,
+        }),
       }
     },
 
@@ -115,11 +130,23 @@ export function createRuntimeAdapter({
           'live-runtime acquisition requires --confirm-authorization-current at run time',
         )
       }
+      const dependencies = await probeRequiredClis(planned.operations, {
+        env,
+        resolver,
+        label: 'live-runtime',
+      })
+      assertLiveExecutionProfile(planned, liveExecutionProfile({
+        adapterId: 'runtime',
+        adapterVersion: ADAPTER_VERSION,
+        operations: planned.operations,
+        dependencies,
+        limits: effectiveLimits,
+      }))
       return runLiveAcquisition({
         planned,
         out,
         env,
-        resolver,
+        resolver: resolverForProbedDependencies(dependencies),
         limits,
         adapterVersion: ADAPTER_VERSION,
         shouldStop,

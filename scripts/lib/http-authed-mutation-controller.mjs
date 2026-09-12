@@ -48,6 +48,7 @@ function exactBytes(value, label, { minimum = 1, maximum }) {
   }
   const bytes = Buffer.from(value)
   if (bytes.length < minimum || bytes.length > maximum) {
+    bytes.fill(0)
     throw mutationError(
       'HTTP_AUTHED_MUTATION_BYTES_INVALID',
       `${label} is outside its permitted byte range`,
@@ -68,6 +69,7 @@ function boundBody(metadata, supplied, label) {
   }
   const bytes = exactBytes(supplied, `${label} body`, { minimum: 0, maximum: MAX_BODY_BYTES })
   if (bytes.length !== metadata.byte_length || sha256Hex(bytes) !== metadata.sha256) {
+    bytes.fill(0)
     throw mutationError(
       'HTTP_AUTHED_MUTATION_BODY_BINDING_MISMATCH',
       `${label} body does not match its sealed length and digest`,
@@ -127,6 +129,31 @@ function responseMetadata(response) {
     bytes: response.responseBytes,
     header_names: headerNames,
   }
+}
+
+function eraseResponseBody(response) {
+  if (Buffer.isBuffer(response?.body) || response?.body instanceof Uint8Array) {
+    response.body.fill(0)
+  }
+}
+
+async function waitForDurableMinimumInterval({ ledger, scope, now, wait }) {
+  const lastRequestAt = ledger.snapshot().last_request_at
+  if (lastRequestAt === null || lastRequestAt === undefined
+    || scope.limits.min_interval_ms === 0) return
+  const current = now()
+  const currentMilliseconds = current instanceof Date ? current.getTime() : Number.NaN
+  const lastMilliseconds = Date.parse(lastRequestAt)
+  if (!Number.isFinite(currentMilliseconds) || !Number.isFinite(lastMilliseconds)
+    || currentMilliseconds < lastMilliseconds) {
+    throw mutationError(
+      'HTTP_AUTHED_MUTATION_CLOCK_INVALID',
+      'mutation clock moved behind the last durable request pre-dispatch',
+    )
+  }
+  const remaining = scope.limits.min_interval_ms
+    - (currentMilliseconds - lastMilliseconds)
+  if (remaining > 0) await wait(remaining)
 }
 
 function requestBinding({ actionId, phase, method, url, body }) {
@@ -536,7 +563,6 @@ export async function runDeclaredHttpAuthedMutation({
   const verificationFailures = []
   const responses = {}
   let stopReason = null
-  let dispatchAttempts = 0
 
   const terminal = async (outcome, reasonCode) => {
     // Import an out-of-band operator stop before the terminal record so the
@@ -567,10 +593,7 @@ export async function runDeclaredHttpAuthedMutation({
 
   const dispatch = async (phase) => {
     const request = phaseRequest(allocatedAction, phase, mutationBody, rollbackBody)
-    if (dispatchAttempts > 0 && scope.limits.min_interval_ms > 0) {
-      await wait(scope.limits.min_interval_ms)
-    }
-    dispatchAttempts += 1
+    await waitForDurableMinimumInterval({ ledger, scope, now, wait })
     let preDispatched = false
     let preDispatchSettled = false
     let sendPermitGranted = false
@@ -657,19 +680,26 @@ export async function runDeclaredHttpAuthedMutation({
     }
 
     let rawResponse
+    let transportBody
+    let transportCredential
     try {
+      transportBody = request.body === null ? null : Buffer.from(request.body)
+      transportCredential = credentialBytes === undefined
+        ? undefined
+        : Buffer.from(credentialBytes)
       rawResponse = await transport({
         phase,
         method: request.method,
         url: request.url,
-        body: request.body === null ? null : Buffer.from(request.body),
-        credentialValue: credentialBytes === undefined ? undefined : Buffer.from(credentialBytes),
+        body: transportBody,
+        credentialValue: transportCredential,
         timeoutMs: scope.limits.request_timeout_ms,
         maxResponseBytes: scope.limits.max_response_bytes,
         tls: structuredClone(scope.target.tls),
         beforeSend,
       })
       if (!preDispatched) {
+        eraseResponseBody(rawResponse)
         return { ok: false, mayHaveBeenSent: false, response: null, metadata: null }
       }
       const metadata = responseMetadata(rawResponse)
@@ -702,9 +732,7 @@ export async function runDeclaredHttpAuthedMutation({
         metadata,
       }
     } catch (cause) {
-      if (Buffer.isBuffer(rawResponse?.body) || rawResponse?.body instanceof Uint8Array) {
-        rawResponse.body.fill(0)
-      }
+      eraseResponseBody(rawResponse)
       const durableState = ledger.actionState(lease.actionId)
       const durablePreDispatch = preDispatched
         || durableState?.pending_phase === phase
@@ -726,6 +754,9 @@ export async function runDeclaredHttpAuthedMutation({
         })
       }
       return { ok: false, mayHaveBeenSent, response: null, metadata: null }
+    } finally {
+      transportBody?.fill(0)
+      transportCredential?.fill(0)
     }
   }
 
@@ -783,6 +814,7 @@ export async function runDeclaredHttpAuthedMutation({
 
   const before = await dispatch('BEFORE_READ')
   if (!before.ok || !before.acceptedStatus) {
+    eraseResponseBody(before.response)
     return terminal('FAILED_BEFORE_MUTATION', 'BEFORE_READ_FAILED')
   }
   const beforeDecision = await observe(
@@ -818,6 +850,8 @@ export async function runDeclaredHttpAuthedMutation({
     )
     verification.after = afterDecision.matched
     afterObservationFailed = !afterDecision.completed
+  } else {
+    eraseResponseBody(after.response)
   }
   // Once a mutation may have crossed the send boundary, the sealed idempotent
   // restore is attempted exactly once even when the response or after-read is
@@ -827,6 +861,7 @@ export async function runDeclaredHttpAuthedMutation({
 
   const rollbackVerify = await dispatch('ROLLBACK_VERIFY')
   if (!rollbackVerify.ok || !rollbackVerify.acceptedStatus) {
+    eraseResponseBody(rollbackVerify.response)
     return terminal('MANUAL_INTERVENTION_REQUIRED', 'ROLLBACK_VERIFY_FAILED')
   }
   const rollbackDecision = await observe(
@@ -995,10 +1030,17 @@ export async function recoverDeclaredHttpAuthedMutation({
     : exactBytes(credentialValue, 'credential value', {
         maximum: MAX_CREDENTIAL_BYTES,
       })
-  const rollbackBody = boundBody(action.rollback.request_body, rollbackBodyBytes, 'rollback')
+  let rollbackBody
+  try {
+    if (!browserSession && sha256Hex(credentialBytes) !== scope.credential.binding_sha256) {
+      throw mutationError(
+        'HTTP_AUTHED_MUTATION_CREDENTIAL_BINDING_MISMATCH',
+        'credential value does not match the sealed binding digest',
+      )
+    }
+    rollbackBody = boundBody(action.rollback.request_body, rollbackBodyBytes, 'rollback')
   const responses = {}
   const verificationFailures = []
-  let dispatchAttempts = 0
   const terminal = async (outcome, reasonCode) => {
     await ledger.terminalizeAction({
       actionId: existingLease.actionId,
@@ -1030,10 +1072,7 @@ export async function recoverDeclaredHttpAuthedMutation({
   }
   const dispatch = async (phase) => {
     const request = phaseRequest(action, phase, null, rollbackBody)
-    if (dispatchAttempts > 0 && scope.limits.min_interval_ms > 0) {
-      await wait(scope.limits.min_interval_ms)
-    }
-    dispatchAttempts += 1
+    await waitForDurableMinimumInterval({ ledger, scope, now, wait })
     let preDispatched = false
     const beforeSend = async () => {
       if (preDispatched) {
@@ -1057,19 +1096,29 @@ export async function recoverDeclaredHttpAuthedMutation({
       })
       preDispatched = true
     }
+    let rawResponse
+    let transportBody
+    let transportCredential
     try {
-      const rawResponse = await transport({
+      transportBody = request.body === null ? null : Buffer.from(request.body)
+      transportCredential = credentialBytes === undefined
+        ? undefined
+        : Buffer.from(credentialBytes)
+      rawResponse = await transport({
         phase,
         method: request.method,
         url: request.url,
-        body: request.body === null ? null : Buffer.from(request.body),
-        credentialValue: credentialBytes === undefined ? undefined : Buffer.from(credentialBytes),
+        body: transportBody,
+        credentialValue: transportCredential,
         timeoutMs: scope.limits.request_timeout_ms,
         maxResponseBytes: scope.limits.max_response_bytes,
         tls: structuredClone(scope.target.tls),
         beforeSend,
       })
-      if (!preDispatched) return { ok: false, acceptedStatus: false, response: null }
+      if (!preDispatched) {
+        eraseResponseBody(rawResponse)
+        return { ok: false, acceptedStatus: false, response: null }
+      }
       const metadata = responseMetadata(rawResponse)
       await ledger.markOutcome({
         actionId: existingLease.actionId,
@@ -1084,14 +1133,14 @@ export async function recoverDeclaredHttpAuthedMutation({
         },
       })
       responses[phase] = metadata
-      if (phase === 'ROLLBACK' && (Buffer.isBuffer(rawResponse.body)
-        || rawResponse.body instanceof Uint8Array)) rawResponse.body.fill(0)
+      if (phase === 'ROLLBACK') eraseResponseBody(rawResponse)
       return {
         ok: true,
         acceptedStatus: expectedStatusesForPhase(action, phase).includes(metadata.status),
         response: rawResponse,
       }
     } catch (cause) {
+      eraseResponseBody(rawResponse)
       if (preDispatched) {
         await ledger.markOutcome({
           actionId: existingLease.actionId,
@@ -1107,13 +1156,16 @@ export async function recoverDeclaredHttpAuthedMutation({
         })
       }
       return { ok: false, acceptedStatus: false, response: null }
+    } finally {
+      transportBody?.fill(0)
+      transportCredential?.fill(0)
     }
   }
 
-  try {
     if (rollbackRequiredStates.has(state.state)) await dispatch('ROLLBACK')
     const verificationRead = await dispatch('ROLLBACK_VERIFY')
     if (!verificationRead.ok || !verificationRead.acceptedStatus) {
+      eraseResponseBody(verificationRead.response)
       return terminal('MANUAL_INTERVENTION_REQUIRED', 'RECOVERY_ROLLBACK_VERIFY_FAILED')
     }
     let decision

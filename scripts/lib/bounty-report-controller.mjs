@@ -4,6 +4,7 @@ import { assertNoSecretLeak } from './bounty-report-curl.mjs'
 import { explainUnreportable, isReportable, renderAuthzReport } from './bounty-report.mjs'
 import { ANONYMOUS_ROLE, findRole } from './bounty-authz-roles.mjs'
 import { describeScopeCurrency } from './bounty-contracts.mjs'
+import { sanitizeCapturedRequest } from './bounty-authz-request.mjs'
 
 const SCOPE_FILE = 'scope.json'
 const FINDINGS_FILE = 'authz-findings.json'
@@ -19,7 +20,11 @@ function slugFor(result, index) {
     }
   })()
   const cleaned = path.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
-  return `${String(index + 1).padStart(2, '0')}-${result.tester_role}-${cleaned || 'endpoint'}`.slice(0, 96)
+  const role = String(result.tester_role ?? 'unknown')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase()
+  return `${String(index + 1).padStart(2, '0')}-${role || 'unknown'}-${cleaned || 'endpoint'}`.slice(0, 96)
 }
 
 function roleOrAnonymous(registry, roleId) {
@@ -56,7 +61,9 @@ export async function draftAuthzReports({
   const findings = JSON.parse(await readFile(join(bundlePath, FINDINGS_FILE), 'utf8'))
   let requests = []
   try {
-    requests = JSON.parse(await readFile(join(bundlePath, REQUESTS_FILE), 'utf8')).requests
+    const stored = JSON.parse(await readFile(join(bundlePath, REQUESTS_FILE), 'utf8'))
+    if (!Array.isArray(stored.requests)) throw new Error('authz request bundle must contain a request array')
+    requests = stored.requests.map((request) => sanitizeCapturedRequest(request))
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
   }
@@ -70,8 +77,17 @@ export async function draftAuthzReports({
     if (typeof value === 'string' && value.length > 0) secrets.push(value)
   }
 
-  const reportable = findings.results.filter(isReportable)
-  const declined = findings.results
+  const safeResults = findings.results.map((result) => ({
+    ...result,
+    url: sanitizeCapturedRequest({
+      method: result.method,
+      url: result.url,
+      headers: {},
+      body: null,
+    }).url,
+  }))
+  const reportable = safeResults.filter(isReportable)
+  const declined = safeResults
     .filter((result) => !isReportable(result))
     .map((result) => ({ url: result.url, verdict: result.verdict, why: explainUnreportable(result) }))
 

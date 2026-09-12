@@ -1,9 +1,9 @@
 import { constants as fsConstants } from 'node:fs'
 import {
   lstat,
+  link,
   mkdir,
   open,
-  readFile,
   realpath,
   rename,
   rm,
@@ -38,6 +38,10 @@ import {
   verifyOperatorAuthorizationReceipt,
   verifyPrePlanHttpsOperatorAuthorization,
 } from './operator-authorization.mjs'
+import {
+  publishFileCreateOnlyDurably,
+  replaceFileDurably,
+} from './durable-file-publication.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const PROJECT_ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)))
@@ -48,6 +52,7 @@ const REPORT_FILE = 'report.md'
 const OBSERVATIONS_DIRECTORY = 'observations'
 const STOP_FILE = '.http-recon.stop'
 const LOCK_FILE = '.http-recon.lock'
+const LOCK_RECLAIM_FILE = '.http-recon.lock-reclaim'
 const MAX_RUN_BYTES = 4 * 1024 * 1024
 const MAX_ATTESTED_SCOPE_BYTES = 1024 * 1024
 const MAX_EVENT_BYTES = 16 * 1024 * 1024
@@ -364,9 +369,15 @@ function safeArtifactPath(bundle, artifactPath) {
   return target
 }
 
-async function readBoundedNoFollow(path, maxBytes, label) {
+async function readBoundedNoFollowSnapshot(
+  path,
+  maxBytes,
+  label,
+  faultInjector,
+  allowedLinks = [1],
+) {
   const info = await lstat(path)
-  if (!info.isFile() || info.isSymbolicLink()) {
+  if (!info.isFile() || info.isSymbolicLink() || !allowedLinks.includes(info.nlink)) {
     throw controllerError(
       'HTTP_RECON_ARTIFACT_NOT_REGULAR',
       `${label} must be a regular non-symlink file`,
@@ -378,26 +389,103 @@ async function readBoundedNoFollow(path, maxBytes, label) {
       `${label} exceeds its ${maxBytes}-byte limit`,
     )
   }
-  const handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
+  await faultInjector?.('after-run-lock-lstat', { path, label })
+  let handle
+  try {
+    handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
+  } catch (cause) {
+    if (cause.code === 'ENOENT') {
+      throw controllerError(
+        'HTTP_RECON_ARTIFACT_CHANGED',
+        `${label} disappeared before it could be opened`,
+        { cause },
+      )
+    }
+    throw cause
+  }
   try {
     const before = await handle.stat()
-    const content = await handle.readFile()
-    const after = await handle.stat()
     if (
-      before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs
+      !before.isFile()
+      || !allowedLinks.includes(before.nlink)
+      || before.dev !== info.dev
+      || before.ino !== info.ino
+      || before.size !== info.size
+      || before.mtimeMs !== info.mtimeMs
+      || before.ctimeMs !== info.ctimeMs
+      || before.nlink !== info.nlink
+    ) {
+      throw controllerError(
+        'HTTP_RECON_ARTIFACT_CHANGED',
+        `${label} changed before it was read`,
+      )
+    }
+    if (!Number.isSafeInteger(before.size) || before.size < 0 || before.size > maxBytes) {
+      throw controllerError(
+        'HTTP_RECON_ARTIFACT_TOO_LARGE',
+        `${label} exceeds its ${maxBytes}-byte limit`,
+      )
+    }
+    const content = Buffer.alloc(maxBytes + 1)
+    let offset = 0
+    while (offset < content.length) {
+      const { bytesRead } = await handle.read(content, offset, content.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat()
+    if (offset > maxBytes || after.size > maxBytes) {
+      throw controllerError(
+        'HTTP_RECON_ARTIFACT_TOO_LARGE',
+        `${label} exceeds its ${maxBytes}-byte limit`,
+      )
+    }
+    let endpointAfter
+    try {
+      endpointAfter = await lstat(path)
+    } catch (cause) {
+      if (cause.code === 'ENOENT') {
+        throw controllerError(
+          'HTTP_RECON_ARTIFACT_CHANGED',
+          `${label} disappeared while it was being read`,
+          { cause },
+        )
+      }
+      throw cause
+    }
+    if (
+      !after.isFile()
+      || endpointAfter.isSymbolicLink()
+      || !endpointAfter.isFile()
+      || !allowedLinks.includes(after.nlink)
+      || !allowedLinks.includes(endpointAfter.nlink)
+      || before.dev !== after.dev
       || before.ino !== after.ino
-      || content.length !== after.size
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || before.nlink !== after.nlink
+      || after.dev !== endpointAfter.dev
+      || after.ino !== endpointAfter.ino
+      || after.size !== endpointAfter.size
+      || after.mtimeMs !== endpointAfter.mtimeMs
+      || after.ctimeMs !== endpointAfter.ctimeMs
+      || after.nlink !== endpointAfter.nlink
+      || offset !== after.size
     ) {
       throw controllerError(
         'HTTP_RECON_ARTIFACT_CHANGED',
         `${label} changed while it was being read`,
       )
     }
-    return content
+    return { bytes: content.subarray(0, offset), info: after }
   } finally {
     await handle.close()
   }
+}
+
+async function readBoundedNoFollow(path, maxBytes, label) {
+  return (await readBoundedNoFollowSnapshot(path, maxBytes, label)).bytes
 }
 
 async function readJson(path, maxBytes, label) {
@@ -413,7 +501,7 @@ async function readJson(path, maxBytes, label) {
   }
 }
 
-async function atomicReplace(path, content) {
+async function atomicReplace(path, content, publicationImpl = replaceFileDurably) {
   const target = resolve(path)
   const temporary = `${target}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`
   const handle = await open(temporary, 'wx', 0o600)
@@ -431,7 +519,7 @@ async function atomicReplace(path, content) {
     throw writeError
   }
   try {
-    await rename(temporary, target)
+    await publicationImpl(temporary, target)
   } catch (error) {
     await rm(temporary, { force: true })
     throw error
@@ -443,6 +531,13 @@ async function exclusiveWrite(path, content) {
   try {
     await handle.writeFile(content, { encoding: 'utf8' })
     await handle.sync()
+    const info = await handle.stat()
+    return {
+      path,
+      content,
+      info,
+      bytes: Buffer.from(content, 'utf8'),
+    }
   } finally {
     await handle.close()
   }
@@ -645,7 +740,194 @@ async function appendEvent(loaded, type, details, now) {
   return record
 }
 
-async function acquireRunLock(directory, now) {
+function lockSnapshotMatches(left, right) {
+  return left.info.dev === right.info.dev
+    && left.info.ino === right.info.ino
+    && left.info.size === right.info.size
+    && left.info.mtimeMs === right.info.mtimeMs
+    && left.bytes.equals(right.bytes)
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== 'ESRCH'
+  }
+}
+
+function validateRunLockSnapshot(snapshot, label) {
+  let value
+  try {
+    value = JSON.parse(snapshot.bytes.toString('utf8'))
+  } catch (cause) {
+    throw controllerError(
+      'HTTP_RECON_RUN_LOCK_INVALID',
+      `${label} is not valid JSON`,
+      { cause },
+    )
+  }
+  if (
+    !value
+    || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).sort().join(',') !== 'acquired_at,nonce,pid,schema_version'
+    || value.schema_version !== '1.0.0'
+    || !Number.isSafeInteger(value.pid)
+    || value.pid <= 0
+    || typeof value.acquired_at !== 'string'
+    || Number.isNaN(new Date(value.acquired_at).getTime())
+    || new Date(value.acquired_at).toISOString() !== value.acquired_at
+    || typeof value.nonce !== 'string'
+    || !/^[a-f0-9]{32}$/.test(value.nonce)
+    || snapshot.bytes.toString('utf8') !== stableJson(value)
+  ) {
+    throw controllerError(
+      'HTTP_RECON_RUN_LOCK_INVALID',
+      `${label} is malformed or non-canonical`,
+    )
+  }
+  return value
+}
+
+async function quarantineExpectedRunLock({
+  path,
+  expected,
+  faultInjector,
+  phase,
+  suffix,
+}) {
+  await faultInjector?.(phase, { path })
+  const quarantine = `${path}.${suffix}-${process.pid}-${randomBytes(8).toString('hex')}`
+  try {
+    await rename(path, quarantine)
+  } catch (cause) {
+    if (cause.code === 'ENOENT') {
+      throw controllerError(
+        'HTTP_RECON_RUN_LOCK_CHANGED',
+        'HTTP-recon lock disappeared before its identity-bound quarantine',
+        { cause },
+      )
+    }
+    throw cause
+  }
+  let quarantined
+  try {
+    quarantined = await readBoundedNoFollowSnapshot(
+      quarantine,
+      4096,
+      LOCK_FILE,
+      faultInjector,
+      [1, 2],
+    )
+    if (!lockSnapshotMatches(quarantined, expected)) {
+      throw controllerError(
+        'HTTP_RECON_RUN_LOCK_CHANGED',
+        'HTTP-recon lock was replaced before its identity-bound quarantine',
+      )
+    }
+  } catch (error) {
+    try {
+      await rename(quarantine, path)
+    } catch (restoreError) {
+      throw controllerError(
+        'HTTP_RECON_RUN_LOCK_CHANGED',
+        'HTTP-recon replacement lock could not be restored after quarantine',
+        { cause: new AggregateError([error, restoreError]) },
+      )
+    }
+    throw error
+  }
+  await rm(quarantine)
+}
+
+async function acquireRunLockReclaimGuard(directory, now) {
+  const path = join(directory, LOCK_RECLAIM_FILE)
+  const content = stableJson({
+    schema_version: '1.0.0',
+    pid: process.pid,
+    acquired_at: timestamp(now),
+    nonce: randomBytes(16).toString('hex'),
+  })
+  let lastContention
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`
+    try {
+      const created = await exclusiveWrite(temporary, content)
+      await link(temporary, path)
+      await rm(temporary, { force: true }).catch(() => {})
+      return { ...created, path }
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {})
+      // Win32 can surface a sharing race with a just-removed create-only file
+      // as EPERM rather than EEXIST. It remains bounded contention here; the
+      // durable publication path never classifies EPERM as success.
+      if (!['EEXIST', 'EPERM'].includes(error.code)) throw error
+      lastContention = error
+    }
+    let observed
+    try {
+      observed = await readBoundedNoFollowSnapshot(path, 4096, LOCK_RECLAIM_FILE, undefined, [1, 2])
+    } catch (error) {
+      if ([
+        'ENOENT',
+        'HTTP_RECON_ARTIFACT_CHANGED',
+        'HTTP_RECON_ARTIFACT_NOT_REGULAR',
+      ].includes(error.code)) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 2))
+        continue
+      }
+      throw error
+    }
+    let owner
+    try {
+      owner = validateRunLockSnapshot(observed, 'HTTP-recon stale-lock recovery guard')
+    } catch (error) {
+      if (error.code !== 'HTTP_RECON_RUN_LOCK_INVALID') throw error
+      // A legacy malformed guard or externally replaced file is never removed
+      // without an owner identity. New guards are published only after their
+      // complete owner record is fsynced under a private temporary name.
+      lastContention = error
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 2))
+      continue
+    }
+    if (!processIsAlive(owner.pid)) {
+      await quarantineExpectedRunLock({
+        path,
+        expected: observed,
+        phase: 'before-run-lock-reclaim-guard-stale-quarantine',
+        suffix: 'stale',
+      })
+      continue
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2))
+  }
+  throw controllerError(
+    'HTTP_RECON_RUN_LOCK_RECLAIM_BUSY',
+    'HTTP-recon stale-lock recovery is already in progress',
+    { cause: lastContention },
+  )
+}
+
+async function releaseRunLockReclaimGuard(guard, faultInjector) {
+  try {
+    await quarantineExpectedRunLock({
+      path: guard.path,
+      expected: guard,
+      faultInjector,
+      phase: 'before-run-lock-reclaim-guard-release-quarantine',
+      suffix: 'release',
+    })
+  } catch (cause) {
+    throw controllerError(
+      'HTTP_RECON_RUN_LOCK_RECLAIM_CHANGED',
+      'HTTP-recon stale-lock recovery guard changed while held',
+      { cause },
+    )
+  }
+}
+
+async function acquireRunLock(directory, now, faultInjector) {
   const path = join(directory, LOCK_FILE)
   const content = stableJson({
     schema_version: '1.0.0',
@@ -653,44 +935,92 @@ async function acquireRunLock(directory, now) {
     acquired_at: timestamp(now),
     nonce: randomBytes(16).toString('hex'),
   })
-  let handle
-  try {
-    handle = await open(path, 'wx', 0o600)
-  } catch (error) {
-    if (error.code === 'EEXIST') {
-      throw controllerError(
-        'HTTP_RECON_RUN_LOCKED',
-        `HTTP-recon bundle is already locked: ${directory}`,
-      )
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const temporary = `${path}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`
+    let handle
+    try {
+      handle = await open(temporary, 'wx', 0o600)
+      await handle.writeFile(content, { encoding: 'utf8' })
+      await handle.sync()
+      const info = await handle.stat()
+      await handle.close()
+      handle = undefined
+      await link(temporary, path)
+      await rm(temporary, { force: true }).catch(() => {})
+      return { path, content, info, bytes: Buffer.from(content, 'utf8') }
+    } catch (error) {
+      await handle?.close().catch(() => {})
+      await rm(temporary, { force: true }).catch(() => {})
+      if (error.code !== 'EEXIST') throw error
     }
-    throw error
+    await faultInjector?.('after-run-lock-collision')
+    const reclaimGuard = await acquireRunLockReclaimGuard(directory, now)
+    try {
+      await faultInjector?.('after-run-lock-reclaim-guard-acquired')
+      let observed
+      try {
+        observed = await readBoundedNoFollowSnapshot(path, 4096, LOCK_FILE, faultInjector, [1, 2])
+      } catch (error) {
+        if (['ENOENT', 'HTTP_RECON_ARTIFACT_CHANGED'].includes(error.code)) continue
+        throw error
+      }
+      const value = validateRunLockSnapshot(observed, 'HTTP-recon run lock')
+      if (processIsAlive(value.pid)) {
+        throw controllerError(
+          'HTTP_RECON_RUN_LOCKED',
+          `HTTP-recon bundle is already locked: ${directory}`,
+        )
+      }
+      await faultInjector?.('before-run-lock-stale-quarantine')
+      let current
+      try {
+        current = await readBoundedNoFollowSnapshot(path, 4096, LOCK_FILE, faultInjector, [1, 2])
+      } catch (error) {
+        if (['ENOENT', 'HTTP_RECON_ARTIFACT_CHANGED'].includes(error.code)) continue
+        throw error
+      }
+      if (!lockSnapshotMatches(current, observed)) continue
+      await quarantineExpectedRunLock({
+        path,
+        expected: observed,
+        faultInjector,
+        phase: 'before-run-lock-stale-identity-quarantine',
+        suffix: 'stale',
+      })
+    } finally {
+      await releaseRunLockReclaimGuard(reclaimGuard, faultInjector)
+    }
   }
-  try {
-    await handle.writeFile(content, { encoding: 'utf8' })
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  return { path, content }
+  throw controllerError(
+    'HTTP_RECON_RUN_LOCKED',
+    `HTTP-recon bundle lock remained contended: ${directory}`,
+  )
 }
 
-async function releaseRunLock(lock) {
-  const observed = await readBoundedNoFollow(lock.path, 4096, LOCK_FILE)
-  if (observed.toString('utf8') !== lock.content) {
+async function releaseRunLock(lock, faultInjector) {
+  try {
+    await quarantineExpectedRunLock({
+      path: lock.path,
+      expected: lock,
+      faultInjector,
+      phase: 'before-run-lock-release-quarantine',
+      suffix: 'release',
+    })
+  } catch (cause) {
     throw controllerError(
       'HTTP_RECON_RUN_LOCK_CHANGED',
       'HTTP-recon run lock changed while the controller held it',
+      { cause },
     )
   }
-  await rm(lock.path)
 }
 
-async function withRunLock(loaded, now, operation) {
-  const lock = await acquireRunLock(loaded.directory, now)
+async function withRunLock(loaded, now, operation, options = {}) {
+  const lock = await acquireRunLock(loaded.directory, now, options.lockFaultInjector)
   try {
     return await operation()
   } finally {
-    await releaseRunLock(lock)
+    await releaseRunLock(lock, options.lockFaultInjector)
   }
 }
 
@@ -1089,6 +1419,7 @@ export async function requestHttpReconStop({
   operatorId,
   reason,
   now = () => new Date(),
+  stopPublicationFaultInjector,
 }) {
   const normalizedOperatorId = normalizeOperatorId(operatorId)
   const normalizedReason = normalizeHumanReason(reason, 'stop_reason')
@@ -1117,9 +1448,19 @@ export async function requestHttpReconStop({
     reason: normalizedReason,
   }
   const path = join(directory, STOP_FILE)
+  const temporary = `${path}.tmp-${process.pid}-${randomBytes(12).toString('hex')}`
+  let handle
   try {
-    await exclusiveWrite(path, stableJson(marker))
+    handle = await open(temporary, 'wx', 0o600)
+    await stopPublicationFaultInjector?.()
+    await handle.writeFile(stableJson(marker), { encoding: 'utf8' })
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await publishFileCreateOnlyDurably(temporary, path)
   } catch (error) {
+    await handle?.close().catch(() => {})
+    await rm(temporary, { force: true }).catch(() => {})
     if (error.code === 'EEXIST') {
       const existing = await loadStopMarker(directory)
       return {
@@ -1152,7 +1493,6 @@ function startStopWatcher(directory, abortController, intervalMs = 100) {
       checking = false
     }
   }, intervalMs)
-  timer.unref?.()
   return () => clearInterval(timer)
 }
 
@@ -1355,9 +1695,7 @@ async function markStopped(
       priorEvents,
       action.action_id,
     )
-    action.state = action.state === 'SENT' || hasPreDispatch
-      ? 'DELIVERY_AMBIGUOUS'
-      : 'FAILED'
+    action.state = hasPreDispatch ? 'DELIVERY_AMBIGUOUS' : 'FAILED'
     if (action.state === 'DELIVERY_AMBIGUOUS' && action.sent_at === null) {
       action.sent_at = unsettledPreDispatchEvent(
         priorEvents,
@@ -1396,7 +1734,7 @@ async function terminalizeInterruptedAction(loaded, now, priorEvents = []) {
     priorEvents,
     action.action_id,
   )
-  const deliveryAmbiguous = action.state === 'SENT' || preDispatch !== null
+  const deliveryAmbiguous = preDispatch !== null
   action.state = deliveryAmbiguous ? 'DELIVERY_AMBIGUOUS' : 'FAILED'
   if (deliveryAmbiguous && action.sent_at === null) {
     action.sent_at = preDispatch?.at ?? action.leased_at
@@ -1436,6 +1774,7 @@ export async function runHttpReconAction({
   clientDependencies,
   stopPollIntervalMs = 100,
   delayImpl = delayWithSignal,
+  lockFaultInjector,
 }) {
   const loaded = await loadRun(bundle)
   return withRunLock(loaded, now, async () => {
@@ -1696,7 +2035,7 @@ export async function runHttpReconAction({
     } finally {
       stopWatching()
     }
-  })
+  }, { lockFaultInjector })
 }
 
 function reportCoverage(run) {
@@ -1819,8 +2158,17 @@ export function renderHttpReconReport({ run, observations }) {
 export async function finalizeHttpReconBundle({
   bundle,
   now = () => new Date(),
+  directorySyncImpl,
+  reportPublicationImpl,
+  lockFaultInjector,
 }) {
   const loaded = await loadRun(bundle)
+  const publishReport = reportPublicationImpl ?? (directorySyncImpl === undefined
+    ? replaceFileDurably
+    : async (source, destination) => {
+        await rename(source, destination)
+        await directorySyncImpl(dirname(destination))
+      })
   return withRunLock(loaded, now, async () => {
     const refreshed = await loadRun(loaded.directory)
     loaded.run = refreshed.run
@@ -1835,7 +2183,13 @@ export async function finalizeHttpReconBundle({
       forDispatch: false,
       recoverFsyncedTail: true,
     })
-    if (evidence.recovered_finalized) {
+    if (evidence.events.at(-1)?.type === 'RUN_FINALIZED') {
+      if (loaded.run.report === null) {
+        throw controllerError(
+          'HTTP_RECON_FINALIZATION_ROOT_INVALID',
+          'rooted finalization is missing its report binding',
+        )
+      }
       const report = await readBoundedNoFollow(
         join(loaded.directory, REPORT_FILE),
         MAX_REPORT_BYTES,
@@ -1855,7 +2209,7 @@ export async function finalizeHttpReconBundle({
           'recovered finalized report is not the deterministic run rendering',
         )
       }
-      await saveRun(loaded)
+      if (evidence.recovered) await saveRun(loaded)
       return {
         directory: loaded.directory,
         run: structuredClone(loaded.run),
@@ -1901,22 +2255,14 @@ export async function finalizeHttpReconBundle({
     const observations = evidence.observations
     const report = renderHttpReconReport({ run: loaded.run, observations })
     const reportPath = join(loaded.directory, REPORT_FILE)
-    let existing
     try {
-      existing = await readBoundedNoFollow(reportPath, MAX_REPORT_BYTES, REPORT_FILE)
+      await readBoundedNoFollow(reportPath, MAX_REPORT_BYTES, REPORT_FILE)
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
-    if (existing) {
-      if (existing.toString('utf8') !== report) {
-        throw controllerError(
-          'HTTP_RECON_REPORT_CHANGED',
-          'existing HTTP-recon report differs from deterministic rendering',
-        )
-      }
-    } else {
-      await exclusiveWrite(reportPath, report)
-    }
+    // Republish even an exact unrooted report. A prior process may have exited
+    // after the namespace change but before its durability primitive returned.
+    await atomicReplace(reportPath, report, publishReport)
     loaded.run.report = {
       path: REPORT_FILE,
       sha256: sha256Hex(Buffer.from(report, 'utf8')),
@@ -1935,7 +2281,7 @@ export async function finalizeHttpReconBundle({
       run: structuredClone(loaded.run),
       reportPath,
     }
-  })
+  }, { lockFaultInjector })
 }
 
 function parseEventLines(bytes) {
@@ -2332,11 +2678,17 @@ async function verifyExistingEvidence({
     'STOP_CONFIRMED',
     'RUN_FINALIZED',
   ])
-  for (const event of events) {
+  for (const [eventIndex, event] of events.entries()) {
     if (!allowedEventTypes.has(event.type)) {
       throw controllerError(
         'HTTP_RECON_EVENT_TYPE_INVALID',
         `event ${event.sequence} has an unsupported type`,
+      )
+    }
+    if (event.type === 'RUN_FINALIZED' && eventIndex !== events.length - 1) {
+      throw controllerError(
+        'HTTP_RECON_FINALIZATION_POSITION_INVALID',
+        'RUN_FINALIZED must be the final durable event',
       )
     }
     const eventActionId = event.details?.action_id

@@ -25,7 +25,7 @@ const CARRIER = /^(?:body:[A-Za-z0-9_$@.:[\]-]{1,1024}|cookie:[A-Za-z0-9_$@.:[\]
 const FIELD_NAME = /^[A-Za-z0-9_$@.:[\]-]{1,128}$/u
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9a-z-]{1,128}$/u
 const SENSITIVE_NAME = /(?:api[_-]?key|auth|bearer|client[_-]?secret|connection|credential|csrf|jwt|login|pass(?:word|wd)?|secret|session|ssn|token|user(?:name)?|xsrf)/iu
-const SEMANTIC_NAME = /^(?:action|command|event|method|mode|op|operation|submit|task|view)$/iu
+const SEMANTIC_NAME = /^(?:_method|action|command|do|event|method|mode|op|operation|submit|task|view)$/iu
 const ENDPOINT_PROVENANCE = new Set([
   'BURP_XML',
   'HTTP_AUTHED_CAMPAIGN',
@@ -151,8 +151,8 @@ function sideEffect(entry) {
   const semantic = [...entry.request.query_parameters, ...entry.request.body.fields]
     .flatMap((item) => item.semantic_classes ?? [])
   if (entry.request.path_action_class === 'WRITE_ACTION' || semantic.includes('WRITE_ACTION')) return { classification: 'WRITE_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
+  if (entry.request.path_action_class === 'OTHER_ACTION' || semantic.includes('OTHER_ACTION')) return { classification: 'UNKNOWN', basis: 'SEMANTIC_ACTION_CLASS' }
   if (entry.request.path_action_class === 'READ_ACTION' || semantic.includes('READ_ACTION')) return { classification: 'READ_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
-  if (entry.request.path_action_class === 'OTHER_ACTION') return { classification: 'UNKNOWN', basis: 'SEMANTIC_ACTION_CLASS' }
   if (WRITE_METHODS.has(entry.request.method)) return { classification: 'WRITE_CANDIDATE', basis: 'HTTP_METHOD_ONLY' }
   return { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' }
 }
@@ -284,13 +284,13 @@ function finishEndpoints(map, entries) {
       ? { classification: 'UNKNOWN', basis: 'AUTH_FLOW' }
       : item.pathActionClasses.has('WRITE_ACTION') || fieldSemantics.includes('WRITE_ACTION')
         ? { classification: 'WRITE_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
-        : item.pathActionClasses.has('READ_ACTION') || fieldSemantics.includes('READ_ACTION')
-          ? { classification: 'READ_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
-          : item.pathActionClasses.has('OTHER_ACTION')
+        : item.pathActionClasses.has('OTHER_ACTION') || fieldSemantics.includes('OTHER_ACTION')
             ? { classification: 'UNKNOWN', basis: 'SEMANTIC_ACTION_CLASS' }
-            : WRITE_METHODS.has(item.method)
-              ? { classification: 'WRITE_CANDIDATE', basis: 'HTTP_METHOD_ONLY' }
-              : { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' }
+            : item.pathActionClasses.has('READ_ACTION') || fieldSemantics.includes('READ_ACTION')
+              ? { classification: 'READ_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
+              : WRITE_METHODS.has(item.method)
+                ? { classification: 'WRITE_CANDIDATE', basis: 'HTTP_METHOD_ONLY' }
+                : { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' }
     let retry = 'NOT_OBSERVED'
     for (const reference of item.sequences) {
       const observation = entryBySequence.get(`${reference.capture_id}\n${reference.sequence}`)
@@ -720,18 +720,18 @@ function assertEndpoint(endpoint, pathLiterals, schemaVersion) {
   const semanticClasses = [...endpoint.request.fields, ...endpoint.request.query_parameters].flatMap((field) => field.semantic_classes)
   const hasWriteClass = endpoint.request.path_action_classes.includes('WRITE_ACTION') || semanticClasses.includes('WRITE_ACTION')
   const hasReadClass = endpoint.request.path_action_classes.includes('READ_ACTION') || semanticClasses.includes('READ_ACTION')
-  const hasOtherPathAction = endpoint.request.path_action_classes.includes('OTHER_ACTION')
+  const hasOtherAction = endpoint.request.path_action_classes.includes('OTHER_ACTION') || semanticClasses.includes('OTHER_ACTION')
   const expectedSideEffect = expectedRole === 'AUTH'
     ? { classification: 'UNKNOWN', basis: 'AUTH_FLOW' }
     : hasWriteClass
       ? { classification: 'WRITE_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
-      : hasReadClass
-        ? { classification: 'READ_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
-        : hasOtherPathAction
+      : hasOtherAction
           ? { classification: 'UNKNOWN', basis: 'SEMANTIC_ACTION_CLASS' }
-          : WRITE_METHODS.has(endpoint.method)
-            ? { classification: 'WRITE_CANDIDATE', basis: 'HTTP_METHOD_ONLY' }
-            : { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' }
+          : hasReadClass
+            ? { classification: 'READ_CANDIDATE', basis: 'SEMANTIC_ACTION_CLASS' }
+            : WRITE_METHODS.has(endpoint.method)
+              ? { classification: 'WRITE_CANDIDATE', basis: 'HTTP_METHOD_ONLY' }
+              : { classification: 'UNKNOWN', basis: 'UNCLASSIFIED' }
   if (endpoint.side_effect.classification !== expectedSideEffect.classification || endpoint.side_effect.basis !== expectedSideEffect.basis) fail('native endpoint side effect does not match its observed shape')
   const expectedPagination = pagination(endpoint.request.query_parameters)
   if (endpoint.pagination !== expectedPagination) fail('native endpoint pagination does not match its query shape')

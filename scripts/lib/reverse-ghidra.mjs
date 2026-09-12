@@ -9,6 +9,9 @@ import {
   runSupervisedProcess,
   sanitizedProcessEnvironment,
 } from './reverse-process.mjs'
+import { windowsJavaDevelopmentToolCandidates } from './windows-java-tool-candidates.mjs'
+
+export { windowsJavaDevelopmentToolCandidates } from './windows-java-tool-candidates.mjs'
 
 export const GHIDRA_PROFILE_ID = 'ghidra-headless-fixed-export-v1'
 
@@ -63,39 +66,6 @@ function processSucceeded(result) {
     && result.log_limit_exceeded !== true
     && result.log_integrity_failed !== true
     && result.termination_confirmed === true
-}
-
-export function windowsJavaDevelopmentToolCandidates(environment, executable) {
-  const candidates = []
-  for (const javaHome of [environment.JAVA_HOME, environment.JDK_HOME]) {
-    if (typeof javaHome !== 'string' || javaHome.length < 1) continue
-    assertAbsoluteLocalPath(javaHome, 'Java home')
-    candidates.push(win32.join(javaHome, 'bin', executable))
-  }
-
-  for (const searchPath of [environment.Path, environment.PATH]) {
-    if (typeof searchPath !== 'string' || searchPath.length < 1) continue
-    for (const entry of searchPath.split(';')) {
-      const unquoted = entry.length >= 2 && entry.startsWith('"') && entry.endsWith('"')
-        ? entry.slice(1, -1)
-        : entry
-      if (unquoted.length < 1 || !win32.isAbsolute(unquoted)) continue
-      try {
-        assertAbsoluteLocalPath(unquoted, 'Java tool search path')
-        candidates.push(win32.join(unquoted, executable))
-      } catch {
-        // Invalid PATH entries are not executable candidates.
-      }
-    }
-  }
-
-  const seen = new Set()
-  return candidates.filter((candidate) => {
-    const key = win32.normalize(candidate).toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 
 function sameFile(left, right) {

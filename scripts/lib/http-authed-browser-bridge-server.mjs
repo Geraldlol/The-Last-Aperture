@@ -20,6 +20,7 @@ const LOOPBACK_HOST = '127.0.0.1'
 const DEFAULT_ATTACH_TIMEOUT_MS = 2 * 60 * 1000
 const MAX_CONTROL_MESSAGE_BYTES = 16 * 1024
 const MAX_RESULT_MESSAGE_BYTES = 2 * 1024 * 1024
+const intrinsicByteFill = Uint8Array.prototype.fill
 const ALLOWED_PREFLIGHT_HEADERS = new Set([
   'content-type',
   HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
@@ -37,6 +38,14 @@ const ROUTES = new Map([
 
 function serverError(code, message, options) {
   return new HttpAuthedBrowserBridgeError(code, message, options)
+}
+
+function eraseBytes(value) {
+  try {
+    if (value instanceof Uint8Array) Reflect.apply(intrinsicByteFill, value, [0])
+  } catch {
+    // HTTP dependencies may detach or resize handed-off byte storage.
+  }
 }
 
 function exactKeys(value, keys) {
@@ -121,7 +130,7 @@ function endJson(response, status, value, extensionOrigin, includeCors = true) {
   const scrub = () => {
     if (scrubbed) return
     scrubbed = true
-    bytes.fill(0)
+    eraseBytes(bytes)
   }
   response.once('finish', scrub)
   response.once('close', scrub)
@@ -192,14 +201,14 @@ async function readJson(request, maximum) {
       request.on('data', (chunk) => {
         const bytes = Buffer.from(chunk)
         if (tooLarge) {
-          bytes.fill(0)
+          eraseBytes(bytes)
           return
         }
         length += bytes.length
         if (length > maximum) {
           tooLarge = true
-          bytes.fill(0)
-          for (const held of chunks) held.fill(0)
+          eraseBytes(bytes)
+          for (const held of chunks) eraseBytes(held)
           chunks.length = 0
           return
         }
@@ -239,10 +248,10 @@ async function readJson(request, maximum) {
         )
       }
     } finally {
-      combined.fill(0)
+      eraseBytes(combined)
     }
   } finally {
-    for (const chunk of chunks) chunk.fill(0)
+    for (const chunk of chunks) eraseBytes(chunk)
   }
 }
 
@@ -388,16 +397,27 @@ export async function createHttpAuthedBrowserBridgeServer({
   let attachWaiter
   let attachTimer
 
+  const clearAttachTimer = () => {
+    const timer = attachTimer
+    attachTimer = undefined
+    if (timer === undefined) return
+    try {
+      clearTimer(timer)
+    } catch {
+      // Waiter settlement and server/session cleanup remain authoritative.
+    }
+  }
+
   const resolveAttached = () => {
     attached = true
-    if (attachTimer !== undefined) clearTimer(attachTimer)
-    attachTimer = undefined
-    attachWaiter?.resolve({
+    const waiter = attachWaiter
+    attachWaiter = undefined
+    clearAttachTimer()
+    waiter?.resolve({
       extension_id: extensionId,
       target_origin: targetOrigin,
       campaign_grant_sha256: grant,
     })
-    attachWaiter = undefined
   }
 
   const server = serverFactory(async (request, response) => {
@@ -623,24 +643,40 @@ export async function createHttpAuthedBrowserBridgeServer({
           resolve = resolvePromise
           reject = rejectPromise
         })
-        attachWaiter = { promise, resolve, reject }
-        attachTimer = setTimer(() => {
-          const error = serverError(
-            'HTTP_AUTHED_BROWSER_BRIDGE_ATTACH_TIMEOUT',
-            'loopback browser bridge timed out waiting for Chrome to attach',
-          )
-          attachWaiter?.reject(error)
-          attachWaiter = undefined
+        // Timer setup may call back synchronously or throw. Bind the callback
+        // to this exact waiter so either behavior cannot strand or replace it.
+        void promise.catch(() => {})
+        const waiter = { promise, resolve, reject }
+        attachWaiter = waiter
+        let timer
+        try {
+          timer = setTimer(() => {
+            if (attachWaiter !== waiter) return
+            attachWaiter = undefined
+            attachTimer = undefined
+            waiter.reject(serverError(
+              'HTTP_AUTHED_BROWSER_BRIDGE_ATTACH_TIMEOUT',
+              'loopback browser bridge timed out waiting for Chrome to attach',
+            ))
+          }, attachTimeoutMs)
+        } catch (cause) {
+          if (attachWaiter === waiter) attachWaiter = undefined
           attachTimer = undefined
-        }, attachTimeoutMs)
+          throw serverError(
+            'HTTP_AUTHED_BROWSER_BRIDGE_ATTACH_TIMER_FAILED',
+            'loopback browser bridge could not start its attach deadline timer',
+            { cause },
+          )
+        }
+        if (attachWaiter === waiter) attachTimer = timer
+        return promise
       }
       return attachWaiter.promise
     },
     async close() {
       if (closed) return
       closed = true
-      if (attachTimer !== undefined) clearTimer(attachTimer)
-      attachTimer = undefined
+      clearAttachTimer()
       const attachError = serverError(
         'HTTP_AUTHED_BROWSER_BRIDGE_CLOSED',
         'loopback browser bridge closed before Chrome attached',

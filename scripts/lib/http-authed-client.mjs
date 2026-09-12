@@ -9,6 +9,7 @@ import {
 } from './http-authed-contracts.mjs'
 import {
   createHttpReconIdentity,
+  HttpReconTransportError,
   resolveHttpReconDns,
 } from './http-recon-client.mjs'
 import {
@@ -23,6 +24,7 @@ import {
 import { PLATFORM_SERIES } from './version.mjs'
 
 const MAX_CREDENTIAL_BYTES = 64 * 1024
+const intrinsicByteFill = Uint8Array.prototype.fill
 const OBSERVABLE_RESPONSE_HEADERS = new Set([
   'allow',
   'content-encoding',
@@ -44,17 +46,58 @@ function clientError(code, message, options) {
   return new HttpAuthedClientError(code, message, options)
 }
 
-function exactBytes(value, label, maxBytes, { minimum = 1 } = {}) {
+function eraseBytes(value) {
+  try {
+    if (value instanceof Uint8Array) Reflect.apply(intrinsicByteFill, value, [0])
+  } catch {
+    // Cleanup is best-effort. A dependency may detach or resize handed-off storage.
+  }
+}
+
+function copyToOwnedBuffer(value) {
+  let temporarySource
+  let bytes
+  let copied = false
+  try {
+    const source = typeof value === 'string'
+      ? (temporarySource = Buffer.from(value))
+      : value
+    const storage = new ArrayBuffer(source.byteLength)
+    bytes = Buffer.from(storage)
+    bytes.set(source)
+    copied = true
+    return bytes
+  } finally {
+    eraseBytes(temporarySource)
+    if (!copied) eraseBytes(bytes)
+  }
+}
+
+function exactBytes(value, label, maxBytes, {
+  minimum = 1,
+  dedicated = false,
+} = {}) {
   if (!(typeof value === 'string' || Buffer.isBuffer(value) || value instanceof Uint8Array)) {
     throw clientError('HTTP_AUTHED_BYTES_REQUIRED', `${label} must be supplied as bytes`)
   }
-  const bytes = Buffer.from(value)
-  if (bytes.length < minimum || bytes.length > maxBytes) {
-    bytes.fill(0)
-    throw clientError(
-      'HTTP_AUTHED_BYTES_INVALID',
-      `${label} must contain ${minimum} to ${maxBytes} bytes`,
-    )
+  const expectedByteLength = typeof value === 'string'
+    ? Buffer.byteLength(value)
+    : value.byteLength
+  const invalidLength = () => clientError(
+    'HTTP_AUTHED_BYTES_INVALID',
+    `${label} must contain ${minimum} to ${maxBytes} bytes`,
+  )
+  if (
+    !Number.isSafeInteger(expectedByteLength)
+    || expectedByteLength < minimum
+    || expectedByteLength > maxBytes
+  ) {
+    throw invalidLength()
+  }
+  const bytes = dedicated ? copyToOwnedBuffer(value) : Buffer.from(value)
+  if (bytes.length !== expectedByteLength) {
+    eraseBytes(bytes)
+    throw invalidLength()
   }
   return bytes
 }
@@ -91,9 +134,10 @@ function requestBody(action, supplied) {
     supplied,
     'synthetic request body',
     16 * 1024 * 1024,
-    { minimum: 0 },
+    { minimum: 0, dedicated: true },
   )
   if (bytes.length !== metadata.byte_length || sha256Hex(bytes) !== metadata.sha256) {
+    eraseBytes(bytes)
     throw clientError(
       'HTTP_AUTHED_BODY_BINDING_MISMATCH',
       'synthetic request body length or digest does not match its sealed metadata',
@@ -251,7 +295,7 @@ function validateTransportRequest({
       'authenticated probe response observer is invalid',
     )
   }
-  return { parsed, body: body === null ? null : Buffer.from(body) }
+  return { parsed, body: body === null ? null : copyToOwnedBuffer(body) }
 }
 
 export function createHttpAuthedHttpsTransport({
@@ -273,17 +317,35 @@ export function createHttpAuthedHttpsTransport({
     const controller = new AbortController()
     let timedOut = false
     let request
-    const timer = setTimer(() => {
-      timedOut = true
-      controller.abort()
-      request?.destroy(clientError('HTTP_AUTHED_TIMEOUT', 'authenticated HTTPS probe timed out'))
-    }, input.timeoutMs)
+    let timer
+    let timerCreated = false
     try {
-      const dns = await resolveHttpReconDns(parsed.hostname, {
-        lookup: dnsLookup,
-        signal: controller.signal,
-        timedOut: () => timedOut,
-      })
+      timer = setTimer(() => {
+        timedOut = true
+        controller.abort()
+        request?.destroy(clientError('HTTP_AUTHED_TIMEOUT', 'authenticated HTTPS probe timed out'))
+      }, input.timeoutMs)
+      timerCreated = true
+      let dns
+      try {
+        dns = await resolveHttpReconDns(parsed.hostname, {
+          lookup: dnsLookup,
+          signal: controller.signal,
+          timedOut: () => timedOut,
+        })
+      } catch (cause) {
+        if (
+          cause instanceof HttpReconTransportError
+          && ['HTTP_RECON_ABORTED', 'HTTP_RECON_TIMEOUT'].includes(cause.code)
+        ) {
+          throw clientError(
+            'HTTP_AUTHED_TIMEOUT',
+            'authenticated HTTPS probe timed out',
+            { cause },
+          )
+        }
+        throw cause
+      }
       if (controller.signal.aborted) {
         throw clientError('HTTP_AUTHED_TIMEOUT', 'authenticated HTTPS probe timed out')
       }
@@ -309,6 +371,23 @@ export function createHttpAuthedHttpsTransport({
         let response
         let responseBytes = 0
         const observedBodyChunks = []
+        const pendingObserverBodyChunks = []
+        let observerInputBodyChunks
+        let observerHandoffComplete = false
+        const eraseObservedBodyChunks = () => {
+          for (const chunk of observedBodyChunks) {
+            eraseBytes(chunk)
+          }
+          observedBodyChunks.length = 0
+        }
+        const erasePendingObserverBodyChunks = () => {
+          if (observerHandoffComplete) return
+          for (const chunk of pendingObserverBodyChunks) {
+            eraseBytes(chunk)
+          }
+          pendingObserverBodyChunks.length = 0
+          observerInputBodyChunks = undefined
+        }
         const finish = (callback, value) => {
           if (settled) return
           settled = true
@@ -323,6 +402,8 @@ export function createHttpAuthedHttpsTransport({
             source.message || 'authenticated HTTPS probe failed',
             { cause: source, requestMayHaveBeenSent },
           )
+          eraseObservedBodyChunks()
+          erasePendingObserverBodyChunks()
           finish(reject, wrapped)
         }
         const refuseProtocolSwitch = (_received, socket) => {
@@ -397,8 +478,7 @@ export function createHttpAuthedHttpsTransport({
           }
           response.on('data', (chunk) => {
             if (settled) return
-            const bytes = Buffer.from(chunk)
-            responseBytes += bytes.length
+            responseBytes += Buffer.byteLength(chunk)
             if (responseBytes > input.maxResponseBytes) {
               const error = clientError(
                 'HTTP_AUTHED_RESPONSE_LIMIT_EXCEEDED',
@@ -409,7 +489,9 @@ export function createHttpAuthedHttpsTransport({
               request.destroy(error)
               return
             }
-            if (input.responseObserver !== undefined) observedBodyChunks.push(bytes)
+            if (input.responseObserver !== undefined) {
+              observedBodyChunks.push(Buffer.from(chunk))
+            }
           })
           response.once('error', fail)
           response.once('aborted', () => fail(clientError(
@@ -430,11 +512,21 @@ export function createHttpAuthedHttpsTransport({
             }
             const complete = async () => {
               try {
-                await input.responseObserver?.({
-                  status: response.statusCode,
-                  headers: observableHeaders,
-                  bodyChunks: observedBodyChunks.map((chunk) => Buffer.from(chunk)),
-                })
+                if (input.responseObserver !== undefined) {
+                  for (const chunk of observedBodyChunks) {
+                    pendingObserverBodyChunks.push(Buffer.from(chunk))
+                  }
+                  observerInputBodyChunks = [...pendingObserverBodyChunks]
+                  await input.responseObserver({
+                    status: response.statusCode,
+                    headers: observableHeaders,
+                    bodyChunks: observerInputBodyChunks,
+                  })
+                  if (settled) return
+                  observerHandoffComplete = true
+                  pendingObserverBodyChunks.length = 0
+                  observerInputBodyChunks = undefined
+                }
                 finish(resolve, {
                   status: response.statusCode,
                   responseBytes,
@@ -447,7 +539,8 @@ export function createHttpAuthedHttpsTransport({
                   { cause: error, requestMayHaveBeenSent: true },
                 ))
               } finally {
-                for (const chunk of observedBodyChunks) chunk.fill(0)
+                erasePendingObserverBodyChunks()
+                eraseObservedBodyChunks()
               }
             }
             void complete()
@@ -455,7 +548,19 @@ export function createHttpAuthedHttpsTransport({
         })
       })
     } finally {
-      clearTimer(timer)
+      try {
+        if (timerCreated) {
+          try {
+            clearTimer(timer)
+          } catch {
+            // The transport outcome is already authoritative. A faulty timer
+            // cleanup dependency cannot turn a settled request into an unsent
+            // failure or replace the primary timeout/transport error.
+          }
+        }
+      } finally {
+        eraseBytes(body)
+      }
     }
   }
 }
@@ -558,28 +663,38 @@ export async function dispatchHttpAuthedProbe({
               : [],
             bodyChunks: Array.isArray(input?.bodyChunks) ? input.bodyChunks : [],
           }
-          if (observation !== undefined) {
-            try {
-              jsonShape = observeHttpAuthedJsonShape({
-                ...observed,
-                limits: { maxDepth: observation.max_depth },
-                safeKeyNames: observation.safe_key_names,
-                mode: observation.mode,
-              })
-            } catch {
-              jsonShape = undefined
-              jsonShapeObservationFailed = true
-              return
-            }
-          }
+          let handedOff = false
           try {
-            await responseObserver?.(observed)
-          } catch (cause) {
-            throw clientError(
-              'HTTP_AUTHED_RESPONSE_OBSERVER_FAILED',
-              'authenticated response observation failed',
-              { cause, requestMayHaveBeenSent: true },
-            )
+            if (observation !== undefined) {
+              try {
+                jsonShape = observeHttpAuthedJsonShape({
+                  ...observed,
+                  limits: { maxDepth: observation.max_depth },
+                  safeKeyNames: observation.safe_key_names,
+                  mode: observation.mode,
+                })
+              } catch {
+                jsonShape = undefined
+                jsonShapeObservationFailed = true
+                return
+              }
+            }
+            try {
+              await responseObserver?.(observed)
+              handedOff = responseObserver !== undefined
+            } catch (cause) {
+              throw clientError(
+                'HTTP_AUTHED_RESPONSE_OBSERVER_FAILED',
+                'authenticated response observation failed',
+                { cause, requestMayHaveBeenSent: true },
+              )
+            }
+          } finally {
+            if (!handedOff) {
+              for (const chunk of observed.bodyChunks) {
+                eraseBytes(chunk)
+              }
+            }
           }
         }
       transportResult = await transport({
@@ -630,6 +745,7 @@ export async function dispatchHttpAuthedProbe({
       ),
     }
   } finally {
-    credentialBytes?.fill(0)
+    eraseBytes(credentialBytes)
+    eraseBytes(body)
   }
 }

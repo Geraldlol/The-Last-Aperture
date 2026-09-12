@@ -26,6 +26,7 @@ const STORAGE_KEEPALIVE_MS = 20_000
 const POPUP_KEEPALIVE_NAME = 'last-aperture-popup'
 const RECOVERY_STORAGE_KEY = 'last_aperture_http_authed_recovery_v1'
 const RECOVERY_PHASES = new Set(['OPEN', 'PREPARED', 'COMMIT'])
+const intrinsicByteFill = Uint8Array.prototype.fill
 
 class CompanionError extends Error {
   constructor(code) {
@@ -37,6 +38,14 @@ class CompanionError extends Error {
 
 function fail(code) {
   throw new CompanionError(code)
+}
+
+function eraseBytes(value) {
+  try {
+    if (value instanceof Uint8Array) Reflect.apply(intrinsicByteFill, value, [0])
+  } catch {
+    // Controller producers may detach or resize storage after handoff.
+  }
 }
 
 function plain(value) {
@@ -105,24 +114,47 @@ function assertControllerOrigin(value) {
   }
 }
 
-async function readJsonBounded(response) {
-  const declared = response.headers.get('content-length')
-  if (
-    declared !== null
-    && (!/^(?:0|[1-9][0-9]*)$/u.test(declared)
-      || Number(declared) > MAX_CONTROLLER_MESSAGE_BYTES)
-  ) fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_TOO_LARGE')
+function cancelReader(reader) {
+  try {
+    Promise.resolve(reader.cancel()).catch(() => {})
+  } catch {
+    // Cancellation is best-effort and must never extend the controller deadline.
+  }
+}
+
+async function readJsonBounded(response, withinDeadline) {
   if (response.body === null) fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_INVALID')
   const reader = response.body.getReader()
+  const declared = response.headers.get('content-length')
   const chunks = []
   let length = 0
   try {
+    if (
+      declared !== null
+      && (!/^(?:0|[1-9][0-9]*)$/u.test(declared)
+        || Number(declared) > MAX_CONTROLLER_MESSAGE_BYTES)
+    ) fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_TOO_LARGE')
     while (true) {
-      const part = await reader.read()
-      if (part.done) break
+      const pendingRead = Promise.resolve().then(() => reader.read())
+      let part
+      try {
+        part = await withinDeadline(() => pendingRead)
+      } catch (error) {
+        pendingRead.then((latePart) => {
+          eraseBytes(latePart?.value)
+        }, () => {})
+        throw error
+      }
+      if (part.done) {
+        eraseBytes(part.value)
+        break
+      }
+      if (!(part.value instanceof Uint8Array)) {
+        fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_INVALID')
+      }
       length += part.value.byteLength
       if (length > MAX_CONTROLLER_MESSAGE_BYTES) {
-        await reader.cancel()
+        eraseBytes(part.value)
         fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_TOO_LARGE')
       }
       chunks.push(part.value)
@@ -138,10 +170,15 @@ async function readJsonBounded(response) {
     } catch {
       fail('HTTP_AUTHED_BROWSER_CONTROLLER_RESPONSE_INVALID')
     } finally {
-      bytes.fill(0)
+      eraseBytes(bytes)
     }
+  } catch (error) {
+    cancelReader(reader)
+    throw error
   } finally {
-    for (const chunk of chunks) chunk.fill(0)
+    for (const chunk of chunks) eraseBytes(chunk)
+    chunks.length = 0
+    length = 0
   }
 }
 
@@ -472,12 +509,39 @@ export function createBrowserBridgeCompanion({
     if (body !== undefined) headers['content-type'] = 'application/json'
     const abortController = new AbortController()
     let timedOut = false
-    const timeout = setTimer(() => {
-      timedOut = true
-      abortController.abort()
-    }, CONTROLLER_REQUEST_TIMEOUT_MS)
+    let rejectDeadline
+    const expiresAt = clockMilliseconds() + CONTROLLER_REQUEST_TIMEOUT_MS
+    const deadline = new Promise((_resolve, reject) => {
+      rejectDeadline = reject
+    })
+    // A supplied timer may invoke its callback before returning or throw after
+    // doing so. Observe the deadline immediately so setup failure cannot create
+    // an unhandled rejection in either case.
+    void deadline.catch(() => {})
+    let timeout
     try {
-      const response = await fetchImpl(`${controllerBase}${path}`, {
+      timeout = setTimer(() => {
+        timedOut = true
+        abortController.abort()
+        rejectDeadline(new Error('controller deadline exceeded'))
+      }, CONTROLLER_REQUEST_TIMEOUT_MS)
+    } catch {
+      fail('HTTP_AUTHED_BROWSER_CONTROLLER_TIMER_FAILED')
+    }
+    const ensureDeadline = () => {
+      if (!timedOut && clockMilliseconds() < expiresAt) return
+      timedOut = true
+      if (!abortController.signal.aborted) abortController.abort()
+      throw new Error('controller deadline exceeded')
+    }
+    const withinDeadline = async (operation) => {
+      ensureDeadline()
+      const value = await Promise.race([Promise.resolve().then(operation), deadline])
+      ensureDeadline()
+      return value
+    }
+    try {
+      const response = await withinDeadline(() => fetchImpl(`${controllerBase}${path}`, {
         method,
         headers,
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -486,23 +550,33 @@ export function createBrowserBridgeCompanion({
         redirect: 'error',
         referrerPolicy: 'no-referrer',
         signal: abortController.signal,
-      })
-      if (response.status === 204) return { status: 204, value: null }
-      const value = await readJsonBounded(response)
-      if (!response.ok) {
+      }))
+      const responseMetadata = await withinDeadline(() => ({
+        status: response?.status,
+        ok: response?.ok,
+      }))
+      if (responseMetadata.status === 204) return { status: 204, value: null }
+      const value = await withinDeadline(() => readJsonBounded(response, withinDeadline))
+      if (!responseMetadata.ok) {
         const code = value?.error?.code
         fail(typeof code === 'string' && /^[A-Z0-9_]{3,128}$/u.test(code)
           ? code
           : 'HTTP_AUTHED_BROWSER_CONTROLLER_REJECTED')
       }
-      return { status: response.status, value }
+      const result = await withinDeadline(() => ({ status: responseMetadata.status, value }))
+      return result
     } catch (error) {
       if (error instanceof CompanionError) throw error
       fail(timedOut
         ? 'HTTP_AUTHED_BROWSER_CONTROLLER_TIMEOUT'
         : 'HTTP_AUTHED_BROWSER_CONTROLLER_UNREACHABLE')
     } finally {
-      clearTimer(timeout)
+      try {
+        clearTimer(timeout)
+      } catch {
+        // The exchange outcome is already authoritative. Timer cleanup cannot
+        // replace a successful response or the primary timeout/fetch failure.
+      }
     }
   }
 

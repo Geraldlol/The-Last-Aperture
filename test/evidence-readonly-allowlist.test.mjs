@@ -61,6 +61,22 @@ test('sf.query accepts a SELECT and nothing else', () => {
   }
 })
 
+test('sf.query rejects SELECT clauses that lock records or update view tracking', () => {
+  for (const soql of [
+    'SELECT Id FROM Account FOR UPDATE',
+    'SELECT Id FROM Account FOR VIEW',
+    'SELECT Id FROM Account FOR REFERENCE',
+    'SELECT Id FROM Account UPDATE TRACKING',
+    'SELECT Id FROM Account UPDATE VIEWSTAT',
+  ]) {
+    assert.throws(
+      () => buildReadOnlyCommand('sf.query', { alias: 'a', soql }),
+      /stateful|read-only/i,
+      soql,
+    )
+  }
+})
+
 test('runtime.env-keys returns key names, never values', () => {
   const built = buildReadOnlyCommand('runtime.env-keys', {
     namespace: 'sidecars', pod: 'api-0', container: 'api',

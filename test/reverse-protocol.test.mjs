@@ -400,6 +400,30 @@ test('side effects are classified independently of the HTTP verb without retaini
   assert.equal(canonicalNativeInteractionContract(contract).includes('delete'), false)
 })
 
+test('an unclassified method override cannot inherit read semantics or automatic retry safety', () => {
+  const entries = [500, 200].map((status) => entry({
+    method: 'GET',
+    url: 'https://portal.example/api/read?_method=CUSTOM',
+    status,
+  }))
+  const evidence = importWebHarEvidence({ log: { entries } }, {
+    sourceSha256: '7'.repeat(64),
+    targetOrigins: ['https://portal.example'],
+    pathLiterals: ['api', 'read'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence],
+    reverseEvidence: [],
+    generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+
+  assert.deepEqual(contract.endpoints[0].side_effect, {
+    classification: 'UNKNOWN',
+    basis: 'SEMANTIC_ACTION_CLASS',
+  })
+  assert.equal(contract.endpoints[0].retry, 'RETRY_SEQUENCE_OBSERVED')
+})
+
 test('a standard auth callback is classified without retaining its values', () => {
   const evidence = importWebHarEvidence({ log: { entries: [entry({
     method: 'POST',

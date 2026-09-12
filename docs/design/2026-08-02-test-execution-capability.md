@@ -6,11 +6,10 @@
 - Relates to: ADR 0002 (sealed provider execution), ADR 0006 (disposable
   conformance lab), `skills/last-aperture/lenses/_harness.md`
 
-> **Current 0.13.0 execution status: disabled.** This document records the
+> **Historical 0.13.0 execution status: disabled.** This document records the
 > earlier `TEST_EXECUTION` design; it is not an active capability statement.
-> The public `run-proof` and `run-provider` commands refuse before bundle or
-> configuration access pending the enrolled, network-denied worker controls
-> required by ADR 0020.
+> In 0.14.1, `run-proof` and `run-service-proof` are available only through
+> their sealed narrow routes; provider execution remains unavailable.
 > ADR 0021 also supersedes the RoE-as-consent model below. An authenticated
 > operator target/scope statement is the sole authorization primitive; any RoE
 > retained on re-enablement is technical capability policy or evidence only.

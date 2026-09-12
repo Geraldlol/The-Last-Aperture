@@ -1,10 +1,11 @@
 {
   "name": "last-aperture",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "private": true,
   "license": "MIT",
   "type": "module",
   "files": [
+    "CHANGELOG.md",
     "agents/",
     "benchmarks/",
     "browser/",
@@ -12,10 +13,12 @@
     "containers/",
     "database-conformance/",
     "docs/",
+    "!docs/remediation/",
     "!docs/superpowers/",
     "fixtures/",
     "!**/.gradle/",
     "integrations/",
+    "npm-shrinkwrap.json",
     "providers/",
     "proxy/",
     "schemas/",
@@ -25,7 +28,11 @@
     "skills/",
     "tasks/",
     "test/",
-    "SKILL.md"
+    "SKILL.md",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
+    "!**/*.pyo",
+    "!**/*.pyd"
   ],
   "bin": {
     "last-aperture": "./scripts/audit.mjs",

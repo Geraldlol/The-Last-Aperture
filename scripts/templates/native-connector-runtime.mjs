@@ -13,10 +13,46 @@ const MAX_RESPONSE_CREDENTIAL_VALUES = 4096
 const MAX_REDIRECTS = 5
 const MAX_RETRIES = 3
 const MAX_TIMEOUT_MS = 120_000
+const intrinsicByteFill = Uint8Array.prototype.fill
 const PLACEHOLDER = /\{(integer|uuid|hex|segment|value|\.\.\.)\}/gu
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u
 const COOKIE_VALUE = /^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*$/u
 const AUTOMATIC_RETRY_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const SEMANTIC_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/u
+const SEMANTIC_NAME = /^(?:_method|action|command|do|event|method|mode|op|operation|submit|task|view)$/iu
+const WRITE_ACTION = /^(?:add|approve|archive|assign|begin|cancel|close|commit|confirm|connect|create|delete|disable|disconnect|edit|enable|end|execute|import|insert|link|merge|move|patch|pay|post|publish|put|remove|reset|revoke|save|send|set|start|stop|submit|sync|update|upload|write)$/iu
+const READ_ACTION = /^(?:browse|detail|download|export|fetch|find|get|index|list|load|lookup|open|preview|query|read|report|retrieve|search|show|view)$/iu
+const READ_SHAPED_ACTION_SUFFIXES = new Set([
+  'detail', 'details', 'history', 'list', 'preview', 'report', 'result', 'results', 'status',
+])
+const MAX_LAYERED_DECODE_PASSES = 32
+const RESPONSE_CREDENTIAL_HEADERS = new Set([
+  'api-key', 'authorization', 'cookie', 'location', 'proxy-authorization', 'set-cookie',
+  'x-access-token', 'x-amz-security-token', 'x-api-key', 'x-auth-token',
+  'x-client-secret', 'x-csrf-token', 'x-goog-api-key', 'x-session-token', 'x-xsrf-token',
+  'x-mfa-code', 'x-one-time-password', 'x-otp', 'x-pin', 'x-totp', 'x-verification-code',
+])
+const SENSITIVE_HEADER_FIELDS = new Set([
+  'accesskey', 'accesskeyid', 'apikey', 'assertion', 'auth', 'authentication',
+  'authorization', 'bearer', 'clientsecret', 'code', 'cookie', 'credential',
+  'credentials', 'csrf', 'csrftoken', 'idtoken', 'jsessionid', 'jwt', 'key', 'mfa',
+  'mfacode', 'otp', 'password', 'passwd', 'passcode', 'pin', 'pwd', 'refreshtoken',
+  'relaystate', 'samlrequest', 'samlresponse', 'secret', 'session', 'sessionid',
+  'sessiontoken', 'sid', 'sig', 'signature', 'state', 'ticket', 'token', 'totp',
+  'verificationcode', 'xsrf', 'xsrftoken', 'xamzcredential', 'xamzsecuritytoken',
+  'xamzsignature',
+])
+const SENSITIVE_HEADER_SUFFIX_FIELDS = new Set([
+  'accesskey', 'apikey', 'assertion', 'cookie', 'credential', 'passcode',
+  'passwd', 'password', 'relaystate', 'samlrequest', 'samlresponse', 'secret',
+  'signature', 'state', 'token',
+])
+const SENSITIVE_HEADER_CODE_CONTEXTS = new Set([
+  'auth', 'auth0', 'authentication', 'authorization', 'azuread', 'cognito', 'entra',
+  'forgerock', 'identity', 'keycloak', 'login', 'oauth', 'oauth2', 'oidc', 'okta',
+  'onelogin', 'ping', 'pingidentity', 'saml', 'security', 'signin', 'sso', 'vendor',
+])
+const MAX_SENSITIVE_VERSION_DIGITS = 8
 const FORBIDDEN_HEADERS = new Set([
   'connection', 'content-length', 'content-type', 'cookie', 'forwarded', 'host',
   'keep-alive', 'origin', 'proxy-authenticate', 'proxy-authorization', 'referer',
@@ -24,6 +60,67 @@ const FORBIDDEN_HEADERS = new Set([
   'x-forwarded-port', 'x-forwarded-proto', 'x-http-method',
   'x-http-method-override', 'x-method-override', 'x-original-url', 'x-rewrite-url',
 ])
+
+function eraseBytes(value) {
+  try {
+    const bytes = value instanceof Uint8Array
+      ? value
+      : (value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : (ArrayBuffer.isView(value)
+              ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+              : null))
+    if (bytes !== null) Reflect.apply(intrinsicByteFill, bytes, [0])
+  } catch {
+    // Producers may detach or resize handed-off storage. Cleanup cannot own settlement.
+  }
+}
+
+function forbiddenHeader(name) {
+  const lower = name.toLowerCase()
+  return FORBIDDEN_HEADERS.has(lower)
+    || lower.startsWith('sec-')
+    || lower.startsWith('x-forwarded-')
+    || lower.startsWith('x-original-')
+    || lower.startsWith('x-rewrite-')
+    || lower === 'x-envoy-original-path'
+    || lower === 'x-http-url-override'
+}
+
+function sensitiveHeaderSuffix(candidate) {
+  const version = /v?([0-9]+)$/u.exec(candidate)
+  if (version?.[1].length > MAX_SENSITIVE_VERSION_DIGITS) return true
+  const stem = version === null ? candidate : candidate.slice(0, -version[0].length)
+  if (stem.endsWith('code')) {
+    const context = stem.slice(0, -'code'.length)
+    for (const marker of SENSITIVE_HEADER_CODE_CONTEXTS) {
+      if (context.endsWith(marker)) return true
+    }
+  }
+  for (const field of SENSITIVE_HEADER_SUFFIX_FIELDS) {
+    if (stem.endsWith(field)) return true
+  }
+  return false
+}
+
+function sensitiveHeaderName(value) {
+  const lower = String(value).toLowerCase()
+  if (RESPONSE_CREDENTIAL_HEADERS.has(lower)) return true
+  let decoded = lower
+  for (let pass = 0; decoded.includes('%') && pass < 8; pass += 1) {
+    try { decoded = decodeURIComponent(decoded) } catch { return true }
+  }
+  if (decoded.includes('%')) return true
+  const compact = decoded.toLowerCase().replace(/[^a-z0-9]/gu, '')
+  const candidates = compact.startsWith('x') && compact.length > 1
+    ? [compact, compact.slice(1)]
+    : [compact]
+  return candidates.some((candidate) => (
+    SENSITIVE_HEADER_FIELDS.has(candidate)
+    || sensitiveHeaderSuffix(candidate)
+    || /^(?:csrf|xsrf)/u.test(candidate)
+  ))
+}
 
 function fail(code, message) {
   const error = new Error(message)
@@ -184,6 +281,86 @@ function scalarText(value, label, maximum = 16 * 1024) {
   return result
 }
 
+function semanticActionClass(value, { allowReadSuffix = true } = {}) {
+  if (typeof value !== 'string') return null
+  let decoded = value
+  for (let pass = 0; pass < MAX_LAYERED_DECODE_PASSES; pass += 1) {
+    let next
+    try { next = decodeURIComponent(decoded) } catch { break }
+    if (next === decoded) break
+    decoded = next
+  }
+  try {
+    if (decodeURIComponent(decoded) !== decoded) return 'OTHER_ACTION'
+  } catch {}
+  if (!SEMANTIC_VALUE.test(decoded)) return null
+  const tokens = decoded.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean)
+  if (allowReadSuffix && READ_SHAPED_ACTION_SUFFIXES.has(tokens.at(-1))) return 'READ_ACTION'
+  if (tokens.some((token) => WRITE_ACTION.test(token))) return 'WRITE_ACTION'
+  if (tokens.some((token) => READ_ACTION.test(token))) return 'READ_ACTION'
+  return 'OTHER_ACTION'
+}
+
+function pathActionClass(pathname) {
+  let read = false
+  for (const part of pathname.split('/').filter(Boolean)) {
+    const classification = semanticActionClass(part)
+    if (classification === 'WRITE_ACTION') return 'WRITE_ACTION'
+    if (classification === 'READ_ACTION') read = true
+  }
+  return read ? 'READ_ACTION' : 'NONE'
+}
+
+function assertPathActionClass(endpoint, pathname, code = 'CONNECTOR_INPUT_INVALID') {
+  const classification = pathActionClass(pathname)
+  if (
+    classification === 'OTHER_ACTION'
+    || !endpoint.request.path_action_classes.includes(classification)
+  ) {
+    fail(code, 'resolved path changes or leaves its action semantics unclassified')
+  }
+}
+
+function assertSemanticClass(value, field, label) {
+  if (!Array.isArray(field.semantic_classes) || field.semantic_classes.length === 0) {
+    if (SEMANTIC_NAME.test(field.name ?? '')) {
+      fail('CONNECTOR_INPUT_INVALID', `${label} leaves its action semantics unclassified`)
+    }
+    return
+  }
+  const classification = semanticActionClass(value, { allowReadSuffix: false })
+  if (
+    classification === null
+    || classification === 'OTHER_ACTION'
+    || !field.semantic_classes.includes(classification)
+  ) {
+    fail('CONNECTOR_INPUT_INVALID', `${label} changes or leaves its action semantics unclassified`)
+  }
+}
+
+function assertSemanticValues(value, field, label, depth = 0) {
+  if (typeof value === 'string') {
+    assertSemanticClass(value, field, label)
+    return
+  }
+  if (Array.isArray(value)) {
+    if (depth > 16) fail('CONNECTOR_INPUT_INVALID', `${label} nesting is too deep`)
+    if (value.length === 0 && actionBoundField(field)) {
+      fail('CONNECTOR_INPUT_INVALID', `${label} leaves its action semantics unclassified`)
+    }
+    for (const child of value) assertSemanticValues(child, field, label, depth + 1)
+    return
+  }
+  if (SEMANTIC_NAME.test(field.name ?? '')) {
+    fail('CONNECTOR_INPUT_INVALID', `${label} leaves its action semantics unclassified`)
+  }
+}
+
+function actionBoundField(field) {
+  return SEMANTIC_NAME.test(field.name ?? '')
+    || Array.isArray(field.semantic_classes) && field.semantic_classes.length > 0
+}
+
 function cookieValue(value, label) {
   const result = scalarText(value, label, MAX_COOKIE_VALUE_BYTES)
   if (!COOKIE_VALUE.test(result)) fail('CONNECTOR_INPUT_INVALID', `${label} is not a valid cookie value`)
@@ -192,7 +369,7 @@ function cookieValue(value, label) {
 
 function segment(value, label) {
   const result = scalarText(value, label, 2048)
-  if (result.length === 0 || result === '.' || result === '..') {
+  if (result.length === 0 || result === '.' || result === '..' || /[\\/%]/u.test(result)) {
     fail('CONNECTOR_INPUT_INVALID', `${label} is invalid`)
   }
   return encodeURIComponent(result)
@@ -315,15 +492,35 @@ function assertObservedType(value, field, label, { textual = false } = {}) {
 
 function redirectQueryMatches(fields, location) {
   const allowed = new Map(fields.map((field) => [field.name, field]))
+  const present = new Set(location.searchParams.keys())
+  if (fields.some((field) => actionBoundField(field) && !present.has(field.name))) return false
   return [...location.searchParams.entries()].every(([name, value]) => {
     const field = allowed.get(name)
-    return field !== undefined && field.types.some((type) => matchesObservedType(value, type, true))
+    const semanticClass = semanticActionClass(value, { allowReadSuffix: false })
+    return field !== undefined
+      && field.types.some((type) => matchesObservedType(value, type, true))
+      && (
+        !Array.isArray(field.semantic_classes)
+        || field.semantic_classes.length === 0
+        || semanticClass !== 'OTHER_ACTION' && field.semantic_classes.includes(semanticClass)
+      )
   })
 }
 
 function normalizeQuery(endpoint, supplied) {
   const values = assertRecord(supplied, 'query')
   const allowed = new Map(endpoint.request.query_parameters.map((item) => [item.name, item]))
+  for (const field of allowed.values()) {
+    const suppliedValue = values[field.name]
+    if (
+      actionBoundField(field)
+      && (!Object.hasOwn(values, field.name)
+        || suppliedValue === undefined
+        || Array.isArray(suppliedValue) && suppliedValue.every((value) => value === undefined))
+    ) {
+      fail('CONNECTOR_INPUT_INVALID', 'query leaves observed action semantics unspecified')
+    }
+  }
   const result = new URLSearchParams()
   let count = 0
   for (const name of Object.keys(values).sort()) {
@@ -335,6 +532,7 @@ function normalizeQuery(endpoint, supplied) {
       if (count > MAX_QUERY_VALUES) fail('CONNECTOR_INPUT_INVALID', 'query contains too many values')
       if (value !== undefined) {
         assertObservedType(value, field, 'query value', { textual: true })
+        assertSemanticClass(String(value), field, 'query value')
         result.append(name, scalarText(value, 'query value'))
       }
     }
@@ -348,7 +546,7 @@ function normalizeHeaders(supplied, { allowed, code = 'CONNECTOR_INPUT_INVALID',
   const result = {}
   for (const name of Object.keys(values).sort()) {
     const lower = name.toLowerCase()
-    if (!HEADER_NAME.test(name) || FORBIDDEN_HEADERS.has(lower) || lower.startsWith('sec-')) {
+    if (!HEADER_NAME.test(name) || forbiddenHeader(lower)) {
       fail(code, `a forbidden ${label} header was supplied`)
     }
     if (!(allowed instanceof Set) || !allowed.has(lower)) {
@@ -363,7 +561,7 @@ function normalizeHeaders(supplied, { allowed, code = 'CONNECTOR_INPUT_INVALID',
 function callerHeaderNames(endpoint) {
   const credentialHeaders = carrierParts(endpoint).headers
   return new Set(endpoint.request.header_names.filter((name) => (
-    !credentialHeaders.has(name) && name !== 'authorization'
+    !credentialHeaders.has(name) && !sensitiveHeaderName(name)
   )))
 }
 
@@ -385,49 +583,69 @@ function normalizedFieldValues(value, prefix = '', result = []) {
   return result
 }
 
-function cloneBody(value, depth = 0) {
+function cloneBody(value, ownedByteClones, depth = 0) {
   if (depth > 16) fail('CONNECTOR_INPUT_INVALID', 'body nesting is too deep')
   if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value
   if (value instanceof Uint8Array) {
     if (value.byteLength > MAX_REQUEST_BYTES) fail('CONNECTOR_INPUT_INVALID', 'request body is too large')
-    return new Uint8Array(value)
+    const clone = new Uint8Array(value)
+    ownedByteClones.add(clone)
+    return clone
   }
   if (Array.isArray(value)) {
     if (value.length > 4096) fail('CONNECTOR_INPUT_INVALID', 'body array is too large')
-    return value.map((item) => cloneBody(item, depth + 1))
+    return value.map((item) => cloneBody(item, ownedByteClones, depth + 1))
   }
   const record = assertRecord(value, 'body')
-  return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, cloneBody(child, depth + 1)]))
+  return Object.fromEntries(Object.entries(record).map(
+    ([key, child]) => [key, cloneBody(child, ownedByteClones, depth + 1)],
+  ))
 }
 
-function mergeBody(base, addition) {
+function mergeBody(base, addition, ownedByteClones) {
   if (addition === undefined) return base
-  if (base === undefined) return cloneBody(addition)
+  if (base === undefined) return cloneBody(addition, ownedByteClones)
   if (!plain(base) || !plain(addition)) fail('CONNECTOR_INPUT_INVALID', 'credential body cannot merge with the request body')
-  const result = cloneBody(base)
+  const result = cloneBody(base, ownedByteClones)
   for (const [key, value] of Object.entries(addition)) {
-    result[key] = plain(result[key]) && plain(value) ? mergeBody(result[key], value) : cloneBody(value)
+    result[key] = plain(result[key]) && plain(value)
+      ? mergeBody(result[key], value, ownedByteClones)
+      : cloneBody(value, ownedByteClones)
   }
   return result
 }
 
 function assertBodyShape(endpoint, body, { textual = false } = {}) {
-  if (body === undefined) return
   const allowed = new Map(endpoint.request.fields.map((item) => [item.path, item]))
+  if (body === undefined) {
+    if ([...allowed.values()].some(actionBoundField)) {
+      fail('CONNECTOR_INPUT_INVALID', 'body leaves observed action semantics unspecified')
+    }
+    return
+  }
   if (
     allowed.size > 0
     && !plain(body)
     && !(Array.isArray(body) && [...allowed.keys()].some((path) => path.startsWith('[]')))
   ) fail('CONNECTOR_INPUT_INVALID', 'body root does not match its observed object or array shape')
-  for (const item of normalizedFieldValues(body)) {
+  const suppliedFields = normalizedFieldValues(body)
+  const suppliedPaths = new Set(suppliedFields.map(({ path }) => path))
+  if ([...allowed.values()].some((field) => actionBoundField(field) && !suppliedPaths.has(field.path))) {
+    fail('CONNECTOR_INPUT_INVALID', 'body leaves observed action semantics unspecified')
+  }
+  for (const item of suppliedFields) {
     const field = allowed.get(item.path)
     if (!field) fail('CONNECTOR_INPUT_INVALID', 'body contains an unobserved field path')
     assertObservedType(item.value, field, 'body value', { textual })
+    assertSemanticValues(item.value, field, 'body value')
   }
 }
 
 function encodeBody(endpoint, body, requestedContentType) {
-  if (body === undefined) return { body: undefined, contentType: null }
+  if (body === undefined) {
+    assertBodyShape(endpoint, body)
+    return { body: undefined, contentType: null }
+  }
   const observed = endpoint.request.content_types
   const contentType = requestedContentType ?? observed[0]
   if (typeof contentType !== 'string' || !observed.includes(contentType)) {
@@ -468,7 +686,7 @@ function carrierParts(endpoint) {
   return result
 }
 
-function validateCredentials(endpoint, supplied) {
+function validateCredentials(endpoint, supplied, ownedByteClones) {
   if (supplied === undefined || supplied === null) return { headers: {}, cookies: {}, body: undefined }
   if (!plain(supplied) || Object.keys(supplied).some((key) => !['body', 'cookies', 'headers'].includes(key))) {
     fail('CONNECTOR_CREDENTIAL_INVALID', 'credential provider result contains an unknown field')
@@ -485,7 +703,9 @@ function validateCredentials(endpoint, supplied) {
   }
   if (Object.keys(cookies).length > MAX_COOKIE_COUNT) fail('CONNECTOR_CREDENTIAL_INVALID', 'credential provider returned too many cookies')
   for (const value of Object.values(cookies)) cookieValue(value, 'credential cookie value')
-  const body = supplied.body === undefined ? undefined : cloneBody(supplied.body)
+  const body = supplied.body === undefined
+    ? undefined
+    : cloneBody(supplied.body, ownedByteClones)
   if (body !== undefined) {
     if (!plain(body) && !Array.isArray(body)) {
       fail('CONNECTOR_CREDENTIAL_INVALID', 'credential body must map to a declared field carrier')
@@ -623,40 +843,104 @@ function cookieHeader(cookies) {
   return value
 }
 
-async function readResponse(response) {
+function cancelReaderWithoutWaiting(reader) {
+  try {
+    Promise.resolve(reader.cancel()).catch(() => {})
+  } catch {}
+}
+
+async function readResponse(response, { withinDeadline }) {
   const chunks = []
   let length = 0
-  if (response.body && typeof response.body.getReader === 'function') {
-    const reader = response.body.getReader()
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      length += value.byteLength
-      if (length > MAX_RESPONSE_BYTES) {
-        await reader.cancel().catch(() => {})
-        fail('CONNECTOR_RESPONSE_INVALID', 'response body exceeded the size limit')
+  let reader = null
+  let combined = null
+  let completed = false
+  try {
+    if (response.body && typeof response.body.getReader === 'function') {
+      reader = response.body.getReader()
+      while (true) {
+        const pendingRead = Promise.resolve().then(() => reader.read())
+        let part
+        try {
+          part = await withinDeadline(() => pendingRead)
+        } catch (error) {
+          pendingRead.then((latePart) => {
+            eraseBytes(latePart?.value)
+          }, () => {})
+          throw error
+        }
+        if (part?.done === true) {
+          eraseBytes(part.value)
+          break
+        }
+        if (!(part?.value instanceof Uint8Array)) {
+          fail('CONNECTOR_RESPONSE_INVALID', 'response stream returned a non-byte chunk')
+        }
+        if (length + part.value.byteLength > MAX_RESPONSE_BYTES) {
+          eraseBytes(part.value)
+          fail('CONNECTOR_RESPONSE_INVALID', 'response body exceeded the size limit')
+        }
+        const retained = Buffer.from(part.value)
+        chunks.push(retained)
+        length += retained.byteLength
+        eraseBytes(part.value)
       }
-      chunks.push(Buffer.from(value))
+    } else {
+      if (typeof response.arrayBuffer !== 'function') {
+        fail('CONNECTOR_RESPONSE_INVALID', 'response body is not readable')
+      }
+      const pendingArrayBuffer = Promise.resolve().then(() => response.arrayBuffer())
+      let arrayBuffer
+      try {
+        arrayBuffer = await withinDeadline(() => pendingArrayBuffer)
+      } catch (error) {
+        pendingArrayBuffer.then((lateBuffer) => {
+          eraseBytes(lateBuffer)
+        }, () => {})
+        throw error
+      }
+      if (!(arrayBuffer instanceof ArrayBuffer) && !ArrayBuffer.isView(arrayBuffer)) {
+        fail('CONNECTOR_RESPONSE_INVALID', 'response arrayBuffer returned a non-byte value')
+      }
+      const source = arrayBuffer instanceof ArrayBuffer
+        ? new Uint8Array(arrayBuffer)
+        : new Uint8Array(arrayBuffer.buffer, arrayBuffer.byteOffset, arrayBuffer.byteLength)
+      try {
+        if (source.byteLength > MAX_RESPONSE_BYTES) {
+          fail('CONNECTOR_RESPONSE_INVALID', 'response body exceeded the size limit')
+        }
+        const retained = Buffer.from(source)
+        chunks.push(retained)
+        length += retained.byteLength
+      } finally {
+        eraseBytes(source)
+      }
     }
-  } else {
-    const bytes = Buffer.from(await response.arrayBuffer())
-    if (bytes.byteLength > MAX_RESPONSE_BYTES) fail('CONNECTOR_RESPONSE_INVALID', 'response body exceeded the size limit')
-    chunks.push(bytes)
-  }
-  const bytes = Buffer.concat(chunks)
-  const contentType = response.headers?.get?.('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? null
-  if (bytes.length === 0) return { data: null, contentType }
-  if (contentType === 'application/json' || contentType?.endsWith('+json')) {
-    try {
-      return { data: JSON.parse(bytes.toString('utf8')), contentType }
-    } catch {
-      fail('CONNECTOR_RESPONSE_INVALID', 'response declared JSON but contained invalid JSON')
+    combined = Buffer.concat(chunks, length)
+    const contentType = response.headers?.get?.('content-type')?.split(';', 1)[0]?.trim().toLowerCase() ?? null
+    let data = null
+    if (combined.length > 0) {
+      if (contentType === 'application/json' || contentType?.endsWith('+json')) {
+        try {
+          data = JSON.parse(combined.toString('utf8'))
+        } catch {
+          fail('CONNECTOR_RESPONSE_INVALID', 'response declared JSON but contained invalid JSON')
+        }
+      } else if (contentType?.startsWith('text/') || contentType === 'application/x-www-form-urlencoded') {
+        data = combined.toString('utf8')
+      } else {
+        data = new Uint8Array(combined)
+      }
     }
+    completed = true
+    return { data, contentType }
+  } finally {
+    if (!completed && reader !== null) cancelReaderWithoutWaiting(reader)
+    eraseBytes(combined)
+    for (const chunk of chunks) eraseBytes(chunk)
+    chunks.length = 0
+    length = 0
   }
-  if (contentType?.startsWith('text/') || contentType === 'application/x-www-form-urlencoded') {
-    return { data: bytes.toString('utf8'), contentType }
-  }
-  return { data: new Uint8Array(bytes), contentType }
 }
 
 function projectResponseCredentials(endpoint, data) {
@@ -711,17 +995,21 @@ function responseHeaders(headers, endpoint) {
   const result = {}
   if (!headers || typeof headers.entries !== 'function') return result
   const credentialHeaders = new Set([
-    'authorization',
-    'cookie',
-    'location',
-    'proxy-authorization',
-    'set-cookie',
+    ...RESPONSE_CREDENTIAL_HEADERS,
     ...endpoint.auth.response_carriers
       .filter((carrier) => carrier.startsWith('header:'))
       .map((carrier) => carrier.slice('header:'.length).toLowerCase()),
   ])
+  let count = 0
   for (const [name, value] of headers.entries()) {
-    if (!credentialHeaders.has(name.toLowerCase())) result[name.toLowerCase()] = value
+    count += 1
+    if (
+      count > MAX_HEADER_COUNT
+      || !HEADER_NAME.test(name)
+      || Buffer.byteLength(value, 'utf8') > MAX_HEADER_VALUE_BYTES
+    ) fail('CONNECTOR_RESPONSE_INVALID', 'response headers exceeded the connector bounds')
+    const lower = name.toLowerCase()
+    if (!credentialHeaders.has(lower) && !sensitiveHeaderName(lower)) result[lower] = value
   }
   return result
 }
@@ -778,6 +1066,11 @@ export function createConnector({ credentialProvider, credentialReceiver, fetchI
   const jars = new Map()
 
   async function request(endpointId, options = {}) {
+    const ownedByteClones = new Set()
+    let requestMayHaveBeenSent = false
+    let timer
+    let timerCreated = false
+    try {
     if (!plain(options)) fail('CONNECTOR_OPTION_INVALID', 'request options must be an object')
     const optionNames = new Set([
       'body', 'contentType', 'cookies', 'headers', 'maxRedirects', 'maxRetries',
@@ -797,112 +1090,276 @@ export function createConnector({ credentialProvider, credentialReceiver, fetchI
     const initialOrigin = initialEndpoint.origin
     let endpoint = initialEndpoint
     let url = new URL(fillPath(endpoint.path_template, options.path), endpoint.origin)
+    assertPathActionClass(endpoint, url.pathname)
     const query = normalizeQuery(endpoint, options.query)
     url.search = query.toString()
-    let callerBody = options.body === undefined ? undefined : cloneBody(options.body)
+    let callerBody = options.body === undefined
+      ? undefined
+      : cloneBody(options.body, ownedByteClones)
     let redirects = 0
     let retries = 0
     let attempts = 0
+    const controller = new AbortController()
+    const clockNow = () => globalThis.performance?.now?.() ?? Date.now()
+    const expiresAt = clockNow() + timeoutMs
+    let rejectDeadline
+    const deadline = new Promise((_resolve, reject) => { rejectDeadline = reject })
+    // An ambient timer may invoke its callback before returning or throw after
+    // doing so. Observe the deadline immediately so setup failure cannot leave
+    // an unhandled rejection behind.
+    void deadline.catch(() => {})
+    const timeoutError = new Error('connector request timed out')
+    timeoutError.name = 'GeneratedConnectorError'
+    timeoutError.code = 'CONNECTOR_TIMEOUT'
+    timeoutError.request_may_have_been_sent = false
+    const ensureDeadline = () => {
+      if (!controller.signal.aborted && clockNow() < expiresAt) return
+      timeoutError.request_may_have_been_sent = requestMayHaveBeenSent
+      if (!controller.signal.aborted) controller.abort(timeoutError)
+      throw timeoutError
+    }
+    const withinDeadline = async (operation) => {
+      ensureDeadline()
+      const result = await Promise.race([Promise.resolve().then(operation), deadline])
+      ensureDeadline()
+      return result
+    }
+    const credentialProviderError = (error) => {
+      if (error === timeoutError) return error
+      const wrapped = new Error(requestMayHaveBeenSent
+        ? 'connector credential provider failed after transport invocation'
+        : 'connector credential provider failed')
+      wrapped.name = 'GeneratedConnectorError'
+      wrapped.code = requestMayHaveBeenSent
+        ? 'CONNECTOR_TRANSPORT_FAILED'
+        : 'CONNECTOR_CREDENTIAL_PROVIDER_FAILED'
+      wrapped.request_may_have_been_sent = requestMayHaveBeenSent
+      return wrapped
+    }
+    const preDispatchError = (error) => {
+      if (error === timeoutError) return error
+      if (requestMayHaveBeenSent) {
+        if (error?.name === 'GeneratedConnectorError') return markRequestMayHaveBeenSent(error)
+        const wrapped = new Error('connector preparation failed after transport invocation', { cause: error })
+        wrapped.name = 'GeneratedConnectorError'
+        wrapped.code = 'CONNECTOR_TRANSPORT_FAILED'
+        return markRequestMayHaveBeenSent(wrapped)
+      }
+      if (error?.name === 'GeneratedConnectorError') {
+        if (Object.isExtensible(error)) error.request_may_have_been_sent = false
+        return error
+      }
+      const wrapped = new Error('connector credential provider failed', { cause: error })
+      wrapped.name = 'GeneratedConnectorError'
+      wrapped.code = 'CONNECTOR_CREDENTIAL_PROVIDER_FAILED'
+      wrapped.request_may_have_been_sent = false
+      return wrapped
+    }
 
-    while (true) {
-      attempts += 1
-      const suppliedCredentials = validateCredentials(endpoint, await providerValue(credentialProvider, endpoint))
-      const allowedCallerHeaders = callerHeaderNames(endpoint)
-      const callerHeaders = endpoint.origin === initialOrigin
-        ? Object.fromEntries(Object.entries(baseHeaders).filter(([name]) => allowedCallerHeaders.has(name)))
-        : {}
-      const headers = {
-        ...callerHeaders,
-        ...suppliedCredentials.headers,
-      }
-      const cookies = requestCookies(jars, endpoint, url, {
-        ...(endpoint.origin === initialOrigin ? baseCookies : {}),
-        ...suppliedCredentials.cookies,
-      })
-      if (Object.keys(cookies).length > 0) headers.cookie = cookieHeader(cookies)
-      const mergedBody = mergeBody(callerBody, suppliedCredentials.body)
-      if (mergedBody !== undefined && ['GET', 'HEAD'].includes(endpoint.method)) {
-        fail('CONNECTOR_INPUT_INVALID', 'GET and HEAD endpoints cannot carry a request body')
-      }
-      const encoded = encodeBody(endpoint, mergedBody, options.contentType)
-      if (encoded.contentType !== null) headers['content-type'] = encoded.contentType
-      if (Object.keys(headers).length > MAX_HEADER_COUNT) fail('CONNECTOR_INPUT_INVALID', 'request contains too many headers')
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(new Error('connector request timed out')), timeoutMs)
-      timer.unref?.()
+    try {
       try {
-        const response = await fetchImpl(url, {
-          method: endpoint.method,
-          headers,
-          body: ['GET', 'HEAD'].includes(endpoint.method) ? undefined : encoded.body,
-          redirect: 'manual',
-          signal: controller.signal,
-        })
-        if (!response || !Number.isSafeInteger(response.status) || response.status < 100 || response.status > 999) {
-          fail('CONNECTOR_RESPONSE_INVALID', 'connector transport returned an invalid response')
+        timer = setTimeout(() => {
+          timeoutError.request_may_have_been_sent = requestMayHaveBeenSent
+          controller.abort(timeoutError)
+          rejectDeadline(timeoutError)
+        }, timeoutMs)
+        timerCreated = true
+      } catch {
+        const timerError = new Error('connector request could not start its deadline timer')
+        timerError.name = 'GeneratedConnectorError'
+        timerError.code = 'CONNECTOR_TIMER_FAILED'
+        timerError.request_may_have_been_sent = false
+        throw timerError
+      }
+      while (true) {
+        attempts += 1
+        let providedCredentials
+        try {
+          providedCredentials = await withinDeadline(() => providerValue(credentialProvider, endpoint))
+        } catch (error) {
+          throw credentialProviderError(error)
         }
-        rememberCookies(jars, endpoint, response.headers, url)
+        let headers
+        let encoded
+        try {
+          const suppliedCredentials = validateCredentials(
+            endpoint,
+            providedCredentials,
+            ownedByteClones,
+          )
+          const allowedCallerHeaders = callerHeaderNames(endpoint)
+          const callerHeaders = endpoint.origin === initialOrigin
+            ? Object.fromEntries(Object.entries(baseHeaders).filter(([name]) => allowedCallerHeaders.has(name)))
+            : {}
+          headers = {
+            ...callerHeaders,
+            ...suppliedCredentials.headers,
+          }
+          const cookies = requestCookies(jars, endpoint, url, {
+            ...(endpoint.origin === initialOrigin ? baseCookies : {}),
+            ...suppliedCredentials.cookies,
+          })
+          if (Object.keys(cookies).length > 0) headers.cookie = cookieHeader(cookies)
+          const mergedBody = mergeBody(callerBody, suppliedCredentials.body, ownedByteClones)
+          if (mergedBody !== undefined && ['GET', 'HEAD'].includes(endpoint.method)) {
+            fail('CONNECTOR_INPUT_INVALID', 'GET and HEAD endpoints cannot carry a request body')
+          }
+          encoded = encodeBody(endpoint, mergedBody, options.contentType)
+          if (encoded.body instanceof Uint8Array) ownedByteClones.add(encoded.body)
+          if (encoded.contentType !== null) headers['content-type'] = encoded.contentType
+          if (Object.keys(headers).length > MAX_HEADER_COUNT) {
+            fail('CONNECTOR_INPUT_INVALID', 'request contains too many headers')
+          }
+        } catch (error) {
+          throw preDispatchError(error)
+        }
+        try {
+          const response = await withinDeadline(() => {
+            requestMayHaveBeenSent = true
+            return fetchImpl(url, {
+              method: endpoint.method,
+              headers,
+              body: ['GET', 'HEAD'].includes(endpoint.method) ? undefined : encoded.body,
+              redirect: 'manual',
+              signal: controller.signal,
+            })
+          })
+          const responseView = await withinDeadline(() => {
+            const status = response?.status
+            const headers = response?.headers
+            const body = response?.body
+            const arrayBufferMethod = response?.arrayBuffer
+            if (!Number.isSafeInteger(status) || status < 100 || status > 999) {
+              fail('CONNECTOR_RESPONSE_INVALID', 'connector transport returned an invalid response')
+            }
+            return {
+              status,
+              headers,
+              body,
+              arrayBuffer: typeof arrayBufferMethod === 'function'
+                ? arrayBufferMethod.bind(response)
+                : undefined,
+            }
+          })
+          await withinDeadline(() => rememberCookies(jars, endpoint, responseView.headers, url))
 
         if (
-          (response.status === 429 || response.status >= 500)
+          (responseView.status === 429 || responseView.status >= 500)
           && retries < maxRetries
           && endpoint.retry === 'RETRY_SEQUENCE_OBSERVED'
           && endpoint.side_effect.classification === 'READ_CANDIDATE'
           && AUTOMATIC_RETRY_METHODS.has(endpoint.method)
         ) {
           retries += 1
-          await response.body?.cancel?.().catch(() => {})
+          await withinDeadline(() => responseView.body?.cancel?.()).catch((error) => {
+            if (error === timeoutError || controller.signal.aborted) throw error
+          })
           continue
         }
 
-        const location = redirectLocation(response, url)
+        const location = await withinDeadline(() => redirectLocation(responseView, url))
         if (location !== null) {
           if (redirects >= maxRedirects) fail('CONNECTOR_REDIRECT_REFUSED', 'redirect limit exceeded')
-          const nextEndpoint = endpointForRedirect(endpoint, location, response.status)
-          const nextBody = redirectedBody(response.status, endpoint, callerBody)
+          const nextEndpoint = await withinDeadline(
+            () => endpointForRedirect(endpoint, location, responseView.status),
+          )
+          await withinDeadline(() => assertPathActionClass(
+            nextEndpoint,
+            location.pathname,
+            'CONNECTOR_REDIRECT_REFUSED',
+          ))
+          const nextBody = redirectedBody(responseView.status, endpoint, callerBody)
           redirects += 1
-          await response.body?.cancel?.().catch(() => {})
+          await withinDeadline(() => responseView.body?.cancel?.()).catch((error) => {
+            if (error === timeoutError || controller.signal.aborted) throw error
+          })
           endpoint = nextEndpoint
           url = location
           callerBody = nextBody
           continue
         }
 
-        const parsed = await readResponse(response)
-        const projected = projectResponseCredentials(endpoint, parsed.data)
-        await deliverResponseCredentials(credentialReceiver, endpoint, response.status, projected.captures)
-        return deepFreeze({
+        const parsed = await withinDeadline(() => readResponse(responseView, { withinDeadline }))
+        const projected = await withinDeadline(
+          () => projectResponseCredentials(endpoint, parsed.data),
+        )
+        await withinDeadline(
+          () => deliverResponseCredentials(
+            credentialReceiver,
+            endpoint,
+            responseView.status,
+            projected.captures,
+          ),
+        )
+        const visibleHeaders = await withinDeadline(
+          () => responseHeaders(responseView.headers, endpoint),
+        )
+        const result = await withinDeadline(() => deepFreeze({
           endpointId: endpoint.endpoint_id,
           origin: endpoint.origin,
           pathTemplate: endpoint.path_template,
-          status: response.status,
-          ok: response.status >= 200 && response.status < 300,
-          headers: responseHeaders(response.headers, endpoint),
+          status: responseView.status,
+          ok: responseView.status >= 200 && responseView.status < 300,
+          headers: visibleHeaders,
           contentType: parsed.contentType,
           data: projected.data,
           attempts,
           redirects,
           retries,
-        })
-      } catch (error) {
-        if (controller.signal.aborted) {
-          const timeout = new Error('connector request timed out')
-          timeout.name = 'GeneratedConnectorError'
-          timeout.code = 'CONNECTOR_TIMEOUT'
-          timeout.request_may_have_been_sent = true
-          throw timeout
+        }))
+        return result
+        } catch (error) {
+          if (error === timeoutError) throw error
+          if (controller.signal.aborted) {
+            const timeout = new Error('connector request timed out')
+            timeout.name = 'GeneratedConnectorError'
+            timeout.code = 'CONNECTOR_TIMEOUT'
+            timeout.request_may_have_been_sent = true
+            throw timeout
+          }
+          if (error?.name === 'GeneratedConnectorError') {
+            throw markRequestMayHaveBeenSent(error)
+          }
+          const wrapped = new Error('connector transport failed', { cause: error })
+          wrapped.name = 'GeneratedConnectorError'
+          wrapped.code = 'CONNECTOR_TRANSPORT_FAILED'
+          wrapped.request_may_have_been_sent = true
+          throw wrapped
         }
-        if (error?.name === 'GeneratedConnectorError') {
-          throw markRequestMayHaveBeenSent(error)
-        }
-        const wrapped = new Error('connector transport failed', { cause: error })
-        wrapped.name = 'GeneratedConnectorError'
-        wrapped.code = 'CONNECTOR_TRANSPORT_FAILED'
-        wrapped.request_may_have_been_sent = true
-        throw wrapped
-      } finally {
-        clearTimeout(timer)
       }
+    } finally {
+      if (timerCreated) {
+        try {
+          clearTimeout(timer)
+        } catch {
+          // The request outcome is authoritative. Timer cleanup cannot
+          // replace it or prevent transient request-body erasure.
+        }
+      }
+    }
+    } catch (error) {
+      if (error?.name === 'GeneratedConnectorError') {
+        if (requestMayHaveBeenSent) throw markRequestMayHaveBeenSent(error)
+        if (Object.isExtensible(error)) error.request_may_have_been_sent = false
+        throw error
+      }
+      const wrapped = new Error(
+        requestMayHaveBeenSent
+          ? 'connector request failed after transport invocation'
+          : 'connector request preparation failed',
+        { cause: error },
+      )
+      wrapped.name = 'GeneratedConnectorError'
+      wrapped.code = requestMayHaveBeenSent
+        ? 'CONNECTOR_TRANSPORT_FAILED'
+        : 'CONNECTOR_PREPARATION_FAILED'
+      wrapped.request_may_have_been_sent = requestMayHaveBeenSent
+      throw wrapped
+    } finally {
+      for (const bytes of ownedByteClones) {
+        eraseBytes(bytes)
+      }
+      ownedByteClones.clear()
     }
   }
 

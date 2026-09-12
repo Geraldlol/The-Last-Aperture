@@ -1,14 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gzipSync } from 'node:zlib'
-import { createHash } from 'node:crypto'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
+import {
+  buildArtifactPayload,
+  createArtifactAdapter,
+} from '../scripts/lib/evidence-adapters/artifact.mjs'
 import { readEvidenceIndex } from '../scripts/lib/evidence-packet.mjs'
 import {
   DEFAULT_NORMALIZER_LIMITS,
+  normalizeOciArchive,
   normalizeOciLayout,
   readTarEntries,
   readTarEntryBytes,
@@ -157,6 +161,28 @@ test('the entry reader accepts zero record padding but rejects data or partial b
     () => readTarEntries(Buffer.concat([withoutTerminator, Buffer.from([1])]), DEFAULT_NORMALIZER_LIMITS),
     /partial trailing block without a complete tar header/i,
   )
+  assert.throws(
+    () => readTarEntries(Buffer.from([1]), DEFAULT_NORMALIZER_LIMITS),
+    /partial trailing block without a complete tar header/i,
+  )
+})
+
+test('a file cannot use a directory-shaped tar path', () => {
+  assert.throws(
+    () => readTarEntries(tar([{ name: 'not-a-directory/', content: 'x' }]), DEFAULT_NORMALIZER_LIMITS),
+    /non-directory entry.*directory-shaped path/i,
+  )
+})
+
+test('a directory tar entry must have a directory-shaped path and zero content bytes', () => {
+  assert.throws(
+    () => readTarEntries(tar([{ name: 'not-shaped', content: '', type: '5' }]), DEFAULT_NORMALIZER_LIMITS),
+    /directory entry.*non-directory-shaped path/i,
+  )
+  assert.throws(
+    () => readTarEntries(tar([{ name: 'shaped/', content: 'x', type: '5' }]), DEFAULT_NORMALIZER_LIMITS),
+    /directory entry carries 1 content byte/i,
+  )
 })
 
 test('the entry reader halts at its bounded limits rather than exhausting memory', () => {
@@ -174,7 +200,64 @@ test('the entry reader halts at its bounded limits rather than exhausting memory
   )
 })
 
-function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null, corruptLayer = false }) {
+test('gzip expansion is bounded before an outer archive can inflate without limit', () => {
+  const compressed = gzipSync(Buffer.alloc(16 * 1024))
+  const normalized = normalizeOciLayout(compressed, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxArchiveBytes: 1024,
+  })
+  assert.equal(normalized.format, 'unknown')
+  assert.match(normalized.gaps[0].reason, /bounded limit.*1024 bytes/i)
+})
+
+test('normalizer and artifact limits reject non-finite or fractional caps before reading bytes', () => {
+  assert.throws(
+    () => normalizeOciArchive(Buffer.alloc(0), { ...DEFAULT_NORMALIZER_LIMITS, maxInflatedBytes: Number.NaN }),
+    /maxInflatedBytes.*positive safe integer/i,
+  )
+  assert.throws(
+    () => readTarEntries(Buffer.alloc(0), { ...DEFAULT_NORMALIZER_LIMITS, maxEntries: Number.POSITIVE_INFINITY }),
+    /maxEntries.*positive safe integer/i,
+  )
+  assert.throws(
+    () => createArtifactAdapter({ limits: { maxCapturedBytes: Number.POSITIVE_INFINITY } }),
+    /maxCapturedBytes.*positive safe integer/i,
+  )
+  assert.throws(
+    () => createArtifactAdapter({ limits: { maxCapturedEntryBytes: 1.5 } }),
+    /maxCapturedEntryBytes.*positive safe integer/i,
+  )
+})
+
+test('tar paths with a conventional leading dot segment normalize to one canonical path', () => {
+  const archive = tar([
+    { name: './file.txt', content: 'x' },
+    { name: './directory/', content: '', type: '5' },
+  ])
+  assert.deepEqual(
+    readTarEntries(archive, DEFAULT_NORMALIZER_LIMITS).map(({ path }) => path),
+    ['file.txt', 'directory/'],
+  )
+})
+
+test('unsupported PAX and GNU metadata extensions are rejected explicitly', () => {
+  for (const type of ['x', 'g', 'L', 'K']) {
+    assert.throws(
+      () => readTarEntries(tar([{ name: 'metadata', content: 'path=value\n', type }]), DEFAULT_NORMALIZER_LIMITS),
+      /unsupported tar metadata extension/i,
+    )
+  }
+})
+
+function ociLayout({
+  layers,
+  historyEntry = 'RUN rm /secret.txt',
+  orphan = null,
+  corruptLayer = false,
+  rawLayerBlobs = false,
+  history,
+  diffIds,
+}) {
   const blobs = new Map()
   const put = (bytes) => {
     const digest = `sha256:${sha256(bytes)}`
@@ -186,6 +269,8 @@ function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null,
     // deterministically undecompressable, which is what the gap case needs.
     const compressed = corruptLayer
       ? Buffer.concat([Buffer.from([0x1f, 0x8b, 0x08, 0x00]), Buffer.alloc(64, 0xab)])
+      : rawLayerBlobs
+        ? Buffer.from(entries)
       : gzipSync(Buffer.isBuffer(entries) ? entries : tar(entries))
     return {
       mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
@@ -196,8 +281,8 @@ function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null,
   const config = Buffer.from(JSON.stringify({
     architecture: 'amd64',
     os: 'linux',
-    history: [{ created_by: 'FROM alpine' }, { created_by: historyEntry }],
-    rootfs: { type: 'layers', diff_ids: layerDescriptors.map(({ digest }) => digest) },
+    history: history ?? [{ created_by: 'FROM alpine' }, { created_by: historyEntry }],
+    rootfs: { type: 'layers', diff_ids: diffIds ?? layerDescriptors.map(({ digest }) => digest) },
   }), 'utf8')
   const configDigest = put(config)
   const manifest = Buffer.from(JSON.stringify({
@@ -227,7 +312,7 @@ function ociLayout({ layers, historyEntry = 'RUN rm /secret.txt', orphan = null,
   return tar(files)
 }
 
-function multiPlatformOciLayout({ nested = false, digestlessLayer = false } = {}) {
+function multiPlatformOciLayout({ nested = false, nestedFirst = false, digestlessLayer = false } = {}) {
   const blobs = new Map()
   const put = (bytes) => {
     const digest = `sha256:${sha256(bytes)}`
@@ -275,17 +360,18 @@ function multiPlatformOciLayout({ nested = false, digestlessLayer = false } = {}
     }
   })
   let topManifests = manifests
-  if (nested) {
+  if (nested || nestedFirst) {
     const nestedIndex = Buffer.from(JSON.stringify({
       schemaVersion: 2,
       mediaType: 'application/vnd.oci.image.index.v1+json',
-      manifests,
+      manifests: nestedFirst ? [manifests[0]] : manifests,
     }))
-    topManifests = [{
+    const nestedDescriptor = {
       mediaType: 'application/vnd.oci.image.index.v1+json',
       digest: put(nestedIndex),
       size: nestedIndex.length,
-    }]
+    }
+    topManifests = nestedFirst ? [nestedDescriptor, manifests[1]] : [nestedDescriptor]
   }
   const files = [
     { name: 'oci-layout', content: JSON.stringify({ imageLayoutVersion: '1.0.0' }) },
@@ -295,6 +381,19 @@ function multiPlatformOciLayout({ nested = false, digestlessLayer = false } = {}
     files.push({ name: `blobs/sha256/${digest.slice(7)}`, content: bytes })
   }
   return tar(files)
+}
+
+function withRepeatedTopManifest(layout, mutate = (descriptor) => descriptor) {
+  const entries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS)
+  return tar(entries.map((entry) => {
+    let content = Buffer.from(readTarEntryBytes(layout, entry))
+    if (entry.path === 'index.json') {
+      const index = JSON.parse(content.toString('utf8'))
+      index.manifests.push(mutate({ ...index.manifests[0] }))
+      content = Buffer.from(JSON.stringify(index), 'utf8')
+    }
+    return { name: entry.path, content }
+  }))
 }
 
 async function assertArtifactNormalizationIsGapped(archive, label, expectedError) {
@@ -379,6 +478,206 @@ test('layers are normalized in manifest order, which is what makes "below" mean 
   assert.equal(normalized.layers[1].entries[0].path, '.wh.secret.txt')
 })
 
+test('repeated OCI layer descriptors remain repeated in their exact manifest order', () => {
+  const entries = [{ name: 'same.txt', content: 'same' }]
+  const normalized = normalizeOciLayout(
+    ociLayout({ layers: [entries, entries] }),
+    DEFAULT_NORMALIZER_LIMITS,
+  )
+  assert.equal(normalized.layers.length, 2)
+  assert.deepEqual(normalized.layers.map(({ index }) => index), [0, 1])
+  assert.equal(normalized.layers[0].digest, normalized.layers[1].digest)
+})
+
+test('repeated OCI manifest descriptors preserve their layer occurrences in index order', () => {
+  const result = normalizeOciArchive(
+    withRepeatedTopManifest(ociLayout({ layers: [[{ name: 'same.txt', content: 'same' }]] })),
+    DEFAULT_NORMALIZER_LIMITS,
+  )
+  const { normalized } = result
+  assert.equal(normalized.layers.length, 2)
+  assert.deepEqual(normalized.layers.map(({ index }) => index), [0, 1])
+  assert.equal(normalized.layers[0].digest, normalized.layers[1].digest)
+  assert.equal(result.resource_usage.verified_blob_cache_entries, 3)
+})
+
+test('each repeated OCI manifest descriptor is validated before digest caching', () => {
+  const normalized = normalizeOciLayout(
+    withRepeatedTopManifest(
+      ociLayout({ layers: [[{ name: 'same.txt', content: 'same' }]] }),
+      (descriptor) => ({ ...descriptor, size: descriptor.size + 1 }),
+    ),
+    DEFAULT_NORMALIZER_LIMITS,
+  )
+  assert.equal(normalized.layers.length, 1)
+  assert.ok(normalized.gaps.some(({ reason }) => /declares.*bytes.*blob has/i.test(reason)))
+  assert.deepEqual(normalized.orphan_blobs, [])
+})
+
+test('repeated layer content consumes the aggregate inflation budget once through the digest cache', () => {
+  const entries = [{ name: 'same.txt', content: 'same' }]
+  const decodedLayer = tar(entries)
+  const layout = ociLayout({ layers: [entries, entries] })
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxInflatedBytes: layout.length + decodedLayer.length,
+  })
+  assert.equal(result.normalized.layers.length, 2)
+  assert.deepEqual(result.normalized.layers.map(({ index }) => index), [0, 1])
+  assert.equal(result.resource_usage.inflated_bytes, layout.length + decodedLayer.length)
+  assert.equal(result.resource_usage.decoded_layer_cache_entries, 1)
+})
+
+test('repeated layer metadata stops before crossing the aggregate projected-entry budget', () => {
+  const entries = Array.from({ length: 10 }, (_, index) => ({
+    name: `entry-${index}.txt`, content: String(index),
+  }))
+  const layout = ociLayout({ layers: [entries, entries] })
+  const outerEntries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS).length
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxEntries: outerEntries + entries.length,
+  })
+  assert.equal(result.normalized.layers.length, 2)
+  assert.equal(result.normalized.layers[0].entries.length, entries.length)
+  assert.equal(result.normalized.layers[1].entries.length, outerEntries)
+  assert.equal(result.resource_usage.projected_entries, outerEntries + entries.length)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /aggregate projected-entry limit/i.test(reason)))
+})
+
+test('serialized layer metadata retains an ordered prefix within its aggregate byte cap', () => {
+  const archive = ociLayout({ layers: [[
+    { name: 'control-\u0001-\u0002.txt', content: 'one' },
+    { name: 'second.txt', content: 'two' },
+  ]] })
+  const baseline = normalizeOciArchive(archive, DEFAULT_NORMALIZER_LIMITS)
+  const first = baseline.normalized.layers[0].entries[0]
+  const maxProjectedBytes = Buffer.byteLength(JSON.stringify(first), 'utf8')
+  const result = normalizeOciArchive(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxProjectedBytes,
+  })
+  assert.deepEqual(result.normalized.layers[0].entries.map(({ path }) => path), ['control-\u0001-\u0002.txt'])
+  assert.equal(result.resource_usage.projected_entries, 1)
+  assert.equal(result.resource_usage.projected_bytes, maxProjectedBytes)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /projected-entry limits.*serialized bytes/i.test(reason)))
+  const built = buildArtifactPayload(
+    result.archive,
+    result.normalized,
+    { ...DEFAULT_NORMALIZER_LIMITS, maxProjectedBytes },
+    result.resource_budget,
+  )
+  const entriesPayload = built.payload.find(({ path }) => path.endsWith('/entries.json'))
+  assert.equal(entriesPayload.bytes.length, maxProjectedBytes + 2)
+  assert.deepEqual(JSON.parse(entriesPayload.bytes).map(({ path }) => path), ['control-\u0001-\u0002.txt'])
+  assert.equal(
+    built.payload.some(({ path }) => path.endsWith('/content/second.txt')),
+    false,
+  )
+})
+
+test('unique layers stop before crossing the campaign aggregate inflation budget', () => {
+  const first = [{ name: 'one.txt', content: 'one' }]
+  const second = [{ name: 'two.txt', content: 'two' }]
+  const layout = ociLayout({ layers: [first, second] })
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxInflatedBytes: layout.length + tar(first).length,
+  })
+  assert.equal(result.normalized.layers.length, 1)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /aggregate.*inflation|inflated.*limit/i.test(reason)))
+})
+
+test('unique layers stop before crossing the aggregate tar-entry budget', () => {
+  const layout = ociLayout({
+    layers: [
+      [{ name: 'one.txt', content: 'one' }],
+      [{ name: 'two.txt', content: 'two' }],
+    ],
+  })
+  const outerEntries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS).length
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxEntries: outerEntries + 1,
+  })
+  assert.equal(result.normalized.layers.length, 1)
+  assert.equal(result.resource_usage.parsed_entries, outerEntries + 1)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /aggregate tar-entry limit/i.test(reason)))
+})
+
+test('entries parsed before corrupt layer trailers still consume the campaign entry budget', () => {
+  const corruptAfterTwo = (prefix) => {
+    const archive = tar([
+      { name: `${prefix}-one`, content: '1' },
+      { name: `${prefix}-two`, content: '2' },
+      { name: `${prefix}-corrupt`, content: '3' },
+    ])
+    const last = readTarEntries(archive, DEFAULT_NORMALIZER_LIMITS).at(-1)
+    archive[last.offset - 512] ^= 1
+    return archive
+  }
+  const layout = ociLayout({ layers: [corruptAfterTwo('a'), corruptAfterTwo('b')] })
+  const outerEntries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS).length
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxEntries: outerEntries + 3,
+  })
+  assert.equal(result.resource_usage.parsed_entries, outerEntries + 3)
+  assert.equal(result.normalized.layers.length, 0)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /aggregate tar-entry limit/i.test(reason)))
+})
+
+test('a failed gzip decode conservatively exhausts the remaining campaign inflation budget', () => {
+  const badGzip = (byte) => {
+    const compressed = gzipSync(Buffer.alloc(4096, byte))
+    compressed[compressed.length - 1] ^= 1
+    return compressed
+  }
+  const layout = ociLayout({
+    layers: [badGzip(0x61), badGzip(0x62)],
+    rawLayerBlobs: true,
+  })
+  const maxInflatedBytes = layout.length + 1024
+  const result = normalizeOciArchive(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxInflatedBytes,
+  })
+  assert.equal(result.resource_usage.inflated_bytes, maxInflatedBytes)
+  assert.equal(result.normalized.layers.length, 0)
+  assert.ok(result.normalized.gaps.some(({ reason }) => /aggregate inflation limit/i.test(reason)))
+})
+
+test('artifact payload capture reuses the verified outer tar index without reparsing it', () => {
+  const layout = ociLayout({ layers: [[{ name: 'captured.txt', content: 'captured' }]] })
+  const result = normalizeOciArchive(layout, DEFAULT_NORMALIZER_LIMITS)
+  const parsedBeforeCapture = result.resource_budget.parsedEntries
+  result.archive[0] ^= 1 // invalidate only an outer header checksum after the verified parse
+  const built = buildArtifactPayload(
+    result.archive,
+    result.normalized,
+    undefined,
+    result.resource_budget,
+  )
+  assert.equal(result.resource_budget.parsedEntries, parsedBeforeCapture)
+  assert.equal(
+    built.payload.find(({ path }) => path.endsWith('/content/captured.txt')).bytes.toString('utf8'),
+    'captured',
+  )
+})
+
+test('a layer blob and its files use the image byte policy rather than the JSON metadata cap', () => {
+  const layout = ociLayout({
+    layers: [[{ name: 'large.bin', content: randomBytes(16 * 1024) }]],
+  })
+  const normalized = normalizeOciLayout(layout, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxEntryBytes: 1024,
+    maxTotalBytes: 128 * 1024,
+  })
+  assert.equal(normalized.layers.length, 1)
+  assert.equal(normalized.layers[0].entries[0].size, 16 * 1024)
+})
+
 test('a real whiteout and a file merely named like one are distinguishable', () => {
   const layout = ociLayout({
     layers: [[
@@ -404,6 +703,56 @@ test('the image config history is carried through addressably', () => {
   assert.equal(normalized.config.diff_ids.length, 1)
 })
 
+test('OCI history and diff-id projection obey aggregate item and serialized-byte limits', () => {
+  const history = Array.from({ length: 200_000 }, () => null)
+  const diffIds = Array.from({ length: 200_000 }, () => 'sha256:metadata')
+  const archive = ociLayout({ layers: [], history, diffIds })
+  const result = normalizeOciArchive(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxMetadataItems: 4,
+    maxMetadataBytes: 14,
+  })
+  assert.equal(result.normalized.config.history.length, 3)
+  assert.equal(result.normalized.config.diff_ids.length, 0)
+  assert.equal(result.resource_usage.metadata_items, 3)
+  assert.equal(result.resource_usage.metadata_bytes, 14)
+  assert.equal(
+    result.normalized.gaps.filter(({ area }) => area === 'image configuration metadata').length,
+    1,
+  )
+  const built = buildArtifactPayload(
+    result.archive,
+    result.normalized,
+    { ...DEFAULT_NORMALIZER_LIMITS, maxMetadataItems: 4, maxMetadataBytes: 14 },
+    result.resource_budget,
+  )
+  const durable = JSON.parse(built.payload.find(({ path }) => path === 'normalized.json').bytes)
+  assert.equal(durable.resource_usage.metadata_items, 3)
+  assert.equal(durable.resource_usage.metadata_bytes, 14)
+})
+
+test('docker history and diff-id projection stop without spreading attacker-cardinality arrays', () => {
+  const history = Array.from({ length: 200_000 }, () => null)
+  const diffIds = Array.from({ length: 200_000 }, () => 'sha256:metadata')
+  const archive = tar([
+    { name: 'manifest.json', content: JSON.stringify([{ Config: 'config.json', Layers: [] }]) },
+    { name: 'config.json', content: JSON.stringify({ history, rootfs: { diff_ids: diffIds } }) },
+  ])
+  const result = normalizeOciArchive(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxMetadataItems: 5,
+    maxMetadataBytes: 24,
+  })
+  assert.equal(result.normalized.config.history.length, 5)
+  assert.equal(result.normalized.config.diff_ids.length, 0)
+  assert.equal(result.resource_usage.metadata_items, 5)
+  assert.equal(result.resource_usage.metadata_bytes, 24)
+  assert.equal(
+    result.normalized.gaps.filter(({ area }) => area === 'image configuration metadata').length,
+    1,
+  )
+})
+
 test('a blob no manifest references is reported, not dropped', () => {
   const layout = ociLayout({
     layers: [[{ name: 'a', content: 'a' }]],
@@ -412,6 +761,35 @@ test('a blob no manifest references is reported, not dropped', () => {
   const normalized = normalizeOciLayout(layout, DEFAULT_NORMALIZER_LIMITS)
   assert.equal(normalized.orphan_blobs.length, 1)
   assert.ok(normalized.orphan_blobs[0].size > 0)
+})
+
+test('a directory shaped like a blob path is not reported as an orphan blob', () => {
+  const layout = ociLayout({ layers: [[{ name: 'a', content: 'a' }]] })
+  const directory = appendTarEntryBeforeTerminator(layout, {
+    name: `blobs/sha256/${'a'.repeat(64)}/`,
+    content: '',
+    type: '5',
+  })
+  assert.deepEqual(normalizeOciLayout(directory, DEFAULT_NORMALIZER_LIMITS).orphan_blobs, [])
+})
+
+test('an OCI descriptor cannot treat a content-bearing directory record as its blob', () => {
+  const layout = ociLayout({ layers: [[{ name: 'a', content: 'a' }]] })
+  const entries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS)
+  const index = JSON.parse(readTarEntryBytes(
+    layout,
+    entries.find(({ path }) => path === 'index.json'),
+  ).toString('utf8'))
+  const manifestPath = `blobs/sha256/${index.manifests[0].digest.slice('sha256:'.length)}`
+  const forged = tar(entries.map((entry) => ({
+    name: entry.path,
+    content: Buffer.from(readTarEntryBytes(layout, entry)),
+    ...(entry.path === manifestPath ? { type: '5' } : {}),
+  })))
+  const normalized = normalizeOciLayout(forged, DEFAULT_NORMALIZER_LIMITS)
+  assert.equal(normalized.format, 'unknown')
+  assert.deepEqual(normalized.layers, [])
+  assert.ok(normalized.gaps.some(({ reason }) => /directory entry/i.test(reason)))
 })
 
 test('a corrupt OCI index cannot manufacture orphan-blob findings', () => {
@@ -484,6 +862,128 @@ test('a docker save tarball is recognised as its own format', () => {
   assert.equal(normalized.layers.length, 1)
 })
 
+test('repeated docker layer paths remain repeated in manifest order', () => {
+  const layer = tar([{ name: 'x', content: 'x' }])
+  const archive = tar([
+    { name: 'manifest.json', content: JSON.stringify([{ Config: 'c.json', Layers: ['l/layer.tar', 'l/layer.tar'] }]) },
+    { name: 'c.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+    { name: 'l/layer.tar', content: layer },
+  ])
+  const result = normalizeOciArchive(archive, DEFAULT_NORMALIZER_LIMITS)
+  assert.equal(result.normalized.layers.length, 2)
+  assert.equal(result.normalized.layers[0].digest, result.normalized.layers[1].digest)
+  assert.equal(result.resource_usage.verified_blob_cache_entries, 1)
+})
+
+test('a gzip-compressed outer OCI archive is decoded once for normalization and payload capture', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-outer-gzip-'))
+  const source = join(directory, 'image.tar.gz')
+  await writeFile(source, gzipSync(ociLayout({ layers: [[{ name: 'app.txt', content: 'captured' }]] })))
+  const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+  const acquired = await adapter.run(await adapter.plan({
+    evidence_id: 'outer-gzip',
+    source_path: source,
+    target_class: 'LAB',
+    phi_scope: 'none',
+  }), { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'COVERED')
+  assert.equal(
+    await readFile(join(acquired.directory, 'payload', 'layers', '00', 'content', 'app.txt'), 'utf8'),
+    'captured',
+  )
+})
+
+test('artifact content capture stops before the aggregate capture budget is exceeded', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-capture-cap-'))
+  const source = join(directory, 'image.tar')
+  await writeFile(source, ociLayout({ layers: [[
+    { name: 'first.txt', content: '1234' },
+    { name: 'second.txt', content: '5678' },
+  ]] }))
+  const adapter = createArtifactAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    limits: { maxCapturedBytes: 4 },
+  })
+  const acquired = await adapter.run(await adapter.plan({
+    evidence_id: 'capture-cap', source_path: source, target_class: 'LAB', phi_scope: 'none',
+  }), { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'PARTIAL')
+  assert.equal(
+    await readFile(join(acquired.directory, 'payload', 'layers', '00', 'content', 'first.txt'), 'utf8'),
+    '1234',
+  )
+  await assert.rejects(() => access(join(acquired.directory, 'payload', 'layers', '00', 'content', 'second.txt')))
+  assert.ok(acquired.profile.coverage_gaps.some(({ reason }) => /aggregate.*capture|capture.*budget/i.test(reason)))
+  const normalized = JSON.parse(await readFile(join(acquired.directory, 'payload', 'normalized.json'), 'utf8'))
+  assert.ok(normalized.gaps.some(({ reason }) => /aggregate.*capture|capture.*budget/i.test(reason)))
+  assert.equal(normalized.resource_usage.captured_bytes, 4)
+  assert.ok(normalized.resource_usage.inflated_bytes > 0)
+})
+
+test('artifact content capture bounds payload file cardinality before manifest publication', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-capture-files-'))
+  const source = join(directory, 'image.tar')
+  await writeFile(source, ociLayout({ layers: [[
+    { name: 'first.txt', content: '1' },
+    { name: 'second.txt', content: '2' },
+    { name: 'third.txt', content: '3' },
+  ]] }))
+  const adapter = createArtifactAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    limits: { maxCapturedFiles: 1 },
+  })
+  const acquired = await adapter.run(await adapter.plan({
+    evidence_id: 'capture-files', source_path: source, target_class: 'LAB', phi_scope: 'none',
+  }), { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'PARTIAL')
+  assert.equal(
+    acquired.profile.files.filter(({ path }) => path.includes('/content/')).length,
+    1,
+  )
+  assert.ok(acquired.profile.coverage_gaps.some(({ reason }) => /file-count limit of 1/i.test(reason)))
+  const normalized = JSON.parse(await readFile(
+    join(acquired.directory, 'payload', 'normalized.json'),
+    'utf8',
+  ))
+  assert.equal(normalized.resource_usage.captured_files, 1)
+})
+
+test('nonportable and colliding layer names stay listed while optional content capture is gapped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'rta-oci-portable-paths-'))
+  const source = join(directory, 'image.tar')
+  const layer = tar([
+    { name: 'safe.txt', content: 'safe' },
+    { name: 'CON', content: 'reserved' },
+    { name: 'stream:ads', content: 'ads' },
+    { name: 'trailing.', content: 'dot' },
+    { name: 'Case.txt', content: 'first' },
+    { name: 'case.txt', content: 'collision' },
+  ])
+  await writeFile(source, tar([
+    { name: 'manifest.json', content: JSON.stringify([{ Config: 'config.json', Layers: ['layer.tar'] }]) },
+    { name: 'config.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+    { name: 'layer.tar', content: layer },
+  ]))
+  const adapter = createArtifactAdapter({ clock: () => '2026-08-08T14:22:10Z' })
+  const acquired = await adapter.run(await adapter.plan({
+    evidence_id: 'portable-paths', source_path: source, target_class: 'LAB', phi_scope: 'none',
+  }), { out: join(directory, 'evidence') })
+  assert.equal(acquired.profile.coverage_state, 'PARTIAL')
+  const listed = JSON.parse(await readFile(
+    join(acquired.directory, 'payload', 'layers', '00', 'entries.json'),
+    'utf8',
+  ))
+  assert.deepEqual(listed.map(({ path }) => path), [
+    'safe.txt', 'CON', 'stream:ads', 'trailing.', 'Case.txt', 'case.txt',
+  ])
+  const published = acquired.profile.files.map(({ path }) => path)
+  assert.ok(published.includes('payload/layers/00/content/safe.txt'))
+  assert.ok(published.includes('payload/layers/00/content/Case.txt'))
+  assert.equal(published.some((path) => /\/(?:CON|stream:ads|trailing\.|case\.txt)$/.test(path)), false)
+  assert.ok(acquired.profile.coverage_gaps.some(({ reason }) => /not portable/i.test(reason)))
+  assert.ok(acquired.profile.coverage_gaps.some(({ reason }) => /collides/i.test(reason)))
+})
+
 test('every platform manifest and nested index is traversed without false orphan blobs', () => {
   for (const nested of [false, true]) {
     const normalized = normalizeOciLayout(
@@ -498,6 +998,21 @@ test('every platform manifest and nested index is traversed without false orphan
     assert.deepEqual(normalized.orphan_blobs, [])
     assert.deepEqual(normalized.gaps, [])
   }
+})
+
+test('nested OCI indexes preserve depth-first descriptor occurrence order', () => {
+  const normalized = normalizeOciLayout(
+    multiPlatformOciLayout({ nestedFirst: true }),
+    DEFAULT_NORMALIZER_LIMITS,
+  )
+  assert.deepEqual(
+    normalized.config.history.map(({ created_by: command }) => command),
+    ['BUILD amd64', 'BUILD arm64'],
+  )
+  assert.deepEqual(
+    normalized.layers.map(({ entries }) => entries[0].path),
+    ['app/amd64.txt', 'app/arm64.txt'],
+  )
 })
 
 test('OCI blob paths do not substitute for content-address verification', () => {
@@ -521,6 +1036,81 @@ test('the manifest traversal cap is explicit and suppresses incomplete orphan cl
   assert.deepEqual(normalized.orphan_blobs, [])
   assert.ok(normalized.gaps.some(({ area, reason }) =>
     area === 'manifests' && /bounded limit/i.test(reason)))
+})
+
+test('a huge malformed top descriptor array is inspected only to its aggregate cap', () => {
+  const layout = ociLayout({ layers: [] })
+  const entries = readTarEntries(layout, DEFAULT_NORMALIZER_LIMITS)
+  const archive = tar(entries.map((entry) => ({
+    name: entry.path,
+    content: entry.path === 'index.json'
+      ? JSON.stringify({ schemaVersion: 2, manifests: Array.from({ length: 200_000 }, () => null) })
+      : Buffer.from(readTarEntryBytes(layout, entry)),
+  })))
+  const normalized = normalizeOciLayout(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxManifests: 4,
+  })
+  assert.deepEqual(normalized.top_level_digests, [])
+  assert.deepEqual(normalized.orphan_blobs, [])
+  assert.equal(normalized.gaps.filter(({ reason }) => /index descriptor has no digest/i.test(reason)).length, 4)
+  assert.equal(normalized.gaps.filter(({ reason }) => /199996 manifest descriptor/i.test(reason)).length, 1)
+})
+
+test('invalid OCI layer occurrences consume the same aggregate cap as valid descriptors', () => {
+  const blobs = new Map()
+  const put = (value) => {
+    const bytes = Buffer.from(JSON.stringify(value))
+    const digest = `sha256:${sha256(bytes)}`
+    blobs.set(digest, bytes)
+    return { digest, size: bytes.length }
+  }
+  const config = put({ history: [], rootfs: { diff_ids: [] } })
+  const manifests = []
+  for (let image = 0; image < 2; image += 1) {
+    manifests.push({
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      ...put({
+        schemaVersion: 2,
+        config,
+        layers: Array.from({ length: 200 }, () => null),
+      }),
+    })
+  }
+  const archive = tar([
+    { name: 'oci-layout', content: JSON.stringify({ imageLayoutVersion: '1.0.0' }) },
+    { name: 'index.json', content: JSON.stringify({ schemaVersion: 2, manifests }) },
+    ...[...blobs].map(([digest, content]) => ({
+      name: `blobs/sha256/${digest.slice(7)}`,
+      content,
+    })),
+  ])
+  const normalized = normalizeOciLayout(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxLayers: 4,
+  })
+  assert.equal(normalized.gaps.filter(({ reason }) => /layer descriptor with no digest/i.test(reason)).length, 4)
+  assert.equal(normalized.gaps.filter(({ reason }) => /396 ordered layer occurrence/i.test(reason)).length, 1)
+})
+
+test('invalid docker layer occurrences consume the same aggregate cap as valid paths', () => {
+  const archive = tar([
+    {
+      name: 'manifest.json',
+      content: JSON.stringify([
+        { Config: 'one.json', Layers: Array.from({ length: 200 }, () => null) },
+        { Config: 'two.json', Layers: Array.from({ length: 200 }, () => null) },
+      ]),
+    },
+    { name: 'one.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+    { name: 'two.json', content: JSON.stringify({ history: [], rootfs: { diff_ids: [] } }) },
+  ])
+  const normalized = normalizeOciLayout(archive, {
+    ...DEFAULT_NORMALIZER_LIMITS,
+    maxLayers: 4,
+  })
+  assert.equal(normalized.gaps.filter(({ reason }) => /layer with no path/i.test(reason)).length, 4)
+  assert.equal(normalized.gaps.filter(({ reason }) => /396 ordered layer occurrence/i.test(reason)).length, 1)
 })
 
 test('a mixed valid and digestless OCI layer is a named PARTIAL acquisition gap', async () => {

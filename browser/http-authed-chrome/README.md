@@ -133,6 +133,14 @@ value remained browser-side. The live run required and verified the extension
 identity/Fetch Metadata binding, popup keepalive, controlled injection-error
 envelope, and omitted-null scripting-serialization handling.
 
+Maintainer validation on 2026-09-12 loaded and enabled unpacked v0.14.1 in an
+isolated Chrome 153.0.8010.36 profile through DevTools
+`Extensions.loadUnpacked`. The exact repository path, extension ID, manifest
+version, activated Manifest V3 worker, popup, and popup-to-worker `IDLE` status
+were observed with no worker or popup exception/console events. Headless Chrome
+left the optional loopback host-permission prompt pending, so that run stopped
+before preview or dispatch and does not claim a complete synthetic campaign.
+
 While a session is open, the polling loop periodically touches session storage
 to keep the worker active; the recovery marker lets a restarted worker detect
 unfinished work. Restart recovery is fail closed:

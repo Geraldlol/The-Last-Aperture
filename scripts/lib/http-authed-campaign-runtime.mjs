@@ -35,6 +35,8 @@ const INPUT_LIMITS = Object.freeze({
 })
 const MAX_PUBLIC_FIXED_CAMPAIGN_ACTIONS = 256
 const STARTUP_STOP_POLL_MS = 20
+const DEFAULT_STARTUP_CLEANUP_TIMEOUT_MS = 250
+const MAX_STARTUP_CLEANUP_TIMEOUT_MS = 30_000
 const CLEANUP_ROLLBACK_STATES = new Set([
   'MUTATION_SETTLED',
   'MUTATION_FAILED',
@@ -83,10 +85,100 @@ async function waitForStartupStop(ledger, signal) {
   return false
 }
 
+async function superviseLateStartupCleanup({
+  ledger,
+  operationPromise,
+  disposeLateValue,
+  resourceKind,
+  timeoutMs,
+}) {
+  if (typeof disposeLateValue !== 'function') return { outcome: 'NOT_REQUIRED' }
+  const cleanup = operationPromise.then(
+    async (value) => {
+      try {
+        await disposeLateValue(value)
+        return { outcome: 'COMPLETED' }
+      } catch (error) {
+        return { outcome: 'FAILED', error }
+      }
+    },
+    () => ({ outcome: 'NOT_REQUIRED' }),
+  )
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ outcome: 'TIMED_OUT' }), timeoutMs)
+  })
+  const result = await Promise.race([cleanup, timeout])
+  clearTimeout(timer)
+  if (result.outcome === 'NOT_REQUIRED') return result
+  if (typeof ledger.recordStartupCleanup !== 'function') {
+    throw runtimeError(
+      'HTTP_AUTHED_CAMPAIGN_STARTUP_CLEANUP_LEDGER_INVALID',
+      'bounded startup cleanup requires a durable ledger outcome API',
+    )
+  }
+  await ledger.recordStartupCleanup({
+    resourceKind,
+    outcome: result.outcome,
+  })
+  return result
+}
+
+function startupCleanupFailure(cleanupError, startupError) {
+  const cause = startupError === undefined
+    ? cleanupError
+    : new AggregateError(
+        [startupError, cleanupError],
+        'startup failure and late resource cleanup failure',
+      )
+  return runtimeError(
+    'HTTP_AUTHED_CAMPAIGN_STARTUP_CLEANUP_FAILED',
+    'a late startup resource could not be closed; the failure was recorded in the campaign ledger',
+    { cause },
+  )
+}
+
+async function disposeRuntimeResources({ ledger, credential, browserTransportSession }) {
+  const failures = []
+  try {
+    await ledger?.close()
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    credential?.fill(0)
+  } catch (error) {
+    failures.push(error)
+  }
+  try {
+    await browserTransportSession?.close()
+  } catch (error) {
+    failures.push(error)
+  }
+  return failures
+}
+
+function runtimeCleanupFailure(operationError, cleanupErrors) {
+  if (cleanupErrors.length === 0) return null
+  if (operationError === undefined && cleanupErrors.length === 1) return cleanupErrors[0]
+  return runtimeError(
+    'HTTP_AUTHED_CAMPAIGN_RUNTIME_CLEANUP_FAILED',
+    'campaign execution and runtime resource cleanup did not both complete successfully',
+    {
+      cause: new AggregateError(
+        operationError === undefined ? cleanupErrors : [operationError, ...cleanupErrors],
+        'campaign runtime operation and cleanup failures',
+      ),
+    },
+  )
+}
+
 async function raceStartupOperationWithStop({
   ledger,
   operation,
   disposeLateValue,
+  cleanupResourceKind,
+  cleanupTimeoutMs,
 }) {
   if (ledger.snapshot().stopped || await ledger.observeStopRequest()) {
     return { stopped: true, value: undefined }
@@ -99,7 +191,23 @@ async function raceStartupOperationWithStop({
   )
   const stopped = waitForStartupStop(ledger, polling.signal)
     .then((value) => ({ kind: 'STOPPED', value }))
-  const winner = await Promise.race([completed, stopped])
+  let winner
+  try {
+    winner = await Promise.race([completed, stopped])
+  } catch (error) {
+    polling.abort()
+    const cleanup = await superviseLateStartupCleanup({
+      ledger,
+      operationPromise,
+      disposeLateValue,
+      resourceKind: cleanupResourceKind,
+      timeoutMs: cleanupTimeoutMs,
+    })
+    if (cleanup.outcome === 'FAILED') {
+      throw startupCleanupFailure(cleanup.error, error)
+    }
+    throw error
+  }
   polling.abort()
   if (winner.kind === 'FAILED') throw winner.error
   if (winner.kind === 'COMPLETED') return { stopped: false, value: winner.value }
@@ -109,48 +217,98 @@ async function raceStartupOperationWithStop({
       'campaign startup stop monitor ended without a stop request',
     )
   }
-  // The underlying provider may not support cancellation. If it resolves
-  // after the stop wins, destroy any returned secret/session immediately.
-  if (typeof disposeLateValue === 'function') {
-    operationPromise.then(
-      async (value) => { await disposeLateValue(value) },
-      () => {},
-    ).catch(() => {})
+  const cleanup = await superviseLateStartupCleanup({
+    ledger,
+    operationPromise,
+    disposeLateValue,
+    resourceKind: cleanupResourceKind,
+    timeoutMs: cleanupTimeoutMs,
+  })
+  if (cleanup.outcome === 'FAILED') {
+    throw startupCleanupFailure(cleanup.error)
   }
   return { stopped: true, value: undefined }
 }
 
-async function readStableBoundedFile(path, label, maximum, { minimum = 1 } = {}) {
+async function readStableBoundedFile(path, label, maximum, {
+  minimum = 1,
+  faultInjector,
+} = {}) {
   let info
   try {
     info = await lstat(path)
   } catch (cause) {
     throw runtimeError('HTTP_AUTHED_CAMPAIGN_INPUT_UNREADABLE', `${label} cannot be read`, { cause })
   }
-  if (!info.isFile() || info.isSymbolicLink() || info.size < minimum || info.size > maximum) {
+  if (
+    !info.isFile()
+    || info.isSymbolicLink()
+    || (info.nlink !== 1 && info.nlink !== 1n)
+    || info.size < minimum
+    || info.size > maximum
+  ) {
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_INPUT_UNSAFE',
       `${label} must be a regular non-symlink file within its byte limit`,
     )
   }
+  await faultInjector?.('after-campaign-input-lstat', { path, label, maximum })
   let handle
   try {
     handle = await open(path, OPEN_READ_ONLY_NO_FOLLOW)
     const before = await handle.stat()
-    const bytes = await handle.readFile()
-    const after = await handle.stat()
     if (
-      before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs
+      !before.isFile()
+      || (before.nlink !== 1 && before.nlink !== 1n)
+      || before.size < minimum
+      || before.size > maximum
+      || before.dev !== info.dev
+      || before.ino !== info.ino
+      || before.size !== info.size
+      || before.mtimeMs !== info.mtimeMs
+      || before.ctimeMs !== info.ctimeMs
+      || before.nlink !== info.nlink
+    ) {
+      throw runtimeError(
+        'HTTP_AUTHED_CAMPAIGN_INPUT_UNSAFE',
+        `${label} must remain one regular unlinked file within its byte limit`,
+      )
+    }
+    const buffer = Buffer.alloc(before.size + 1)
+    let offset = 0
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const after = await handle.stat()
+    const endpointAfter = await lstat(path)
+    if (
+      !after.isFile()
+      || !endpointAfter.isFile()
+      || endpointAfter.isSymbolicLink()
+      || (after.nlink !== 1 && after.nlink !== 1n)
+      || (endpointAfter.nlink !== 1 && endpointAfter.nlink !== 1n)
+      || before.dev !== after.dev
       || before.ino !== after.ino
-      || bytes.length !== after.size
+      || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+      || before.nlink !== after.nlink
+      || after.dev !== endpointAfter.dev
+      || after.ino !== endpointAfter.ino
+      || after.size !== endpointAfter.size
+      || after.mtimeMs !== endpointAfter.mtimeMs
+      || after.ctimeMs !== endpointAfter.ctimeMs
+      || after.nlink !== endpointAfter.nlink
+      || offset !== before.size
     ) {
       throw runtimeError(
         'HTTP_AUTHED_CAMPAIGN_INPUT_CHANGED',
         `${label} changed while it was read`,
       )
     }
-    return bytes
+    return buffer.subarray(0, offset)
   } catch (cause) {
     if (cause instanceof HttpAuthedCampaignRuntimeError) throw cause
     throw runtimeError('HTTP_AUTHED_CAMPAIGN_INPUT_UNREADABLE', `${label} cannot be read`, { cause })
@@ -238,8 +396,15 @@ function createProtectedMutationTransport({ scope, action, protectedTransport })
         tls: request.tls,
         beforeSend: request.beforeSend,
         responseObserver: async ({ headers: responseHeaders, bodyChunks }) => {
-          observedHeaders = responseHeaders
-          for (const chunk of bodyChunks) observedChunks.push(Buffer.from(chunk))
+          const transientChunks = Array.isArray(bodyChunks) ? bodyChunks : []
+          try {
+            observedHeaders = responseHeaders
+            for (const chunk of transientChunks) observedChunks.push(Buffer.from(chunk))
+          } finally {
+            for (const chunk of transientChunks) {
+              if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
+            }
+          }
         },
       })
       if (['BEFORE_READ', 'AFTER_READ', 'ROLLBACK_VERIFY'].includes(request.phase)) {
@@ -374,6 +539,8 @@ async function runHttpAuthedCampaignRuntime({
   protectedTransport,
   mutationDependencies = {},
   fixedCampaignOnly = false,
+  startupCleanupTimeoutMs = DEFAULT_STARTUP_CLEANUP_TIMEOUT_MS,
+  inputReadFaultInjector,
 }) {
   const commandName = 'campaign-attested'
   if (!isAbsolute(ledgerDirectory ?? '')) {
@@ -388,6 +555,10 @@ async function runHttpAuthedCampaignRuntime({
     || (onBrowserPairing !== undefined && typeof onBrowserPairing !== 'function')
     || typeof clock !== 'function'
     || typeof fixedCampaignOnly !== 'boolean'
+    || (inputReadFaultInjector !== undefined && typeof inputReadFaultInjector !== 'function')
+    || !Number.isSafeInteger(startupCleanupTimeoutMs)
+    || startupCleanupTimeoutMs < 1
+    || startupCleanupTimeoutMs > MAX_STARTUP_CLEANUP_TIMEOUT_MS
   ) {
     throw runtimeError(
       'HTTP_AUTHED_CAMPAIGN_DEPENDENCY_INVALID',
@@ -398,6 +569,7 @@ async function runHttpAuthedCampaignRuntime({
     scopePath,
     'http-authed scope',
     INPUT_LIMITS.scope,
+    { faultInjector: inputReadFaultInjector },
   )
   const scope = parseJson(scopeBytes, 'http-authed scope')
   if (scope.authorization?.mode !== 'OPERATOR_ATTESTED_AUTHED') {
@@ -465,6 +637,7 @@ async function runHttpAuthedCampaignRuntime({
     let cleanupCredential
     let cleanupBrowserTransportSession
     let cleanupTransport = protectedTransport
+    let cleanupOperationError
     try {
       cleanupLedger = await openHttpAuthedCampaignLedger({
         directory: ledgerDirectory,
@@ -599,16 +772,19 @@ async function runHttpAuthedCampaignRuntime({
         cleanupCredentialValue?.fill(0)
         rollbackBodyBytes?.fill(0)
       }
+    } catch (error) {
+      cleanupOperationError = error
+      throw error
     } finally {
-      try {
-        await cleanupLedger?.close()
-      } finally {
-        try {
-          cleanupCredential?.fill(0)
-        } finally {
-          await cleanupBrowserTransportSession?.close()
-        }
-      }
+      const failure = runtimeCleanupFailure(
+        cleanupOperationError,
+        await disposeRuntimeResources({
+          ledger: cleanupLedger,
+          credential: cleanupCredential,
+          browserTransportSession: cleanupBrowserTransportSession,
+        }),
+      )
+      if (failure !== null) throw failure
     }
   }
 
@@ -616,6 +792,7 @@ async function runHttpAuthedCampaignRuntime({
   let browserTransportSession
   let activeTransport = protectedTransport
   let ledger
+  let operationError
   try {
     // Create and bind the durable control surface before credential input or a
     // browser attach can block. The operator can therefore request a stop for
@@ -652,6 +829,8 @@ async function runHttpAuthedCampaignRuntime({
             timeoutMs: scope.limits.request_timeout_ms,
           }),
           disposeLateValue: async (session) => { await session?.close?.() },
+          cleanupResourceKind: 'BROWSER_SESSION',
+          cleanupTimeoutMs: startupCleanupTimeoutMs,
         })
         startupStopped = created.stopped
         if (!startupStopped) {
@@ -696,6 +875,8 @@ async function runHttpAuthedCampaignRuntime({
           signal,
         }),
         disposeLateValue: (value) => { value?.fill?.(0) },
+        cleanupResourceKind: 'CREDENTIAL_BYTES',
+        cleanupTimeoutMs: startupCleanupTimeoutMs,
       })
       startupStopped = credential.stopped
       if (!startupStopped) masterCredential = credential.value
@@ -743,6 +924,7 @@ async function runHttpAuthedCampaignRuntime({
         let credentialValue
         let requestBodyBytes
         let discoveryInput = { headers: [], bodyChunks: [] }
+        let discoveryInputHandedOff = false
         try {
           requestBodyBytes = await resolveBody(
             materialsDirectory,
@@ -765,8 +947,15 @@ async function runHttpAuthedCampaignRuntime({
               ? async (input) => { discoveryInput = input }
               : undefined,
           })
-          return { response: result.response, discoveryInput }
+          const execution = { response: result.response, discoveryInput }
+          discoveryInputHandedOff = true
+          return execution
         } finally {
+          if (!discoveryInputHandedOff && Array.isArray(discoveryInput?.bodyChunks)) {
+            for (const chunk of discoveryInput.bodyChunks) {
+              if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) chunk.fill(0)
+            }
+          }
           credentialValue?.fill(0)
           requestBodyBytes?.fill(0)
         }
@@ -852,16 +1041,19 @@ async function runHttpAuthedCampaignRuntime({
         }
       },
     })
+  } catch (error) {
+    operationError = error
+    throw error
   } finally {
-    try {
-      await ledger?.close()
-    } finally {
-      try {
-        masterCredential?.fill(0)
-      } finally {
-        await browserTransportSession?.close()
-      }
-    }
+    const failure = runtimeCleanupFailure(
+      operationError,
+      await disposeRuntimeResources({
+        ledger,
+        credential: masterCredential,
+        browserTransportSession,
+      }),
+    )
+    if (failure !== null) throw failure
   }
 }
 

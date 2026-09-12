@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { digestAdversarialPlan } from '../scripts/lib/adversarial-validation-contracts.mjs'
 import { digestPolicySnapshot } from '../scripts/lib/bounty-contracts.mjs'
-import { runScan } from '../scripts/lib/bounty-scan-controller.mjs'
+import { loadScanRequests, runScan } from '../scripts/lib/bounty-scan-controller.mjs'
 import { normalizeCapturedRequest } from '../scripts/lib/bounty-authz-request.mjs'
 import { findRole } from '../scripts/lib/bounty-authz-roles.mjs'
 import { resolveIntensityProfile } from '../scripts/lib/bounty-intensity.mjs'
@@ -211,8 +211,70 @@ test('the full ground-truth sweep finds only the planted injection', async () =>
 
 test('passive rules collect leads from the untouched response', async () => {
   const { summary } = await scan(['/api/search?q=widget'], { classes: ['passive'] })
-  assert.ok(summary.passive.total >= 0)
-  assert.ok(['NOTHING_OBSERVED', 'LEADS_OBSERVED'].includes(summary.passive.status))
+  assert.equal(summary.passive.total, 0)
+  assert.equal(summary.passive.status, 'NOT_ASSESSED')
+  assert.equal(summary.coverage, 'NOT_ASSESSED_MISSING_RESPONSE_EVIDENCE')
+})
+
+test('passive-only review accepts a captured POST without target I/O', async () => {
+  const testbed = await startAuthzTestbed()
+  const dir = await workspace(testbed.port)
+  let sends = 0
+  try {
+    const request = normalizeCapturedRequest({
+      request_id: 'captured-login-post',
+      method: 'POST',
+      url: `${testbed.origin}/login`,
+      headers: { accept: 'application/json' },
+      owner_role: 'alice',
+    })
+    const summary = await runScan({
+      bundlePath: dir,
+      requests: [request],
+      registry: REGISTRY,
+      roleId: 'alice',
+      now: NOW,
+      env: ENV,
+      classes: ['passive'],
+      fetchImpl: async () => {
+        sends += 1
+        throw new Error('passive review must not dispatch')
+      },
+      sleep: async () => {},
+      clock: () => 0,
+    })
+    assert.equal(sends, 0)
+    assert.equal(summary.passive.status, 'NOT_ASSESSED')
+    assert.equal(summary.coverage, 'NOT_ASSESSED_MISSING_RESPONSE_EVIDENCE')
+  } finally {
+    await testbed.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('scan request loading sanitizes legacy credential-bearing bundles', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'bounty-scan-legacy-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await writeFile(join(dir, 'authz-requests.json'), JSON.stringify({
+    requests: [{
+      request_id: 'legacy-scan-request',
+      method: 'POST',
+      url: 'https://api.example.test/login?access_token=legacy-query-secret',
+      headers: {
+        'content-type': 'application/json',
+        'x-access-token': 'legacy-header-secret',
+      },
+      body: '{"password":"legacy-body-secret"}',
+      owner_role: 'alice',
+    }],
+  }), 'utf8')
+
+  const loaded = await loadScanRequests(dir)
+  const serialized = JSON.stringify(loaded)
+  assert.doesNotMatch(serialized, /legacy-(?:query|header|body)-secret/)
+  assert.deepEqual(loaded[0].redacted_headers, ['x-access-token'])
+  assert.deepEqual(loaded[0].redacted_query_parameters, ['access_token'])
+  assert.deepEqual(loaded[0].redacted_body_fields, ['password'])
 })
 
 test('scanning refuses a scope without active_testing', async () => {

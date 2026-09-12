@@ -8,6 +8,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 
 import { assertLocalFilesystemEndpoint } from './filesystem-endpoint.mjs'
 import { engagementAuthorizationProfile } from './engagement-authority-profiles.mjs'
+import { ENGAGEMENT_ROUTE_REGISTRY } from './engagement-route-registry.mjs'
 import { stableJson } from './run-engine.mjs'
 
 const INTAKE_SCHEMA_URL = new URL('../../schemas/engagement-intake.schema.json', import.meta.url)
@@ -39,12 +40,19 @@ const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$/
 const MAX_STATEMENT_BYTES = 8 * 1024
 const MAX_OBJECTIVE_BYTES = 4 * 1024
 const MAX_INPUT_BYTES = 2 * 1024 * 1024 * 1024
-const AFFIRMATIVE_AUTHORITY = /(?:\bauthori[sz](?:e|es|ed|ing|ation)\b|\bauthority\b|\bpermission\b|\ballowed\b|\bpermitted\b|дозвіл|дозволяю|уповноваж)/iu
-const NEGATED_AUTHORITY = /(?:\b(?:not|never|without)\b[^.!?\n]{0,64}\b(?:authori[sz](?:e|ed|ation)|authority|permission|allowed|permitted)\b|не\s+маю\s+дозволу)/iu
-const FULL_AUTHORITY = /(?:\b(?:all|complete|every|full|maximum|unrestricted)\b|повн)/iu
-const RESTRICTED_AUTHORITY = /\b(?:read[- ]only|no\s+(?:attach(?:ment)?|network|requests?|runtime|writes?|changes?)|without\s+(?:network|runtime|writes?))\b/iu
+const AFFIRMATIVE_AUTHORITY = /(?:\b(?:i|we)\b[^.!?\n]{0,40}\b(?:am|are)\s+(?:(?:explicitly|fully)\s+)?(?:allowed|authori[sz]ed|permitted)\b|\b(?:i|we)\s+(?:currently\s+)?have\s+(?:(?:complete|explicit|full|unrestricted)\s+)?(?:authori[sz]ation|authority|permission)\b|\b(?:i|we|my\s+team|our\s+(?:company|organization|team))\b[^.!?\n]{0,64}\bauthori[sz](?:e|es)\b|\bauthori[sz]ed\s+for\b|\b(?:authori[sz]ation|permission)\s+(?:is|has\s+been)\s+granted\b|\b(?:you|claude|codex)\s+(?:are|is)\s+(?:allowed|authori[sz]ed|permitted)\b|дозволяю|(?:маю|маємо)\s+дозвіл|уповноваж(?:ений|ена|ені))/iu
+const NEGATED_AUTHORITY = /(?:\b(?:not|never|without|no|lack(?:ing|s|ed)?)\b[^.!?\n]{0,64}\b(?:authori[sz](?:e|ed|ation)|authority|permission|allowed|permitted)\b|\b(?:denied|refused|revoked|withdrew|withdrawn)\b[^.!?\n]{0,32}\b(?:authori[sz](?:e|ed|ation)|authority|permission)\b|\b(?:authori[sz]ation|authority|permission)\b[^.!?\n]{0,32}\b(?:denied|revoked|withdrawn|not\s+(?:been\s+)?(?:approved|confirmed|granted))\b|не\s+маю\s+дозволу)/iu
+const NON_AFFIRMATIVE_AUTHORITY = /(?:\b(?:await(?:ing)?|need(?:ing|s|ed)?|request(?:ing|s|ed)?|seek(?:ing|s|ed)?)\b[^.!?\n]{0,48}\b(?:authori[sz](?:e|ation)|authority|permission|approval)\b|\b(?:authori[sz]ation|authority|permission|approval)\b[^.!?\n]{0,32}\b(?:absent|awaited|missing|needed|pending|required|requested)\b|\bplease\s+authori[sz]e\b|\b(?:am|are|can|may)\s+(?:i|we)\b[^.!?\n]{0,48}\b(?:allowed|authori[sz]ed|permitted)\b|\bdo\s+(?:i|we)\s+have\b[^.!?\n]{0,32}\b(?:authority|permission)\b)/iu
+const REPORTED_OR_DISAVOWED_AUTHORITY = /(?:\b(?:says?|said|states?|stated|mentions?|mentioned|claims?|claimed|quotes?|quoted)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b|\b(?:(?:the\s+)?(?:administrator|client|contract|customer|document(?:ation)?|owner|policy)|he|it|she|someone|they)\b[^.!?\n]{0,40}\b(?:confirms?|confirmed|indicates?|indicated|reads?|reports?|reported|tells?|told)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b|\b(?:i|we)\s+(?:was|were)\s+(?:assured|informed|told)\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b|\baccording\s+to\b[^.!?\n]{0,96}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b|\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b[^.!?\n]{0,64}\baccording\s+to\b|\b(?:deny|denies|denied|dispute|doubt|reject|refute|repudiate)\b[^.!?\n]{0,80}\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b|\b(?:false|untrue)\s+that\b[^.!?\n]{0,80}\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b)/iu
+const CONDITIONAL_AUTHORITY = /(?:\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b[^.!?\n]{0,64}\b(?:if|provided(?:\s+that)?|assuming|subject\s+to|contingent\s+on|unless|pending)\b|\b(?:if|provided(?:\s+that)?|assuming|subject\s+to|contingent\s+on|unless|pending)\b[^.!?\n]{0,96}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b|\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b[^.!?\n]{0,48}\b(?:after|as\s+long\s+as|once|upon|when)\b[^.!?\n]{0,32}\b(?:approv\w*|authori[sz]\w*|client|consent|customer|owner|permission)\b|\b(?:after|as\s+long\s+as|once|upon|when)\b[^.!?\n]{0,48}\b(?:approv\w*|authori[sz]\w*|client|consent|customer|owner|permission)\b[^.!?\n]{0,64}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b)/iu
+const QUESTIONED_AUTHORITY = /(?:\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b[^.;!?\n]{0,96}\?|\b(?:ask|question|wonder)\b[^.!?\n]{0,96}\b(?:allowed|authori[sz]ed|permitted|authori[sz]ation|authority|permission)\b|\b(?:can|could|will|would)\s+you\b[^.!?\n]{0,80}\b(?:i|we)\b[^.!?\n]{0,40}\b(?:allowed|authori[sz]ed|permitted)\b)/iu
+const RESTRICTED_AUTHORITY = /\b(?:read[- ]only|no\s+(?:access|attach(?:ment)?|network|requests?|runtime|writes?|changes?)|without\s+(?:access|network|runtime|writes?))\b/iu
+const FULL_SCOPE_RESTRICTION = /(?:\bnot\s+(?:a\s+)?(?:full|complete|maximum|unrestricted)\b|\bnot\s+[/\\]|\b(?:limited|restricted|partial)\s+(?:scope|assessment|access|authori[sz]ation)\b|\b(?:limited|restricted)\s+to\b|\b(?:except|exception\s+(?:of|for)|excluding|other\s+than)\b|\b(?:scope|access)\b[^.!?\n]{0,32}\b(?:excludes?|omits?)\b|\b(?:avoid|exclude|omit|skip)\b[^.!?\n]{0,64}\b(?:access|attach|attack|change|connect|execute|exploit|fuzz|hit|modif\w*|probe|request|scan|send|test|touch|write)\w*\b|\b(?:do\s+not|don't|must\s+not|may\s+not|cannot|can't)\b[^.!?\n]{0,64}\b(?:access|attach|attack|change|connect|execute|exploit|fuzz|hit|modify|probe|request|scan|send|test|touch|write)\w*\b|\bno\b[^.!?\n]{0,32}\b(?:DELETE|PATCH|POST|PUT)\b|\bonly\b[^.!?\n]{0,48}\b(?:access|attach|change|connect|execute|modify|passive|probe|read|recon|request|send|static|test|write)\w*\b|\b(?:passive\s+recon(?:naissance)?|read[- ]only\s+(?:access|review)|(?:API|endpoint)\s+(?:access|testing)|testing\s+(?:of\s+)?(?:the\s+)?API)\b[^.!?\n]{0,24}\bonly\b)/iu
+const TARGET_ONLY_SCOPE = /\b(?:(?:full\s+)?(?:(?:this|that)(?:\s+named)?|the\s+(?:named|specified)|named|specified)?\s*target\s+only|only\s+(?:(?:this|that)(?:\s+named)?|the\s+(?:named|specified)|named|specified)\s+target)\b/giu
+const SCOPE_CONTINUITY_NOTE = /(^|[.;]\s*)no\s+changes?\s+to\s+(?:the\s+)?scope(?=$|[.;])/giu
 const NETWORK_RESTRICTION = /\b(?:no\s+(?:network|requests?)|without\s+network)\b/iu
 const RUNTIME_RESTRICTION = /\b(?:no\s+(?:attach(?:ment)?|runtime)|without\s+runtime)\b/iu
+const SUPPORTED_CREDENTIAL_REFERENCE = /^(?:browser:[a-p]{32}|browser-session:[A-Za-z0-9][A-Za-z0-9._:/-]{2,143})$/u
 
 export class EngagementContractError extends Error {
   constructor(code, message, details = [], options = {}) {
@@ -127,7 +135,14 @@ function assertBoundedText(value, label, maximumBytes, { naturalLanguage = false
 }
 
 function assertAffirmativeAuthority(value) {
-  if (!AFFIRMATIVE_AUTHORITY.test(value) || NEGATED_AUTHORITY.test(value)) {
+  if (
+    !AFFIRMATIVE_AUTHORITY.test(value)
+    || NEGATED_AUTHORITY.test(value)
+    || NON_AFFIRMATIVE_AUTHORITY.test(value)
+    || REPORTED_OR_DISAVOWED_AUTHORITY.test(value)
+    || CONDITIONAL_AUTHORITY.test(value)
+    || QUESTIONED_AUTHORITY.test(value)
+  ) {
     fail(
       'ENGAGEMENT_AUTHORITY_NOT_ASSERTED',
       'engagement statement must affirm that the operator is authorized or has permission for the named target',
@@ -156,8 +171,13 @@ function assertAuthorizationProfileBinding(value, { authority = false } = {}) {
   }
   const profileSends = profile.effects.some((effect) => effect.startsWith('SEND_'))
   const profileAttaches = profile.effects.includes('ATTACH_AUTHORIZED_RUNTIME')
+  const statementWithoutTargetOnlyScope = value.statement
+    .replace(TARGET_ONLY_SCOPE, '')
+    .replace(SCOPE_CONTINUITY_NOTE, '$1')
   const contradicted = value.authorization_profile === 'full'
-    ? !FULL_AUTHORITY.test(value.statement) || RESTRICTED_AUTHORITY.test(value.statement)
+    ? RESTRICTED_AUTHORITY.test(statementWithoutTargetOnlyScope)
+      || FULL_SCOPE_RESTRICTION.test(statementWithoutTargetOnlyScope)
+      || /\bonly\b/iu.test(statementWithoutTargetOnlyScope)
     : (NETWORK_RESTRICTION.test(value.statement) && profileSends)
       || (RUNTIME_RESTRICTION.test(value.statement) && profileAttaches)
   if (contradicted) {
@@ -169,12 +189,38 @@ function assertAuthorizationProfileBinding(value, { authority = false } = {}) {
   return profile
 }
 
+function assertAuthorizationProfileTargetBinding(value) {
+  const applicable = ENGAGEMENT_ROUTE_REGISTRY.some((route) => (
+    value.capabilities.includes(route.id)
+    && route.applicability.target_kinds.includes(value.target.kind)
+  ))
+  if (!applicable) {
+    fail(
+      'ENGAGEMENT_AUTHORIZATION_PROFILE_TARGET_MISMATCH',
+      'the selected authorization profile has no registered route for the target kind',
+    )
+  }
+}
+
 function assertTimestamp(value, label) {
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
     fail('ENGAGEMENT_TIME_INVALID', `${label} must be a real canonical UTC millisecond timestamp`)
   }
   return value
+}
+
+function ambiguousEncodedPath(value) {
+  let current = value
+  for (let pass = 0; pass < 8; pass += 1) {
+    if (/%(?:2e|2f|5c)/iu.test(current)) return true
+    if (!current.includes('%')) return false
+    let decoded
+    try { decoded = decodeURIComponent(current) } catch { return true }
+    if (decoded === current) return false
+    current = decoded
+  }
+  return current.includes('%')
 }
 
 function canonicalHttpsLocator(value, label) {
@@ -209,7 +255,7 @@ function canonicalHttpsLocator(value, label) {
   const suffixOffset = afterScheme.search(/[/?#]/u)
   const suffix = suffixOffset === -1 ? '' : afterScheme.slice(suffixOffset)
   const rawPath = suffix.startsWith('/') ? suffix.split(/[?#]/u, 1)[0] : ''
-  if (/%(?:2e|2f|5c)/iu.test(rawPath)) {
+  if (ambiguousEncodedPath(rawPath)) {
     fail('ENGAGEMENT_TARGET_AMBIGUOUS', `${label} contains an ambiguous URL path encoding`)
   }
   return parsed.href
@@ -415,6 +461,19 @@ function assertSortedReferences(values, label) {
   }
 }
 
+export function assertSupportedEngagementCredentialReferences(values) {
+  if (
+    !Array.isArray(values)
+    || values.some((value) => typeof value !== 'string' || !SUPPORTED_CREDENTIAL_REFERENCE.test(value))
+  ) {
+    fail(
+      'ENGAGEMENT_REFERENCE_SCHEME_UNSUPPORTED',
+      'new engagements require a browser or browser-session credential reference with an executable adapter',
+    )
+  }
+  return values
+}
+
 export function assertValidEngagementIntake(value) {
   assertSchema(validateIntakeSchema, value, 'engagement intake')
   assertTimestamp(value.declared_at, 'engagement intake declared_at')
@@ -423,7 +482,9 @@ export function assertValidEngagementIntake(value) {
   assertAuthorizationProfileBinding(value)
   assertBoundedText(value.objective, 'engagement objective', MAX_OBJECTIVE_BYTES)
   assertCanonicalTargetSemantics(value.target)
+  assertAuthorizationProfileTargetBinding(value)
   assertSortedReferences(value.credential_references, 'credential_references')
+  assertSupportedEngagementCredentialReferences(value.credential_references)
   for (const input of value.inputs) {
     assertLocalFilesystemEndpoint(input.locator, 'engagement input locator')
     if (!isAbsolute(input.locator) || resolve(input.locator) !== input.locator) {
@@ -445,7 +506,9 @@ export function assertValidEngagementAuthority(value) {
   assertAuthorizationProfileBinding(value, { authority: true })
   assertBoundedText(value.objective, 'engagement objective', MAX_OBJECTIVE_BYTES)
   assertCanonicalTargetSemantics(value.target)
+  assertAuthorizationProfileTargetBinding(value)
   assertSortedReferences(value.credential_references, 'credential_references')
+  assertSupportedEngagementCredentialReferences(value.credential_references)
   return value
 }
 
@@ -488,6 +551,7 @@ function normalizeCredentialReferences(values) {
   }
   references.sort()
   assertSortedReferences(references, 'credentialReferences')
+  assertSupportedEngagementCredentialReferences(references)
   return references
 }
 

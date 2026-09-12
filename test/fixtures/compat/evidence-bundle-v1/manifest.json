@@ -1,0 +1,32 @@
+{
+  "profile": {
+    "schema": "evidence-bundle-v1",
+    "evidence_context": {
+      "evidence_id": "legacy-fixture",
+      "evidence_class": "built-artifact",
+      "adapter_id": "artifact",
+      "target_identity": "sha256:9f2c1d0e4b6a8c3f5e7d9b1a3c5e7f9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c",
+      "acquisition_mode": "offline-export",
+      "acquired_on": "2026-08-08T14:22:10Z",
+      "detection_evidence": ["legacy compatibility fixture"],
+      "confidence": "high"
+    },
+    "target_class": "LAB",
+    "phi_scope": "none",
+    "phi_bearing": false,
+    "adapter_version": "1.0.0",
+    "contract_version": 1,
+    "coverage_state": "COVERED",
+    "artifact_kind": "oci-image",
+    "attestation": null,
+    "coverage_gaps": [],
+    "files": [
+      {
+        "path": "payload/legacy.txt",
+        "sha256": "618cce48c4485735c7d5bb4599179b566851719f070bad3cfd8f410a02427236",
+        "size": 16
+      }
+    ]
+  },
+  "root_sha256": "82c57c38ce8049ff4697742a544c3f9497be9f4f512206a1ca0ad69044073db8"
+}

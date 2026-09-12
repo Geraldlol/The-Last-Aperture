@@ -112,7 +112,7 @@
           "maxLength": 1024
         },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "size": { "type": "integer", "minimum": 0 }
+        "size": { "type": "integer", "minimum": 0, "maximum": 134217728 }
       }
     },
     "attestation": {

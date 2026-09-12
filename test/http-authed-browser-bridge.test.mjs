@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { request as httpRequest } from 'node:http'
 import { test } from 'node:test'
 
@@ -577,6 +578,328 @@ test('a transport timeout after COMMIT closes the session instead of permitting 
   assert.equal(session.snapshot().request_may_have_been_sent, true)
 })
 
+test('a browser transport timer setup failure erases its prepared request body and restores the session', async (t) => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+    createHttpAuthedBrowserBridgeTransport,
+  } = await bridgeApi()
+  const supplied = Buffer.from('synthetic-browser-timer-body')
+  const copies = []
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const copy = originalFrom.call(Buffer, value, ...args)
+    if (value === supplied) copies.push(copy)
+    return copy
+  })
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    setTimer() { throw new Error('synthetic browser timer setup failure') },
+  })
+  openSession(session)
+  const transport = createHttpAuthedBrowserBridgeTransport({ session })
+
+  await assert.rejects(
+    transport({
+      ...request(),
+      method: 'POST',
+      headers: {
+        'content-length': String(supplied.length),
+        'content-type': 'application/octet-stream',
+      },
+      body: supplied,
+      beforeSend: async () => {},
+    }),
+    (error) => error instanceof HttpAuthedBrowserBridgeError
+      && error.code === 'HTTP_AUTHED_BROWSER_BRIDGE_TIMER_FAILED'
+      && error.request_may_have_been_sent === false,
+  )
+  assert.equal(copies.length, 1)
+  assert.equal(copies[0].every((byte) => byte === 0), true)
+  assert.equal(session.snapshot().state, 'OPEN')
+  assert.equal(session.snapshot().in_flight, null)
+})
+
+test('a browser timer cleanup failure cannot strand request or session secret bytes', async (t) => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+    createHttpAuthedBrowserBridgeTransport,
+  } = await bridgeApi()
+  const pairingSource = Buffer.alloc(32, 0x31)
+  const sessionSource = Buffer.alloc(32, 0x32)
+  const suppliedBody = Buffer.from('synthetic-browser-clear-timer-body')
+  const requestCopies = []
+  const sessionSecretCopies = []
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const copy = originalFrom.call(Buffer, value, ...args)
+    if (value === suppliedBody) requestCopies.push(copy)
+    if (value === sessionSource) sessionSecretCopies.push(copy)
+    return copy
+  })
+  let randomCalls = 0
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    randomBytes(size) {
+      assert.equal(size, 32)
+      randomCalls += 1
+      return randomCalls === 1 ? pairingSource : sessionSource
+    },
+    setTimer(callback) { return callback },
+    clearTimer() { throw new Error('synthetic browser timer cleanup failure') },
+  })
+  openSession(session)
+  const transport = createHttpAuthedBrowserBridgeTransport({ session })
+  const pending = transport({
+    ...request(),
+    method: 'POST',
+    headers: {
+      'content-length': String(suppliedBody.length),
+      'content-type': 'application/octet-stream',
+    },
+    body: suppliedBody,
+    beforeSend: async () => {},
+  })
+  void pending.catch(() => {})
+
+  assert.deepEqual(session.close('synthetic timer cleanup failure'), {
+    state: 'CLOSED',
+    request_may_have_been_sent: false,
+  })
+  await assert.rejects(
+    pending,
+    (error) => error instanceof HttpAuthedBrowserBridgeError
+      && error.code === 'HTTP_AUTHED_BROWSER_BRIDGE_CLOSED'
+      && error.request_may_have_been_sent === false,
+  )
+  assert.equal(requestCopies.length, 1)
+  assert.equal(requestCopies[0].every((byte) => byte === 0), true)
+  assert.equal(sessionSecretCopies.length, 2)
+  assert.equal(sessionSecretCopies.every((copy) => copy.every((byte) => byte === 0)), true)
+  assert.equal(session.snapshot().state, 'CLOSED')
+  assert.equal(session.snapshot().in_flight, null)
+})
+
+test('an uncleared stale timer cannot cancel a later action that reuses an external action id', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+    createHttpAuthedBrowserBridgeTransport,
+  } = await bridgeApi()
+  const timerCallbacks = []
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    setTimer(callback) {
+      timerCallbacks.push(callback)
+      return callback
+    },
+    clearTimer() { throw new Error('synthetic stale timer cleanup failure') },
+  })
+  openSession(session)
+  const transport = createHttpAuthedBrowserBridgeTransport({
+    session,
+    actionIdFactory: () => 'synthetic-reused-external-action',
+  })
+  const firstPending = transport({ ...request(), beforeSend: async () => {} })
+  const firstPrepared = session.takePrepared()
+  const firstBound = {
+    protocol: firstPrepared.protocol,
+    schema_version: firstPrepared.schema_version,
+    campaign_id: firstPrepared.campaign_id,
+    action_id: firstPrepared.action_id,
+    action_nonce: firstPrepared.action_nonce,
+    action_sha256: firstPrepared.action_sha256,
+    document_nonce: firstPrepared.document_nonce,
+  }
+  session.acceptReady({ ...firstBound, type: 'READY' })
+  await session.commit({ beforeSend: async () => {} })
+  await session.acceptResult({
+    ...firstBound,
+    type: 'RESULT',
+    outcome: 'OBSERVED',
+    response_truncated: false,
+    response: {
+      status: 204,
+      response_bytes: 0,
+      response_header_names: [],
+      headers: [],
+      body_base64: null,
+    },
+  })
+  await firstPending
+
+  const secondPending = transport({ ...request(), beforeSend: async () => {} })
+  void secondPending.catch(() => {})
+  assert.equal(session.snapshot().state, 'PREPARE')
+  timerCallbacks[0]()
+  assert.equal(session.snapshot().state, 'PREPARE')
+  session.close('synthetic stale timer regression cleanup')
+  await assert.rejects(
+    secondPending,
+    (error) => error instanceof HttpAuthedBrowserBridgeError
+      && error.code === 'HTTP_AUTHED_BROWSER_BRIDGE_CLOSED',
+  )
+})
+
+test('loopback bridge attach timer setup failure resets the waiter for retry', async (t) => {
+  const {
+    createHttpAuthedBrowserBridgeServer,
+  } = await bridgeApi()
+  let timerCalls = 0
+  const bridge = await createHttpAuthedBrowserBridgeServer({
+    extensionId: EXTENSION_ID,
+    targetOrigin: TARGET_ORIGIN,
+    campaignGrantSha256: 'a'.repeat(64),
+    setTimer() {
+      timerCalls += 1
+      throw new Error('synthetic attach timer setup failure')
+    },
+    clearTimer() {},
+  })
+  t.after(() => bridge.close())
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      bridge.waitForAttach(),
+      { code: 'HTTP_AUTHED_BROWSER_BRIDGE_ATTACH_TIMER_FAILED' },
+    )
+  }
+  assert.equal(timerCalls, 2)
+})
+
+test('loopback bridge close settles its attach waiter when timer cleanup throws', async () => {
+  const {
+    createHttpAuthedBrowserBridgeServer,
+  } = await bridgeApi()
+  let clearTimerCalls = 0
+  const bridge = await createHttpAuthedBrowserBridgeServer({
+    extensionId: EXTENSION_ID,
+    targetOrigin: TARGET_ORIGIN,
+    campaignGrantSha256: 'a'.repeat(64),
+    setTimer: () => 71,
+    clearTimer() {
+      clearTimerCalls += 1
+      throw new Error('synthetic attach timer cleanup failure')
+    },
+  })
+  const attached = bridge.waitForAttach()
+  void attached.catch(() => {})
+
+  await bridge.close()
+  await assert.rejects(
+    attached,
+    { code: 'HTTP_AUTHED_BROWSER_BRIDGE_CLOSED' },
+  )
+  await bridge.close()
+  assert.equal(clearTimerCalls, 1)
+})
+
+test('loopback bridge attach succeeds when timer cleanup throws', async (t) => {
+  const {
+    HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
+    HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER,
+    createHttpAuthedBrowserBridgeServer,
+  } = await bridgeApi()
+  const campaignGrantSha256 = 'a'.repeat(64)
+  let clearTimerCalls = 0
+  const bridge = await createHttpAuthedBrowserBridgeServer({
+    extensionId: EXTENSION_ID,
+    targetOrigin: TARGET_ORIGIN,
+    campaignGrantSha256,
+    setTimer: () => 72,
+    clearTimer() {
+      clearTimerCalls += 1
+      throw new Error('synthetic attach timer cleanup failure')
+    },
+  })
+  t.after(() => bridge.close())
+  const pairing = bridge.pairing
+  const attached = bridge.waitForAttach()
+  const opened = await loopbackRequest(`${pairing.bridge_origin}/v1/open`, {
+    method: 'POST',
+    headers: {
+      origin: EXTENSION_ORIGIN,
+      'content-type': 'application/json',
+      [HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER]: EXTENSION_ID,
+      [HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER]: pairing.pairing_code,
+    },
+    body: JSON.stringify({
+      protocol: 'red-team-audit/http-authed-browser-bridge',
+      schema_version: '1.0.0',
+      type: 'OPEN',
+      campaign_id: campaignGrantSha256,
+      target_origin: TARGET_ORIGIN,
+      tab_id: 17,
+      document_nonce: DOCUMENT_NONCE,
+    }),
+  })
+
+  assert.equal(opened.status, 200)
+  assert.deepEqual(await attached, {
+    extension_id: EXTENSION_ID,
+    target_origin: TARGET_ORIGIN,
+    campaign_grant_sha256: campaignGrantSha256,
+  })
+  assert.equal(clearTimerCalls, 1)
+})
+
+test('loopback response finish cleanup tolerates a body detached by response.end', async (t) => {
+  const {
+    HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
+    HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER,
+    createHttpAuthedBrowserBridgeServer,
+  } = await bridgeApi()
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const ordinary = originalFrom.call(Buffer, value, ...args)
+    if (typeof value !== 'string' || !value.includes('"type":"PREVIEW"')) return ordinary
+    const isolated = Buffer.allocUnsafeSlow(ordinary.length)
+    ordinary.copy(isolated)
+    return isolated
+  })
+  let requestListener
+  const server = new EventEmitter()
+  server.listen = () => queueMicrotask(() => server.emit('listening'))
+  server.address = () => ({ address: '127.0.0.1', port: 4712, family: 'IPv4' })
+  server.close = (callback) => queueMicrotask(() => callback?.())
+  server.closeAllConnections = () => {}
+  const bridge = await createHttpAuthedBrowserBridgeServer({
+    extensionId: EXTENSION_ID,
+    targetOrigin: TARGET_ORIGIN,
+    campaignGrantSha256: 'a'.repeat(64),
+    port: 4712,
+    serverFactory(listener) {
+      requestListener = listener
+      return server
+    },
+  })
+  t.after(() => bridge.close())
+  const pairing = bridge.pairing
+  const response = new EventEmitter()
+  response.headersSent = false
+  response.setHeader = () => {}
+  response.destroy = () => { response.destroyed = true }
+  let handedOffBody
+  response.end = (body) => {
+    handedOffBody = body
+    response.headersSent = true
+    structuredClone(body, { transfer: [body.buffer] })
+  }
+  await requestListener({
+    url: '/v1/preview',
+    method: 'GET',
+    headers: {
+      host: '127.0.0.1:4712',
+      origin: EXTENSION_ORIGIN,
+      [HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER]: EXTENSION_ID,
+      [HTTP_AUTHED_BROWSER_BRIDGE_PAIRING_HEADER]: pairing.pairing_code,
+    },
+  }, response)
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(handedOffBody.byteLength, 0)
+  assert.doesNotThrow(() => response.emit('finish'))
+  assert.doesNotThrow(() => response.emit('close'))
+})
+
 test('loopback bridge rotates one-use pairing into a continuous session transport', async (t) => {
   const {
     HTTP_AUTHED_BROWSER_BRIDGE_EXTENSION_HEADER,
@@ -751,6 +1074,7 @@ test('closing during transient result observation cannot resurrect the session',
   } = await bridgeApi()
   let observerStarted
   let releaseObserver
+  let retainedObserverChunk
   const started = new Promise((resolve) => { observerStarted = resolve })
   const release = new Promise((resolve) => { releaseObserver = resolve })
   const { session } = createSession(createHttpAuthedBrowserBridgeSession)
@@ -758,7 +1082,8 @@ test('closing during transient result observation cannot resurrect the session',
   const prepared = session.prepare({
     actionId: 'synthetic-action-close-race',
     request: request({
-      responseObserver: async () => {
+      responseObserver: async ({ bodyChunks }) => {
+        retainedObserverChunk = bodyChunks.shift()
         observerStarted()
         await release
       },
@@ -790,6 +1115,7 @@ test('closing during transient result observation cannot resurrect the session',
   })
   await started
   session.close('synthetic concurrent close')
+  assert.equal(retainedObserverChunk.every((byte) => byte === 0), true)
   releaseObserver()
   await assert.rejects(
     result,
@@ -798,4 +1124,152 @@ test('closing during transient result observation cannot resurrect the session',
   )
   assert.equal(session.snapshot().state, 'CLOSED')
   assert.equal(session.snapshot().request_may_have_been_sent, true)
+})
+
+test('browser bridge settles after an observer transfers its response copy before rejecting', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+    createHttpAuthedBrowserBridgeTransport,
+  } = await bridgeApi()
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession, {
+    setTimer: () => ({ kind: 'synthetic-timer' }),
+    clearTimer: () => {},
+  })
+  openSession(session)
+  const transport = createHttpAuthedBrowserBridgeTransport({ session })
+  const pending = transport({
+    ...request({ maxResponseBytes: 32 * 1024 }),
+    beforeSend: async () => {},
+    responseObserver: async ({ bodyChunks }) => {
+      Object.freeze(bodyChunks)
+      structuredClone(bodyChunks[0], { transfer: [bodyChunks[0].buffer] })
+      throw new Error('synthetic detached browser observer rejection')
+    },
+  })
+  void pending.catch(() => {})
+  const prepared = session.takePrepared()
+  const bound = {
+    protocol: prepared.protocol,
+    schema_version: prepared.schema_version,
+    campaign_id: prepared.campaign_id,
+    action_id: prepared.action_id,
+    action_nonce: prepared.action_nonce,
+    action_sha256: prepared.action_sha256,
+    document_nonce: prepared.document_nonce,
+  }
+  session.acceptReady({ ...bound, type: 'READY' })
+  await session.commit()
+  const body = Buffer.alloc(16 * 1024, 0x61)
+  const accepted = session.acceptResult({
+    ...bound,
+    type: 'RESULT',
+    outcome: 'OBSERVED',
+    response_truncated: false,
+    response: {
+      status: 200,
+      response_bytes: body.length,
+      response_header_names: ['content-type'],
+      headers: [{
+        name: 'content-type',
+        value_base64: Buffer.from('application/octet-stream').toString('base64'),
+      }],
+      body_base64: body.toString('base64'),
+    },
+  })
+
+  const outcomeWithin = (promise) => new Promise((resolve) => {
+    const watchdog = setTimeout(() => resolve({ timeout: true }), 500)
+    promise.then(
+      (value) => {
+        clearTimeout(watchdog)
+        resolve({ value })
+      },
+      (error) => {
+        clearTimeout(watchdog)
+        resolve({ error })
+      },
+    )
+  })
+  const [acceptedOutcome, waiterOutcome] = await Promise.all([
+    outcomeWithin(accepted),
+    outcomeWithin(pending),
+  ])
+  for (const outcome of [acceptedOutcome, waiterOutcome]) {
+    assert.equal(outcome.timeout, undefined)
+    assert.ok(outcome.error instanceof HttpAuthedBrowserBridgeError)
+    assert.equal(outcome.error.code, 'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_OBSERVER_FAILED')
+    assert.equal(outcome.error.request_may_have_been_sent, true)
+  }
+  assert.equal(session.snapshot().state, 'OPEN')
+  assert.equal(session.snapshot().request_may_have_been_sent, true)
+})
+
+test('a concurrent duplicate result cannot replace the pending observer cleanup tracker', async () => {
+  const {
+    HttpAuthedBrowserBridgeError,
+    createHttpAuthedBrowserBridgeSession,
+  } = await bridgeApi()
+  const retainedObserverChunks = []
+  const releaseObservers = []
+  let observerCalls = 0
+  const { session } = createSession(createHttpAuthedBrowserBridgeSession)
+  openSession(session)
+  const prepared = session.prepare({
+    actionId: 'synthetic-action-duplicate-result',
+    request: request({
+      responseObserver: ({ bodyChunks }) => {
+        observerCalls += 1
+        retainedObserverChunks.push(bodyChunks.shift())
+        return new Promise((resolve) => { releaseObservers.push(resolve) })
+      },
+    }),
+  })
+  const bound = {
+    protocol: prepared.protocol,
+    schema_version: prepared.schema_version,
+    campaign_id: prepared.campaign_id,
+    action_id: prepared.action_id,
+    action_nonce: prepared.action_nonce,
+    action_sha256: prepared.action_sha256,
+    document_nonce: prepared.document_nonce,
+  }
+  const resultEnvelope = {
+    ...bound,
+    type: 'RESULT',
+    outcome: 'OBSERVED',
+    response_truncated: false,
+    response: {
+      status: 200,
+      response_bytes: 1,
+      response_header_names: [],
+      headers: [],
+      body_base64: Buffer.from('x').toString('base64'),
+    },
+  }
+  session.acceptReady({ ...bound, type: 'READY' })
+  await session.commit({ beforeSend: async () => {} })
+  const first = session.acceptResult(resultEnvelope)
+  void first.catch(() => {})
+  const second = session.acceptResult(resultEnvelope)
+  const secondOutcome = await Promise.race([
+    second.then(
+      () => ({ kind: 'RESOLVED' }),
+      (error) => ({ kind: 'REJECTED', error }),
+    ),
+    new Promise((resolve) => setImmediate(() => resolve({ kind: 'PENDING' }))),
+  ])
+
+  session.close('synthetic duplicate result')
+  const erasedAtClose = retainedObserverChunks.every(
+    (chunk) => chunk.every((byte) => byte === 0),
+  )
+  for (const release of releaseObservers) release()
+  await Promise.allSettled([first, second])
+
+  assert.equal(secondOutcome.kind, 'REJECTED')
+  assert.ok(secondOutcome.error instanceof HttpAuthedBrowserBridgeError)
+  assert.equal(secondOutcome.error.code, 'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_UNEXPECTED')
+  assert.equal(observerCalls, 1)
+  assert.equal(erasedAtClose, true)
 })

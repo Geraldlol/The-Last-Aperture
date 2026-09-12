@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDeployedAdapter } from '../scripts/lib/evidence-adapters/deployed.mjs'
@@ -47,6 +47,54 @@ const REQUEST = {
 }
 
 runEvidenceAdapterConformance(await adapterWithStub(), { validPlanRequest: REQUEST })
+
+test('invalid object limits fail before any executable resolver is consulted', () => {
+  let resolverCalls = 0
+  assert.throws(
+    () => createDeployedAdapter({
+      limits: { maxObjects: Number.NaN },
+      resolver: () => {
+        resolverCalls += 1
+        throw new Error('must not resolve')
+      },
+    }),
+    /maxObjects.*non-negative safe integer/i,
+  )
+  assert.equal(resolverCalls, 0)
+})
+
+test('Salesforce query records are individually counted and captured', async () => {
+  const stub = await stubCli('sf', `
+    if (args[0] === 'version') process.stdout.write('@salesforce/cli/2.100.0 win32-x64 node-v24\\n')
+    else process.stdout.write(JSON.stringify({ status: 0, result: { records: [
+      { attributes: { type: 'Account' }, Id: '001A' },
+      { attributes: { type: 'Account' }, Id: '001B' },
+    ] } }))
+  `)
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: stub.resolver,
+    limits: { maxObjects: 64 },
+  })
+  const planned = await adapter.plan({
+    ...REQUEST,
+    target_class: 'LAB',
+    acknowledge_production: false,
+    phi_scope: 'none',
+    operations: [{
+      operation_id: 'sf.query',
+      params: { alias: 'sandbox', soql: 'SELECT Id FROM Account' },
+    }],
+  })
+  const out = join(await mkdtemp(join(tmpdir(), 'rta-deployed-sf-records-')), 'ev')
+  const written = await adapter.run(planned, { out })
+  assert.equal(written.profile.coverage_state, 'COVERED')
+  const counters = JSON.parse(await readFile(join(out, 'payload', 'impact-counters.json'), 'utf8'))
+  assert.equal(counters.objects_touched, 2)
+  const operations = JSON.parse(await readFile(join(out, 'payload', 'operations.json'), 'utf8'))
+  assert.equal(operations[0].objects, 2)
+  assert.equal((await readFile(join(out, 'payload', 'objects', '00', '1.json'), 'utf8')).includes('001B'), true)
+})
 
 test('plan seals the operation list and probes kubectl without running anything', async () => {
   const adapter = await adapterWithStub()
@@ -263,6 +311,60 @@ test('collection object caps use the observed item count, not the allowlist esti
   const written = await adapter.run(planned, { out })
   assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
   assert.ok(written.profile.coverage_gaps.some(({ reason }) => /object|cap/i.test(reason)))
+})
+
+test('a collection producer is terminated at cap plus one before it completes its response', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-deployed-stream-cap-'))
+  const completed = join(root, 'completed.txt')
+  const stub = await stubCli('kubectl', `
+    if (args[0] === 'version') process.stdout.write('v1.29.4\\n')
+    else if (args.includes('first')) {
+      process.stdout.write(JSON.stringify({ apiVersion: 'v1', kind: 'Pod', metadata: { name: 'first' } }))
+    }
+    else {
+      process.stdout.write('{"items":[')
+      for (let index = 0; index < 70; index += 1) {
+        if (index > 0) process.stdout.write(',')
+        process.stdout.write(JSON.stringify({ metadata: { name: 'item-' + index } }))
+        await new Promise((resolve) => setTimeout(resolve, 3))
+      }
+      process.stdout.write(']}')
+      ;(await import('node:fs')).writeFileSync(${JSON.stringify(completed)}, 'complete')
+    }
+  `)
+  const adapter = createDeployedAdapter({
+    clock: () => '2026-08-08T14:22:10Z',
+    resolver: stub.resolver,
+    limits: { maxObjects: 65 },
+  })
+  const out = join(root, 'ev')
+  const planned = await adapter.plan({
+    ...REQUEST,
+    operations: [
+      { operation_id: 'k8s.resource', params: { kind: 'pods', name: 'first', namespace: 'clinical' } },
+      { operation_id: 'k8s.resources', params: { kind: 'pods', namespace: 'clinical' } },
+    ],
+  })
+  const written = await adapter.run(planned, { out })
+  assert.equal(written.profile.coverage_state, 'PARTIAL')
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /objects_touched|object.*cap/i.test(reason)))
+  const counters = JSON.parse(await readFile(join(out, 'payload', 'impact-counters.json'), 'utf8'))
+  assert.equal(counters.objects_touched, 66)
+  const operations = JSON.parse(await readFile(join(out, 'payload', 'operations.json'), 'utf8'))
+  assert.equal(operations.length, 2)
+  assert.equal(operations[0].operation_id, 'k8s.resource')
+  assert.equal(operations[0].exit_code, 0)
+  assert.equal(operations[0].objects, 1)
+  assert.equal(operations[1].operation_id, 'k8s.resources')
+  assert.equal(operations[1].exit_code, null)
+  assert.equal(operations[1].failure_code, 'IMPACT_CAP_EXCEEDED')
+  assert.equal(operations[1].outcome, 'IMPACT_CAP_EXCEEDED')
+  assert.equal(typeof operations[1].termination_confirmed, 'boolean')
+  assert.equal(operations[1].objects, 65)
+  assert.equal(operations[1].impact_dimension, 'objects_touched')
+  assert.equal(operations[1].operation_cap, 64)
+  assert.equal(operations[1].observed_value, 65)
+  await assert.rejects(() => access(completed))
 })
 
 test('a stop request halts the loop before the next operation', async () => {

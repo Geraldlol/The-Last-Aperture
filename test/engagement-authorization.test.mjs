@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { resolve } from 'node:path'
 import { test } from 'node:test'
 
 import {
@@ -19,6 +20,8 @@ import {
   verifyEngagementManifest,
   verifyEngagementRouteGrant,
 } from '../scripts/lib/engagement-authorization.mjs'
+import { ENGAGEMENT_AUTHORIZATION_PROFILES } from '../scripts/lib/engagement-authority-profiles.mjs'
+import { ENGAGEMENT_ROUTE_REGISTRY } from '../scripts/lib/engagement-route-registry.mjs'
 
 const DECLARED_AT = '2026-09-11T09:00:00.000Z'
 const TARGET = Object.freeze({
@@ -41,7 +44,7 @@ function authority(overrides = {}) {
     objective: 'Assess the application and reconstruct its internal interactions.',
     target: TARGET,
     authorizationProfile: 'full',
-    credentialReferences: ['browser-session:primary', 'vault:portal-test-user'],
+    credentialReferences: ['browser-session:primary'],
     ...overrides,
   })
 }
@@ -76,10 +79,7 @@ test('one bounded natural-language statement is preserved exactly and grants the
   assert.equal(value.authorization_profile, 'full')
   assert.deepEqual(value.capabilities, ENGAGEMENT_AUTHORIZED_CAPABILITIES)
   assert.deepEqual(value.effects, ENGAGEMENT_AUTHORIZED_EFFECTS)
-  assert.deepEqual(value.credential_references, [
-    'browser-session:primary',
-    'vault:portal-test-user',
-  ])
+  assert.deepEqual(value.credential_references, ['browser-session:primary'])
   assert.equal(value.target_sha256, sha256('{"kind":"https","locator":"https://app.example/internal"}'))
   assert.equal(Object.isFrozen(value.target), true)
   assert.equal(Object.isFrozen(value.capabilities), true)
@@ -122,6 +122,10 @@ test('authority verification rejects statement, target, and fixed full-authority
 
 test('ordinary statements are bounded UTF-8 data rather than one magic sentence', () => {
   for (const statement of [
+    'I am authorized to assess https://app.example/internal.',
+    'I have permission to assess the named target.',
+    'I confirm I am authorized to assess the named target.',
+    'I am authorized to assess the target and report findings when complete.',
     'Authorized for a full assessment. Break this named test application and map its private endpoints.',
     'My team authorizes this target; Codex and Claude have full freedom for this engagement.',
     'Дозволяю повну перевірку названої системи.',
@@ -132,9 +136,43 @@ test('ordinary statements are bounded UTF-8 data rather than one magic sentence'
   for (const statement of [
     'Please review this application.',
     'I am not authorized to assess this target.',
+    'I have no authorization to assess this target.',
+    'I lack authorization to assess this target.',
+    'Permission was denied for this target.',
+    'The owner denied permission for this target.',
+    'Authorization has not been granted for this target.',
+    'I am requesting permission to assess this target.',
+    'Please authorize me to assess this target.',
+    'Am I allowed to assess this target?',
+    'The documentation mentions permission for this target.',
+    'If authorized, assess this target.',
+    'I used to have permission to assess this target.',
+    'I was authorized, but that permission expired.',
+    'Authorization might be granted later.',
     'Proceed without permission.',
+    'The documentation says I am authorized to assess this target.',
+    'I am authorized to assess this target?',
+    'I have permission to assess this target?',
+    'I deny that I am authorized to assess this target.',
+    'It is false that I am authorized to assess this target.',
+    'I am authorized if the owner approves.',
+    'If the owner approves, I am authorized to assess this target.',
+    'According to the documentation, I am authorized to assess this target.',
+    'I am authorized according to the documentation.',
+    'I am authorized pending the owner\'s approval.',
+    'I am authorized unless the owner objects.',
+    'The owner told me I am authorized to assess this target.',
+    'The contract confirms I am authorized to assess this target.',
+    'The policy reads: "I am authorized to assess this target."',
+    'I wonder whether I am authorized to assess this target.',
+    'Can you confirm I am authorized to assess this target.',
+    'I reject the claim that I am authorized to assess this target.',
+    'I am authorized once the owner approves.',
+    'I am authorized when the owner approves.',
+    'I am authorized upon owner approval.',
+    'Once the owner approves, I am authorized to assess this target.',
   ]) {
-    assert.throws(() => authority({ statement }), /authoriz|permission|authority/i)
+    assert.throws(() => authority({ statement }), /authoriz|permission|authority/i, statement)
   }
 
   for (const statement of [
@@ -156,9 +194,49 @@ test('a restrictive statement cannot be expanded into the full machine profile',
     (error) => error.code === 'ENGAGEMENT_AUTHORIZATION_PROFILE_CONTRADICTED',
   )
 
+  for (const statement of [
+    'I have authorization for https://app.example/internal, but not full scope.',
+    'I am authorized for a limited assessment of this target.',
+    'I have permission only for passive reconnaissance.',
+    'I am authorized for this target except runtime attachment.',
+    'I am authorized for this target, but do not send requests.',
+    'I am authorized only to send GET requests.',
+    'I have permission for the target excluding /admin.',
+    'I am authorized for passive reconnaissance only.',
+    'I authorize testing of the API only.',
+    'I am authorized, but avoid modifying data.',
+    'I have permission for everything other than /admin.',
+    'I am authorized, but no POST or DELETE requests.',
+    'I have permission but no access to the target.',
+    'I am authorized, but restricted to /api.',
+    'I am authorized, but the scope excludes /admin.',
+    'I am authorized for GET requests only.',
+    'I am authorized only for /api.',
+    'I am authorized for /api and not /admin.',
+    'I am authorized, but do not scan /admin.',
+    'I am authorized with the exception of /admin.',
+    'I am authorized to make no changes to scope.',
+  ]) {
+    assert.throws(
+      () => authority({ statement }),
+      (error) => error.code === 'ENGAGEMENT_AUTHORIZATION_PROFILE_CONTRADICTED',
+    )
+  }
+
+  for (const statement of [
+    'I am authorized for the full named target only; no other target is in scope.',
+    'I have permission for the full named target only, with unrestricted methods.',
+    'I am authorized to assess only this named target, with every method needed for that assessment.',
+    'I have authority for this target with no limits on testing methods.',
+    'I have unrestricted permission for this target; no changes to scope.',
+  ]) {
+    assert.doesNotThrow(() => authority({ statement }), statement)
+  }
+
   const restricted = authority({
     statement: 'I am authorized for T1 read-only repository review.',
     authorizationProfile: 'repository-read',
+    target: { kind: 'repository', locator: resolve('test-repository') },
   })
   assert.deepEqual(restricted.capabilities, ['repository-audit', 'repository-agent-work'])
   assert.equal(restricted.effects.some((effect) => effect.startsWith('SEND_')), false)
@@ -189,6 +267,60 @@ test('a restrictive statement cannot be expanded into the full machine profile',
     statement: 'I am authorized for local runtime tracing without network requests.',
     authorizationProfile: 'reverse',
   }))
+})
+
+test('authorization profiles must have at least one registered route for the bound target kind', () => {
+  const targets = Object.freeze({
+    https: TARGET,
+    browser: { kind: 'browser', locator: 'https://app.example/internal' },
+    repository: { kind: 'repository', locator: resolve('test-repository') },
+    artifact: { kind: 'artifact', locator: resolve('test-artifact.bin') },
+    process: { kind: 'process', locator: 'pid:42', instance_sha256: '1'.repeat(64) },
+    device: { kind: 'device', locator: 'id:test-device', instance_sha256: '2'.repeat(64) },
+  })
+
+  for (const [authorizationProfile, profile] of Object.entries(ENGAGEMENT_AUTHORIZATION_PROFILES)) {
+    for (const target of Object.values(targets)) {
+      const applicable = ENGAGEMENT_ROUTE_REGISTRY.some((route) => (
+        profile.capabilities.includes(route.id)
+        && route.applicability.target_kinds.includes(target.kind)
+      ))
+      const create = () => authority({
+        authorizationProfile,
+        target,
+        statement: 'I am authorized to assess the named target.',
+      })
+      if (applicable) {
+        assert.doesNotThrow(create, `${authorizationProfile}:${target.kind}`)
+      } else {
+        assert.throws(
+          create,
+          (error) => error.code === 'ENGAGEMENT_AUTHORIZATION_PROFILE_TARGET_MISMATCH',
+          `${authorizationProfile}:${target.kind}`,
+        )
+      }
+    }
+  }
+})
+
+test('new engagement authority rejects credential schemes without an executable adapter', () => {
+  for (const credentialReference of ['env:TARGET_TOKEN', 'vault:portal-test-user']) {
+    assert.throws(
+      () => authority({ credentialReferences: [credentialReference] }),
+      (error) => error.code === 'ENGAGEMENT_REFERENCE_SCHEME_UNSUPPORTED',
+    )
+  }
+
+  assert.doesNotThrow(() => authority({
+    credentialReferences: ['browser-session:primary'],
+  }))
+
+  const persisted = structuredClone(authority())
+  persisted.credential_references = ['env:TARGET_TOKEN']
+  assert.throws(
+    () => assertValidEngagementAuthority(persisted),
+    (error) => error.code === 'ENGAGEMENT_REFERENCE_SCHEME_UNSUPPORTED',
+  )
 })
 
 test('immutable manifest binds authority and target without runtime status', () => {

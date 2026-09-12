@@ -125,10 +125,16 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.bin['last-aperture-reverse'], './scripts/reverse.mjs')
-  assert.equal(packageDocument.version, '0.14.0')
+  assert.equal(packageDocument.version, '0.14.1')
+  assert.ok(packageDocument.files.includes('CHANGELOG.md'))
   assert.ok(packageDocument.files.includes('integrations/'))
+  assert.ok(packageDocument.files.includes('!docs/remediation/'))
   assert.ok(packageDocument.files.includes('!docs/superpowers/'))
   assert.ok(packageDocument.files.includes('!**/.gradle/'))
+  assert.ok(packageDocument.files.includes('!**/__pycache__/**'))
+  assert.ok(packageDocument.files.includes('!**/*.pyc'))
+  assert.ok(packageDocument.files.includes('!**/*.pyo'))
+  assert.ok(packageDocument.files.includes('!**/*.pyd'))
   assert.ok(packageDocument.files.includes('!scripts/audit.mjs.bak_diag'))
   assert.equal(packageDocument.scripts['audit:reverse'], 'node scripts/reverse.mjs')
   assert.match(packageDocument.scripts['test:reverse'], /page-session-adapter\.test\.mjs/)
@@ -149,7 +155,19 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
 test('release pack excludes local and nested build artifacts and retains compatibility fixtures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'last-aperture-pack-'))
+  const syntheticBytecode = join(
+    'proxy',
+    '__pycache__',
+    `last-aperture-pack-regression-${process.pid}.pyc`,
+  )
   try {
+    await mkdir(dirname(syntheticBytecode), { recursive: true })
+    const syntheticPrivatePath = ['C:', 'Users', 'example', 'private-checkout', 'proxy', 'fixture.py']
+      .join('\\')
+    await writeFile(
+      syntheticBytecode,
+      Buffer.from(`synthetic bytecode ${syntheticPrivatePath}`),
+    )
     const configuredNpm = process.env.npm_execpath
     const windowsNpm = join(
       dirname(process.execPath),
@@ -179,8 +197,11 @@ test('release pack excludes local and nested build artifacts and retains compati
     assert.equal(report.length, 1)
     const paths = report[0].files.map((item) => item.path.replaceAll('\\', '/'))
     for (const forbidden of [
+      /^docs\/remediation(?:\/|$)/u,
       /^docs\/superpowers(?:\/|$)/u,
       /(?:^|\/)\.gradle(?:\/|$)/u,
+      /(?:^|\/)__pycache__(?:\/|$)/u,
+      /\.py[cod]$/u,
       /(?:^|\/)\.audit-runs(?:\/|$)/u,
       /(?:^|\/)scratchpad(?:\/|$)/u,
       /(?:^|\/)_tmp_[^/]*$/u,
@@ -190,6 +211,7 @@ test('release pack excludes local and nested build artifacts and retains compati
       assert.equal(paths.some((path) => forbidden.test(path)), false, forbidden.source)
     }
     for (const required of [
+      'CHANGELOG.md',
       'SECURITY.md',
       'browser/http-authed-chrome/README.md',
       'integrations/burp-montoya/README.md',
@@ -204,6 +226,7 @@ test('release pack excludes local and nested build artifacts and retains compati
       assert.equal(paths.includes(required), true, `${required} must be packed`)
     }
   } finally {
+    await rm(syntheticBytecode, { force: true })
     await rm(root, { recursive: true, force: true })
   }
 })

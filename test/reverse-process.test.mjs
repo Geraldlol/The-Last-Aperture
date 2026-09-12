@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { test } from 'node:test'
 
@@ -147,6 +147,54 @@ test('Windows production supervision delegates the complete contract to the Job 
   assert.equal(result, sentinel)
 })
 
+test('Windows Job Object request files never serialize the inherited target environment', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const secret = 'job-request-must-not-persist-this-secret'
+  const environment = { ...sanitizedProcessEnvironment(), JOB_REQUEST_SECRET: secret }
+  let inspected = false
+  const result = await runWindowsJobProcess({
+    file: 'C:\\fixed-tool.exe',
+    args: ['--version'],
+    cwd: 'C:\\fixed-work',
+    env: environment,
+    timeoutMs: 1_000,
+    maxOutputBytes: 4_096,
+  }, {
+    invokeWindowsHelperImpl: async (invocation) => {
+      const requestPath = invocation.args[invocation.args.indexOf('-RequestPath') + 1]
+      const resultPath = invocation.args[invocation.args.indexOf('-ResultPath') + 1]
+      const requestText = await readFile(requestPath, 'utf8')
+      const request = JSON.parse(requestText)
+      assert.equal(Object.hasOwn(request, 'env'), false)
+      assert.equal(requestText.includes(secret), false)
+      assert.equal(invocation.env.JOB_REQUEST_SECRET, secret)
+      await writeFile(request.stdout_path, Buffer.alloc(0))
+      await writeFile(request.stderr_path, Buffer.alloc(0))
+      await writeFile(resultPath, JSON.stringify({
+        schema_version: '1.2.0',
+        request_nonce: request.request_nonce,
+        code: 0,
+        timed_out: false,
+        stop_requested: false,
+        output_limit_exceeded: false,
+        log_limit_exceeded: false,
+        log_integrity_failed: false,
+        log_bytes: 0,
+        spawn_error: false,
+        termination_confirmed: true,
+        supervision: 'WINDOWS_JOB_OBJECT',
+        duration_ms: 1,
+      }))
+      inspected = true
+      return { code: 0, failed: false }
+    },
+  })
+  assert.equal(inspected, true)
+  assert.equal(result.code, 0)
+  assert.equal(result.termination_confirmed, true)
+})
+
 function processExists(pid) {
   try {
     process.kill(pid, 0)
@@ -261,6 +309,52 @@ test('a Windows helper result failure after launch remains a possibly-started ou
   assert.equal(result.spawn_error, true)
   assert.equal(result.started, true)
   assert.equal(result.termination_confirmed, false)
+})
+
+test('an unconfirmed Windows helper result still removes identity-bound provider-output scratch', async () => {
+  const environment = {
+    ...sanitizedProcessEnvironment(),
+    SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+  }
+  let adapterDirectory
+  const secret = Buffer.from('provider-output-must-not-remain-on-disk')
+  const result = await runWindowsJobProcess({
+    file: process.execPath,
+    args: ['--version'],
+    cwd: tmpdir(),
+    env: environment,
+    timeoutMs: 10_000,
+    maxOutputBytes: 4_096,
+  }, {
+    invokeWindowsHelperImpl: async (invocation) => {
+      const requestPath = invocation.args[invocation.args.indexOf('-RequestPath') + 1]
+      const resultPath = invocation.args[invocation.args.indexOf('-ResultPath') + 1]
+      adapterDirectory = dirname(requestPath)
+      const request = JSON.parse(await readFile(requestPath, 'utf8'))
+      await writeFile(request.stdout_path, secret)
+      await writeFile(request.stderr_path, secret)
+      await writeFile(resultPath, JSON.stringify({
+        schema_version: '1.2.0',
+        request_nonce: request.request_nonce,
+        code: null,
+        timed_out: true,
+        stop_requested: false,
+        output_limit_exceeded: false,
+        log_limit_exceeded: false,
+        log_integrity_failed: false,
+        log_bytes: 0,
+        spawn_error: false,
+        termination_confirmed: false,
+        supervision: 'WINDOWS_JOB_OBJECT',
+        duration_ms: 1,
+      }))
+      return { code: 0, failed: false }
+    },
+  })
+  assert.equal(result.termination_confirmed, false)
+  assert.equal(result.stdout.equals(secret), true)
+  assert.equal(result.stderr.equals(secret), true)
+  await assert.rejects(() => access(adapterDirectory))
 })
 
 test('POSIX timeout uses SIGKILL to remove a SIGTERM-resistant child and its descendant', {

@@ -140,7 +140,7 @@ import { buildReviewTemplate } from './lib/review-handoff.mjs'
 import { buildVerdictAssessment, renderVerdictAssessment } from './lib/verdict-assessment.mjs'
 import { buildRepairBrief, renderRepairBriefMarkdown } from './lib/repair-brief.mjs'
 import { capabilityRegistry, renderCapabilities, assessEnvironmentCoverage } from './lib/capabilities.mjs'
-import { inspectReadiness, renderReadiness } from './lib/doctor.mjs'
+import { inspectReadiness, normalizeReadinessPaths, renderReadiness } from './lib/doctor.mjs'
 import {
   assertBundleArtifactSize,
   assertRunManifestSize,
@@ -256,11 +256,18 @@ Usage:
   last-aperture engage work submit <engagement-directory> --work-id <repository-work:sha256> --result <absolute-json-path> [--json]
     Browser auth accepts --credential-reference browser:<32-character a-p Chrome-extension-id>
     and optional --input configuration=<absolute-page-session-adapter.json>.
+  last-aperture http-recon <command> [options]
+  last-aperture http-authed <command> [options]
+  last-aperture reverse <command> [options]
+  last-aperture adversarial <command> [options]
+  last-aperture bounty <command> [options]
+  last-aperture acquire <command> [options]
+  last-aperture database-conformance <command> [options]
   last-aperture plan <repository> [--out <directory>] [--roe <policy.json>] [--completeness-inputs <inputs.json>] [--database-conformance <complete-bundle>] [--evidence-bundle <bundle>[,<bundle>...]  DISABLED] [--max-text-bytes <bytes>] [--max-shard-files <count>] [--max-shard-bytes <bytes>] [--max-closure-rounds <count>] [--require-source-closure] [--seal-source] [--json]
   last-aperture next <run.json|bundle-directory>
   last-aperture status <run.json|bundle-directory> [--json] [--receipt-public-key <ed25519-public.pem>]
   last-aperture capabilities [--json]
-  last-aperture doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--json]
+  last-aperture doctor [--worker <proof-worker.json>] [--bundle <bundle>] [--ghidra <file>] [--javac <file>] [--jar <file>] [--frida <file>] [--burp <jar>] [--burp-extension <jar>] [--crane <file>] [--json]
   last-aperture review-template <bundle> --job <job-id>
   last-aperture check-result <bundle> <job-result.json> [--expected-sha256 <sha256> --expected-size <bytes>] [--json]
   last-aperture verdict <bundle> [--candidate <candidate-id>] [--json]
@@ -352,7 +359,10 @@ const COMMAND_ARGUMENTS = {
   next: { positionals: 1, options: {} },
   status: { positionals: 1, options: { json: 'flag', 'receipt-public-key': 'value' } },
   capabilities: { positionals: 0, options: { json: 'flag' } },
-  doctor: { positionals: 0, options: { json: 'flag', worker: 'value', bundle: 'value' } },
+  doctor: { positionals: 0, options: {
+    json: 'flag', worker: 'value', bundle: 'value', ghidra: 'value', javac: 'value',
+    jar: 'value', frida: 'value', burp: 'value', 'burp-extension': 'value', crane: 'value',
+  } },
   'review-template': { positionals: 1, options: { job: 'value' } },
   'check-result': {
     positionals: 2,
@@ -4230,11 +4240,25 @@ async function capabilitiesCommand(options) {
 }
 
 async function doctorCommand(options) {
-  const loaded = options.bundle ? await loadInspectionBundle(options.bundle) : null
-  if (options.worker !== undefined) assertLocalFilesystemEndpoint(options.worker, 'worker configuration')
-  const report = await inspectReadiness({
+  const toolPaths = {}
+  for (const [option, name] of [
+    ['ghidra', 'ghidra'], ['javac', 'javac'], ['jar', 'jar'], ['frida', 'frida'],
+    ['burp', 'burpDesktop'], ['burp-extension', 'burpExtension'], ['crane', 'crane'],
+  ]) {
+    if (options[option] === undefined) continue
+    toolPaths[name] = resolve(options[option])
+  }
+  const normalized = normalizeReadinessPaths({
     projectRoot: PROJECT_ROOT,
+    bundlePath: options.bundle === undefined ? undefined : resolve(options.bundle),
     workerConfigPath: options.worker === undefined ? undefined : resolve(options.worker),
+    toolPaths,
+  })
+  const loaded = normalized.bundlePath ? await loadInspectionBundle(normalized.bundlePath) : null
+  const report = await inspectReadiness({
+    projectRoot: normalized.projectRoot,
+    workerConfigPath: normalized.workerConfigPath,
+    toolPaths: normalized.toolPaths,
   })
   if (loaded) {
     report.environment_coverage = assessEnvironmentCoverage(loaded.run.coverage.inventory)
@@ -7515,6 +7539,44 @@ export async function main(argv = process.argv.slice(2)) {
     const { runEngageCli } = await import('./engage.mjs')
     const exitCode = await runEngageCli(argv.slice(1))
     if (exitCode !== 0) process.exitCode = exitCode
+    return
+  }
+  if (command === 'http-recon') {
+    const { main: runHttpReconCli } = await import('./http-recon.mjs')
+    await runHttpReconCli(argv.slice(1))
+    return
+  }
+  if (command === 'http-authed') {
+    const { main: runHttpAuthedCli } = await import('./http-authed.mjs')
+    await runHttpAuthedCli(argv.slice(1))
+    return
+  }
+  if (command === 'reverse') {
+    const { runReverseCli } = await import('./reverse.mjs')
+    const exitCode = await runReverseCli(argv.slice(1))
+    if (exitCode !== 0) process.exitCode = exitCode
+    return
+  }
+  if (command === 'adversarial') {
+    const { main: runAdversarialCli } = await import('./adversarial.mjs')
+    const exitCode = await runAdversarialCli(argv.slice(1))
+    if (exitCode !== 0) process.exitCode = exitCode
+    return
+  }
+  if (command === 'bounty') {
+    const { runBountyCli } = await import('./bounty.mjs')
+    const exitCode = await runBountyCli(argv.slice(1))
+    if (exitCode !== 0) process.exitCode = exitCode
+    return
+  }
+  if (command === 'acquire') {
+    const { main: runAcquireCli } = await import('./acquire.mjs')
+    await runAcquireCli(argv.slice(1))
+    return
+  }
+  if (command === 'database-conformance') {
+    const { main: runDatabaseConformanceCli } = await import('./database-conformance.mjs')
+    await runDatabaseConformanceCli(argv.slice(1))
     return
   }
   assertLocalFilesystemEndpoint(process.cwd(), 'working directory')

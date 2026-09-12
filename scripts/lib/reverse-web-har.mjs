@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { isSensitiveHeaderName } from './bounty-authz-request.mjs'
 import { legacyV1CredentialCookieName } from './reverse-v1-compat-semantics.mjs'
 import { stableJson } from './run-engine.mjs'
 
@@ -41,16 +42,55 @@ const VALUE_TYPES = new Set(['array', 'boolean', 'integer', 'null', 'number', 'o
 const BODY_FORMATS = new Set(['FORM', 'JSON', 'MULTIPART', 'NONE', 'OPAQUE'])
 const BODY_SHAPE_STATUSES = new Set(['MALFORMED', 'NOT_OBSERVED', 'OBSERVED', 'OMITTED_SIZE_LIMIT'])
 const BYTE_BUCKETS = new Set(['EMPTY', 'LE_1_KIB', 'LE_4_KIB', 'LE_16_KIB', 'LE_64_KIB', 'LE_256_KIB', 'LE_1_MIB', 'OVER_1_MIB', 'UNKNOWN'])
-const CREDENTIAL_HEADERS = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'x-auth-token', 'x-csrf-token', 'x-session-token', 'x-xsrf-token'])
+const CREDENTIAL_HEADERS = new Set([
+  'api-key',
+  'authorization',
+  'proxy-authorization',
+  'x-access-token',
+  'x-amz-security-token',
+  'x-api-key',
+  'x-auth-token',
+  'x-client-secret',
+  'x-csrf-token',
+  'x-goog-api-key',
+  'x-mfa-code',
+  'x-one-time-password',
+  'x-otp',
+  'x-pin',
+  'x-session-token',
+  'x-totp',
+  'x-verification-code',
+  'x-xsrf-token',
+])
 const CREDENTIAL_CARRIER = /^(?:body:[A-Za-z0-9_$@.:[\]-]{1,1024}|cookie:[A-Za-z0-9_$@.:[\]-]{1,128}|header:[!#$%&'*+.^_`|~0-9a-z-]{1,128})$/u
 const SENSITIVE_NAME = /(?:api[_-]?key|auth|bearer|client[_-]?secret|connection|credential|csrf|jwt|login|pass(?:word|wd)?|secret|session|ssn|token|user(?:name)?|xsrf)/iu
 const CREDENTIAL_COOKIE_TOKENS = new Set(['auth', 'authentication', 'bearer', 'credential', 'csrf', 'jwt', 'session', 'sid', 'token', 'xsrf'])
 const CREDENTIAL_COOKIE_COMPOUND_TOKEN = /^(?:(?:auth|session)(?:cookie|id)?|(?:access|auth|bearer|csrf|id|refresh|session|xsrf)token|sessid)$/iu
 const CREDENTIAL_COOKIE_EXACT = new Set(['aspxauth', 'connect.sid', 'fedauth', 'jsessionid', 'phpsessid'])
-const SEMANTIC_NAME = /^(?:action|command|event|method|mode|op|operation|submit|task|view)$/iu
+const SEMANTIC_NAME = /^(?:_method|action|command|do|event|method|mode|op|operation|submit|task|view)$/iu
+const METHOD_OVERRIDE_HEADERS = Object.freeze([
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+  'x-original-method',
+  'x-rewrite-method',
+])
+const ROUTING_OVERRIDE_HEADERS = Object.freeze([
+  'x-envoy-original-path',
+  'x-forwarded-prefix',
+  'x-forwarded-uri',
+  'x-http-url-override',
+  'x-original-uri',
+  'x-original-url',
+  'x-rewrite-uri',
+  'x-rewrite-url',
+])
 const SEMANTIC_VALUE = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/u
 const WRITE_ACTION = /^(?:add|approve|archive|assign|begin|cancel|close|commit|confirm|connect|create|delete|disable|disconnect|edit|enable|end|execute|import|insert|link|merge|move|patch|pay|post|publish|put|remove|reset|revoke|save|send|set|start|stop|submit|sync|update|upload|write)$/iu
 const READ_ACTION = /^(?:browse|detail|download|export|fetch|find|get|index|list|load|lookup|open|preview|query|read|report|retrieve|search|show|view)$/iu
+const READ_SHAPED_ACTION_SUFFIXES = new Set([
+  'detail', 'details', 'history', 'list', 'preview', 'report', 'result', 'results', 'status',
+])
 const PATH_ACTION_CLASSES = new Set(['NONE', 'OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'])
 const TEMPLATE_SEGMENTS = new Set(['{hex}', '{integer}', '{segment}', '{uuid}', '{value}'])
 const DEFAULT_PATH_LITERALS = new Set([
@@ -58,6 +98,7 @@ const DEFAULT_PATH_LITERALS = new Set([
 ])
 const REDACTED_FIELD_NAME = 'redacted_name'
 const REDACTED_HEADER_NAME = 'x-redacted-name'
+const MAX_LAYERED_DECODE_PASSES = 32
 const SOURCE_KINDS = new Set(WEB_SESSION_SOURCE_KINDS)
 const SCHEMA_VERSIONS = new Set(['1.0.0', '1.1.0', '1.2.0'])
 
@@ -109,6 +150,63 @@ function sanitizedName(value, label = 'field name') {
     : value
 }
 
+function layeredDecode(value) {
+  let current = String(value)
+  for (let pass = 0; pass < MAX_LAYERED_DECODE_PASSES; pass += 1) {
+    let decoded
+    try { decoded = decodeURIComponent(current) } catch {
+      return { ambiguous: current.includes('%'), value: current }
+    }
+    if (decoded === current) return { ambiguous: false, value: current }
+    current = decoded
+  }
+  let ambiguous = false
+  try { ambiguous = decodeURIComponent(current) !== current } catch {}
+  return { ambiguous, value: current }
+}
+
+function actionTokens(value) {
+  const decoded = layeredDecode(value)
+  return {
+    ambiguous: decoded.ambiguous,
+    tokens: decoded.value.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean),
+  }
+}
+
+function semanticFieldName(value) {
+  const decoded = layeredDecode(value)
+  if (decoded.ambiguous) return null
+  const normalized = decoded.value.toLowerCase()
+  return SEMANTIC_NAME.test(normalized) ? normalized : null
+}
+
+function semanticActionClass(value, { allowReadSuffix = true } = {}) {
+  const decoded = layeredDecode(value)
+  if (decoded.ambiguous) return 'OTHER_ACTION'
+  if (!SEMANTIC_VALUE.test(decoded.value)) return null
+  const { tokens } = actionTokens(decoded.value)
+  if (allowReadSuffix && READ_SHAPED_ACTION_SUFFIXES.has(tokens.at(-1))) return 'READ_ACTION'
+  if (tokens.some((token) => WRITE_ACTION.test(token))) return 'WRITE_ACTION'
+  if (tokens.some((token) => READ_ACTION.test(token))) return 'READ_ACTION'
+  return 'OTHER_ACTION'
+}
+
+function methodOverrideActionClass(value) {
+  const decoded = layeredDecode(value)
+  if (decoded.ambiguous || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$/u.test(decoded.value)) {
+    return 'OTHER_ACTION'
+  }
+  const method = decoded.value.toUpperCase()
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return 'READ_ACTION'
+  if (['DELETE', 'PATCH', 'POST', 'PUT'].includes(method)) return 'WRITE_ACTION'
+  return 'OTHER_ACTION'
+}
+
+function requestFieldName(value, label) {
+  if (layeredDecode(value).ambiguous) fail(`${label} exceeds the layered encoding limit`)
+  return semanticFieldName(value) ?? sanitizedName(value, label)
+}
+
 function credentialCookieName(value) {
   const normalized = value.toLowerCase().replace(/^[._-]+|[._-]+$/gu, '')
   if (CREDENTIAL_COOKIE_EXACT.has(normalized)) return true
@@ -117,17 +215,49 @@ function credentialCookieName(value) {
     .some((token) => CREDENTIAL_COOKIE_TOKENS.has(token) || CREDENTIAL_COOKIE_COMPOUND_TOKEN.test(token))
 }
 
+function credentialHeaderName(value) {
+  return value !== 'cookie' && value !== 'set-cookie' && isSensitiveHeaderName(value)
+}
+
 function pathActionClass(pathname) {
   let read = false
   for (const segment of pathname.split('/').filter(Boolean)) {
-    let decoded
-    try { decoded = decodeURIComponent(segment) } catch { continue }
-    if (!SEMANTIC_VALUE.test(decoded)) continue
-    if (WRITE_ACTION.test(decoded)) return 'WRITE_ACTION'
-    if (READ_ACTION.test(decoded)) read = true
+    const actionClass = semanticActionClass(segment)
+    if (actionClass === 'WRITE_ACTION') return 'WRITE_ACTION'
+    if (actionClass === 'READ_ACTION') read = true
   }
   if (read) return 'READ_ACTION'
   return 'NONE'
+}
+
+function requestActionClass(pathname, headerValues) {
+  const pathClass = pathActionClass(pathname)
+  const overrideClasses = []
+  for (const name of METHOD_OVERRIDE_HEADERS) {
+    for (const value of headerValues.get(name) ?? []) {
+      overrideClasses.push(methodOverrideActionClass(value))
+    }
+  }
+  for (const name of ROUTING_OVERRIDE_HEADERS) {
+    for (const value of headerValues.get(name) ?? []) {
+      let parsed
+      try { parsed = new URL(value, 'https://last-aperture.invalid/') } catch {
+        overrideClasses.push('OTHER_ACTION')
+        continue
+      }
+      const routeClass = pathActionClass(parsed.pathname)
+      const queryClasses = [...parsed.searchParams]
+        .filter(([fieldName]) => semanticFieldName(fieldName) !== null)
+        .map(([, fieldValue]) => semanticActionClass(fieldValue, { allowReadSuffix: false }) ?? 'OTHER_ACTION')
+      overrideClasses.push(routeClass, ...queryClasses)
+    }
+  }
+  const classes = [pathClass, ...overrideClasses]
+  if (classes.includes('WRITE_ACTION')) return 'WRITE_ACTION'
+  if (overrideClasses.includes('OTHER_ACTION')) return 'OTHER_ACTION'
+  if (classes.includes('READ_ACTION')) return 'READ_ACTION'
+  if (classes.includes('OTHER_ACTION')) return 'OTHER_ACTION'
+  return pathClass
 }
 
 function pathContainsValueLikeName(path) {
@@ -156,6 +286,19 @@ function origin(value) {
   return parsed.origin
 }
 
+function ambiguousEncodedPath(value) {
+  let current = value
+  for (let pass = 0; pass < 8; pass += 1) {
+    if (/%(?:2e|2f|5c)/iu.test(current)) return true
+    if (!current.includes('%')) return false
+    let decoded
+    try { decoded = decodeURIComponent(current) } catch { return true }
+    if (decoded === current) return false
+    current = decoded
+  }
+  return current.includes('%')
+}
+
 export function canonicalWebPathPrefix(value) {
   if (
     typeof value !== 'string'
@@ -163,7 +306,7 @@ export function canonicalWebPathPrefix(value) {
     || value.length > 2048
     || !value.startsWith('/')
     || CONTROL.test(value)
-    || /%(?:2e|2f|5c)/iu.test(value)
+    || ambiguousEncodedPath(value)
     || /%(?![0-9a-f]{2})/iu.test(value)
   ) fail('target path prefix must be one canonical raw URL pathname')
   let parsed
@@ -180,7 +323,7 @@ export function canonicalWebPathPrefix(value) {
 }
 
 function pathWithinPrefix(pathname, pathPrefix) {
-  if (/%(?:2e|2f|5c)/iu.test(pathname)) return false
+  if (ambiguousEncodedPath(pathname)) return false
   if (pathPrefix === '/') return true
   return pathname === pathPrefix
     || pathname.startsWith(pathPrefix.endsWith('/') ? pathPrefix : `${pathPrefix}/`)
@@ -235,12 +378,16 @@ function parameters(values) {
   for (const [rawName, value] of values) {
     pairs += 1
     if (pairs > MAX_PARAMETER_PAIRS) fail('parameter pair limit exceeded')
-    const fieldName = sanitizedName(rawName, 'parameter name')
+    const decodedName = layeredDecode(rawName)
+    if (decodedName.ambiguous) fail('parameter name exceeds the layered encoding limit')
+    const semanticName = decodedName.ambiguous ? null : semanticFieldName(rawName)
+    const fieldName = semanticName ?? sanitizedName(rawName, 'parameter name')
     const item = found.get(fieldName) ?? { types: new Set(), semanticClasses: new Set() }
     item.types.add(valueType(value))
-    if (SEMANTIC_NAME.test(fieldName) && typeof value === 'string' && SEMANTIC_VALUE.test(value)) {
-      item.semanticClasses.add(WRITE_ACTION.test(value) ? 'WRITE_ACTION' : READ_ACTION.test(value) ? 'READ_ACTION' : 'OTHER_ACTION')
-    }
+    const actionClass = semanticName === null || typeof value !== 'string'
+        ? null
+        : (semanticActionClass(value, { allowReadSuffix: false }) ?? 'OTHER_ACTION')
+    if (actionClass !== null) item.semanticClasses.add(actionClass)
     found.set(fieldName, item)
     if (found.size > MAX_FIELDS) fail('parameter field limit exceeded')
   }
@@ -294,7 +441,18 @@ function addField(map, path, fieldName, value) {
   if (map.size >= MAX_FIELDS && !map.has(path)) return false
   const item = map.get(path) ?? { name: fieldName, path, types: new Set(), sensitive: SENSITIVE_NAME.test(fieldName), semantic_classes: new Set() }
   item.types.add(valueType(value))
-  if (typeof value === 'string' && SEMANTIC_NAME.test(fieldName) && SEMANTIC_VALUE.test(value)) item.semantic_classes.add(WRITE_ACTION.test(value) ? 'WRITE_ACTION' : READ_ACTION.test(value) ? 'READ_ACTION' : 'OTHER_ACTION')
+  if (semanticFieldName(fieldName) !== null) {
+    const addSemanticValue = (candidate, depth = 0) => {
+      if (typeof candidate === 'string') {
+        item.semantic_classes.add(
+          semanticActionClass(candidate, { allowReadSuffix: false }) ?? 'OTHER_ACTION',
+        )
+      } else if (Array.isArray(candidate) && depth < 8) {
+        for (const child of candidate.slice(0, 32)) addSemanticValue(child, depth + 1)
+      }
+    }
+    addSemanticValue(value)
+  }
   map.set(path, item)
   return true
 }
@@ -313,7 +471,7 @@ function walkJson(value, map, state, path = '', depth = 0) {
   const entries = Object.entries(value)
   if (entries.length > MAX_FIELDS) state.truncated = true
   for (const [rawFieldName, child] of entries.slice(0, MAX_FIELDS)) {
-    const fieldName = sanitizedName(rawFieldName)
+    const fieldName = requestFieldName(rawFieldName, 'body field name')
     const childPath = path ? `${path}.${fieldName}` : fieldName
     if (childPath.length > 1024 || !addField(map, childPath, fieldName, child)) {
       state.truncated = true
@@ -336,7 +494,25 @@ function body(postData, fallbackMime) {
   const declaredSize = Number.isFinite(postData.size) && postData.size >= 0
     ? postData.size
     : null
-  let measured = declaredSize ?? (rawText === null ? 0 : Buffer.byteLength(rawText, 'utf8'))
+  const actualTextBytes = rawText === null ? null : Buffer.byteLength(rawText, 'utf8')
+  let actualParameterBytes = null
+  if (params !== null) {
+    actualParameterBytes = 0
+    for (const item of params) {
+      actualParameterBytes += Buffer.byteLength(String(item?.name ?? ''), 'utf8')
+        + Buffer.byteLength(String(item?.value ?? ''), 'utf8')
+      if (actualParameterBytes > MAX_BODY_BYTES) {
+        actualParameterBytes = MAX_BODY_BYTES + 1
+        break
+      }
+    }
+  }
+  const actualBytes = actualTextBytes === null
+    ? actualParameterBytes
+    : Math.max(actualTextBytes, actualParameterBytes ?? 0)
+  const measured = actualBytes === null
+    ? (declaredSize ?? 0)
+    : Math.max(actualBytes, declaredSize ?? 0)
   let format = 'OPAQUE'
   if (mime === 'application/json' || mime?.endsWith('+json')) format = 'JSON'
   else if (mime === 'application/x-www-form-urlencoded') format = 'FORM'
@@ -358,17 +534,8 @@ function body(postData, fallbackMime) {
     shapeStatus = measured > MAX_BODY_BYTES ? 'OMITTED_SIZE_LIMIT' : 'OBSERVED'
     for (const item of params) {
       if (shapeStatus === 'OMITTED_SIZE_LIMIT') break
-      if (rawText === null && declaredSize === null) {
-        measured += Buffer.byteLength(String(item?.value ?? ''), 'utf8')
-        if (measured > MAX_BODY_BYTES) {
-          fields.clear()
-          state.truncated = false
-          shapeStatus = 'OMITTED_SIZE_LIMIT'
-          break
-        }
-      }
       if (!plain(item) || typeof item.name !== 'string') continue
-      const fieldName = sanitizedName(item.name, 'body field name')
+      const fieldName = requestFieldName(item.name, 'body field name')
       if (!addField(fields, fieldName, fieldName, typeof item.value === 'string' ? item.value : '')) state.truncated = true
     }
   } else if (format === 'FORM' && rawText !== null) {
@@ -379,7 +546,7 @@ function body(postData, fallbackMime) {
       for (const [rawFieldName, value] of new URLSearchParams(rawText)) {
         pairs += 1
         if (pairs > MAX_PARAMETER_PAIRS) fail('body parameter pair limit exceeded')
-        const fieldName = sanitizedName(rawFieldName, 'body field name')
+        const fieldName = requestFieldName(rawFieldName, 'body field name')
         if (!addField(fields, fieldName, fieldName, value)) state.truncated = true
       }
     }
@@ -478,9 +645,15 @@ function responseDestinations(content, scope, pathPrefix, pathLiterals, baseUrl)
   }
 }
 
-function carriers(headerNames, cookies, bodyShape, cookieClassifier = credentialCookieName) {
+function carriers(
+  headerNames,
+  cookies,
+  bodyShape,
+  cookieClassifier = credentialCookieName,
+  headerClassifier = credentialHeaderName,
+) {
   const result = unique([
-    ...headerNames.filter((item) => CREDENTIAL_HEADERS.has(item)).map((item) => `header:${item}`),
+    ...headerNames.filter(headerClassifier).map((item) => `header:${item}`),
     ...cookies.filter(cookieClassifier).map((item) => `cookie:${item}`),
     ...bodyShape.fields.filter((item) => item.sensitive).map((item) => `body:${item.path}`),
   ])
@@ -537,7 +710,7 @@ function sanitizeEntry(
   const status = Number(entry.response.status)
   if (!Number.isSafeInteger(status) || status < 0 || status > 999) return { skip: 'malformed' }
   const pathTemplate = webPathTemplate(url.pathname, { pathLiterals })
-  const actionClass = pathActionClass(url.pathname)
+  const actionClass = requestActionClass(url.pathname, requestHeaderValues)
   const observationId = createHash('sha256').update(`${sourceSha256}\n${sequence}\n${method}\n${url.origin}\n${pathTemplate}\n${actionClass}`).digest('hex').slice(0, 32)
   let observedAt = null
   if (typeof entry.startedDateTime === 'string' && !Number.isNaN(Date.parse(entry.startedDateTime))) observedAt = new Date(entry.startedDateTime).toISOString()
@@ -576,7 +749,7 @@ function assertParameter(item, label) {
   name(item.name, `${label} name`)
   if (valueLikeName(item.name)) fail(`${label} contains a value-like name`)
   if (item.sensitive !== SENSITIVE_NAME.test(item.name) || !canonicalList(item.types, (type) => VALUE_TYPES.has(type)) || item.types.length < 1 || item.types.length > VALUE_TYPES.size) fail(`${label} is invalid`)
-  if (!canonicalList(item.semantic_classes, (value) => ['OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'].includes(value)) || (!SEMANTIC_NAME.test(item.name) && item.semantic_classes.length > 0)) fail(`${label} semantic classes are invalid`)
+  if (!canonicalList(item.semantic_classes, (value) => ['OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'].includes(value)) || (semanticFieldName(item.name) === null && item.semantic_classes.length > 0)) fail(`${label} semantic classes are invalid`)
 }
 
 function assertBody(item, label) {
@@ -594,7 +767,7 @@ function assertBody(item, label) {
     text(field.path, `${label} field path`, 1024)
     if (valueLikeName(field.name) || pathContainsValueLikeName(field.path)) fail(`${label} field contains a value-like name`)
     if (field.sensitive !== SENSITIVE_NAME.test(field.name) || !canonicalList(field.types, (type) => VALUE_TYPES.has(type)) || field.types.length < 1 || field.types.length > VALUE_TYPES.size) fail(`${label} field is invalid`)
-    if (!canonicalList(field.semantic_classes, (value) => ['OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'].includes(value)) || (!SEMANTIC_NAME.test(field.name) && field.semantic_classes.length > 0)) fail(`${label} field semantic classes are invalid`)
+    if (!canonicalList(field.semantic_classes, (value) => ['OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'].includes(value)) || (semanticFieldName(field.name) === null && field.semantic_classes.length > 0)) fail(`${label} field semantic classes are invalid`)
   }
   if (!item.fields.every((field, index) => index === 0 || lexical(item.fields[index - 1].path, field.path) < 0)) fail(`${label} fields are not canonical`)
 }
@@ -603,7 +776,16 @@ function assertCredentialCarriersMatchShape(item, schemaVersion, label) {
   const cookieClassifier = schemaVersion === '1.0.0'
     ? legacyV1CredentialCookieName
     : credentialCookieName
-  const expected = carriers(item.header_names, item.cookie_names, item.body, cookieClassifier)
+  const headerClassifier = schemaVersion === '1.0.0'
+    ? (header) => CREDENTIAL_HEADERS.has(header)
+    : credentialHeaderName
+  const expected = carriers(
+    item.header_names,
+    item.cookie_names,
+    item.body,
+    cookieClassifier,
+    headerClassifier,
+  )
   if (JSON.stringify(item.credential_carriers) !== JSON.stringify(expected)) fail(`${label} credential carriers do not match its shape`)
 }
 
@@ -614,7 +796,11 @@ function assertRequest(item, pathLiterals, schemaVersion) {
   if (webPathTemplate(item.path_template, { pathLiterals }) !== item.path_template) fail('web request path template is not canonical')
   if (!PATH_ACTION_CLASSES.has(item.path_action_class)) fail('web request path action class is invalid')
   const visibleActionClass = pathActionClass(item.path_template)
-  if (visibleActionClass !== 'NONE' && visibleActionClass !== item.path_action_class) fail('web request path action class does not match its visible path')
+  if (
+    (visibleActionClass === 'WRITE_ACTION' && item.path_action_class !== 'WRITE_ACTION')
+    || (visibleActionClass === 'READ_ACTION'
+      && !['OTHER_ACTION', 'READ_ACTION', 'WRITE_ACTION'].includes(item.path_action_class))
+  ) fail('web request path action class does not match its visible path')
   if (!Array.isArray(item.query_parameters) || item.query_parameters.length > MAX_FIELDS || !item.query_parameters.every((parameter, index) => index === 0 || lexical(item.query_parameters[index - 1].name, parameter.name) < 0)) fail('web request parameters are invalid')
   item.query_parameters.forEach((value) => assertParameter(value, 'web request parameter'))
   if (!canonicalList(item.header_names, (value) => HEADER_NAME.test(value) && !valueLikeName(value)) || item.header_names.length > MAX_HEADER_NAMES) fail('web request headers are invalid')

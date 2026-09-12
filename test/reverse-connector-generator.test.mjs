@@ -10,6 +10,7 @@ import { test } from 'node:test'
 
 import Ajv2020 from 'ajv/dist/2020.js'
 
+import { SENSITIVE_HEADERS } from '../scripts/lib/bounty-authz-request.mjs'
 import {
   assertValidGeneratedConnectorManifest,
   buildGeneratedConnectorDescriptor,
@@ -134,6 +135,28 @@ async function fixture(t) {
   const contractPath = join(root, 'contract.json')
   await writeFile(contractPath, JSON.stringify(contract), 'utf8')
   return { root, contract, contractPath }
+}
+
+async function observeZeroedByteCopies(source, operation) {
+  const expected = [...source]
+  const clearedCopies = []
+  const originalFill = Uint8Array.prototype.fill
+  const originalApply = Reflect.apply
+  try {
+    Reflect.apply = function trackedApply(target, receiver, args) {
+      const matches = target === originalFill
+        && args?.[0] === 0
+        && receiver?.length === expected.length
+        && expected.every((byte, index) => receiver[index] === byte)
+      const result = originalApply(target, receiver, args)
+      if (matches) clearedCopies.push(receiver)
+      return result
+    }
+    await operation()
+  } finally {
+    Reflect.apply = originalApply
+  }
+  return clearedCopies
 }
 
 test('generator emits a deterministic, schema-valid, digest-bound connector without network I/O', async (t) => {
@@ -311,7 +334,7 @@ test('generated connector executes only contract endpoints with auth metadata, v
       if (url.pathname.startsWith('/api/items/')) {
         itemAttempts += 1
         assert.equal(url.pathname, '/api/items/456')
-        assert.equal(url.search, '?limit=2')
+        assert.equal(url.search, '?limit=2&view=read')
         assert.equal(init.headers.authorization, 'Bearer do-not-persist')
         assert.match(init.headers.cookie, /SessionCookie=runtime-only/)
         return new Response(itemAttempts === 1 ? '{"error":"busy"}' : '{"items":[{"id":456}]}', {
@@ -331,7 +354,7 @@ test('generated connector executes only contract endpoints with auth metadata, v
   assert.equal(loginResult.origin, 'https://portal.example')
   assert.equal(loginResult.pathTemplate, '/Home')
   assert.equal(loginResult.headers.authorization, undefined)
-  const itemsResult = await connector.request(items.endpoint_id, { path: { integer: 456 }, query: { limit: 2 } })
+  const itemsResult = await connector.request(items.endpoint_id, { path: { integer: 456 }, query: { limit: 2, view: 'read' } })
   assert.equal(itemsResult.status, 200)
   assert.equal(itemsResult.retries, 1)
   assert.equal(itemsResult.attempts, 2)
@@ -411,11 +434,11 @@ test('generated runtime enforces observed path, query, body, header, and cookie 
   const connector = runtime.createConnector({ fetchImpl: noFetch })
 
   await assert.rejects(
-    connector.request(items.endpoint_id, { path: { integer: 'delete-all' }, query: { limit: 1 } }),
+    connector.request(items.endpoint_id, { path: { integer: 'delete-all' }, query: { limit: 1, view: 'read' } }),
     (error) => error?.code === 'CONNECTOR_INPUT_INVALID' && /observed type/.test(error.message),
   )
   await assert.rejects(
-    connector.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 'many' } }),
+    connector.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 'many', view: 'read' } }),
     (error) => error?.code === 'CONNECTOR_INPUT_INVALID' && /observed type/.test(error.message),
   )
   await assert.rejects(
@@ -436,7 +459,7 @@ test('generated runtime enforces observed path, query, body, header, and cookie 
     fetchImpl: noFetch,
   })
   await assert.rejects(
-    injectedCookie.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 1 } }),
+    injectedCookie.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 1, view: 'read' } }),
     (error) => error?.code === 'CONNECTOR_INPUT_INVALID',
   )
 
@@ -456,9 +479,88 @@ test('generated runtime enforces observed path, query, body, header, and cookie 
     fetchImpl: noFetch,
   })
   await assert.rejects(
-    undeclaredCredentialBody.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 1 } }),
+    undeclaredCredentialBody.request(items.endpoint_id, { path: { integer: 123 }, query: { limit: 1, view: 'read' } }),
     (error) => error?.code === 'CONNECTOR_CREDENTIAL_INVALID',
   )
+})
+
+test('generated runtime erases nested credential byte clones when a later nested byte value is invalid', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'invalid-nested-credential-bytes')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'invalid-nested-credential-bytes',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=invalid-nested-credential-bytes`,
+  )
+  const login = runtime.metadata.endpoints.find((item) => item.path_template === '/login')
+  const credentialBytes = new TextEncoder().encode('nested-credential-secret')
+  const expectedBytes = [...credentialBytes]
+  const oversizedBytes = new Uint8Array((1024 * 1024) + 1)
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    credentialProvider: async () => ({
+      body: { Password: [credentialBytes, oversizedBytes] },
+    }),
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response(null, { status: 204 })
+    },
+  })
+
+  const clearedCopies = await observeZeroedByteCopies(credentialBytes, async () => {
+    await assert.rejects(
+      connector.request(login.endpoint_id),
+      (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+        && error.request_may_have_been_sent === false,
+    )
+  })
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual([...credentialBytes], expectedBytes)
+  assert.equal(clearedCopies.some((bytes) => bytes !== credentialBytes
+    && bytes.every((byte) => byte === 0)), true)
+})
+
+test('generated runtime erases partial nested caller byte clones when later cloning fails', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'partial-nested-caller-clone')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'partial-nested-caller-clone',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=partial-nested-caller-clone`,
+  )
+  const login = runtime.metadata.endpoints.find((item) => item.path_template === '/login')
+  const callerBytes = new TextEncoder().encode('nested-caller-secret')
+  const expectedBytes = [...callerBytes]
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response(null, { status: 204 })
+    },
+  })
+
+  const clearedCopies = await observeZeroedByteCopies(callerBytes, async () => {
+    await assert.rejects(
+      connector.request(login.endpoint_id, {
+        body: {
+          UserName: callerBytes,
+          Password: new Date('2026-09-12T00:00:00.000Z'),
+        },
+      }),
+      (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+        && error.request_may_have_been_sent === false,
+    )
+  })
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual([...callerBytes], expectedBytes)
+  assert.equal(clearedCopies.some((bytes) => bytes !== callerBytes
+    && bytes.every((byte) => byte === 0)), true)
 })
 
 test('generated runtime keeps the timeout active while reading the response body', async (t) => {
@@ -474,11 +576,563 @@ test('generated runtime keeps the timeout active while reading the response body
       },
     }), { status: 200, headers: { 'content-type': 'application/json' } }),
   })
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.clearTimeout = () => { throw new Error('synthetic timer cleanup failure') }
+  try {
+    await assert.rejects(
+      connector.request(home.endpoint_id, { timeoutMs: 20 }),
+      (error) => error?.code === 'CONNECTOR_TIMEOUT'
+        && error.request_may_have_been_sent === true,
+    )
+  } finally {
+    globalThis.clearTimeout = originalClearTimeout
+  }
+})
+
+test('generated runtime clears its internal outgoing byte body after transport settles', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-request-bytes-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = 'https://portal.example'
+  const evidence = importWebHarEvidence({ log: { entries: [entry({
+    method: 'POST',
+    url: `${origin}/upload`,
+    postData: {
+      mimeType: 'application/octet-stream',
+      text: 'synthetic-request-body',
+    },
+    status: 204,
+    content: { mimeType: 'application/octet-stream', text: '' },
+  })] } }, {
+    sourceSha256: '9'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['upload'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence],
+    reverseEvidence: [],
+    generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'request-byte-zeroization')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'request-byte-zeroization',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=request-byte-zeroization`,
+  )
+  const upload = runtime.metadata.endpoints.find((item) => item.path_template === '/upload')
+  const callerBytes = new TextEncoder().encode('caller-request-secret')
+  const expectedBytes = [...callerBytes]
+  let transportBytes
+  const connector = runtime.createConnector({
+    fetchImpl: async (_url, init) => {
+      transportBytes = init.body
+      assert.ok(transportBytes instanceof Uint8Array)
+      assert.notEqual(transportBytes, callerBytes)
+      assert.deepEqual([...transportBytes], expectedBytes)
+      return new Response(null, { status: 204 })
+    },
+  })
+
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  globalThis.setTimeout = () => Symbol('synthetic-timer')
+  globalThis.clearTimeout = () => { throw new Error('synthetic timer cleanup failure') }
+  try {
+    const result = await connector.request(upload.endpoint_id, {
+      body: callerBytes,
+      contentType: 'application/octet-stream',
+    })
+    assert.equal(result.status, 204)
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+  }
+  assert.deepEqual([...callerBytes], expectedBytes)
+  assert.deepEqual([...transportBytes], Array(transportBytes.length).fill(0))
+})
+
+test('generated runtime clears its internal outgoing byte body when timer setup fails', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-request-timer-setup-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = 'https://portal.example'
+  const evidence = importWebHarEvidence({ log: { entries: [entry({
+    method: 'POST',
+    url: `${origin}/upload`,
+    postData: {
+      mimeType: 'application/octet-stream',
+      text: 'synthetic-request-body',
+    },
+    status: 204,
+    content: { mimeType: 'application/octet-stream', text: '' },
+  })] } }, {
+    sourceSha256: '9'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['upload'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence],
+    reverseEvidence: [],
+    generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'generated')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'timer-setup-failure' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=timer-setup-failure`)
+  const upload = runtime.metadata.endpoints.find((item) => item.path_template === '/upload')
+  const callerBytes = new TextEncoder().encode('caller-request-secret')
+  const expectedBytes = [...callerBytes]
+  const clearedCopies = []
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response(null, { status: 204 })
+    },
+  })
+
+  const originalFill = Uint8Array.prototype.fill
+  const originalApply = Reflect.apply
+  const originalSetTimeout = globalThis.setTimeout
+  let requestPromise
+  try {
+    Reflect.apply = function trackedApply(target, receiver, args) {
+      const before = receiver instanceof Uint8Array ? [...receiver] : []
+      const result = originalApply(target, receiver, args)
+      if (target === originalFill && args?.[0] === 0 && before.length === expectedBytes.length
+        && before.every((byte, index) => byte === expectedBytes[index])) {
+        clearedCopies.push(receiver)
+      }
+      return result
+    }
+    globalThis.setTimeout = () => { throw new Error('synthetic timer setup failure') }
+    requestPromise = connector.request(upload.endpoint_id, {
+      body: callerBytes,
+      contentType: 'application/octet-stream',
+    })
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    Reflect.apply = originalApply
+  }
+
+  await assert.rejects(
+    requestPromise,
+    (error) => error?.code === 'CONNECTOR_TIMER_FAILED'
+      && error.request_may_have_been_sent === false
+      && !String(error.message).includes('synthetic'),
+  )
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual([...callerBytes], expectedBytes)
+  assert.equal(clearedCopies.some((bytes) => bytes !== callerBytes
+    && bytes.every((byte) => byte === 0)), true)
+})
+
+test('generated runtime types a pre-dispatch clock failure and erases its raw body clone', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-request-clock-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = 'https://portal.example'
+  const evidence = importWebHarEvidence({ log: { entries: [entry({
+    method: 'POST',
+    url: `${origin}/upload`,
+    postData: {
+      mimeType: 'application/octet-stream',
+      text: 'synthetic-request-body',
+    },
+    status: 204,
+    content: { mimeType: 'application/octet-stream', text: '' },
+  })] } }, {
+    sourceSha256: '9'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['upload'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence],
+    reverseEvidence: [],
+    generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'generated')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'clock-failure-cleanup',
+  })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=clock-failure-cleanup`)
+  const upload = runtime.metadata.endpoints.find((item) => item.path_template === '/upload')
+  const callerBytes = new TextEncoder().encode('caller-clock-secret')
+  const expectedBytes = [...callerBytes]
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response(null, { status: 204 })
+    },
+  })
+  t.mock.method(globalThis.performance, 'now', () => {
+    throw new Error('synthetic monotonic clock failure')
+  })
+
+  const clearedCopies = await observeZeroedByteCopies(callerBytes, async () => {
+    await assert.rejects(
+      connector.request(upload.endpoint_id, {
+        body: callerBytes,
+        contentType: 'application/octet-stream',
+      }),
+      (error) => error?.code === 'CONNECTOR_PREPARATION_FAILED'
+        && error.request_may_have_been_sent === false
+        && !String(error.message).includes('synthetic'),
+    )
+  })
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual([...callerBytes], expectedBytes)
+  assert.equal(clearedCopies.some((bytes) => bytes !== callerBytes
+    && bytes.every((byte) => byte === 0)), true)
+})
+
+test('generated runtime cancels a hostile response reader and clears retained bytes on timeout', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'hostile-response-timeout')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'hostile-response-timeout' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=hostile-response-timeout`)
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  const observedChunk = new Uint8Array(Buffer.from('transient-response-secret'))
+  let reads = 0
+  let cancelCalls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      body: {
+        getReader() {
+          return {
+            read() {
+              reads += 1
+              return reads === 1
+                ? Promise.resolve({ done: false, value: observedChunk })
+                : new Promise(() => {})
+            },
+            cancel() {
+              cancelCalls += 1
+              return new Promise(() => {})
+            },
+          }
+        },
+      },
+    }),
+  })
+
   await assert.rejects(
     connector.request(home.endpoint_id, { timeoutMs: 20 }),
     (error) => error?.code === 'CONNECTOR_TIMEOUT'
       && error.request_may_have_been_sent === true,
   )
+  assert.equal(cancelCalls, 1)
+  assert.deepEqual([...observedChunk], Array(observedChunk.length).fill(0))
+})
+
+test('generated runtime preserves a response when producer byte cleanup is overridden', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'overridden-response-byte-cleanup')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'overridden-response-byte-cleanup',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=overridden-response-byte-cleanup`,
+  )
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  const sourceChunk = new Uint8Array(Buffer.from('transient-generated-response'))
+  const retainedCopies = []
+  const originalFrom = Buffer.from
+  t.mock.method(Buffer, 'from', function (value, ...args) {
+    const copy = originalFrom.call(Buffer, value, ...args)
+    if (value === sourceChunk) retainedCopies.push(copy)
+    return copy
+  })
+  sourceChunk.fill = () => { throw new Error('synthetic hostile producer fill') }
+  let reads = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      body: {
+        getReader() {
+          return {
+            read() {
+              reads += 1
+              return Promise.resolve(reads === 1
+                ? { done: false, value: sourceChunk }
+                : { done: true })
+            },
+            cancel() {},
+          }
+        },
+      },
+    }),
+  })
+
+  const result = await connector.request(home.endpoint_id)
+  assert.equal(result.data, 'transient-generated-response')
+  assert.equal(sourceChunk.every((byte) => byte === 0), true)
+  assert.equal(retainedCopies.length, 1)
+  assert.equal(retainedCopies[0].every((byte) => byte === 0), true)
+})
+
+test('generated runtime late detached response cleanup cannot reject unhandled', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'late-detached-array-buffer')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'late-detached-array-buffer',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=late-detached-array-buffer`,
+  )
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  let resolveArrayBuffer
+  const lateArrayBuffer = new Promise((resolve) => { resolveArrayBuffer = resolve })
+  const connector = runtime.createConnector({
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      arrayBuffer: () => lateArrayBuffer,
+    }),
+  })
+  const unhandled = []
+  const onUnhandled = (error) => { unhandled.push(error) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await assert.rejects(
+      connector.request(home.endpoint_id, { timeoutMs: 10 }),
+      (error) => error?.code === 'CONNECTOR_TIMEOUT'
+        && error.request_may_have_been_sent === true,
+    )
+    const detached = new ArrayBuffer(16 * 1024)
+    structuredClone(detached, { transfer: [detached] })
+    resolveArrayBuffer(detached)
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+test('generated runtime clears a fallback response buffer that resolves after timeout', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'late-array-buffer-timeout')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'late-array-buffer-timeout',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=late-array-buffer-timeout`,
+  )
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  const lateBytes = new TextEncoder().encode('late-fallback-response-secret')
+  const connector = runtime.createConnector({
+    fetchImpl: async () => ({
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/plain' }),
+      arrayBuffer: async () => new Promise((resolve) => {
+        setTimeout(() => resolve(lateBytes.buffer), 40)
+      }),
+    }),
+  })
+
+  await assert.rejects(
+    connector.request(home.endpoint_id, { timeoutMs: 10 }),
+    (error) => error?.code === 'CONNECTOR_TIMEOUT'
+      && error.request_may_have_been_sent === true,
+  )
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.deepEqual([...lateBytes], Array(lateBytes.length).fill(0))
+})
+
+test('generated runtime rechecks the monotonic deadline after a synchronous credential provider', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'synchronous-provider-timeout')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'synchronous-provider-timeout' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=synchronous-provider-timeout`)
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    credentialProvider: () => {
+      const until = performance.now() + 40
+      while (performance.now() < until) {}
+      return {}
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    },
+  })
+
+  await assert.rejects(
+    connector.request(home.endpoint_id, { timeoutMs: 5 }),
+    (error) => error?.code === 'CONNECTOR_TIMEOUT'
+      && error.request_may_have_been_sent === false,
+  )
+  assert.equal(fetchCalls, 0)
+})
+
+test('generated runtime rechecks the deadline after synchronous response-header processing', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'synchronous-response-header-timeout')
+  await generateNativeConnectorPackage({
+    contractPath,
+    outPath: out,
+    packageName: 'synchronous-response-header-timeout',
+  })
+  const runtime = await import(
+    `${pathToFileURL(join(out, 'index.mjs')).href}?case=synchronous-response-header-timeout`,
+  )
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  const headers = {
+    get(name) {
+      return name.toLowerCase() === 'content-type' ? 'application/json' : null
+    },
+    entries() {
+      const until = performance.now() + 40
+      while (performance.now() < until) {}
+      return [['content-type', 'application/json']][Symbol.iterator]()
+    },
+  }
+  const connector = runtime.createConnector({
+    fetchImpl: async () => ({
+      status: 200,
+      headers,
+      arrayBuffer: async () => new TextEncoder().encode('{}').buffer,
+    }),
+  })
+
+  await assert.rejects(
+    connector.request(home.endpoint_id, { timeoutMs: 5 }),
+    (error) => error?.code === 'CONNECTOR_TIMEOUT'
+      && error.request_may_have_been_sent === true,
+  )
+})
+
+test('generated runtime deadline includes credential providers and receivers', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const providerOut = join(root, 'provider-timeout')
+  await generateNativeConnectorPackage({ contractPath, outPath: providerOut, packageName: 'provider-timeout' })
+  const providerRuntime = await import(`${pathToFileURL(join(providerOut, 'index.mjs')).href}?case=provider-timeout`)
+  const home = providerRuntime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  let fetchCalls = 0
+  const providerConnector = providerRuntime.createConnector({
+    credentialProvider: async () => new Promise(() => {}),
+    fetchImpl: async () => { fetchCalls += 1; return new Response('{}') },
+  })
+
+  let providerWatchdog
+  try {
+    await assert.rejects(
+      Promise.race([
+        providerConnector.request(home.endpoint_id, { timeoutMs: 20 }),
+        new Promise((_, reject) => {
+          providerWatchdog = setTimeout(() => reject(new Error('credential provider exceeded deadline')), 300)
+        }),
+      ]),
+      (error) => error?.code === 'CONNECTOR_TIMEOUT'
+        && error.request_may_have_been_sent === false,
+    )
+  } finally {
+    clearTimeout(providerWatchdog)
+  }
+  assert.equal(fetchCalls, 0)
+
+  const origin = 'https://portal.example'
+  const evidence = importWebHarEvidence({ log: { entries: [entry({
+    method: 'GET',
+    url: `${origin}/token`,
+    status: 200,
+    content: { mimeType: 'application/json', text: '{"access_token":"synthetic-token"}' },
+  })] } }, {
+    sourceSha256: 'e'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['token'],
+  })
+  const receiverContract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const receiverContractPath = join(root, 'receiver-contract.json')
+  const receiverOut = join(root, 'receiver-timeout')
+  await writeFile(receiverContractPath, JSON.stringify(receiverContract), 'utf8')
+  await generateNativeConnectorPackage({
+    contractPath: receiverContractPath,
+    outPath: receiverOut,
+    packageName: 'receiver-timeout',
+  })
+  const receiverRuntime = await import(`${pathToFileURL(join(receiverOut, 'index.mjs')).href}?case=receiver-timeout`)
+  const token = receiverRuntime.metadata.endpoints[0]
+  const receiverConnector = receiverRuntime.createConnector({
+    credentialReceiver: async () => new Promise(() => {}),
+    fetchImpl: async () => new Response('{"access_token":"runtime-secret"}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  })
+
+  let receiverWatchdog
+  try {
+    await assert.rejects(
+      Promise.race([
+        receiverConnector.request(token.endpoint_id, { timeoutMs: 20 }),
+        new Promise((_, reject) => {
+          receiverWatchdog = setTimeout(() => reject(new Error('credential receiver exceeded deadline')), 300)
+        }),
+      ]),
+      (error) => error?.code === 'CONNECTOR_TIMEOUT'
+        && error.request_may_have_been_sent === true,
+    )
+  } finally {
+    clearTimeout(receiverWatchdog)
+  }
+})
+
+test('generated runtime marks a credential-provider failure after a retryable send as ambiguous', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'provider-after-send')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'provider-after-send' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=provider-after-send`)
+  const items = runtime.metadata.endpoints.find((item) => item.path_template.includes('/api/items/'))
+  let providerCalls = 0
+  let fetchCalls = 0
+  const connector = runtime.createConnector({
+    credentialProvider: async () => {
+      providerCalls += 1
+      if (providerCalls === 1) return { headers: { authorization: 'Bearer transient-value' } }
+      const forged = new Error('provider detail that must not escape')
+      forged.name = 'GeneratedConnectorError'
+      forged.code = 'CONNECTOR_TIMEOUT'
+      forged.request_may_have_been_sent = false
+      throw forged
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1
+      return new Response('{"error":"busy"}', {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })
+    },
+  })
+
+  await assert.rejects(
+    connector.request(items.endpoint_id, { path: { integer: 456 }, query: { limit: 2, view: 'read' } }),
+    (error) => error?.code === 'CONNECTOR_TRANSPORT_FAILED'
+      && error.request_may_have_been_sent === true
+      && !String(error.message).includes('provider detail'),
+  )
+  assert.equal(fetchCalls, 1)
 })
 
 test('generated runtime never automatically retries an observed write sequence', async (t) => {
@@ -537,6 +1191,168 @@ test('generated runtime never automatically retries an observed write sequence',
   assert.equal(failedCalls, 1)
 })
 
+test('generated runtime never retries a GET carrying an observed method override', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-connector-method-override-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = 'https://portal.example'
+  const har = { log: { entries: [500, 200].map((status) => entry({
+    method: 'GET',
+    url: `${origin}/read?_method=DELETE`,
+    requestHeaders: [{ name: 'X-Forwarded-Prefix', value: '/internal' }],
+    status,
+    content: { mimeType: 'application/json', text: status === 500 ? '{"error":"busy"}' : '{"ok":true}' },
+  })) } }
+  const evidence = importWebHarEvidence(har, {
+    sourceSha256: '9'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['read'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'generated')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'method-override' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=method-override`)
+  const overridden = runtime.metadata.endpoints[0]
+  assert.equal(overridden.retry, 'RETRY_SEQUENCE_OBSERVED')
+  assert.equal(overridden.side_effect.classification, 'WRITE_CANDIDATE')
+  let calls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => {
+      calls += 1
+      return new Response('{"error":"busy"}', { status: 500, headers: { 'content-type': 'application/json' } })
+    },
+  })
+
+  await assert.rejects(
+    connector.request(overridden.endpoint_id, {
+      headers: { 'x-forwarded-prefix': '/internal' },
+      query: { _method: 'DELETE' },
+      maxRetries: 3,
+    }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID',
+  )
+  assert.equal(calls, 0)
+
+  const result = await connector.request(overridden.endpoint_id, {
+    query: { _method: 'DELETE' },
+    maxRetries: 3,
+  })
+  assert.equal(result.status, 500)
+  assert.equal(result.attempts, 1)
+  assert.equal(result.retries, 0)
+  assert.equal(calls, 1)
+})
+
+test('generated runtime refuses layered path traversal and state-changing action substitution', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'last-aperture-connector-semantic-input-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const origin = 'https://portal.example'
+  const har = { log: { entries: [
+    ...[500, 200].map((status) => entry({
+      method: 'GET',
+      url: `${origin}/files/example?action=read`,
+      status,
+      content: { mimeType: 'application/json', text: status === 500 ? '{"error":"busy"}' : '{"ok":true}' },
+    })),
+    entry({
+      method: 'GET',
+      url: `${origin}/jobs/example?action=custom`,
+      status: 200,
+      content: { mimeType: 'application/json', text: '{"ok":true}' },
+    }),
+    entry({
+      method: 'POST',
+      url: `${origin}/array-actions/example`,
+      postData: { mimeType: 'application/json', text: '{"action":["read"]}' },
+      status: 200,
+      content: { mimeType: 'application/json', text: '{"ok":true}' },
+    }),
+  ] } }
+  const evidence = importWebHarEvidence(har, {
+    sourceSha256: '8'.repeat(64),
+    targetOrigins: [origin],
+    pathLiterals: ['array-actions', 'files', 'jobs'],
+  })
+  const contract = buildNativeInteractionContract({
+    webSessionEvidence: [evidence], reverseEvidence: [], generatedAt: '2026-09-11T12:01:00.000Z',
+  })
+  const contractPath = join(root, 'contract.json')
+  const out = join(root, 'generated')
+  await writeFile(contractPath, JSON.stringify(contract), 'utf8')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'semantic-input' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=semantic-input`)
+  const endpoint = runtime.metadata.endpoints.find((item) => item.path_template === '/files/{segment}')
+  const unknownEndpoint = runtime.metadata.endpoints.find((item) => item.path_template === '/jobs/{segment}')
+  const arrayEndpoint = runtime.metadata.endpoints.find((item) => item.path_template === '/array-actions/{segment}')
+  assert.equal(endpoint.path_template, '/files/{segment}')
+  assert.deepEqual(endpoint.request.query_parameters[0].semantic_classes, ['READ_ACTION'])
+  assert.deepEqual(unknownEndpoint.request.query_parameters[0].semantic_classes, ['OTHER_ACTION'])
+  assert.deepEqual(arrayEndpoint.request.fields.find(({ path }) => path === 'action').semantic_classes, ['READ_ACTION'])
+  let calls = 0
+  const connector = runtime.createConnector({
+    fetchImpl: async () => {
+      calls += 1
+      return new Response('{"error":"busy"}', {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })
+    },
+  })
+  let layeredDelete = '%64elete'
+  for (let index = 0; index < 16; index += 1) layeredDelete = encodeURIComponent(layeredDelete)
+
+  for (const options of [
+    { path: { segment: '../admin' }, query: { action: 'read' } },
+    { path: { segment: '%252e%252e%252fadmin' }, query: { action: 'read' } },
+    { path: { segment: 'delete' }, query: { action: 'read' } },
+    { path: { segment: 'report' }, query: { action: 'delete' } },
+    { path: { segment: 'report' }, query: { action: 'delete_status' } },
+    { path: { segment: 'report' }, query: { action: layeredDelete } },
+  ]) {
+    await assert.rejects(
+      connector.request(endpoint.endpoint_id, options),
+      (error) => error?.code === 'CONNECTOR_INPUT_INVALID',
+    )
+  }
+  await assert.rejects(
+    connector.request(endpoint.endpoint_id, { path: { segment: 'example' } }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+      && /action semantics/u.test(error.message),
+  )
+  await assert.rejects(
+    connector.request(unknownEndpoint.endpoint_id, {
+      path: { segment: 'report' },
+      query: { action: 'another-custom' },
+    }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+      && /unclassified/u.test(error.message),
+  )
+  await assert.rejects(
+    connector.request(arrayEndpoint.endpoint_id, {
+      path: { segment: 'report' },
+      body: { action: ['delete'] },
+    }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID',
+  )
+  await assert.rejects(
+    connector.request(arrayEndpoint.endpoint_id, {
+      path: { segment: 'example' },
+      body: { action: [] },
+    }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+      && /action semantics/u.test(error.message),
+  )
+  await assert.rejects(
+    connector.request(arrayEndpoint.endpoint_id, { path: { segment: 'example' } }),
+    (error) => error?.code === 'CONNECTOR_INPUT_INVALID'
+      && /action semantics/u.test(error.message),
+  )
+  assert.equal(calls, 0)
+})
+
 test('generated runtime follows only exact observed Location exchanges and typed redirect queries', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'last-aperture-redirect-contract-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -558,6 +1374,30 @@ test('generated runtime follows only exact observed Location exchanges and typed
       contract: redirectContract({ destination: '/next?limit=1' }),
       liveStatus: 302,
       liveLocation: '/next?limit=delete-all',
+    },
+    {
+      name: 'unclassified-action-substitution',
+      contract: redirectContract({ destination: '/next?action=custom' }),
+      liveStatus: 302,
+      liveLocation: '/next?action=another-custom',
+    },
+    {
+      name: 'nonclassifiable-action-substitution',
+      contract: redirectContract({ destination: '/next?action=1' }),
+      liveStatus: 302,
+      liveLocation: '/next?action=2',
+    },
+    {
+      name: 'missing-observed-action',
+      contract: redirectContract({ destination: '/next?action=read' }),
+      liveStatus: 302,
+      liveLocation: '/next',
+    },
+    {
+      name: 'state-changing-redirect-path',
+      contract: redirectContract({ destination: '/unrecognized-next' }),
+      liveStatus: 302,
+      liveLocation: '/delete',
     },
   ]
 
@@ -594,6 +1434,11 @@ test('runtime result metadata omits concrete redirect queries and credential res
   await generateNativeConnectorPackage({ contractPath, outPath: out })
   const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=private-result`)
   const login = runtime.metadata.endpoints.find((item) => item.path_template === '/login')
+  let unresolvedTokenHeader = 'x-%74oken'
+  for (let pass = 0; pass < 8; pass += 1) unresolvedTokenHeader = encodeURIComponent(unresolvedTokenHeader)
+  const canonicalSensitiveHeaders = Object.fromEntries(
+    [...SENSITIVE_HEADERS].map((name) => [name, `canonical-${name}-response-secret`]),
+  )
   const connector = runtime.createConnector({
     credentialProvider: async ({ endpointId }) => endpointId === login.endpoint_id
       ? { body: { UserName: 'private-user', Password: 'private-password' } }
@@ -603,9 +1448,32 @@ test('runtime result metadata omits concrete redirect queries and credential res
       : new Response('{"ready":true}', {
         status: 200,
         headers: {
+          ...canonicalSensitiveHeaders,
           authorization: 'Bearer response-secret',
           'content-type': 'application/json',
           location: '/Home?token=response-location-secret',
+          'x-access-token': 'secondary-response-secret',
+          'x-hub-signature-256': 'dynamic-versioned-signature-secret',
+          'x-service-signature': 'dynamic-signature-secret',
+          'x-service-token': 'dynamic-token-secret',
+          'x-%2574oken': 'encoded-header-secret',
+          [unresolvedTokenHeader]: 'unresolved-encoded-header-secret',
+          'x-%zz-token': 'malformed-encoded-header-secret',
+          'x-relay-state': 'sso-relay-secret',
+          'x-saml-request': 'sso-request-secret',
+          'x-saml-response': 'sso-response-secret',
+          'x-state': 'sso-state-secret',
+          'x-oauth-state': 'vendor-oauth-state-secret',
+          'x-okta-saml-response': 'vendor-saml-response-secret',
+          'x-auth-relay-state': 'vendor-relay-state-secret',
+          'x-auth-code': 'vendor-authorization-code-secret',
+          'x-%2561uth-code-v2': 'layered-authorization-code-secret',
+          'x-vendor-saml-request-v12': 'versioned-saml-request-secret',
+          'x-okta-%2573aml-response-v3': 'layered-saml-response-secret',
+          'x-status-code': '200',
+          'x-response-code': 'accepted',
+          'x-error-code': 'none',
+          'x-verification-code': 'otp-response-secret',
           'x-public-shape': 'visible',
         },
       }),
@@ -615,9 +1483,55 @@ test('runtime result metadata omits concrete redirect queries and credential res
   assert.equal(result.pathTemplate, '/Home')
   assert.equal(result.headers.authorization, undefined)
   assert.equal(result.headers.location, undefined)
+  for (const name of SENSITIVE_HEADERS) assert.equal(result.headers[name], undefined, name)
+  assert.equal(result.headers['x-access-token'], undefined)
+  assert.equal(result.headers['x-hub-signature-256'], undefined)
+  assert.equal(result.headers['x-service-signature'], undefined)
+  assert.equal(result.headers['x-service-token'], undefined)
+  for (const name of [
+    'x-%2574oken',
+    'x-relay-state',
+    'x-saml-request',
+    'x-saml-response',
+    'x-state',
+    'x-oauth-state',
+    'x-okta-saml-response',
+    'x-auth-relay-state',
+    'x-auth-code',
+    'x-%2561uth-code-v2',
+    'x-vendor-saml-request-v12',
+    'x-okta-%2573aml-response-v3',
+  ]) {
+    assert.equal(result.headers[name], undefined, name)
+  }
+  assert.equal(result.headers[unresolvedTokenHeader], undefined)
+  assert.equal(result.headers['x-%zz-token'], undefined)
+  assert.equal(result.headers['x-verification-code'], undefined)
+  assert.equal(result.headers['x-status-code'], '200')
+  assert.equal(result.headers['x-response-code'], 'accepted')
+  assert.equal(result.headers['x-error-code'], 'none')
   assert.equal(result.headers['x-public-shape'], 'visible')
   assert.equal(Object.hasOwn(result, 'url'), false)
-  assert.doesNotMatch(JSON.stringify(result), /redirect-secret|response-secret|response-location-secret|private-password|private-user/)
+  assert.doesNotMatch(JSON.stringify(result), /redirect-secret|response-secret|response-location-secret|secondary-response-secret|dynamic-versioned-signature-secret|dynamic-signature-secret|dynamic-token-secret|unresolved-encoded-header-secret|malformed-encoded-header-secret|vendor-oauth-state-secret|vendor-saml-response-secret|vendor-relay-state-secret|vendor-authorization-code-secret|layered-authorization-code-secret|versioned-saml-request-secret|layered-saml-response-secret|otp-response-secret|private-password|private-user/)
+})
+
+test('generated runtime bounds response header count and values', async (t) => {
+  const { root, contractPath } = await fixture(t)
+  const out = join(root, 'response-header-bounds')
+  await generateNativeConnectorPackage({ contractPath, outPath: out, packageName: 'response-header-bounds' })
+  const runtime = await import(`${pathToFileURL(join(out, 'index.mjs')).href}?case=response-header-bounds`)
+  const home = runtime.metadata.endpoints.find((item) => item.path_template === '/Home')
+  const headers = new Headers({ 'content-type': 'application/json' })
+  for (let index = 0; index < 129; index += 1) headers.set(`x-field-${index}`, 'value')
+  const connector = runtime.createConnector({
+    fetchImpl: async () => new Response('{}', { status: 200, headers }),
+  })
+
+  await assert.rejects(
+    connector.request(home.endpoint_id),
+    (error) => error?.code === 'CONNECTOR_RESPONSE_INVALID'
+      && error.request_may_have_been_sent === true,
+  )
 })
 
 test('response body credentials use an explicit transient receiver and stay out of ordinary result data', async (t) => {

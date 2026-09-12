@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, link, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createArtifactAdapter } from '../scripts/lib/evidence-adapters/artifact.mjs'
@@ -58,6 +58,32 @@ test('plan refuses remote/device-style paths and sources above its byte cap', as
   await assert.rejects(
     () => capped.plan(REQUEST),
     (error) => error?.code === 'ARTIFACT_SOURCE_TOO_LARGE',
+  )
+})
+
+test('plan refuses hard-linked sources and linked source ancestors', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rta-artifact-links-'))
+  const source = join(root, 'source.tar')
+  const alias = join(root, 'source-alias.tar')
+  await copyFile(FIXTURE, source)
+  await link(source, alias)
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, source_path: alias }),
+    (error) => error?.code === 'ARTIFACT_SOURCE_NOT_REGULAR',
+  )
+
+  const outside = join(root, 'outside')
+  const linked = join(root, 'linked')
+  await mkdir(outside)
+  await copyFile(FIXTURE, join(outside, 'image.tar'))
+  try {
+    await symlink(outside, linked, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    return t.skip(`directory links unavailable: ${error.code}`)
+  }
+  await assert.rejects(
+    () => adapter.plan({ ...REQUEST, source_path: join(linked, 'image.tar') }),
+    (error) => error?.code === 'ARTIFACT_SOURCE_ANCESTOR_UNSAFE',
   )
 })
 
@@ -168,7 +194,8 @@ test('an archive that is neither format is NOT_ASSESSED with a named gap', async
   })
   const written = await adapter.run(planned, { out })
   assert.equal(written.profile.coverage_state, 'NOT_ASSESSED')
-  assert.ok(written.profile.coverage_gaps.some(({ reason }) => /neither an OCI layout/i.test(reason)))
+  assert.ok(written.profile.coverage_gaps.some(({ reason }) =>
+    /neither an OCI layout|partial trailing block/i.test(reason)))
 })
 
 test('two runs of one sealed plan produce the same bundle root', async () => {

@@ -26,6 +26,7 @@ const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 const MAX_HEADER_VALUE_BYTES = 8 * 1024
 const MAX_OBSERVED_HEADER_BYTES = 64 * 1024
 const DEFAULT_PAIRING_TTL_MS = 5 * 60 * 1000
+const intrinsicByteFill = Uint8Array.prototype.fill
 const FETCH_FORBIDDEN_METHODS = new Set(['CONNECT', 'TRACE', 'TRACK'])
 const ALLOWED_REQUEST_HEADERS = new Set([
   'accept',
@@ -52,6 +53,14 @@ export class HttpAuthedBrowserBridgeError extends Error {
 
 function bridgeError(code, message, options) {
   return new HttpAuthedBrowserBridgeError(code, message, options)
+}
+
+function eraseBytes(value) {
+  try {
+    if (value instanceof Uint8Array) Reflect.apply(intrinsicByteFill, value, [0])
+  } catch {
+    // Observer and transport dependencies may detach or resize handed-off storage.
+  }
 }
 
 function exactObject(value, keys, code, message) {
@@ -106,7 +115,7 @@ function exactRandomSecret(randomBytes) {
   }
   const secret = Buffer.from(produced)
   if (secret.length !== 32) {
-    secret.fill(0)
+    eraseBytes(secret)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_RANDOM_INVALID',
       'browser bridge random source must return exactly 256 bits',
@@ -119,7 +128,7 @@ function decodeSecret(value) {
   if (typeof value !== 'string' || !BASE64URL_256.test(value)) return null
   const decoded = Buffer.from(value, 'base64url')
   if (decoded.length !== 32 || decoded.toString('base64url') !== value) {
-    decoded.fill(0)
+    eraseBytes(decoded)
     return null
   }
   return decoded
@@ -131,7 +140,7 @@ function secretMatches(expected, candidateValue) {
   try {
     return timingSafeEqual(expected, candidate)
   } finally {
-    candidate.fill(0)
+    eraseBytes(candidate)
   }
 }
 
@@ -344,11 +353,11 @@ function validateRequest(input, targetOrigin, pageSessionAdapter, now) {
   try {
     headers = validateRequestHeaders(input.headers, body)
   } catch (error) {
-    body?.fill(0)
+    eraseBytes(body)
     throw error
   }
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs < 1000 || input.timeoutMs > 30000) {
-    body?.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_TIMEOUT_INVALID',
       'browser-held session request timeout is invalid',
@@ -359,7 +368,7 @@ function validateRequest(input, targetOrigin, pageSessionAdapter, now) {
     || input.maxResponseBytes < 0
     || input.maxResponseBytes > MAX_RESPONSE_BYTES
   ) {
-    body?.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_LIMIT_INVALID',
       'browser-held session response limit is invalid',
@@ -371,21 +380,21 @@ function validateRequest(input, targetOrigin, pageSessionAdapter, now) {
     || !exactKeys(input.tls, ['mode'])
     || !['BROWSER_MANAGED', 'PKIX_HOSTNAME'].includes(input.tls.mode)
   ) {
-    body?.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_TLS_POLICY_INVALID',
       'browser-held sessions require browser-managed TLS',
     )
   }
   if (input.beforeSend !== undefined && typeof input.beforeSend !== 'function') {
-    body?.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_BEFORE_SEND_INVALID',
       'browser-held session pre-send verifier is invalid',
     )
   }
   if (input.responseObserver !== undefined && typeof input.responseObserver !== 'function') {
-    body?.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_OBSERVER_INVALID',
       'browser-held session response observer is invalid',
@@ -545,7 +554,7 @@ function validateObservedHeaders(value) {
       const encodingMatches = bytes.length === canonical.length
         && timingSafeEqual(bytes, canonical)
         && bytes.toString('base64') === encoded
-      canonical.fill(0)
+      eraseBytes(canonical)
       if (!encodingMatches || /[\r\n\0]/.test(decoded)) {
         throw bridgeError(
           'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_INVALID',
@@ -564,7 +573,7 @@ function validateObservedHeaders(value) {
       }
       result.push({ name: item.name, value: decoded })
     } finally {
-      bytes.fill(0)
+      eraseBytes(bytes)
     }
   }
   return result
@@ -597,7 +606,7 @@ function decodeResponseBody(value, maximum, expectedBytes, required) {
   }
   const body = Buffer.from(value, 'base64')
   if (body.length !== expectedBytes || body.length > maximum || body.toString('base64') !== value) {
-    body.fill(0)
+    eraseBytes(body)
     throw bridgeError(
       'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_INVALID',
       'browser bridge response body does not match its declared size',
@@ -610,8 +619,18 @@ function decodeResponseBody(value, maximum, expectedBytes, required) {
 function cleanCurrent(state) {
   const current = state.current
   if (current === null) return null
-  current.requestBody?.fill(0)
+  eraseBytes(current.requestBody)
   current.requestBody = null
+  for (const chunk of current.pendingResponseBodyChunks ?? []) {
+    if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) {
+      eraseBytes(chunk)
+    }
+  }
+  if (Array.isArray(current.pendingResponseBodyChunks)) {
+    try { current.pendingResponseBodyChunks.length = 0 } catch {}
+  }
+  current.pendingResponseBodyChunks = []
+  current.pendingResponseObserverInput = null
   current.prepareEnvelope = null
   current.beforeSend = null
   current.responseObserver = null
@@ -619,13 +638,24 @@ function cleanCurrent(state) {
   return current
 }
 
+function clearWaiterTimer(current) {
+  if (current?.timer === undefined) return
+  const timer = current.timer
+  current.timer = undefined
+  try {
+    current.clearTimer(timer)
+  } catch {
+    // Every settlement path detaches the action first, so its stale callback is inert.
+  }
+}
+
 function rejectWaiter(current, error) {
-  if (current?.timer !== undefined) current.clearTimer(current.timer)
+  clearWaiterTimer(current)
   current?.waiter?.reject(error)
 }
 
 function resolveWaiter(current, result) {
-  if (current?.timer !== undefined) current.clearTimer(current.timer)
+  clearWaiterTimer(current)
   current?.waiter?.resolve(result)
 }
 
@@ -719,7 +749,7 @@ export function createHttpAuthedBrowserBridgeSession({
         return undefined
       }
       if (currentTime(state.clock) > state.pairingExpiresAt) {
-        state.pairingSecret.fill(0)
+        eraseBytes(state.pairingSecret)
         state.pairingSecret = null
         return undefined
       }
@@ -793,12 +823,12 @@ export function createHttpAuthedBrowserBridgeSession({
           .update(sessionSecret)
           .update('red-team-audit/browser-bridge/session', 'utf8')
           .digest()
-        sessionSecret.fill(0)
+        eraseBytes(sessionSecret)
         state.sessionSecret = derived
       } else {
         state.sessionSecret = sessionSecret
       }
-      state.pairingSecret.fill(0)
+      eraseBytes(state.pairingSecret)
       state.pairingSecret = null
       state.tabId = input.tabId
       state.documentNonce = input.documentNonce
@@ -915,6 +945,9 @@ export function createHttpAuthedBrowserBridgeSession({
           beforeSend: validated.beforeSend,
           responseObserver: validated.responseObserver,
           requestBody: validated.body,
+          pendingResponseBodyChunks: [],
+          pendingResponseObserverInput: null,
+          resultObservationPending: false,
           prepareEnvelope: envelope,
           delivered: false,
           requestMayHaveBeenSent: false,
@@ -926,10 +959,10 @@ export function createHttpAuthedBrowserBridgeSession({
         state.requestMayHaveBeenSent = false
         return cloneWireEnvelope(envelope)
       } catch (error) {
-        validated.body?.fill(0)
+        eraseBytes(validated.body)
         throw error
       } finally {
-        actionNonceBytes?.fill(0)
+        eraseBytes(actionNonceBytes)
       }
     },
 
@@ -1023,6 +1056,13 @@ export function createHttpAuthedBrowserBridgeSession({
         'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_UNEXPECTED',
         'browser bridge RESULT message is out of sequence',
       )
+      if (state.current.resultObservationPending === true) {
+        throw bridgeError(
+          'HTTP_AUTHED_BROWSER_BRIDGE_RESULT_UNEXPECTED',
+          'browser bridge RESULT observation is already in progress',
+          { requestMayHaveBeenSent: true },
+        )
+      }
       assertBinding(
         envelope,
         state.current,
@@ -1121,7 +1161,7 @@ export function createHttpAuthedBrowserBridgeSession({
         responseHeaderNames: headerNames,
       }
       if (!complete) {
-        body?.fill(0)
+        eraseBytes(body)
         const error = bridgeError(
           bounded
             ? 'HTTP_AUTHED_BROWSER_BRIDGE_RESPONSE_BOUNDED'
@@ -1138,18 +1178,46 @@ export function createHttpAuthedBrowserBridgeSession({
         throw error
       }
       let observerFailed = false
+      let observerBodyChunks = []
+      let observerInputBodyChunks
+      let observerHandoffComplete = false
       try {
         if (observer !== undefined) {
+          activeAction.resultObservationPending = true
+          observerBodyChunks = body === null ? [] : [Buffer.from(body)]
+          observerInputBodyChunks = [...observerBodyChunks]
+          activeAction.pendingResponseBodyChunks = observerBodyChunks
+          activeAction.pendingResponseObserverInput = observerInputBodyChunks
           await observer({
             status: response.status,
             headers: observedHeaders.map(({ name, value }) => ({ name, value })),
-            bodyChunks: body === null ? [] : [Buffer.from(body)],
+            bodyChunks: observerInputBodyChunks,
           })
+          if (state.state === 'COMMIT' && state.current === activeAction) {
+            observerHandoffComplete = true
+            observerBodyChunks.length = 0
+            activeAction.pendingResponseBodyChunks = []
+            activeAction.pendingResponseObserverInput = null
+          }
         }
       } catch {
         observerFailed = true
       } finally {
-        body?.fill(0)
+        eraseBytes(body)
+        if (!observerHandoffComplete) {
+          for (const chunk of observerBodyChunks) {
+            if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) {
+              eraseBytes(chunk)
+            }
+          }
+          observerBodyChunks.length = 0
+          if (activeAction.pendingResponseBodyChunks === observerBodyChunks) {
+            activeAction.pendingResponseBodyChunks = []
+          }
+          if (activeAction.pendingResponseObserverInput === observerInputBodyChunks) {
+            activeAction.pendingResponseObserverInput = null
+          }
+        }
       }
       if (state.state !== 'COMMIT' || state.current !== activeAction) {
         throw bridgeError(
@@ -1196,9 +1264,9 @@ export function createHttpAuthedBrowserBridgeSession({
       )
       const current = cleanCurrent(state)
       rejectWaiter(current, error)
-      state.pairingSecret?.fill(0)
+      eraseBytes(state.pairingSecret)
       state.pairingSecret = null
-      state.sessionSecret?.fill(0)
+      eraseBytes(state.sessionSecret)
       state.sessionSecret = null
       state.tabId = null
       state.documentNonce = null
@@ -1272,30 +1340,46 @@ export function createHttpAuthedBrowserBridgeTransport({
       : actionIdFactory({ sequence: state.actionCounter })
     const prepared = session.prepare({ actionId: generatedActionId, request })
     const deferred = createDeferred()
+    // A supplied timer may invoke its callback synchronously. Attach a handler
+    // before setup so that path cannot create an unhandled rejected promise.
+    void deferred.promise.catch(() => {})
     state.current.waiter = deferred
-    state.current.timer = state.setTimer(() => {
-      if (state.current?.actionId !== prepared.action_id) return
-      const requestMayHaveBeenSent = state.current.requestMayHaveBeenSent === true
-      const error = bridgeError(
-        'HTTP_AUTHED_BROWSER_BRIDGE_TIMEOUT',
-        'browser-held transport timed out waiting for the extension',
-        { requestMayHaveBeenSent },
+    const activeAction = state.current
+    let timer
+    try {
+      timer = state.setTimer(() => {
+        if (state.current !== activeAction) return
+        const requestMayHaveBeenSent = state.current.requestMayHaveBeenSent === true
+        const error = bridgeError(
+          'HTTP_AUTHED_BROWSER_BRIDGE_TIMEOUT',
+          'browser-held transport timed out waiting for the extension',
+          { requestMayHaveBeenSent },
+        )
+        const current = cleanCurrent(state)
+        if (requestMayHaveBeenSent) {
+          eraseBytes(state.pairingSecret)
+          state.pairingSecret = null
+          eraseBytes(state.sessionSecret)
+          state.sessionSecret = null
+          state.tabId = null
+          state.documentNonce = null
+          state.state = 'CLOSED'
+        } else {
+          state.state = state.state === 'CLOSED' ? 'CLOSED' : 'OPEN'
+        }
+        state.requestMayHaveBeenSent = requestMayHaveBeenSent
+        rejectWaiter(current, error)
+      }, request.timeoutMs)
+    } catch {
+      cleanCurrent(state)
+      if (state.state !== 'CLOSED') state.state = 'OPEN'
+      state.requestMayHaveBeenSent = false
+      throw bridgeError(
+        'HTTP_AUTHED_BROWSER_BRIDGE_TIMER_FAILED',
+        'browser-held transport could not start its deadline timer',
       )
-      const current = cleanCurrent(state)
-      if (requestMayHaveBeenSent) {
-        state.pairingSecret?.fill(0)
-        state.pairingSecret = null
-        state.sessionSecret?.fill(0)
-        state.sessionSecret = null
-        state.tabId = null
-        state.documentNonce = null
-        state.state = 'CLOSED'
-      } else {
-        state.state = state.state === 'CLOSED' ? 'CLOSED' : 'OPEN'
-      }
-      state.requestMayHaveBeenSent = requestMayHaveBeenSent
-      rejectWaiter(current, error)
-    }, request.timeoutMs)
+    }
+    if (state.current === activeAction) state.current.timer = timer
     return deferred.promise
   }
 }

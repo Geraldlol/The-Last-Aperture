@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
-export const ENGAGEMENT_ROUTE_REGISTRY_VERSION = '1.3.0'
+export const ENGAGEMENT_ROUTE_REGISTRY_VERSION = '2.0.0'
 
 const NODE_ENTRYPOINT = process.execPath
 const AUDIT_CLI = fileURLToPath(new URL('../audit.mjs', import.meta.url))
@@ -16,6 +17,38 @@ const TARGET_KINDS = new Set([
   'device',
   'browser',
 ])
+
+const ROUTE_CAPABILITY_IDS = Object.freeze({
+  'repository-audit': 'source-review',
+  'repository-t1-proof': 't1-proof',
+  'repository-t2-service-proof': 't2-service-proof',
+  'https-recon': 'https-recon',
+  'authenticated-http-browser': 'authenticated-http',
+  'adversarial-validation': 'adversarial-validation',
+  'bounty-perimeter': 'bounty-perimeter',
+  'bounty-recon': 'bounty-live-work',
+  'bounty-authorization': 'bounty-live-work',
+  'bounty-scan': 'bounty-live-work',
+  'bounty-oob': 'bounty-live-work',
+  'bounty-proxy': 'bounty-proxy-capture',
+  'web-live-metadata-import': 'web-protocol-reconstruction',
+  'web-capture-har-import': 'web-protocol-reconstruction',
+  'web-capture-burp-import': 'web-protocol-reconstruction',
+  'ghidra-analysis': 'ghidra-static-reverse',
+  'frida-trace': 'frida-typed-reverse',
+  'evidence-artifact-acquisition': 'deployed-evidence-acquisition',
+  'evidence-registry-acquisition': 'deployed-evidence-acquisition',
+  'evidence-deployed-acquisition': 'deployed-evidence-acquisition',
+  'evidence-runtime-acquisition': 'deployed-evidence-acquisition',
+  'evidence-bundle-import': 'evidence-bundle-import',
+  'protocol-build': 'web-protocol-reconstruction',
+  'connector-generate': 'web-protocol-reconstruction',
+  'connector-verify': 'web-protocol-reconstruction',
+  'provider-execution': 'remote-provider-and-publication',
+  'remote-provider-execution': 'remote-provider-and-publication',
+  'transparency-publication': 'remote-provider-and-publication',
+  'database-conformance': 'database-stack-execution',
+})
 
 function routeError(code, message) {
   const error = new Error(message)
@@ -40,21 +73,36 @@ function route({
   recoveryMode,
   cli,
   argumentVector,
+  availability = Object.freeze({ status: 'AVAILABLE', reason_code: null }),
 }) {
+  const executable = availability.status === 'AVAILABLE'
   return {
     id,
+    capability_id: ROUTE_CAPABILITY_IDS[id],
     order,
     dependencies,
     applicability: { target_kinds: targetKinds },
     required_material: requiredMaterial,
     optional_material: optionalMaterial,
     recovery_mode: recoveryMode,
-    invocation: {
-      public_entrypoint: NODE_ENTRYPOINT,
-      argument_vector: [cli, ...argumentVector],
-      shell: false,
-    },
+    availability,
+    invocation: executable
+      ? {
+          public_entrypoint: NODE_ENTRYPOINT,
+          argument_vector: [cli, ...argumentVector],
+          shell: false,
+        }
+      : null,
   }
+}
+
+function unavailableRoute({ reasonCode, ...options }) {
+  return route({
+    ...options,
+    cli: null,
+    argumentVector: [],
+    availability: Object.freeze({ status: 'UNAVAILABLE', reason_code: reasonCode }),
+  })
 }
 
 const ROUTES = [
@@ -66,6 +114,24 @@ const ROUTES = [
     recoveryMode: 'RESUME_FROM_BUNDLE',
     cli: AUDIT_CLI,
     argumentVector: ['plan', '{repository_path}', '--out', '{output_directory}', '--seal-source', '--json'],
+  }),
+  unavailableRoute({
+    id: 'repository-t1-proof',
+    order: 11,
+    dependencies: ['repository-audit'],
+    targetKinds: ['repository'],
+    requiredMaterial: ['audit_bundle_path', 'proof_config_path', 'proof_worker_path'],
+    recoveryMode: 'RECONCILE_CONTROLLER_ATTEMPT',
+    reasonCode: 'ENGAGEMENT_PROOF_PROFILE_UNAVAILABLE',
+  }),
+  unavailableRoute({
+    id: 'repository-t2-service-proof',
+    order: 12,
+    dependencies: ['repository-audit'],
+    targetKinds: ['repository'],
+    requiredMaterial: ['audit_bundle_path', 'service_proof_config_path', 'proof_worker_path'],
+    recoveryMode: 'RECONCILE_CONTROLLER_ATTEMPT',
+    reasonCode: 'ENGAGEMENT_SERVICE_PROOF_PROFILE_UNAVAILABLE',
   }),
   route({
     id: 'https-recon',
@@ -105,9 +171,70 @@ const ROUTES = [
       '--json',
     ],
   }),
+  unavailableRoute({
+    id: 'adversarial-validation',
+    order: 31,
+    targetKinds: ['https', 'browser', 'repository'],
+    requiredMaterial: ['adversarial_plan_path', 'enrollment_id'],
+    recoveryMode: 'RECONCILE_APPEND_ONLY_LEDGER',
+    reasonCode: 'ENGAGEMENT_ADVERSARIAL_GRANT_ADAPTER_UNAVAILABLE',
+  }),
+  unavailableRoute({
+    id: 'bounty-perimeter',
+    order: 32,
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_policy_path', 'bounty_program_configuration'],
+    recoveryMode: 'RESUME_FROM_BUNDLE',
+    reasonCode: 'ENGAGEMENT_BOUNTY_PERIMETER_ADAPTER_UNAVAILABLE',
+  }),
+  unavailableRoute({
+    id: 'bounty-recon',
+    order: 33,
+    dependencies: ['bounty-perimeter'],
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_bundle_path'],
+    recoveryMode: 'RECONCILE_APPEND_ONLY_BUNDLE',
+    reasonCode: 'BOUNTY_RECON_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'bounty-authorization',
+    order: 34,
+    dependencies: ['bounty-perimeter'],
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_bundle_path', 'role_registry_path'],
+    recoveryMode: 'RECONCILE_APPEND_ONLY_BUNDLE',
+    reasonCode: 'BOUNTY_AUTHZ_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'bounty-scan',
+    order: 35,
+    dependencies: ['bounty-perimeter'],
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_bundle_path', 'role_registry_path'],
+    recoveryMode: 'RECONCILE_APPEND_ONLY_LEDGER',
+    reasonCode: 'BOUNTY_SCAN_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'bounty-oob',
+    order: 36,
+    dependencies: ['bounty-perimeter'],
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_bundle_path', 'oob_backend_configuration'],
+    recoveryMode: 'RECONCILE_APPEND_ONLY_LEDGER',
+    reasonCode: 'BOUNTY_OOB_SESSION_ENROLLMENT_REQUIRED',
+  }),
+  unavailableRoute({
+    id: 'bounty-proxy',
+    order: 37,
+    dependencies: ['bounty-perimeter'],
+    targetKinds: ['https', 'browser'],
+    requiredMaterial: ['bounty_bundle_path', 'proxy_capture_path'],
+    recoveryMode: 'RESTART_CREATE_ONLY',
+    reasonCode: 'BOUNTY_PROXY_CAPTURE_DISABLED',
+  }),
   route({
     id: 'web-live-metadata-import',
-    order: 35,
+    order: 40,
     dependencies: ['https-recon'],
     targetKinds: ['https', 'browser'],
     requiredMaterial: [
@@ -136,7 +263,7 @@ const ROUTES = [
   }),
   route({
     id: 'web-capture-har-import',
-    order: 40,
+    order: 50,
     targetKinds: ['https', 'browser'],
     requiredMaterial: ['har_path', 'target_origins', 'target_path_prefix', 'output_path'],
     optionalMaterial: ['path_literals'],
@@ -152,7 +279,7 @@ const ROUTES = [
   }),
   route({
     id: 'web-capture-burp-import',
-    order: 50,
+    order: 60,
     targetKinds: ['https', 'browser'],
     requiredMaterial: ['burp_path', 'target_origins', 'target_path_prefix', 'output_path'],
     optionalMaterial: ['path_literals'],
@@ -168,7 +295,7 @@ const ROUTES = [
   }),
   route({
     id: 'ghidra-analysis',
-    order: 60,
+    order: 70,
     targetKinds: ['artifact'],
     requiredMaterial: [
       'lab_root',
@@ -190,7 +317,7 @@ const ROUTES = [
   }),
   route({
     id: 'frida-trace',
-    order: 70,
+    order: 80,
     targetKinds: ['artifact', 'process', 'device'],
     requiredMaterial: ['trace_plan_path', 'frida_path', 'output_directory'],
     recoveryMode: 'RESTART_CREATE_ONLY',
@@ -202,9 +329,49 @@ const ROUTES = [
       '--out', '{output_directory}', '--json',
     ],
   }),
+  unavailableRoute({
+    id: 'evidence-artifact-acquisition',
+    order: 81,
+    targetKinds: ['repository', 'artifact'],
+    requiredMaterial: ['evidence_acquisition_plan_path'],
+    recoveryMode: 'RECONCILE_ACQUISITION_PLAN',
+    reasonCode: 'ACQUIRE_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'evidence-registry-acquisition',
+    order: 82,
+    targetKinds: ['repository', 'https', 'browser', 'artifact'],
+    requiredMaterial: ['evidence_acquisition_plan_path'],
+    recoveryMode: 'RECONCILE_ACQUISITION_PLAN',
+    reasonCode: 'ACQUIRE_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'evidence-deployed-acquisition',
+    order: 83,
+    targetKinds: ['repository', 'https', 'browser'],
+    requiredMaterial: ['evidence_acquisition_plan_path'],
+    recoveryMode: 'RECONCILE_ACQUISITION_PLAN',
+    reasonCode: 'ACQUIRE_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'evidence-runtime-acquisition',
+    order: 84,
+    targetKinds: ['repository', 'https', 'browser', 'process', 'device'],
+    requiredMaterial: ['evidence_acquisition_plan_path'],
+    recoveryMode: 'RECONCILE_ACQUISITION_PLAN',
+    reasonCode: 'ACQUIRE_LIVE_IO_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'evidence-bundle-import',
+    order: 85,
+    targetKinds: ['repository'],
+    requiredMaterial: ['evidence_bundle_path'],
+    recoveryMode: 'RESTART_CREATE_ONLY',
+    reasonCode: 'EVIDENCE_BUNDLE_IMPORT_DISABLED',
+  }),
   route({
     id: 'protocol-build',
-    order: 80,
+    order: 90,
     targetKinds: ['https', 'browser', 'artifact', 'process', 'device'],
     requiredMaterial: ['output_path'],
     optionalMaterial: ['web_evidence_paths', 'reverse_evidence_paths'],
@@ -219,7 +386,7 @@ const ROUTES = [
   }),
   route({
     id: 'connector-generate',
-    order: 90,
+    order: 100,
     dependencies: ['protocol-build'],
     targetKinds: ['https', 'browser', 'artifact', 'process', 'device'],
     requiredMaterial: ['contract_path', 'output_directory'],
@@ -235,7 +402,7 @@ const ROUTES = [
   }),
   route({
     id: 'connector-verify',
-    order: 100,
+    order: 110,
     dependencies: ['connector-generate'],
     targetKinds: ['https', 'browser', 'artifact', 'process', 'device'],
     requiredMaterial: ['package_directory', 'manifest_sha256'],
@@ -247,6 +414,41 @@ const ROUTES = [
       '--manifest-sha256', '{manifest_sha256}', '--json',
     ],
   }),
+  unavailableRoute({
+    id: 'provider-execution',
+    order: 120,
+    dependencies: ['repository-audit'],
+    targetKinds: ['repository'],
+    requiredMaterial: ['audit_bundle_path', 'provider_configuration_path'],
+    recoveryMode: 'RECONCILE_CONTROLLER_ATTEMPT',
+    reasonCode: 'PROVIDER_EXECUTION_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'remote-provider-execution',
+    order: 130,
+    dependencies: ['repository-audit'],
+    targetKinds: ['repository'],
+    requiredMaterial: ['audit_bundle_path', 'remote_gateway_configuration_path'],
+    recoveryMode: 'RECONCILE_CONTROLLER_ATTEMPT',
+    reasonCode: 'REMOTE_EXECUTION_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'transparency-publication',
+    order: 140,
+    dependencies: ['repository-audit'],
+    targetKinds: ['repository'],
+    requiredMaterial: ['audit_bundle_path', 'transparency_configuration_path'],
+    recoveryMode: 'RECONCILE_PUBLICATION_RECEIPT',
+    reasonCode: 'TRANSPARENCY_PUBLICATION_DISABLED',
+  }),
+  unavailableRoute({
+    id: 'database-conformance',
+    order: 150,
+    targetKinds: ['repository'],
+    requiredMaterial: ['database_configuration_path'],
+    recoveryMode: 'RECONCILE_CONTROLLER_ATTEMPT',
+    reasonCode: 'DATABASE_EXECUTION_DISABLED',
+  }),
 ]
 
 function assertRegistry(routes) {
@@ -255,6 +457,22 @@ function assertRegistry(routes) {
   for (const descriptor of routes) {
     if (ids.has(descriptor.id) || descriptor.order <= priorOrder) {
       throw routeError('ENGAGEMENT_ROUTE_REGISTRY_INVALID', 'route ids and order must be unique and increasing')
+    }
+    if (typeof descriptor.capability_id !== 'string' || descriptor.capability_id.length === 0) {
+      throw routeError('ENGAGEMENT_ROUTE_REGISTRY_INVALID', `route ${descriptor.id} has no release capability binding`)
+    }
+    if (
+      !['AVAILABLE', 'UNAVAILABLE'].includes(descriptor.availability?.status)
+      || (descriptor.availability.status === 'AVAILABLE' && (
+        descriptor.availability.reason_code !== null
+        || descriptor.invocation === null
+      ))
+      || (descriptor.availability.status === 'UNAVAILABLE' && (
+        !/^[A-Z][A-Z0-9_]{2,127}$/u.test(descriptor.availability.reason_code ?? '')
+        || descriptor.invocation !== null
+      ))
+    ) {
+      throw routeError('ENGAGEMENT_ROUTE_REGISTRY_INVALID', `route ${descriptor.id} has an invalid availability declaration`)
     }
     for (const dependency of descriptor.dependencies) {
       if (!ids.has(dependency)) {
@@ -282,10 +500,13 @@ function cloneDescriptor(descriptor) {
     applicability: { target_kinds: [...descriptor.applicability.target_kinds] },
     required_material: [...descriptor.required_material],
     optional_material: [...descriptor.optional_material],
-    invocation: {
-      ...descriptor.invocation,
-      argument_vector: [...descriptor.invocation.argument_vector],
-    },
+    availability: { ...descriptor.availability },
+    invocation: descriptor.invocation === null
+      ? null
+      : {
+          ...descriptor.invocation,
+          argument_vector: [...descriptor.invocation.argument_vector],
+        },
   }
 }
 
@@ -330,7 +551,8 @@ export function planEngagementRoutes({
     'ENGAGEMENT_ROUTE_COMPLETION_INVALID',
   )
   for (const routeId of completed) {
-    if (!ROUTES_BY_ID.has(routeId)) {
+    const descriptor = ROUTES_BY_ID.get(routeId)
+    if (descriptor === undefined || descriptor.availability.status !== 'AVAILABLE') {
       throw routeError('ENGAGEMENT_ROUTE_COMPLETION_INVALID', `unknown completed route: ${routeId}`)
     }
   }
@@ -343,11 +565,20 @@ export function planEngagementRoutes({
       dependencies: [...descriptor.dependencies],
       required_material: [...descriptor.required_material],
       recovery_mode: descriptor.recovery_mode,
+      availability: { ...descriptor.availability },
       missing_material: [],
       waiting_for_routes: [],
+      unavailable_reason: null,
     }
     if (!applicable) return { ...base, status: 'NOT_APPLICABLE' }
     if (completed.has(descriptor.id)) return { ...base, status: 'COMPLETED' }
+    if (descriptor.availability.status === 'UNAVAILABLE') {
+      return {
+        ...base,
+        status: 'UNAVAILABLE',
+        unavailable_reason: descriptor.availability.reason_code,
+      }
+    }
 
     const missingMaterial = descriptor.required_material.filter((name) => !available.has(name))
     if (
@@ -405,13 +636,26 @@ function optionalScalar(material, name) {
   return scalar(material, name)
 }
 
+function ambiguousEncodedPath(value) {
+  let current = value
+  for (let pass = 0; pass < 8; pass += 1) {
+    if (/%(?:2e|2f|5c)/iu.test(current)) return true
+    if (!current.includes('%')) return false
+    let decoded
+    try { decoded = decodeURIComponent(current) } catch { return true }
+    if (decoded === current) return false
+    current = decoded
+  }
+  return current.includes('%')
+}
+
 function targetPathPrefix(material) {
   const value = scalar(material, 'target_path_prefix')
   if (
     value.length > 2048
     || !value.startsWith('/')
     || /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(value)
-    || /%(?:2e|2f|5c)/iu.test(value)
+    || ambiguousEncodedPath(value)
     || /%(?![0-9a-f]{2})/iu.test(value)
   ) {
     throw routeError('ENGAGEMENT_ROUTE_MATERIAL_INVALID', 'target_path_prefix must be a canonical raw URL pathname')
@@ -628,8 +872,38 @@ export function buildEngagementRouteInvocation(routeId, material) {
   if (typeof routeId !== 'string' || !ROUTES_BY_ID.has(routeId)) {
     throw routeError('ENGAGEMENT_ROUTE_UNKNOWN', `unknown engagement route: ${String(routeId)}`)
   }
-  assertMaterialObject(material)
   const descriptor = ROUTES_BY_ID.get(routeId)
+  if (descriptor.availability.status !== 'AVAILABLE') {
+    throw routeError(
+      'ENGAGEMENT_ROUTE_UNAVAILABLE',
+      `engagement route ${routeId} is unavailable: ${descriptor.availability.reason_code}`,
+    )
+  }
+  assertMaterialObject(material)
   validateMaterialKeys(descriptor, material)
   return BUILDERS.get(routeId)(material)
+}
+
+export function renderEngagementSkillRouteInventory(capabilityRegistry) {
+  const releaseCapabilities = new Map(
+    (capabilityRegistry?.capabilities ?? []).map((capability) => [capability.id, capability]),
+  )
+  const inventory = ENGAGEMENT_ROUTE_REGISTRY.map((descriptor) => {
+    const release = releaseCapabilities.get(descriptor.capability_id)
+    if (release === undefined) {
+      throw routeError(
+        'ENGAGEMENT_ROUTE_CAPABILITY_UNKNOWN',
+        `route ${descriptor.id} references unknown capability ${descriptor.capability_id}`,
+      )
+    }
+    return {
+      route_id: descriptor.id,
+      capability_id: descriptor.capability_id,
+      capability_status: release.status,
+      unified_status: descriptor.availability.status,
+      unavailable_reason: descriptor.availability.reason_code,
+    }
+  })
+  const digest = createHash('sha256').update(JSON.stringify(inventory), 'utf8').digest('hex')
+  return `<!-- ENGAGEMENT_ROUTE_INVENTORY_SHA256: ${digest} -->`
 }

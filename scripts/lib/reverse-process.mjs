@@ -18,7 +18,7 @@ const LOG_POLL_INTERVAL_MS = 100
 const WINDOWS_HELPER_OUTPUT_BYTES = 64 * 1024
 const WINDOWS_HELPER_GRACE_MS = 20_000
 const WINDOWS_HELPER_RESULT_BYTES = 64 * 1024
-const WINDOWS_JOB_REQUEST_VERSION = '1.1.0'
+const WINDOWS_JOB_REQUEST_VERSION = '1.2.0'
 const OPEN_READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 
 export const WINDOWS_JOB_HELPER_PATH = fileURLToPath(
@@ -358,6 +358,9 @@ export async function runWindowsJobProcess({
   env,
   timeoutMs,
   maxOutputBytes,
+  maxStdoutBytes = maxOutputBytes,
+  maxStderrBytes = maxOutputBytes,
+  stdoutObserver,
   logPaths = [],
   maxLogBytes = maxOutputBytes,
   stopMarkerPath,
@@ -366,7 +369,14 @@ export async function runWindowsJobProcess({
   let adapterDirectory
   let adapterIdentity
   let targetMayHaveStarted = false
+  let observerError = null
   try {
+    if (stdoutObserver !== undefined && typeof stdoutObserver !== 'function') {
+      throw new TypeError('stdout observer must be a function')
+    }
+    if (stdoutObserver && stopMarkerPath !== undefined && stopMarkerPath !== null) {
+      throw new TypeError('stdout observation cannot share one Windows job stop marker')
+    }
     const target = prepareWindowsTarget(file, args, env)
     const fixedFiles = [WINDOWS_JOB_HELPER_PATH, ...target.adapterFiles]
     const hashesBefore = await Promise.all(fixedFiles.map((path) => fixedFileHash(path)))
@@ -380,6 +390,7 @@ export async function runWindowsJobProcess({
     const resultPath = join(adapterDirectory, 'result.json')
     const stdoutPath = join(adapterDirectory, 'stdout.bin')
     const stderrPath = join(adapterDirectory, 'stderr.bin')
+    const observerStopPath = stdoutObserver ? join(adapterDirectory, 'observer-stop') : null
     const requestNonce = randomBytes(32).toString('hex')
     const request = {
       schema_version: WINDOWS_JOB_REQUEST_VERSION,
@@ -388,30 +399,107 @@ export async function runWindowsJobProcess({
       args: target.args,
       batch_bridge: target.batchBridge,
       cwd,
-      env: target.environment,
       timeout_ms: timeoutMs,
       max_output_bytes: maxOutputBytes,
+      max_stdout_bytes: maxStdoutBytes,
+      max_stderr_bytes: maxStderrBytes,
       log_paths: logPaths,
       max_log_bytes: maxLogBytes,
-      stop_marker_path: assertStopMarkerPath(stopMarkerPath, 'win32'),
+      stop_marker_path: observerStopPath ?? assertStopMarkerPath(stopMarkerPath, 'win32'),
       stdout_path: stdoutPath,
       stderr_path: stderrPath,
     }
     await writeFile(requestPath, `${JSON.stringify(request)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
     const powerShellPath = windowsSystemTool(env, win32.join('WindowsPowerShell', 'v1.0', 'powershell.exe'))
     targetMayHaveStarted = true
-    const helperResult = await (internals.invokeWindowsHelperImpl ?? invokeWindowsHelper)({
-      file: powerShellPath,
-      args: [
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', WINDOWS_JOB_HELPER_PATH,
-        '-RequestPath', requestPath,
-        '-ResultPath', resultPath,
-      ],
-      cwd: dirname(WINDOWS_JOB_HELPER_PATH),
-      env: sanitizedProcessEnvironment(env),
-      timeoutMs: timeoutMs + WINDOWS_HELPER_GRACE_MS,
-    })
+    let helperSettled = false
+    let observedBytes = 0
+    let observedIdentity = null
+    const stopForObserver = async (error) => {
+      if (observerError) return
+      observerError = error
+      try {
+        await writeFile(observerStopPath, '', { flag: 'wx', mode: 0o600 })
+      } catch (writeError) {
+        if (writeError?.code !== 'EEXIST') observerError = writeError
+      }
+    }
+    const inspectObservedStdout = async () => {
+      if (!stdoutObserver || observerError) return
+      let metadata
+      try {
+        metadata = await nodeLstat(stdoutPath, { bigint: true })
+      } catch (error) {
+        if (missingFile(error)) return
+        await stopForObserver(error)
+        return
+      }
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1n) {
+        await stopForObserver(new Error('Windows job observed stdout is not one regular file'))
+        return
+      }
+      if (observedIdentity && !sameIdentity(observedIdentity, metadata)) {
+        await stopForObserver(new Error('Windows job observed stdout identity changed'))
+        return
+      }
+      observedIdentity ??= metadata
+      const available = Number(metadata.size)
+      if (!Number.isSafeInteger(available) || available < observedBytes || available > maxStdoutBytes) {
+        await stopForObserver(new Error('Windows job observed stdout size is invalid'))
+        return
+      }
+      if (available === observedBytes) return
+      let handle
+      try {
+        handle = await open(stdoutPath, OPEN_READ_FLAGS)
+        const held = await handle.stat({ bigint: true })
+        if (!sameIdentity(observedIdentity, held) || held.size < BigInt(available)) {
+          throw new Error('Windows job observed stdout changed before reading')
+        }
+        while (observedBytes < available) {
+          const wanted = Math.min(64 * 1024, available - observedBytes)
+          const chunk = Buffer.allocUnsafe(wanted)
+          const { bytesRead } = await handle.read(chunk, 0, wanted, observedBytes)
+          if (bytesRead < 1) throw new Error('Windows job observed stdout read made no progress')
+          observedBytes += bytesRead
+          stdoutObserver(chunk.subarray(0, bytesRead))
+        }
+      } catch (error) {
+        await stopForObserver(error)
+      } finally {
+        await handle?.close()
+      }
+    }
+    const observation = stdoutObserver ? (async () => {
+      while (!helperSettled && !observerError) {
+        await inspectObservedStdout()
+        if (!helperSettled && !observerError) {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 5))
+        }
+      }
+      await inspectObservedStdout()
+    })() : null
+    let helperResult
+    try {
+      helperResult = await (internals.invokeWindowsHelperImpl ?? invokeWindowsHelper)({
+        file: powerShellPath,
+        args: [
+          '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+          '-File', WINDOWS_JOB_HELPER_PATH,
+          '-RequestPath', requestPath,
+          '-ResultPath', resultPath,
+        ],
+        cwd: dirname(WINDOWS_JOB_HELPER_PATH),
+        // The target environment stays in the helper's inherited process
+        // environment. Serializing it into request.json would leave credentials
+        // on disk after a crash even though the scratch directory is private.
+        env: target.environment,
+        timeoutMs: timeoutMs + WINDOWS_HELPER_GRACE_MS,
+      })
+    } finally {
+      helperSettled = true
+    }
+    await observation
     const hashesAfter = await Promise.all(fixedFiles.map((path) => fixedFileHash(path)))
     if (hashesAfter.some((hash, index) => hash !== hashesBefore[index])) throw new Error('Windows job adapter changed during execution')
     if (helperResult.failed || ![0, 1].includes(helperResult.code)) throw new Error('Windows job helper did not close normally')
@@ -439,14 +527,16 @@ export async function runWindowsJobProcess({
       || (structured.timed_out && structured.code !== null)) {
       throw new Error('Windows job helper returned an invalid result')
     }
-    const stdout = await readBoundedFile(stdoutPath, maxOutputBytes, { required: structured.spawn_error !== true })
-    const stderr = await readBoundedFile(stderrPath, maxOutputBytes - stdout.length, { required: structured.spawn_error !== true })
+    const stdout = await readBoundedFile(stdoutPath, maxStdoutBytes, { required: structured.spawn_error !== true })
+    const stderr = await readBoundedFile(stderrPath, maxStderrBytes, { required: structured.spawn_error !== true })
     if (stdout.length + stderr.length > maxOutputBytes) throw new Error('Windows job helper exceeded the combined output limit')
-    let terminationConfirmed = structured.termination_confirmed === true
-    if (terminationConfirmed) {
-      terminationConfirmed = await cleanupAdapterDirectory(adapterDirectory, adapterIdentity)
-    }
-    return Object.freeze({
+    // The helper has exited and closed its scratch handles even when target
+    // termination could not be confirmed. Attempt identity-bound cleanup in
+    // both cases so provider output is not left durably on disk; cleanup can
+    // only preserve, never upgrade, the helper's termination result.
+    const scratchRemoved = await cleanupAdapterDirectory(adapterDirectory, adapterIdentity)
+    const terminationConfirmed = structured.termination_confirmed === true && scratchRemoved
+    const result = Object.freeze({
       code: structured.code,
       signal: null,
       timed_out: structured.timed_out,
@@ -463,10 +553,24 @@ export async function runWindowsJobProcess({
       stdout,
       stderr,
     })
-  } catch {
+    if (observerError) {
+      // The observer may have accepted and accounted for a prefix before it
+      // rejected the next object. Preserve that bounded prefix for the caller's
+      // impact counters, while keeping it off enumerable/loggable error state.
+      try {
+        Object.defineProperties(observerError, {
+          capturedStdout: { value: stdout, configurable: true },
+          capturedStderr: { value: stderr, configurable: true },
+        })
+      } catch {}
+      throw observerError
+    }
+    return result
+  } catch (error) {
     if (adapterDirectory !== undefined && adapterIdentity !== undefined) {
       try { await cleanupAdapterDirectory(adapterDirectory, adapterIdentity) } catch {}
     }
+    if (observerError) throw observerError
     return failedWindowsResult(startedAt, { targetMayHaveStarted })
   }
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
 import { canonicalizeCandidate } from './bounty-target.mjs'
-import { normalizeCapturedRequest } from './bounty-authz-request.mjs'
+import { normalizeCapturedRequest, sanitizeCapturedRequest } from './bounty-authz-request.mjs'
 import {
   selectInsertionPoints,
   selectProbes,
@@ -27,6 +27,21 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 const MAX_AGGREGATE_OUTPUT_BYTES = 256 * 1024 * 1024
 const INPUT_HEADROOM_BYTES = 16 * 1024
 const SAFE_REQUEST_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const STATE_CHANGING_ROUTE_ACTIONS = new Set([
+  'activate', 'approve', 'archive', 'ban', 'block', 'cancel', 'create', 'deactivate',
+  'delete', 'deploy', 'destroy', 'disable', 'drop', 'enable', 'execute', 'invite',
+  'lock', 'logout', 'patch', 'post', 'publish', 'purge', 'put', 'reject', 'remove',
+  'reset', 'restore', 'revoke', 'run', 'save', 'send', 'signout', 'start', 'stop',
+  'submit', 'suspend', 'sync', 'terminate', 'truncate', 'unlock', 'unpublish',
+  'unsubscribe', 'update', 'upload', 'write',
+])
+const ACTION_QUERY_NAMES = new Set([
+  '_method', 'action', 'cmd', 'command', 'do', 'event', 'method', 'mode', 'op',
+  'operation', 'submit', 'task',
+])
+const READ_SHAPED_ACTION_SUFFIXES = new Set([
+  'detail', 'details', 'history', 'list', 'preview', 'report', 'result', 'results', 'status',
+])
 const FORBIDDEN_ROUTING_HEADERS = new Set([
   'host',
   ':authority',
@@ -42,6 +57,16 @@ const FORBIDDEN_ROUTING_HEADERS = new Set([
   'x-http-method',
   'x-method-override',
 ])
+
+function forbiddenRoutingHeader(name) {
+  const lower = name.toLowerCase()
+  return FORBIDDEN_ROUTING_HEADERS.has(lower)
+    || lower.startsWith('x-forwarded-')
+    || lower.startsWith('x-original-')
+    || lower.startsWith('x-rewrite-')
+    || lower === 'x-envoy-original-path'
+    || lower === 'x-http-url-override'
+}
 
 const ERROR_PROBE_CATALOG = deepFreeze(ERROR_PROBES.map((probe) => structuredClone(probe)))
 const CONTROL_PROBE_CATALOG = deepFreeze(CONTROL_PROBES.map((probe) => structuredClone(probe)))
@@ -74,7 +99,7 @@ function normalizedRole(role) {
   if (
     auth.kind === 'header'
     && typeof auth.name === 'string'
-    && FORBIDDEN_ROUTING_HEADERS.has(auth.name.toLowerCase())
+    && forbiddenRoutingHeader(auth.name)
   ) {
     throw new Error(`role authentication cannot use forbidden routing header ${auth.name}`)
   }
@@ -166,6 +191,64 @@ function targetOf(request) {
   return result.target
 }
 
+function actionParts(value) {
+  let decoded = String(value)
+  for (let pass = 0; pass < 8; pass += 1) {
+    let next
+    try { next = decodeURIComponent(decoded) } catch {
+      return { ambiguous: decoded.includes('%'), tokens: decoded.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean) }
+    }
+    if (next === decoded) {
+      return { ambiguous: false, tokens: decoded.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean) }
+    }
+    decoded = next
+  }
+  let ambiguous = false
+  try { ambiguous = decodeURIComponent(decoded) !== decoded } catch {}
+  return { ambiguous, tokens: decoded.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean) }
+}
+
+function actionQueryName(value) {
+  const parts = actionParts(value)
+  return parts.ambiguous ? null : parts.tokens.join('')
+}
+
+function carriesStateChangingAction(value, { allowReadSuffix = true } = {}) {
+  const { ambiguous, tokens } = actionParts(value)
+  if (ambiguous) return true
+  if (allowReadSuffix && READ_SHAPED_ACTION_SUFFIXES.has(tokens.at(-1))) return false
+  return tokens.length > 0 && (
+    STATE_CHANGING_ROUTE_ACTIONS.has(tokens.join(''))
+    || tokens.some((token) => STATE_CHANGING_ROUTE_ACTIONS.has(token))
+  )
+}
+
+export function bountyScanStateChangingReason(request) {
+  if (!SAFE_REQUEST_METHODS.has(request.method)) return `method ${request.method}`
+  let parsed
+  try { parsed = new URL(request.url) } catch { return 'unparseable route' }
+  const pathSegments = parsed.pathname.split('/').filter(Boolean)
+  for (const [index, segment] of pathSegments.entries()) {
+    if (!carriesStateChangingAction(segment)) continue
+    // A root /archive commonly names a read-only collection. The same terminal
+    // segment beneath a resource path is an action endpoint.
+    if (index === 0 && pathSegments.length === 1 && actionParts(segment).tokens.join('') === 'archive') {
+      continue
+    }
+    return `route ${parsed.pathname}`
+  }
+  for (const [name, value] of parsed.searchParams) {
+    const normalizedName = actionQueryName(name)
+    if (
+      normalizedName === null
+      || (ACTION_QUERY_NAMES.has(normalizedName)
+        && carriesStateChangingAction(value, { allowReadSuffix: false }))
+      || (carriesStateChangingAction(name) && /^(?:1|true|yes|on)$/iu.test(value))
+    ) return `route ${parsed.pathname} query action`
+  }
+  return null
+}
+
 function isLiteralLoopback(target) {
   if (target.hostKind === 'ipv4') {
     return target.host.split('.')[0] === '127'
@@ -190,7 +273,7 @@ export function digestBountyScanScope(scope) {
 export function authorizeBountyScanRequest({ scope, request }) {
   const normalized = normalizeCapturedRequest(request)
   const forbiddenHeader = Object.keys(normalized.headers)
-    .find((name) => FORBIDDEN_ROUTING_HEADERS.has(name.toLowerCase()))
+    .find((name) => forbiddenRoutingHeader(name))
   if (forbiddenHeader !== undefined) {
     return {
       allowed: false,
@@ -300,16 +383,17 @@ export function buildBountyScanPlan({
     throw new Error('a crafted bounty scan plan requires error-injection or ssrf-oob')
   }
   const normalizedRequests = selectRequests(
-    requests.map((request) => normalizeCapturedRequest(request)),
+    requests.map((request) => sanitizeCapturedRequest(request)),
     profile,
   ).items
   assertRequestsInScope(scope, normalizedRequests)
 
   const unsafeRequest = normalizedRequests.find((request) =>
-    !SAFE_REQUEST_METHODS.has(request.method))
+    bountyScanStateChangingReason(request) !== null)
   if (unsafeRequest !== undefined) {
+    const reason = bountyScanStateChangingReason(unsafeRequest)
     throw new Error(
-      `crafted bounty scanning refuses state-changing method ${unsafeRequest.method}; use the mutation campaign`,
+      `crafted bounty scanning refuses state-changing ${reason}; use the mutation campaign`,
     )
   }
   const normalizedOob = normalizeOobBinding(oobBinding)

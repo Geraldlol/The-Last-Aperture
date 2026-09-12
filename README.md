@@ -103,6 +103,19 @@ security conclusions. See [assessment improvements](docs/assessment-improvements
 for commands and [delivery status](docs/delivery-status.md) for the remaining
 work and verification record.
 
+Version 0.14.1 hardens the unified platform after a repository-wide review:
+
+- Evidence acquisition, bundle verification, and OCI normalization enforce
+  limits before consumption and bind verified metadata, roots, plans, tools,
+  and requested image identities to durable state.
+- Authenticated HTTP and browser routes recover safely across crashes and
+  restarts, preserve redirect and rate-limit state, and erase transient request,
+  response, credential, and observer buffers on every settlement path.
+- HAR, Burp, browser-session, and generated-connector routes redact credential
+  carriers consistently, bound response observation, and preserve explicit
+  passive, crafted, mutation, and delivery-ambiguity outcomes.
+- Pull requests now run the supported Node 20 and Node 24 validation matrix.
+
 Version 0.14.0 adds the unified engagement control plane:
 
 - `engage run`, `resume`, `status`, and `stop` bind a canonical target and exact
@@ -744,7 +757,7 @@ separate evidence, but their digest, issuer, or signature cannot grant a
 different mode, target, action, or limit.
 
 Load `browser/http-authed-chrome` as an unpacked extension and copy the extension
-ID shown by Chrome into `--browser-extension-id` when planning. Version 0.13.0
+ID shown by Chrome into `--browser-extension-id` when planning. Version 0.14.1
 uses `activeTab` and `scripting` only after the operator selects the target tab,
 `storage` for an extension-owned ephemeral recovery marker, plus an optional
 user-granted `http://127.0.0.1/*` permission for controller pairing. It has no
@@ -893,20 +906,21 @@ verification status, or target deployment claims.
 
 ### Install the development checkout as a Codex or Claude Code skill
 
-Link the whole repository, not only `skills/last-aperture`, because the
-canonical skill deliberately enters through the executable controller,
-schemas, and package dependencies at the repository root:
+Link only the canonical `skills/last-aperture` directory so each agent catalog
+discovers one skill. The skill resolves the physical junction target and runs
+the executable controller from the repository root two directories above it:
 
 ```powershell
+$skillSource = Join-Path (Resolve-Path .) 'skills\last-aperture'
 $codexSkill = Join-Path $env:USERPROFILE '.codex\skills\last-aperture'
 $claudeSkill = Join-Path $env:USERPROFILE '.claude\skills\last-aperture'
-New-Item -ItemType Junction -Path $codexSkill -Target (Resolve-Path .)
-New-Item -ItemType Junction -Path $claudeSkill -Target (Resolve-Path .)
+New-Item -ItemType Junction -Path $codexSkill -Target $skillSource
+New-Item -ItemType Junction -Path $claudeSkill -Target $skillSource
 ```
 
 Each chosen destination must not already exist. Codex or Claude Code discovers
-the skill on its next turn. CLI entrypoint detection resolves the physical path,
-so commands invoked through either junction execute normally.
+the skill on its next turn. The repository-root `SKILL.md` remains a package
+compatibility entry point and is not part of these catalog links.
 
 The plan command writes a versioned bundle and prints `State: PLANNED`. A plan
 is not an audit result and cannot be mistaken for one. `next`, `ingest`, and

@@ -419,7 +419,7 @@ verification caps still apply.
 
 | Established condition | Claimed impact severity |
 |---|---|
-| A remote or low-privilege actor can bypass an independent safety boundary and drive a credible life-safety or catastrophic physical consequence | Critical |
+| A remote or low-privilege actor can bypass an independent safety boundary and cause a reasonably foreseeable life-safety or catastrophic physical consequence | Critical |
 | An attacker can install persistent unauthorized firmware across a production device class, extract fleet-wide identity material, or issue unauthenticated commands with major physical effect | High |
 | A reachable maintenance, pairing, field-protocol, or update path yields control of one device or materially unsafe process state | High |
 | Source shows a bypassable security boundary, but hardware state, deployment, topology, or physical consequence remains unknown | Medium |
