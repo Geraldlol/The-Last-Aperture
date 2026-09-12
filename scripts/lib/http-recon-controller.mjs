@@ -4,6 +4,7 @@ import {
   link,
   mkdir,
   open,
+  opendir,
   realpath,
   rename,
   rm,
@@ -51,6 +52,8 @@ const EVENTS_FILE = 'events.jsonl'
 const REPORT_FILE = 'report.md'
 const OBSERVATIONS_DIRECTORY = 'observations'
 const STOP_FILE = '.http-recon.stop'
+const STOP_TEMPORARY_NAME = /^\.http-recon\.stop\.tmp-\d+-[a-f0-9]{24}$/
+const MAX_STOP_ALIAS_DIRECTORY_ENTRIES = 128
 const LOCK_FILE = '.http-recon.lock'
 const LOCK_RECLAIM_FILE = '.http-recon.lock-reclaim'
 const MAX_RUN_BYTES = 4 * 1024 * 1024
@@ -1333,6 +1336,81 @@ function assertActionWindow(run, now) {
   }
 }
 
+async function readStopMarkerBytes(directory) {
+  const path = join(directory, STOP_FILE)
+  const loaded = await readBoundedNoFollowSnapshot(
+    path,
+    64 * 1024,
+    STOP_FILE,
+    undefined,
+    [1, 2],
+  )
+  if (loaded.info.nlink !== 2) return loaded.bytes
+
+  let publicationTemporaryFound = false
+  const entries = await opendir(directory)
+  try {
+    for (let count = 0; ; count += 1) {
+      const entry = await entries.read()
+      if (entry === null) break
+      if (count >= MAX_STOP_ALIAS_DIRECTORY_ENTRIES) {
+        throw controllerError(
+          'HTTP_RECON_ARTIFACT_NAMESPACE_LIMIT',
+          `${STOP_FILE} publication alias inspection exceeded its directory-entry limit`,
+        )
+      }
+      if (!STOP_TEMPORARY_NAME.test(entry.name)) continue
+      let temporary
+      try {
+        temporary = await lstat(join(directory, entry.name))
+      } catch (error) {
+        if (error.code === 'ENOENT') continue
+        throw error
+      }
+      if (
+        temporary.isFile()
+        && !temporary.isSymbolicLink()
+        && temporary.nlink === 2
+        && temporary.dev === loaded.info.dev
+        && temporary.ino === loaded.info.ino
+      ) {
+        publicationTemporaryFound = true
+        break
+      }
+    }
+  } finally {
+    await entries.close()
+  }
+  if (publicationTemporaryFound) return loaded.bytes
+
+  let current
+  try {
+    current = await lstat(path)
+  } catch (cause) {
+    if (cause.code === 'ENOENT') {
+      throw controllerError(
+        'HTTP_RECON_ARTIFACT_CHANGED',
+        `${STOP_FILE} disappeared while its publication alias was checked`,
+        { cause },
+      )
+    }
+    throw cause
+  }
+  if (
+    current.isFile()
+    && !current.isSymbolicLink()
+    && current.nlink === 1
+    && current.dev === loaded.info.dev
+    && current.ino === loaded.info.ino
+  ) {
+    return loaded.bytes
+  }
+  throw controllerError(
+    'HTTP_RECON_ARTIFACT_NOT_REGULAR',
+    `${STOP_FILE} has an unexplained hard-link alias`,
+  )
+}
+
 async function loadStopMarker(directory) {
   const fallback = (message) => ({
     schema_version: '1.0.0',
@@ -1344,15 +1422,31 @@ async function loadStopMarker(directory) {
     reason: `fail-closed stop: ${message}`.slice(0, 1024),
   })
   let bytes
-  try {
-    bytes = await readBoundedNoFollow(
-      join(directory, STOP_FILE),
-      64 * 1024,
-      STOP_FILE,
-    )
-  } catch (error) {
-    if (error.code === 'ENOENT') return null
-    return fallback(error.code ?? error.message)
+  let transitionError
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      bytes = await readStopMarkerBytes(directory)
+      break
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        if (transitionError === undefined) return null
+        return fallback(transitionError.code ?? transitionError.message)
+      }
+      // POSIX create-only publication temporarily exposes the complete,
+      // fsynced marker under both its private and final names. Retry bounded
+      // namespace transitions, but never trust an unexplained hard link.
+      if ([
+        'HTTP_RECON_ARTIFACT_CHANGED',
+        'HTTP_RECON_ARTIFACT_NOT_REGULAR',
+      ].includes(error.code)) {
+        transitionError = error
+        if (attempt < 3) {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 1))
+          continue
+        }
+      }
+      return fallback(error.code ?? error.message)
+    }
   }
   let marker
   try {

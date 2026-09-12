@@ -28,6 +28,7 @@ import {
 } from '../scripts/lib/http-recon-controller.mjs'
 import { stableJson } from '../scripts/lib/run-engine.mjs'
 import {
+  publishFileCreateOnlyDurably,
   replaceFileDurably,
   syncDirectoryDurably,
 } from '../scripts/lib/durable-file-publication.mjs'
@@ -1879,6 +1880,143 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
   assert.equal(result.run.state, 'OUTCOME_UNCERTAIN')
   assert.equal(result.action.state, 'DELIVERY_AMBIGUOUS')
   assert.match(result.stop_reason, /owner requested stop/)
+})
+
+test('stop watcher preserves the owner reason while POSIX publication has two file links', {
+  timeout: 10_000,
+}, async (t) => {
+  const value = await attestedFixture(t)
+  const transport = attestedTransports()
+  let confirmSent
+  const sent = new Promise((resolvePromise) => { confirmSent = resolvePromise })
+  transport.probeImpl = async (options) => {
+    transport.counters.probe += 1
+    await options.beforeSend(preDispatchMetadata({
+      url: options.url,
+      method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
+    }))
+    confirmSent()
+    return new Promise((resolvePromise, rejectPromise) => {
+      options.signal.addEventListener('abort', () => {
+        const error = new Error('request aborted by out-of-band stop')
+        error.code = 'HTTP_RECON_ABORTED'
+        error.request_may_have_been_sent = true
+        rejectPromise(error)
+      }, { once: true })
+    })
+  }
+  const running = runHttpReconAction({
+    bundle: value.out,
+    actionId: value.planned.run.actions[0].action_id,
+    operatorId: 'operator-001',
+    rationale: 'approved bounded response metadata observation',
+    now: value.clock.now,
+    delayImpl: async (milliseconds) => value.clock.advance(milliseconds),
+    stopPollIntervalMs: 1,
+    probeImpl: transport.probeImpl,
+  })
+  await sent
+
+  const stopPath = join(value.out, '.http-recon.stop')
+  const temporary = `${stopPath}.tmp-${process.pid}-${'a'.repeat(24)}`
+  const reason = 'asset owner requested stop during durable publication'
+  await writeFile(temporary, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-recon-stop-request',
+    engagement_id: value.planned.run.engagement_id,
+    run_id: value.planned.run.run_id,
+    requested_at: value.clock.now().toISOString(),
+    operator_id: 'operator-002',
+    reason,
+  }))
+  let markVisible
+  let releasePublication
+  const visible = new Promise((resolvePromise) => { markVisible = resolvePromise })
+  const publicationReleased = new Promise((resolvePromise) => {
+    releasePublication = resolvePromise
+  })
+  t.after(() => releasePublication())
+  const publishing = publishFileCreateOnlyDurably(temporary, stopPath, {
+    platform: 'linux',
+    directorySyncImpl: async () => {},
+    afterVisible: async () => {
+      markVisible()
+      await publicationReleased
+    },
+  })
+  await visible
+
+  const result = await running
+  releasePublication()
+  await publishing
+  assert.equal(result.run.state, 'OUTCOME_UNCERTAIN')
+  assert.equal(result.action.state, 'DELIVERY_AMBIGUOUS')
+  assert.equal(result.stop_reason, reason)
+})
+
+test('stop watcher fail-closes an unexplained two-link marker without trusting its reason', async (t) => {
+  const value = await attestedFixture(t)
+  const stopPath = join(value.out, '.http-recon.stop')
+  const untrustedReason = 'unexplained hard link claims an owner stop'
+  await writeFile(stopPath, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-recon-stop-request',
+    engagement_id: value.planned.run.engagement_id,
+    run_id: value.planned.run.run_id,
+    requested_at: value.clock.now().toISOString(),
+    operator_id: 'operator-002',
+    reason: untrustedReason,
+  }))
+  await link(stopPath, join(value.parent, 'unexplained-stop-alias'))
+
+  const transport = attestedTransports()
+  const result = await runHttpReconAction({
+    bundle: value.out,
+    actionId: value.planned.run.actions[0].action_id,
+    operatorId: 'operator-001',
+    rationale: 'would have been authorized without an unsafe stop marker',
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  assert.equal(result.run.state, 'STOPPED')
+  assert.equal(result.action, null)
+  assert.match(result.stop_reason, /fail-closed stop: HTTP_RECON_ARTIFACT_NOT_REGULAR/)
+  assert.doesNotMatch(result.stop_reason, new RegExp(untrustedReason))
+  assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
+})
+
+test('stop watcher bounds publication-alias inspection in a crowded bundle root', async (t) => {
+  const value = await attestedFixture(t)
+  const stopPath = join(value.out, '.http-recon.stop')
+  const untrustedReason = 'crowded namespace claims an owner stop'
+  await writeFile(stopPath, stableJson({
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-recon-stop-request',
+    engagement_id: value.planned.run.engagement_id,
+    run_id: value.planned.run.run_id,
+    requested_at: value.clock.now().toISOString(),
+    operator_id: 'operator-002',
+    reason: untrustedReason,
+  }))
+  await link(stopPath, join(value.parent, 'crowded-stop-alias'))
+  await Promise.all(Array.from({ length: 140 }, (_unused, index) =>
+    writeFile(join(value.out, `crowded-entry-${index.toString().padStart(3, '0')}`), 'x')))
+
+  const transport = attestedTransports()
+  const result = await runHttpReconAction({
+    bundle: value.out,
+    actionId: value.planned.run.actions[0].action_id,
+    operatorId: 'operator-001',
+    rationale: 'would have been authorized without an unsafe stop marker',
+    now: value.clock.now,
+    probeImpl: transport.probeImpl,
+  })
+  assert.equal(result.run.state, 'STOPPED')
+  assert.equal(result.action, null)
+  assert.match(result.stop_reason, /fail-closed stop: HTTP_RECON_ARTIFACT_NAMESPACE_LIMIT/)
+  assert.doesNotMatch(result.stop_reason, new RegExp(untrustedReason))
+  assert.deepEqual(transport.counters, { proof: 0, probe: 0 })
 })
 
 test('delivery after pre-dispatch without a response is terminal and never replayed', async (t) => {

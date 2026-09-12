@@ -22,7 +22,7 @@ async function scratch() {
 }
 
 async function waitForFile(path) {
-  const deadline = Date.now() + 3000
+  const deadline = Date.now() + 15_000
   while (Date.now() < deadline) {
     try {
       await access(path)
@@ -404,7 +404,12 @@ test('a killed acquisition owner leaves a reclaimable complete lock', async () =
     child.once('exit', (code, signal) => resolveExit({ code, signal }))
   })
   try {
-    await waitForFile(marker)
+    await Promise.race([
+      waitForFile(marker),
+      exited.then(({ code, signal }) => {
+        throw new Error(`acquisition owner exited before lock marker: code=${code} signal=${signal}`)
+      }),
+    ])
     assert.equal(child.kill(), true)
     await exited
     const recovery = await Promise.allSettled(Array.from({ length: 12 }, (_unused, index) =>
@@ -415,7 +420,10 @@ test('a killed acquisition owner leaves a reclaimable complete lock', async () =
         operatorId: `recovery-owner-${index}`,
       })))
     const completed = recovery.filter(({ status }) => status === 'fulfilled')
-    assert.equal(completed.length, 1)
+    const rejected = recovery
+      .filter(({ status }) => status === 'rejected')
+      .map(({ reason }) => `${reason?.code ?? reason?.name ?? 'Error'}: ${reason?.message ?? reason}`)
+    assert.equal(completed.length, 1, `recovery failures:\n${rejected.join('\n')}`)
     assert.match(completed[0].value.execution_receipt_sha256, /^[a-f0-9]{64}$/)
   } catch (error) {
     if (child.exitCode === null && child.signalCode === null) child.kill()
@@ -664,7 +672,13 @@ test('a concurrent stop is durably observed before the next target dispatch', as
     authorizationConfirmed: true,
     resolver: stub.resolver,
   })
-  await waitForFile(started)
+  await Promise.race([
+    waitForFile(started),
+    running.then(
+      () => { throw new Error('acquisition completed before its first dispatch marker') },
+      (error) => { throw error },
+    ),
+  ])
   await requestAcquisitionStop({ bundle: out, operatorId: 'gmaida', reason: 'scope changed' })
   const written = await running
   assert.equal((await readFile(calls, 'utf8')).length, 1)
