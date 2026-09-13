@@ -898,9 +898,12 @@ test('bounty-v1 source design, release inputs, npm scripts, and boundary languag
   for (const path of bountyTests) {
     assert.ok(platformTests.has(path), `${path} must run in test:platform`)
   }
-  // Structured fuzzing deliberately adds one exact-pinned dependency.
-  assert.deepEqual(Object.keys(packageDocument.dependencies).sort(), ['acorn', 'ajv', 'fast-check', 'yaml'])
+  // Structured fuzzing and the patched AJV transitive dependency deliberately
+  // add exact pins. Overrides from an installed dependency are ignored by npm,
+  // so fast-uri must be direct to constrain a clean tarball install.
+  assert.deepEqual(Object.keys(packageDocument.dependencies).sort(), ['acorn', 'ajv', 'fast-check', 'fast-uri', 'yaml'])
   assert.equal(packageDocument.dependencies['fast-check'], '4.9.0')
+  assert.equal(packageDocument.dependencies['fast-uri'], '3.1.7')
 
   const help = spawnSync(process.execPath, ['scripts/bounty.mjs', '--help'], {
     encoding: 'utf8',

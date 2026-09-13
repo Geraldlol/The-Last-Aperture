@@ -12,6 +12,7 @@
         "acorn": "8.15.0",
         "ajv": "8.20.0",
         "fast-check": "4.9.0",
+        "fast-uri": "3.1.7",
         "yaml": "2.9.0"
       },
       "bin": {
@@ -81,9 +82,9 @@
       "license": "MIT"
     },
     "node_modules/fast-uri": {
-      "version": "3.1.6",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.6.tgz",
-      "integrity": "sha512-7Ical1vFEMr0onbVzEDIreM22I4khW+fzyQPwvAFWBp1iwdshSZRsL4jjRvPG9JP1uiqMHRto+YU6R2/CzDz5Q==",
+      "version": "3.1.7",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",
+      "integrity": "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==",
       "funding": [
         {
           "type": "github",
