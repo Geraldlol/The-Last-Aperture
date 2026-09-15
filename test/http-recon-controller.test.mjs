@@ -47,6 +47,10 @@ const DNS_SHA256 = sha256Hex(Buffer.from(JSON.stringify({
   answers: DNS_ANSWERS,
 })))
 
+function writePrivateFixture(path, data) {
+  return writeFile(path, data, { mode: 0o600 })
+}
+
 test('Win32 durable replacement uses a real write-through move instead of directory fsync', {
   skip: process.platform !== 'win32',
 }, async (t) => {
@@ -1722,7 +1726,7 @@ test('finalize atomically replaces an incomplete report left before its durable 
     now: value.clock.now,
     probeImpl: transport.probeImpl,
   })
-  await writeFile(join(value.out, 'report.md'), 'incomplete report publication')
+  await writePrivateFixture(join(value.out, 'report.md'), 'incomplete report publication')
   const finalized = await finalizeHttpReconBundle({ bundle: value.out, now: value.clock.now })
   assert.equal(finalized.run.state, 'PROBE_PLAN_COMPLETE')
   const validation = await validateHttpReconBundle({ bundle: value.out, now: value.clock.now })
@@ -1767,7 +1771,7 @@ test('a dead recon lock owner is recovered before finalization', async (t) => {
   const child = spawn(process.execPath, ['-e', ''])
   const deadPid = child.pid
   await once(child, 'exit')
-  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+  await writePrivateFixture(join(value.out, '.http-recon.lock'), stableJson({
     schema_version: '1.0.0',
     pid: deadPid,
     acquired_at: value.clock.now().toISOString(),
@@ -1793,7 +1797,7 @@ test('a dead two-name recon reclaim guard cannot permanently block stale-lock re
     pid: deadPid,
     acquired_at: value.clock.now().toISOString(),
   }
-  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+  await writePrivateFixture(join(value.out, '.http-recon.lock'), stableJson({
     ...owner,
     nonce: '1'.repeat(32),
   }))
@@ -1802,7 +1806,7 @@ test('a dead two-name recon reclaim guard cannot permanently block stale-lock re
     `.http-recon.lock-reclaim.tmp-${deadPid}-1111111111111111`,
   )
   const reclaimPath = join(value.out, '.http-recon.lock-reclaim')
-  await writeFile(reclaimTemporary, stableJson({
+  await writePrivateFixture(reclaimTemporary, stableJson({
     ...owner,
     nonce: '2'.repeat(32),
   }))
@@ -1820,7 +1824,7 @@ test('a dead two-name recon reclaim guard cannot permanently block stale-lock re
 test('a live recon lock owner remains exclusive', async (t) => {
   const value = await attestedFixture(t)
   const lockPath = join(value.out, '.http-recon.lock')
-  await writeFile(lockPath, stableJson({
+  await writePrivateFixture(lockPath, stableJson({
     schema_version: '1.0.0',
     pid: process.pid,
     acquired_at: value.clock.now().toISOString(),
@@ -1842,7 +1846,7 @@ test('a lock released after create collision is retried instead of leaking ENOEN
     now: value.clock.now,
   })
   const lockPath = join(value.out, '.http-recon.lock')
-  await writeFile(lockPath, stableJson({
+  await writePrivateFixture(lockPath, stableJson({
     schema_version: '1.0.0',
     pid: process.pid,
     acquired_at: value.clock.now().toISOString(),
@@ -1883,7 +1887,7 @@ test('serialized stale reclaim leaves a replacement live lock in place', async (
     acquired_at: value.clock.now().toISOString(),
     nonce: 'e'.repeat(32),
   })
-  await writeFile(lockPath, stale)
+  await writePrivateFixture(lockPath, stale)
   let replacementInstalled = false
   await assert.rejects(
     finalizeHttpReconBundle({
@@ -1893,7 +1897,7 @@ test('serialized stale reclaim leaves a replacement live lock in place', async (
         if (phase !== 'after-run-lock-reclaim-guard-acquired' || replacementInstalled) return
         replacementInstalled = true
         await rm(lockPath)
-        await writeFile(lockPath, replacement)
+        await writePrivateFixture(lockPath, replacement)
       },
     }),
     (error) => error.code === 'HTTP_RECON_RUN_LOCKED',
@@ -1928,7 +1932,7 @@ test('recon lock release never deletes a replacement live owner', async (t) => {
         if (phase !== 'before-run-lock-release-quarantine' || replacementInstalled) return
         replacementInstalled = true
         await rm(lockPath)
-        await writeFile(lockPath, replacement)
+        await writePrivateFixture(lockPath, replacement)
       },
     }),
     (error) => error.code === 'HTTP_RECON_RUN_LOCK_CHANGED',
@@ -1947,7 +1951,7 @@ test('stale-lock inspection rejects an endpoint swapped after its bounded lstat'
     now: value.clock.now,
   })
   const lockPath = join(value.out, '.http-recon.lock')
-  await writeFile(lockPath, stableJson({
+  await writePrivateFixture(lockPath, stableJson({
     schema_version: '1.0.0',
     pid: 2_147_483_647,
     acquired_at: value.clock.now().toISOString(),
@@ -1962,7 +1966,7 @@ test('stale-lock inspection rejects an endpoint swapped after its bounded lstat'
         if (phase !== 'after-run-lock-lstat' || detail?.path !== lockPath || swapped) return
         swapped = true
         await rm(lockPath)
-        await writeFile(lockPath, 'x'.repeat(4097))
+        await writePrivateFixture(lockPath, 'x'.repeat(4097))
       },
     }),
     (error) => error.code === 'HTTP_RECON_ARTIFACT_CHANGED'
@@ -1979,7 +1983,7 @@ test('concurrent stale lock reclaim never leaks filesystem races', async (t) => 
     reason: 'finish after concurrent stale lock reclaim',
     now: value.clock.now,
   })
-  await writeFile(join(value.out, '.http-recon.lock'), stableJson({
+  await writePrivateFixture(join(value.out, '.http-recon.lock'), stableJson({
     schema_version: '1.0.0',
     pid: 2_147_483_647,
     acquired_at: value.clock.now().toISOString(),
@@ -2322,7 +2326,7 @@ test('stop watcher preserves the owner reason while POSIX publication has two fi
   const stopPath = join(value.out, '.http-recon.stop')
   const temporary = `${stopPath}.tmp-${process.pid}-${'a'.repeat(24)}`
   const reason = 'asset owner requested stop during durable publication'
-  await writeFile(temporary, stableJson({
+  await writePrivateFixture(temporary, stableJson({
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-recon-stop-request',
     engagement_id: value.planned.run.engagement_id,
@@ -2360,7 +2364,7 @@ test('stop watcher fail-closes an unexplained two-link marker without trusting i
   const value = await attestedFixture(t)
   const stopPath = join(value.out, '.http-recon.stop')
   const untrustedReason = 'unexplained hard link claims an owner stop'
-  await writeFile(stopPath, stableJson({
+  await writePrivateFixture(stopPath, stableJson({
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-recon-stop-request',
     engagement_id: value.planned.run.engagement_id,
@@ -2391,7 +2395,7 @@ test('stop watcher bounds publication-alias inspection in a crowded bundle root'
   const value = await attestedFixture(t)
   const stopPath = join(value.out, '.http-recon.stop')
   const untrustedReason = 'crowded namespace claims an owner stop'
-  await writeFile(stopPath, stableJson({
+  await writePrivateFixture(stopPath, stableJson({
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-recon-stop-request',
     engagement_id: value.planned.run.engagement_id,

@@ -389,7 +389,11 @@ test('recovery reads only bounded exact canonical JSON through a stable regular 
     storage.readJson('campaign-state.json'),
     rejectsCode('UNLEASH_STORAGE_FILE_NOT_FOUND'),
   )
-  await writeFile(statePath, '{"status":"RUNNING","revision":1}\n', { encoding: 'utf8', flag: 'wx' })
+  await writeFile(statePath, '{"status":"RUNNING","revision":1}\n', {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  })
   await assert.rejects(
     storage.readJson('campaign-state.json'),
     rejectsCode('UNLEASH_STORAGE_JSON_NONCANONICAL'),
@@ -410,7 +414,7 @@ test('recovery lists a sorted frozen JSON inventory and rejects unsafe residue',
   await storage.writeImmutableJson('campaign-plan.json', { revision: 1 })
   await storage.writeImmutableJson('campaign-event-000002.json', { sequence: 2 })
   await storage.writeImmutableJson('campaign-event-000001.json', { sequence: 1 })
-  await mkdir(join(storage.campaign_directory, 'recon'))
+  await mkdir(join(storage.campaign_directory, 'recon'), { mode: 0o700 })
 
   const filenames = await storage.listJsonFilenames()
   assert.deepEqual(filenames, [
