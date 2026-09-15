@@ -19,10 +19,11 @@ const DEFAULT_OBJECTIVE = 'Run the full authorized assessment and integration wo
 export const ENGAGE_HELP = `The Last Aperture unified engagement ${PLATFORM_VERSION}
 
 Usage:
+  last-aperture engage unleash <target> [--json]
   last-aperture engage run <target> --attestation-file <file> --profile <full|repository-read|web|reverse|offline> --out <new-directory> [--target-kind <kind>] [--objective <text>] [--credential-reference <name> ...] [--input <kind=absolute-path> ...] [--json]
-  last-aperture engage resume <engagement-directory> [--json]
-  last-aperture engage status <engagement-directory> [--json]
-  last-aperture engage stop <engagement-directory> [--reason <text>] [--json]
+  last-aperture engage resume <campaign-or-engagement-directory> [--json]
+  last-aperture engage status <campaign-or-engagement-directory> [--json]
+  last-aperture engage stop <campaign-or-engagement-directory> [--reason <text>] [--json]
   last-aperture engage work next <engagement-directory> [--json]
   last-aperture engage work status <engagement-directory> [--json]
   last-aperture engage work submit <engagement-directory> --work-id <repository-work:sha256> --result <absolute-json-path> [--json]
@@ -33,12 +34,10 @@ Authenticated browser sessions:
   --credential-reference browser:<32-character a-p Chrome-extension-id>
   [--input configuration=<absolute-page-session-adapter.json>]
 
-One bounded ordinary-language operator statement and one target open the durable
-engagement. The controller selects every applicable registered route and records
-technical gaps while continuing independent work. Resume, status, and stop reuse
-the original authority; no repeated statement or special authorization syntax is
-accepted. Existing route-specific controls remain implementation details under
-the shared engagement ledger.
+Unleash is the target-only Point-Click-Shoot path. Controller-owned deployment
+policy, storage, provider configuration, and credentials remain outside runtime
+input. The legacy run command stores one bounded ordinary-language operator
+statement and remains available for explicit engagement intake.
 `
 
 const BOOLEAN_OPTIONS = new Set(['help', 'json'])
@@ -133,13 +132,20 @@ function assertCommand(parsed) {
     command = `work-${workAction}`
     rest = workRest
   }
-  if (!['run', 'resume', 'status', 'stop', 'work-next', 'work-status', 'work-submit', 'work-finalize', 'work-validate'].includes(command ?? '')) {
+  if (!['unleash', 'run', 'resume', 'status', 'stop', 'work-next', 'work-status', 'work-submit', 'work-finalize', 'work-validate'].includes(command ?? '')) {
     throw cliError('ENGAGE_CLI_COMMAND_INVALID', `unknown engage command: ${command ?? '(none)'}`)
   }
   if (rest.length !== 1) {
-    throw cliError('ENGAGE_CLI_USAGE', `engage ${command} requires exactly one target or engagement directory`)
+    throw cliError(
+      'ENGAGE_CLI_USAGE',
+      command === 'unleash'
+        ? 'engage unleash requires exactly one target'
+        : `engage ${command} requires exactly one target or engagement directory`,
+    )
   }
-  const allowed = command === 'run'
+  const allowed = command === 'unleash'
+    ? new Set(['json', 'help'])
+    : command === 'run'
     ? new Set(['attestation-file', 'profile', 'out', 'target-kind', 'objective', 'credential-reference', 'input', 'json', 'help'])
     : command === 'stop'
       ? new Set(['reason', 'json', 'help'])
@@ -264,7 +270,12 @@ export async function readBoundedAttestation(path) {
 
 async function defaultOperations() {
   const controller = await import('./lib/engagement-controller.mjs')
-  return {
+  const unleash = await import('./lib/unleash-controller.mjs')
+  const operations = {
+    unleashTarget: unleash.unleashTarget,
+    resumeUnleashCampaign: unleash.resumeUnleashCampaign,
+    getUnleashCampaignStatus: unleash.getUnleashCampaignStatus,
+    stopUnleashCampaign: unleash.stopUnleashCampaign,
     readAttestation: readBoundedAttestation,
     startEngagement: controller.startEngagement,
     resumeEngagement: controller.resumeEngagement,
@@ -276,11 +287,96 @@ async function defaultOperations() {
     finalizeRepositoryWork: controller.finalizeRepositoryWork,
     validateRepositoryWork: controller.validateRepositoryWork,
   }
+  operations.identifyManagementBundle = (input) => identifyEngageManagementBundle(input, {
+    getUnleashCampaignStatus: operations.getUnleashCampaignStatus,
+    getEngagementStatus: operations.getEngagementStatus,
+  })
+  return operations
+}
+
+export async function identifyEngageManagementBundle(
+  input,
+  { getUnleashCampaignStatus, getEngagementStatus } = {},
+) {
+  if (
+    input === null
+    || typeof input !== 'object'
+    || Array.isArray(input)
+    || Object.keys(input).length !== 1
+    || typeof input.bundle !== 'string'
+    || typeof getUnleashCampaignStatus !== 'function'
+    || typeof getEngagementStatus !== 'function'
+  ) {
+    throw cliError('ENGAGE_BUNDLE_IDENTITY_INVALID', 'management requires one bundle and both validating controllers')
+  }
+
+  const candidates = []
+  let unleashFailure
+  try {
+    candidates.push({
+      kind: 'unleash',
+      status: await getUnleashCampaignStatus({ bundle: input.bundle }),
+    })
+  } catch (error) {
+    unleashFailure = error
+  }
+
+  try {
+    candidates.push({
+      kind: 'engagement',
+      status: await getEngagementStatus({ bundle: input.bundle }),
+    })
+  } catch {}
+
+  if (candidates.length === 1) return Object.freeze(candidates[0])
+  if (candidates.length > 1) {
+    throw cliError('ENGAGE_BUNDLE_IDENTITY_AMBIGUOUS', 'bundle validates as both an Unleash campaign and a legacy engagement')
+  }
+  if (
+    unleashFailure !== null
+    && typeof unleashFailure === 'object'
+    && (
+      typeof unleashFailure.run_directory === 'string'
+      || typeof unleashFailure.status === 'string'
+    )
+  ) throw unleashFailure
+  throw cliError('ENGAGE_BUNDLE_IDENTITY_INVALID', 'bundle does not validate as an Unleash campaign or a legacy engagement')
+}
+
+function assertManagementIdentity(value) {
+  if (
+    value === null
+    || typeof value !== 'object'
+    || Array.isArray(value)
+    || !['unleash', 'engagement'].includes(value.kind)
+    || value.status === null
+    || typeof value.status !== 'object'
+    || Array.isArray(value.status)
+  ) throw cliError('ENGAGE_BUNDLE_IDENTITY_INVALID', 'bundle identity validator returned an invalid result')
+  return value
 }
 
 function render(result, asJson, stdout) {
   if (asJson) {
     stdout.write(`${terminalSafeJson(result, 2)}\n`)
+    return
+  }
+  if (typeof result?.campaign_id === 'string') {
+    const counts = result.route_counts ?? {}
+    const target = typeof result.target === 'string'
+      ? result.target
+      : result.target?.canonical_locator ?? '(unavailable)'
+    const lines = [
+      `Campaign: ${result.campaign_id}`,
+      `Status: ${result.status}`,
+      `Target: ${target}`,
+      `Plan SHA-256: ${result.plan_sha256}`,
+      `Run directory: ${result.run_directory}`,
+      `Completed routes: ${Array.isArray(result.completed_routes) ? result.completed_routes.length : 0}`,
+      `Routes: total=${counts.total ?? 0} ready=${counts.ready ?? 0} waiting=${counts.waiting ?? 0} unavailable=${counts.unavailable ?? 0} not_applicable=${counts.not_applicable ?? 0} blocked=${counts.blocked ?? 0}`,
+      `Gaps: ${result.gap_count ?? 0}`,
+    ]
+    stdout.write(`${lines.map((line) => terminalSafeText(line)).join('\n')}\n`)
     return
   }
   const lines = [
@@ -294,7 +390,7 @@ function render(result, asJson, stdout) {
   if (Array.isArray(result.waiting_routes)) {
     lines.push(`Waiting routes: ${result.waiting_routes.length}`)
   }
-  stdout.write(`${lines.map(terminalSafeText).join('\n')}\n`)
+  stdout.write(`${lines.map((line) => terminalSafeText(line)).join('\n')}\n`)
 }
 
 export async function runEngageCli(argv, dependencies = {}) {
@@ -311,6 +407,11 @@ export async function runEngageCli(argv, dependencies = {}) {
     }
     const { command, operand } = assertCommand(parsed)
     const defaults = Object.keys(dependencies).some((key) => [
+      'unleashTarget',
+      'resumeUnleashCampaign',
+      'getUnleashCampaignStatus',
+      'stopUnleashCampaign',
+      'identifyManagementBundle',
       'readAttestation',
       'startEngagement',
       'resumeEngagement',
@@ -324,7 +425,9 @@ export async function runEngageCli(argv, dependencies = {}) {
     ].includes(key)) ? {} : await defaultOperations()
     const operations = { ...defaults, ...dependencies }
     let result
-    if (command === 'run') {
+    if (command === 'unleash') {
+      result = await operations.unleashTarget({ target: operand })
+    } else if (command === 'run') {
       const target = parseTarget(operand, parsed.options.get('target-kind'))
       const inputs = parseInputs(parsed.options.get('input') ?? [])
       const statement = await operations.readAttestation(parsed.options.get('attestation-file'))
@@ -338,11 +441,22 @@ export async function runEngageCli(argv, dependencies = {}) {
         inputs,
       })
     } else if (command === 'resume') {
-      result = await operations.resumeEngagement({ bundle: operand })
+      const identity = assertManagementIdentity(await operations.identifyManagementBundle({ bundle: operand }))
+      const operation = identity.kind === 'unleash'
+        ? operations.resumeUnleashCampaign
+        : operations.resumeEngagement
+      if (typeof operation !== 'function') throw cliError('ENGAGE_CLI_OPERATION_UNAVAILABLE', 'resume controller is unavailable')
+      result = await operation({ bundle: operand })
     } else if (command === 'status') {
-      result = await operations.getEngagementStatus({ bundle: operand })
+      const identity = assertManagementIdentity(await operations.identifyManagementBundle({ bundle: operand }))
+      result = identity.status
     } else if (command === 'stop') {
-      result = await operations.stopEngagement({
+      const identity = assertManagementIdentity(await operations.identifyManagementBundle({ bundle: operand }))
+      const operation = identity.kind === 'unleash'
+        ? operations.stopUnleashCampaign
+        : operations.stopEngagement
+      if (typeof operation !== 'function') throw cliError('ENGAGE_CLI_OPERATION_UNAVAILABLE', 'stop controller is unavailable')
+      result = await operation({
         bundle: operand,
         reason: parsed.options.get('reason') ?? 'operator requested stop',
       })
@@ -366,8 +480,20 @@ export async function runEngageCli(argv, dependencies = {}) {
   } catch (error) {
     const code = typeof error?.code === 'string' ? error.code : 'ENGAGE_CLI_FAILED'
     const message = terminalSafeText(error?.message ?? 'engage command failed')
-    if (asJson) stderr.write(`${terminalSafeJson({ status: 'FAILED', error: { code, message } }, 2)}\n`)
-    else stderr.write(`last-aperture engage: ${message}\n`)
+    const status = typeof error?.status === 'string' ? terminalSafeText(error.status) : 'FAILED'
+    const runDirectory = typeof error?.run_directory === 'string'
+      ? terminalSafeText(error.run_directory)
+      : undefined
+    if (asJson) {
+      const failure = { status, error: { code, message } }
+      if (runDirectory !== undefined) failure.run_directory = runDirectory
+      stderr.write(`${terminalSafeJson(failure, 2)}\n`)
+    } else {
+      const lines = [`last-aperture engage [${code}]: ${message}`]
+      if (typeof error?.status === 'string') lines.push(`Status: ${status}`)
+      if (runDirectory !== undefined) lines.push(`Run directory: ${runDirectory}`)
+      stderr.write(`${lines.map((line) => terminalSafeText(line)).join('\n')}\n`)
+    }
     return 1
   }
 }

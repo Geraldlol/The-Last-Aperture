@@ -79,6 +79,7 @@ import {
   importVerifiedHttpAuthedSessionEvidence,
   importVerifiedHttpReconSessionEvidence,
 } from './reverse-web-live.mjs'
+import { hardenUnleashPrivateEndpoint } from './unleash-policy-loader.mjs'
 import { PLATFORM_VERSION } from './version.mjs'
 
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url))
@@ -1651,11 +1652,35 @@ async function copyBoundFile(source, destination, expected, label) {
     if (failure instanceof EngagementControllerError) throw failure
     fail('ENGAGEMENT_ROUTE_MATERIAL_INVALID', `${label} could not be staged for downstream use`, { cause: failure })
   }
-  const staged = await stableFingerprint(destination, MAX_INPUT_BYTES)
-  if (staged.sha256 !== expected.sha256 || staged.size_bytes !== expected.size_bytes) {
-    fail('ENGAGEMENT_ROUTE_MATERIAL_INVALID', `${label} staged bytes differ from their producer binding`)
+  try {
+    await hardenUnleashPrivateEndpoint(destination, 'file')
+  } catch (cause) {
+    if (created) {
+      try { await unlink(destination) } catch {}
+    }
+    fail(
+      'ENGAGEMENT_ROUTE_MATERIAL_INVALID',
+      `${label} could not be made private for downstream use`,
+      { cause },
+    )
   }
-  return destination
+  try {
+    const staged = await stableFingerprint(destination, MAX_INPUT_BYTES)
+    if (staged.sha256 !== expected.sha256 || staged.size_bytes !== expected.size_bytes) {
+      fail('ENGAGEMENT_ROUTE_MATERIAL_INVALID', `${label} staged bytes differ from their producer binding`)
+    }
+    return destination
+  } catch (cause) {
+    if (created) {
+      try { await unlink(destination) } catch {}
+    }
+    if (cause instanceof EngagementControllerError) throw cause
+    fail(
+      'ENGAGEMENT_ROUTE_MATERIAL_INVALID',
+      `${label} staged bytes could not be verified`,
+      { cause },
+    )
+  }
 }
 
 function bindingContent(binding) {
@@ -1687,6 +1712,7 @@ async function stageProducedDirectory(context, routeId, producerRouteId, source,
   const destination = join(materialDirectory, `${name}-${produced.entry.sha256.slice(0, 24)}`)
   try {
     await mkdir(destination, { recursive: false, mode: 0o700 })
+    await hardenUnleashPrivateEndpoint(destination, 'directory')
     const root = produced.binding.root_relative_path
     const relativeEntries = produced.binding.entries.map((entry) => ({
       ...entry,

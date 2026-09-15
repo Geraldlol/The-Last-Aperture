@@ -96,6 +96,26 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authority": {
+            "properties": {
+              "mode": { "const": "CONTROLLER_DEPLOYMENT_POLICY" }
+            },
+            "required": ["mode"]
+          }
+        },
+        "required": ["authority"]
+      },
+      "then": {
+        "properties": {
+          "method": { "const": "HEAD" }
+        }
+      }
+    }
+  ],
   "$defs": {
     "id": {
       "type": "string",
@@ -124,7 +144,14 @@
       "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
     },
     "authority": {
-      "$ref": "#/$defs/operatorAttestedAuthority"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/operatorAttestedAuthority"
+        },
+        {
+          "$ref": "#/$defs/controllerDeploymentPolicyAuthority"
+        }
+      ]
     },
     "operatorAttestedAuthority": {
       "type": "object",
@@ -155,6 +182,43 @@
         },
         "independently_verified": {
           "const": false
+        }
+      }
+    },
+    "controllerDeploymentPolicyAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "policy_id",
+        "policy_sha256",
+        "target_id",
+        "effect",
+        "admitted_at",
+        "revocation_check_id"
+      ],
+      "properties": {
+        "mode": {
+          "const": "CONTROLLER_DEPLOYMENT_POLICY"
+        },
+        "policy_id": {
+          "$ref": "#/$defs/id"
+        },
+        "policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "target_id": {
+          "type": "string",
+          "pattern": "^target:sha256:[a-f0-9]{64}$"
+        },
+        "effect": {
+          "const": "OBSERVE"
+        },
+        "admitted_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "revocation_check_id": {
+          "$ref": "#/$defs/id"
         }
       }
     },

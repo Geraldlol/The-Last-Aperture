@@ -251,7 +251,7 @@ test('probe uses one pinned, bodyless HTTPS request and retains no body', async 
     'accept-encoding': 'identity',
     'cache-control': 'no-store',
     connection: 'close',
-    'user-agent': 'red-team-audit-http-recon/0.14',
+    'user-agent': 'red-team-audit-http-recon/0.15',
     host: HOSTNAME,
   })
   assert.deepEqual(harness.request.endArguments, [])

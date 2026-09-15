@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-proposal.schema.json",
+  "title": "The Last Aperture provider-neutral campaign proposal",
+  "description": "Inert evidence-linked candidate hypotheses and typed registered-tool proposals. Provider output cannot assign proof state or target identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "proposal_id",
+    "plan_sha256",
+    "provider_protocol_version",
+    "candidates",
+    "actions"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/unleash-proposal" },
+    "proposal_id": { "$ref": "#/$defs/id" },
+    "plan_sha256": { "$ref": "#/$defs/sha256" },
+    "provider_protocol_version": { "$ref": "#/$defs/id" },
+    "candidates": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/action" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "humanText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "evidenceRef": {
+      "type": "string",
+      "pattern": "^evidence:sha256:[a-f0-9]{64}$"
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/evidenceRef" }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "title",
+        "hypothesis",
+        "invariant",
+        "confidence",
+        "evidence_refs",
+        "competing_explanations"
+      ],
+      "properties": {
+        "candidate_id": { "$ref": "#/$defs/id" },
+        "title": { "$ref": "#/$defs/humanText" },
+        "hypothesis": { "$ref": "#/$defs/humanText" },
+        "invariant": { "$ref": "#/$defs/humanText" },
+        "confidence": { "enum": ["LOW", "MEDIUM", "HIGH"] },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "competing_explanations": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/humanText" }
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id",
+        "candidate_id",
+        "tool_id",
+        "evidence_refs",
+        "parameters",
+        "expected_observation"
+      ],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/id" },
+        "candidate_id": { "$ref": "#/$defs/id" },
+        "tool_id": { "$ref": "#/$defs/id" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 1,
+          "properties": {
+            "method": { "const": "HEAD" }
+          }
+        },
+        "expected_observation": { "$ref": "#/$defs/humanText" }
+      }
+    }
+  }
+}

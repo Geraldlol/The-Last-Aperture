@@ -15,7 +15,7 @@
 > primitive. Transport, redirect, evidence, budget, stop, and uncertain-delivery
 > mechanics remain relevant where the current controller retains them.
 >
-> **Current 0.14.1 execution status: active through the bounded
+> **Current 0.15.0 execution status: active through the bounded
 > operator-statement controller.** This status does not reactivate the historical
 > signed authority path.
 

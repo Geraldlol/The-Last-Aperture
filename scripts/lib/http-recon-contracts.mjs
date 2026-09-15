@@ -33,6 +33,17 @@ export const OPERATOR_ATTESTED_LIMITS = Object.freeze({
   concurrency: 1,
 })
 
+export const CONTROLLER_DEPLOYMENT_POLICY_LIMITS = OPERATOR_ATTESTED_LIMITS
+
+const CONTROLLER_POLICY_ADMISSION_FIELDS = Object.freeze([
+  'policy_id',
+  'policy_sha256',
+  'target_id',
+  'effect',
+  'admitted_at',
+  'revocation_check_id',
+])
+
 export const httpReconAttestedScopeSchema = JSON.parse(
   readFileSync(fileURLToPath(ATTESTED_SCOPE_SCHEMA_URL), 'utf8'),
 )
@@ -60,6 +71,12 @@ for (const schema of [
 const validateAttestedScopeSchema = ajv.getSchema(httpReconAttestedScopeSchema.$id)
 const validateRunSchema = ajv.getSchema(httpReconRunSchema.$id)
 const validateObservationSchema = ajv.getSchema(httpReconObservationSchema.$id)
+const validateControllerPolicyAuthoritySchema = ajv.getSchema(
+  `${httpReconRunSchema.$id}#/$defs/controllerDeploymentPolicyAuthorization`,
+)
+const validateControllerPolicyReceiptSchema = ajv.getSchema(
+  `${httpReconRunSchema.$id}#/$defs/controllerDeploymentPolicyReceipt`,
+)
 
 export class HttpReconContractError extends Error {
   constructor(code, message, details = [], options = {}) {
@@ -183,6 +200,184 @@ function parseExactHttpsUrl(value, label, { originOnly = false } = {}) {
   }
   assertNoAmbiguousPath(url, label)
   return url
+}
+
+export function controllerPolicyHttpReconTargetId(canonicalTarget) {
+  return `target:sha256:${sha256Hex(canonicalJson({
+    family: 'https',
+    canonical_locator: canonicalTarget,
+  }))}`
+}
+
+function hasExactKeys(value, keys) {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).toSorted().join(',') === [...keys].toSorted().join(',')
+}
+
+function controllerPolicyBindingsMatch(left, right) {
+  return left?.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+    && right?.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+    && left.policy_id === right.policy_id
+    && left.policy_sha256 === right.policy_sha256
+    && left.target_id === right.target_id
+    && left.effect === right.effect
+    && left.admitted_at === right.admitted_at
+    && left.revocation_check_id === right.revocation_check_id
+}
+
+export function assertValidControllerPolicyHttpReconAuthority(
+  value,
+  { now, requireCurrentValidity = true } = {},
+) {
+  assertSchema(
+    validateControllerPolicyAuthoritySchema,
+    value,
+    'controller deployment-policy HTTP-recon authority',
+  )
+  const admittedAt = parseExactTimestamp(
+    value.admitted_at,
+    'controller policy admitted_at',
+  )
+  if (requireCurrentValidity) {
+    const current = now instanceof Date ? now.getTime() : new Date(now).getTime()
+    if (!Number.isFinite(current)) {
+      throw contractError('HTTP_RECON_TIME_INVALID', 'verification time is invalid')
+    }
+    if (current < admittedAt) {
+      throw contractError(
+        'HTTP_RECON_AUTHORIZATION_NOT_YET_VALID',
+        `controller policy admission is not valid before ${value.admitted_at}`,
+      )
+    }
+    if (current >= admittedAt + CONTROLLER_DEPLOYMENT_POLICY_LIMITS.max_wall_time_ms) {
+      throw contractError(
+        'HTTP_RECON_AUTHORIZATION_EXPIRED',
+        'controller policy admission has exceeded the fixed 15-minute execution window',
+      )
+    }
+  }
+  return value
+}
+
+export function createControllerPolicyHttpReconAuthority({
+  controllerPolicyAuthority,
+}) {
+  if (!hasExactKeys(controllerPolicyAuthority, CONTROLLER_POLICY_ADMISSION_FIELDS)) {
+    throw contractError(
+      'HTTP_RECON_CONTROLLER_POLICY_AUTHORITY_INVALID',
+      'controller policy admission must contain exactly policy_id, policy_sha256, target_id, effect, admitted_at, and revocation_check_id',
+    )
+  }
+  return assertValidControllerPolicyHttpReconAuthority({
+    mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+    ...structuredClone(controllerPolicyAuthority),
+  }, {
+    now: new Date(controllerPolicyAuthority.admitted_at),
+  })
+}
+
+export function assertValidControllerPolicyHttpReconReceipt(
+  value,
+  { now, requireCurrentValidity = true } = {},
+) {
+  assertSchema(
+    validateControllerPolicyReceiptSchema,
+    value,
+    'controller deployment-policy HTTP-recon receipt',
+  )
+  const target = parseExactHttpsUrl(
+    value.canonical_target,
+    'controller policy canonical_target',
+  )
+  assertValidControllerPolicyHttpReconAuthority(value.authority, {
+    now,
+    requireCurrentValidity,
+  })
+  if (value.authority.target_id !== controllerPolicyHttpReconTargetId(target.href)) {
+    throw contractError(
+      'HTTP_RECON_CONTROLLER_POLICY_TARGET_MISMATCH',
+      'controller policy target_id does not bind the canonical target',
+    )
+  }
+  if (
+    canonicalJson(value.limits)
+      !== canonicalJson(CONTROLLER_DEPLOYMENT_POLICY_LIMITS)
+  ) {
+    throw contractError(
+      'HTTP_RECON_CONTROLLER_POLICY_LIMITS_INVALID',
+      'controller policy receipt must bind the exact one-request HTTP-recon limits',
+    )
+  }
+  return value
+}
+
+export function createControllerPolicyHttpReconReceipt({
+  authority,
+  targetUrl,
+  planSha256,
+}) {
+  const target = parseExactHttpsUrl(targetUrl, 'targetUrl')
+  return assertValidControllerPolicyHttpReconReceipt({
+    authority: structuredClone(authority),
+    canonical_target: target.href,
+    limits: structuredClone(CONTROLLER_DEPLOYMENT_POLICY_LIMITS),
+    plan_sha256: planSha256,
+  }, {
+    now: new Date(authority.admitted_at),
+  })
+}
+
+export function buildControllerPolicyHttpReconPlan({
+  engagementId,
+  authority,
+  targetUrl,
+  tlsSpkiSha256,
+}) {
+  assertValidControllerPolicyHttpReconAuthority(authority, {
+    requireCurrentValidity: false,
+  })
+  const target = parseExactHttpsUrl(targetUrl, 'targetUrl')
+  if (authority.target_id !== controllerPolicyHttpReconTargetId(target.href)) {
+    throw contractError(
+      'HTTP_RECON_CONTROLLER_POLICY_TARGET_MISMATCH',
+      'controller policy target_id does not bind targetUrl',
+    )
+  }
+  const projection = {
+    sequence: 1,
+    method: 'HEAD',
+    url: target.href,
+    safe_to_get: false,
+  }
+  const actions = [{
+    action_id: `http-recon-action:${sha256Hex(canonicalJson(projection))}`,
+    ...projection,
+  }]
+  const plan = {
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-recon-plan',
+    authorization_mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+    engagement_id: engagementId,
+    authorization: structuredClone(authority),
+    target: {
+      origin: target.origin,
+      tls: tlsSpkiSha256 === undefined
+        ? { mode: 'PKIX_HOSTNAME' }
+        : {
+            mode: 'PKIX_HOSTNAME_AND_SPKI_PIN',
+            spki_sha256: tlsSpkiSha256,
+          },
+    },
+    limits: structuredClone(CONTROLLER_DEPLOYMENT_POLICY_LIMITS),
+    actions,
+  }
+  return {
+    plan,
+    actions,
+    plan_sha256: sha256Hex(canonicalJson(plan)),
+  }
 }
 
 function assertAttestedScopeSemantics(
@@ -435,21 +630,49 @@ function assertActionState(action) {
 export function assertValidHttpReconRun(value) {
   assertSchema(validateRunSchema, value, 'authorized HTTP-recon run')
   if (
-    value.authorization.mode !== 'OPERATOR_ATTESTED'
-    || value.actions.length !== 1
+    value.actions.length !== 1
     || value.limits.max_probe_requests !== 1
     || value.limits.max_target_proof_requests !== 0
     || value.limits.max_target_proof_response_bytes !== 0
     || value.budget.proof_requests_used !== 0
-    || value.authorization.attested_at !== value.authorization.valid_from
     || !['PKIX_HOSTNAME', 'PKIX_HOSTNAME_AND_SPKI_PIN'].includes(
       value.target.tls?.mode,
     )
   ) {
     throw contractError(
       'HTTP_RECON_ATTESTED_MODE_INVALID',
-      'HTTP reconnaissance requires one operator-attested action, an explicit PKIX TLS policy, and zero target-proof budget',
+      'HTTP reconnaissance requires one authorized action, an explicit PKIX TLS policy, and zero target-proof budget',
     )
+  }
+  if (value.authorization.mode === 'OPERATOR_ATTESTED') {
+    if (value.authorization.attested_at !== value.authorization.valid_from) {
+      throw contractError(
+        'HTTP_RECON_ATTESTED_MODE_INVALID',
+        'operator-attested run validity must begin at attestation',
+      )
+    }
+  } else if (value.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+    assertValidControllerPolicyHttpReconAuthority(value.authorization, {
+      requireCurrentValidity: false,
+    })
+    if (
+      value.authorization.target_id
+        !== controllerPolicyHttpReconTargetId(value.actions[0].url)
+      || new URL(value.actions[0].url).origin !== value.target.origin
+      || canonicalJson(CONTROLLER_DEPLOYMENT_POLICY_LIMITS)
+        !== canonicalJson(value.limits)
+      || value.actions[0].method !== 'HEAD'
+      || value.actions[0].safe_to_get !== false
+      || value.actions[0].request_headers !== undefined
+      || Date.parse(value.created_at) < Date.parse(value.authorization.admitted_at)
+      || Date.parse(value.created_at) >= Date.parse(value.authorization.admitted_at)
+        + CONTROLLER_DEPLOYMENT_POLICY_LIMITS.max_wall_time_ms
+    ) {
+      throw contractError(
+        'HTTP_RECON_CONTROLLER_POLICY_MODE_INVALID',
+        'controller policy run must preserve its admitted target, exact one-request limits, HEAD-only action, and admission window',
+      )
+    }
   }
   if (Date.parse(value.updated_at) < Date.parse(value.created_at)) {
     throw contractError(
@@ -503,6 +726,23 @@ export function assertValidHttpReconRun(value) {
     )
   }
   if (
+    value.stop !== null
+    && (
+      value.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+        ? value.stop.controller_policy_authority === undefined
+          || !controllerPolicyBindingsMatch(
+            value.stop.controller_policy_authority,
+            value.authorization,
+          )
+        : typeof value.stop.operator_id !== 'string'
+    )
+  ) {
+    throw contractError(
+      'HTTP_RECON_STOP_AUTHORITY_INVALID',
+      'run stop evidence must preserve the authorization-mode identity',
+    )
+  }
+  if (
     value.state === 'OUTCOME_UNCERTAIN'
     && !value.actions.some(({ state }) => state === 'DELIVERY_AMBIGUOUS')
   ) {
@@ -529,6 +769,20 @@ export function assertValidHttpReconObservation(value) {
     'authorized HTTP-recon observation',
   )
   parseExactHttpsUrl(value.url, 'observation.url')
+  if (value.authority.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+    assertValidControllerPolicyHttpReconAuthority(value.authority, {
+      requireCurrentValidity: false,
+    })
+    if (
+      value.authority.target_id !== controllerPolicyHttpReconTargetId(value.url)
+      || value.method !== 'HEAD'
+    ) {
+      throw contractError(
+        'HTTP_RECON_CONTROLLER_POLICY_OBSERVATION_INVALID',
+        'controller policy observation must preserve its exact admitted HEAD target',
+      )
+    }
+  }
   if (
     value.body.truncated
     && value.body.digest_scope !== 'captured-prefix'

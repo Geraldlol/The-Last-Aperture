@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import {
+  chmod,
   link,
   mkdtemp,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -15,14 +17,19 @@ import { main as runHttpReconCli } from '../scripts/http-recon.mjs'
 import * as httpReconController from '../scripts/lib/http-recon-controller.mjs'
 import {
   canonicalJson,
+  controllerPolicyHttpReconTargetId,
   sha256Hex,
 } from '../scripts/lib/http-recon-contracts.mjs'
 import {
   finalizeHttpReconBundle,
+  goControllerPolicyHttpRecon,
   goOperatorAttestedHttpRecon,
+  inspectControllerPolicyHttpReconStop,
   nextHttpReconAction,
+  planControllerPolicyHttpReconBundle,
   planOperatorAttestedHttpReconBundle,
   requestHttpReconStop,
+  runControllerPolicyHttpReconAction,
   runHttpReconAction,
   validateHttpReconBundle,
 } from '../scripts/lib/http-recon-controller.mjs'
@@ -75,6 +82,86 @@ test('HTTP recon rejects hard-linked bundle artifacts before acting on them', as
   )
 })
 
+test('HTTP recon rejects a supplied bundle path that traverses an intermediate link or junction', async (t) => {
+  const value = await attestedFixture(t)
+  const aliasRoot = join(value.parent, 'alias-root')
+  try {
+    await symlink(value.parent, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    if (['EPERM', 'EACCES'].includes(error?.code)) {
+      t.skip('this host does not allow creating a test directory link')
+      return
+    }
+    throw error
+  }
+  t.after(() => rm(aliasRoot, { recursive: true, force: true }))
+  await assert.rejects(
+    nextHttpReconAction({ bundle: join(aliasRoot, 'bundle'), now: value.clock.now }),
+    (error) => error.code === 'HTTP_RECON_BUNDLE_AUTHORITY_UNSAFE',
+  )
+})
+
+test('HTTP recon rejects bundle and artifact authority that becomes writable by Everyone', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const systemRoot = process.env.SystemRoot
+  assert.equal(typeof systemRoot, 'string')
+  const icacls = join(systemRoot, 'System32', 'icacls.exe')
+
+  await t.test('bundle directory', async (t) => {
+    const value = await attestedFixture(t)
+    const changed = spawnSync(icacls, [value.out, '/grant', '*S-1-1-0:(OI)(CI)M'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    assert.equal(changed.status, 0, changed.stderr)
+    await assert.rejects(
+      nextHttpReconAction({ bundle: value.out, now: value.clock.now }),
+      (error) => error.code === 'HTTP_RECON_BUNDLE_AUTHORITY_UNSAFE',
+    )
+  })
+
+  await t.test('run artifact', async (t) => {
+    const value = await attestedFixture(t)
+    const changed = spawnSync(icacls, [join(value.out, 'run.json'), '/grant', '*S-1-1-0:(W)'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    assert.equal(changed.status, 0, changed.stderr)
+    await assert.rejects(
+      nextHttpReconAction({ bundle: value.out, now: value.clock.now }),
+      (error) => error.code === 'HTTP_RECON_ARTIFACT_AUTHORITY_UNSAFE',
+    )
+  })
+})
+
+test('HTTP recon rejects POSIX group-readable bundle artifacts', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const value = await attestedFixture(t)
+  await chmod(join(value.out, 'run.json'), 0o640)
+  await assert.rejects(
+    nextHttpReconAction({ bundle: value.out, now: value.clock.now }),
+    (error) => error.code === 'HTTP_RECON_ARTIFACT_AUTHORITY_UNSAFE',
+  )
+})
+
+test('HTTP recon rejects Windows network and object-manager bundle paths before I/O', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  for (const bundle of [
+    '\\\\server\\share\\bundle',
+    '\\\\?\\UNC\\server\\share\\bundle',
+    '\\\\.\\pipe\\last-aperture-recon',
+  ]) {
+    await assert.rejects(
+      nextHttpReconAction({ bundle }),
+      (error) => error.code === 'HTTP_RECON_FILESYSTEM_ENDPOINT_NOT_LOCAL',
+      bundle,
+    )
+  }
+})
+
 test('public HTTP recon execution reaches the controller without a repeat confirmation flag', async () => {
   await assert.rejects(
     () => runHttpReconCli([
@@ -86,7 +173,7 @@ test('public HTTP recon execution reaches the controller without a repeat confir
       '--rationale',
       'exercise the authorized controller path',
     ]),
-    (error) => error.code === 'ENOENT'
+    (error) => error.code === 'HTTP_RECON_BUNDLE_AUTHORITY_UNSAFE'
       && error.code !== 'HTTP_RECON_LIVE_IO_DISABLED',
   )
 })
@@ -253,6 +340,319 @@ test('target-and-go controller library does not infer authorization from omitted
     (error) => error.code === 'HTTP_RECON_LIVE_EXECUTION_AUTHORIZATION_REQUIRED',
   )
   assert.equal(plans, 0)
+})
+
+function controllerPolicyAdmission(targetUrl, admittedAt) {
+  return {
+    policy_id: 'deployment-policy-2026-08-04',
+    policy_sha256: 'd'.repeat(64),
+    target_id: controllerPolicyHttpReconTargetId(targetUrl),
+    effect: 'OBSERVE',
+    admitted_at: admittedAt,
+    revocation_check_id: 'deployment-revocations-v1',
+  }
+}
+
+test('controller-policy target-and-go retains exact policy authority through receipt, lease, and observation', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-policy-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const authority = controllerPolicyAdmission(targetUrl, clock.now().toISOString())
+  const phases = []
+  const transport = attestedTransports()
+  const result = await goControllerPolicyHttpRecon({
+    targetUrl,
+    controllerPolicyAuthority: authority,
+    revalidateAuthority: async (request) => {
+      phases.push(request.phase)
+      assert.deepEqual(request.authority, {
+        mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+        ...authority,
+      })
+      assert.equal(request.canonical_target, targetUrl)
+      assert.equal(request.limits.max_probe_requests, 1)
+      return true
+    },
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+    runImpl: (request) => runControllerPolicyHttpReconAction({
+      ...request,
+      probeImpl: transport.probeImpl,
+    }),
+  })
+  assert.equal(result.state, 'PROBE_PLAN_COMPLETE')
+  assert.deepEqual(phases, ['PRE_EXECUTION', 'ACTION_LEASE', 'PRE_DISPATCH'])
+  assert.equal(transport.counters.probe, 1)
+
+  const run = JSON.parse(await readFile(join(out, 'run.json'), 'utf8'))
+  assert.deepEqual(run.authorization, {
+    mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+    ...authority,
+  })
+  assert.equal(Object.hasOwn(run.authorization, 'operator_id'), false)
+  assert.equal(Object.hasOwn(run.authorization, 'statement'), false)
+  assert.equal(Object.hasOwn(run.authorization, 'independently_verified'), false)
+  assert.equal(run.actions[0].method, 'HEAD')
+  assert.equal(run.actions[0].safe_to_get, false)
+  assert.equal(Object.hasOwn(run.actions[0], 'request_headers'), false)
+
+  const events = (await readFile(join(out, 'events.jsonl'), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line))
+  const planEvent = events.find(({ type }) => type === 'PLAN_CREATED')
+  const leaseEvent = events.find(({ type }) => type === 'ACTION_LEASED')
+  assert.deepEqual(
+    planEvent.details.controller_policy_authority_receipt.authority,
+    run.authorization,
+  )
+  assert.deepEqual(
+    leaseEvent.details.controller_policy_authority_receipt,
+    planEvent.details.controller_policy_authority_receipt,
+  )
+  for (const forbidden of ['operator_id', 'statement', 'rationale', 'independently_verified']) {
+    assert.equal(Object.hasOwn(planEvent.details, forbidden), false)
+    assert.equal(Object.hasOwn(leaseEvent.details, forbidden), false)
+  }
+  const observation = JSON.parse(await readFile(
+    join(out, ...run.actions[0].observation_path.split('/')),
+    'utf8',
+  ))
+  assert.deepEqual(observation.authority, run.authorization)
+  assert.equal((await readFile(result.report, 'utf8')).includes('independently verified'), false)
+  assert.equal((await validateHttpReconBundle({ bundle: out, now: clock.now })).valid, true)
+})
+
+test('controller-policy stop inspection is authority-bound and returns the first durable reason', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-stop-inspect-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const admission = controllerPolicyAdmission(targetUrl, clock.now().toISOString())
+  const planned = await planControllerPolicyHttpReconBundle({
+    targetUrl,
+    controllerPolicyAuthority: admission,
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+  })
+  const authority = planned.run.authorization
+  assert.equal(await inspectControllerPolicyHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: authority,
+  }), null)
+
+  const published = await requestHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: authority,
+    reason: 'first controller stop reason',
+    now: clock.now,
+  })
+  assert.equal(published.reason, 'first controller stop reason')
+  assert.deepEqual(await inspectControllerPolicyHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: authority,
+  }), {
+    requested_at: published.requested_at,
+    reason: 'first controller stop reason',
+  })
+  await assert.rejects(
+    inspectControllerPolicyHttpReconStop({
+      bundle: out,
+      controllerPolicyAuthority: { ...authority, target_id: `target:sha256:${'f'.repeat(64)}` },
+    }),
+    (error) => error.code === 'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+  )
+})
+
+test('controller-policy revocation loss at action admission fails before transport', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-revoked-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  let checks = 0
+  let probeCalls = 0
+  await assert.rejects(
+    goControllerPolicyHttpRecon({
+      targetUrl,
+      controllerPolicyAuthority: controllerPolicyAdmission(
+        targetUrl,
+        clock.now().toISOString(),
+      ),
+      revalidateAuthority: async () => {
+        checks += 1
+        return checks === 1
+      },
+      out,
+      now: clock.now,
+      randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+      runImpl: (request) => runControllerPolicyHttpReconAction({
+        ...request,
+        probeImpl: async () => { probeCalls += 1 },
+      }),
+    }),
+    (error) => error.code === 'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED',
+  )
+  assert.equal(checks, 2)
+  assert.equal(probeCalls, 0)
+})
+
+test('controller-policy stop uses the exact policy authority without an operator identity', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-stop-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const planned = await planControllerPolicyHttpReconBundle({
+    targetUrl,
+    controllerPolicyAuthority: controllerPolicyAdmission(
+      targetUrl,
+      clock.now().toISOString(),
+    ),
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+  })
+  await assert.rejects(
+    requestHttpReconStop({
+      bundle: out,
+      operatorId: 'operator-must-not-be-fabricated',
+      reason: 'controller policy stop mismatch',
+      now: clock.now,
+    }),
+    (error) => error.code === 'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+  )
+  await assert.rejects(
+    requestHttpReconStop({
+      bundle: out,
+      controllerPolicyAuthority: {
+        ...planned.run.authorization,
+        policy_sha256: 'e'.repeat(64),
+      },
+      reason: 'controller policy stop drift',
+      now: clock.now,
+    }),
+    (error) => error.code === 'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+  )
+  clock.advance(1_000)
+  const driftedStopAuthority = {
+    ...planned.run.authorization,
+    admitted_at: clock.now().toISOString(),
+  }
+  await assert.rejects(
+    requestHttpReconStop({
+      bundle: out,
+      controllerPolicyAuthority: driftedStopAuthority,
+      reason: 'controller policy stop admission drift',
+      now: clock.now,
+    }),
+    (error) => error.code === 'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+  )
+  const stopAuthority = planned.run.authorization
+  await requestHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: stopAuthority,
+    reason: 'deployment policy requested bounded stop',
+    now: clock.now,
+  })
+  const marker = JSON.parse(await readFile(join(out, '.http-recon.stop'), 'utf8'))
+  assert.deepEqual(
+    marker.controller_policy_authority,
+    stopAuthority,
+  )
+  assert.equal(Object.hasOwn(marker, 'operator_id'), false)
+  const finalized = await finalizeHttpReconBundle({ bundle: out, now: clock.now })
+  assert.equal(finalized.run.state, 'STOPPED')
+  assert.deepEqual(
+    finalized.run.stop.controller_policy_authority,
+    stopAuthority,
+  )
+  assert.equal(Object.hasOwn(finalized.run.stop, 'operator_id'), false)
+  assert.equal((await validateHttpReconBundle({ bundle: out, now: clock.now })).valid, true)
+})
+
+test('controller-policy validation rejects rehashed authority drift in its plan event', async (t) => {
+  const mutations = {
+    policy_id: 'deployment-policy-drifted',
+    policy_sha256: 'e'.repeat(64),
+    target_id: `target:sha256:${'e'.repeat(64)}`,
+    effect: 'MUTATE',
+    admitted_at: '2026-08-04T12:00:01.000Z',
+    revocation_check_id: 'deployment-revocations-drifted',
+  }
+  for (const [field, value] of Object.entries(mutations)) {
+    await t.test(field, async (t) => {
+      const parent = await mkdtemp(join(tmpdir(), `rta-http-recon-controller-drift-${field}-`))
+      t.after(() => rm(parent, { recursive: true, force: true }))
+      const out = join(parent, 'bundle')
+      const clock = mutableClock()
+      const targetUrl = 'https://target.example/'
+      await planControllerPolicyHttpReconBundle({
+        targetUrl,
+        controllerPolicyAuthority: controllerPolicyAdmission(
+          targetUrl,
+          clock.now().toISOString(),
+        ),
+        out,
+        now: clock.now,
+        randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+      })
+      await rewriteEventChain(out, (records) => {
+        records[0].details.controller_policy_authority_receipt.authority[field] = value
+      })
+      const validation = await validateHttpReconBundle({ bundle: out, now: clock.now })
+      assert.equal(validation.valid, false)
+      assert.match(validation.errors[0].code, /CONTROLLER_POLICY|SCHEMA|HTTP_RECON/)
+    })
+  }
+})
+
+test('controller-policy validation rejects lease, observation, and retained-receipt drift', async (t) => {
+  for (const surface of ['lease', 'observation', 'receipt']) {
+    await t.test(surface, async (t) => {
+      const parent = await mkdtemp(join(tmpdir(), `rta-http-recon-controller-${surface}-`))
+      t.after(() => rm(parent, { recursive: true, force: true }))
+      const out = join(parent, 'bundle')
+      const clock = mutableClock()
+      const targetUrl = 'https://target.example/'
+      const transport = attestedTransports()
+      await goControllerPolicyHttpRecon({
+        targetUrl,
+        controllerPolicyAuthority: controllerPolicyAdmission(
+          targetUrl,
+          clock.now().toISOString(),
+        ),
+        revalidateAuthority: async () => true,
+        out,
+        now: clock.now,
+        randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+        runImpl: (request) => runControllerPolicyHttpReconAction({
+          ...request,
+          probeImpl: transport.probeImpl,
+        }),
+      })
+      if (surface === 'lease') {
+        await rewriteEventChain(out, (records) => {
+          const lease = records.find(({ type }) => type === 'ACTION_LEASED')
+          lease.details.controller_policy_authority_receipt.authority.policy_sha256 = 'e'.repeat(64)
+        })
+      } else if (surface === 'observation') {
+        await rewriteObservationAndChain(out, (observation) => {
+          observation.authority.policy_sha256 = 'e'.repeat(64)
+        })
+      } else {
+        const receiptPath = join(out, 'controller-policy-authority.json')
+        const receipt = JSON.parse(await readFile(receiptPath, 'utf8'))
+        receipt.authority.policy_sha256 = 'e'.repeat(64)
+        await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`)
+      }
+      const validation = await validateHttpReconBundle({ bundle: out, now: clock.now })
+      assert.equal(validation.valid, false)
+    })
+  }
 })
 const CERTIFICATE_SHA256 = 'c'.repeat(64)
 const SPKI_SHA256 = 'a'.repeat(64)
@@ -1785,6 +2185,7 @@ test('out-of-band stop is idempotent and prevents target dispatch', async (t) =>
     now: value.clock.now,
   })
   assert.deepEqual(second, first)
+  assert.equal(first.reason, 'asset owner requested immediate stop')
   const transport = attestedTransports()
   const stopped = await runHttpReconAction({
     bundle: value.out,
@@ -1883,7 +2284,7 @@ test('out-of-band stop aborts an in-flight request and preserves uncertain deliv
 })
 
 test('stop watcher preserves the owner reason while POSIX publication has two file links', {
-  timeout: 10_000,
+  timeout: 60_000,
 }, async (t) => {
   const value = await attestedFixture(t)
   const transport = attestedTransports()

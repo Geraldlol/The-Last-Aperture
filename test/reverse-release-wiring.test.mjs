@@ -125,7 +125,7 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.bin['last-aperture-reverse'], './scripts/reverse.mjs')
-  assert.equal(packageDocument.version, '0.14.1')
+  assert.equal(packageDocument.version, '0.15.0')
   assert.ok(packageDocument.files.includes('CHANGELOG.md'))
   assert.ok(packageDocument.files.includes('integrations/'))
   assert.ok(packageDocument.files.includes('!docs/remediation/'))

@@ -1,47 +1,53 @@
-# Unified Engagement Task List
+# Target-Only Autonomous Controller — Task List
 
-## 1. Authority and target contracts
+## Phase 1: Target and campaign contracts
 
-- [ ] Accept and persist one exact ordinary-language authorization statement.
-- [ ] Normalize HTTPS, local repository, and local artifact targets.
-- [ ] Derive route grants from the durable authority without freshness prompts.
-- [ ] Publish strict schemas and focused contract tests.
+- [x] Map existing resolver, scheduler, adversarial proposer, proof, and ledger seams.
+- [x] Write failing campaign-plan tests.
+- [x] Write failing provider-proposal validation tests.
+- [x] Add campaign-intent, campaign-plan, and campaign-proposal schemas.
+- [x] Implement canonical target-only HTTPS/API planning.
+- [x] Enumerate every frozen registry route with one explicit disposition.
+- [x] Bind target, policy, registry, provider protocol, budgets, and plan digest.
+- [x] Reject target drift, route injection, forged evidence references, and provider proof promotion.
+- [ ] Run focused tests, lint/generation gates, and the full suite.
+- [ ] Review and commit Phase 1.
 
-## 2. Engagement ledger
+## Phase 2: First remote shot
 
-- [ ] Append canonical create-only hash-chain records with fsync.
-- [ ] Bind every record to engagement, authority, and target digests.
-- [ ] Record route plan, durable dispatch permit, outcome, waiting material,
-  resume, stop, cleanup, and terminal events.
-- [ ] Reject tampering, reordering, duplicate dispatch, and retained-head drift.
+- [x] Write failing target-only CLI and controller tests.
+- [x] Add app-owned run storage and `engage unleash <target>`.
+- [x] Load controller deployment policy without runtime form fields.
+- [x] Execute bounded HTTPS reconnaissance.
+- [x] Create a sealed provider evidence packet.
+- [ ] Ingest evidence-linked hypotheses as candidates.
+- [ ] Expose snapshot-bound progress, findings, gaps, Stop, and Resume.
+- [ ] Add a deterministic synthetic remote target and end-to-end test.
+- [ ] Review and commit Phase 2.
 
-## 3. Route registry
+## Phase 3: Autonomous web/API swarm
 
-- [ ] Define a stable dependency graph for every shipped capability.
-- [ ] Build fixed `shell:false` public-entrypoint argument vectors.
-- [ ] Continue independent routes when another waits for material.
-- [ ] Support evidence recording for agent-composed host tools.
+- [ ] Add same-origin surface discovery.
+- [ ] Add provider-neutral parallel agent roles.
+- [ ] Add typed web/API technique adapters.
+- [ ] Add attack/control proof oracles and cleanup contracts.
+- [ ] Add foothold-to-frontier chaining and skeptic review.
+- [ ] Prove exhaustive terminal accounting over the discovered frontier.
+- [ ] Run independent accuracy and false-clearance evaluation.
 
-## 4. Controller and CLI
+## Phase 4: Point-Click-Shoot cockpit
 
-- [ ] Implement `engage run`, `resume`, `status`, and `stop`.
-- [ ] Automatically execute applicable ready routes until quiescent.
-- [ ] Resume without another attestation and refuse work after stop.
-- [ ] Emit one bounded machine-readable status and sanitized human summary.
+- [ ] Add hosted campaign API and real-time event stream.
+- [ ] Build target field, saved-target double-click, and Unleash flow.
+- [ ] Build graph, frontier, proof, cleanup, gap, Stop/Resume, and export views.
+- [ ] Add the optional sandboxed local bridge.
+- [ ] Add accessibility, reconnect, crash-recovery, and parity tests.
 
-## 5. Product wiring
+## Phase 5: Any target
 
-- [ ] Delegate `last-aperture engage` from the primary CLI.
-- [ ] Add npm script/bin, capability declaration, schemas, and package checks.
-- [ ] Make the unified engagement the normal Codex and Claude workflow.
-- [ ] Update README, security boundary, ADR, and delivery status.
-- [ ] Bump the release version.
-
-## 6. Verification and delivery
-
-- [ ] Focused engagement tests pass.
-- [ ] Existing adversarial and reverse tests pass.
-- [ ] Full suite and lint pass.
-- [ ] Packed artifact contains and runs the engagement workflow.
-- [ ] Independent review finds no unresolved blocker.
-- [ ] Commit all completed work locally.
+- [ ] Add database target adapters.
+- [ ] Add cloud target adapters.
+- [ ] Add network-service adapters.
+- [ ] Add binary/process/device enrolled-worker adapters.
+- [ ] Add repair/retest/cleanup loops.
+- [ ] Add tenant, identity, retention, audit, and remote-worker gates.

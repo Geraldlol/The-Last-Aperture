@@ -19,6 +19,13 @@ function capture() {
 
 function operations(calls) {
   return {
+    identifyManagementBundle: async (input) => {
+      calls.push(['identify', input])
+      return {
+        kind: 'engagement',
+        status: { status: 'ACTIVE', engagement_id: 'engagement:test', bundle: input.bundle },
+      }
+    },
     readAttestation: async (path) => {
       calls.push(['read-attestation', path])
       return 'I have full authority to assess this target.'
@@ -74,9 +81,9 @@ test('help exposes one target-and-run engagement surface', async () => {
   const io = capture()
   assert.equal(await runEngageCli(['--help'], { ...operations([]), ...io }), 0)
   assert.match(io.stdoutText(), /engage run <target>/)
-  assert.match(io.stdoutText(), /engage resume <engagement-directory>/)
-  assert.match(io.stdoutText(), /engage status <engagement-directory>/)
-  assert.match(io.stdoutText(), /engage stop <engagement-directory>/)
+  assert.match(io.stdoutText(), /engage resume <campaign-or-engagement-directory>/)
+  assert.match(io.stdoutText(), /engage status <campaign-or-engagement-directory>/)
+  assert.match(io.stdoutText(), /engage stop <campaign-or-engagement-directory>/)
   assert.match(io.stdoutText(), /engage work next <engagement-directory>/)
   assert.match(io.stdoutText(), /engage work submit <engagement-directory>/)
   assert.match(io.stdoutText(), /browser:<32-character a-p Chrome-extension-id>/)
@@ -190,7 +197,7 @@ test('attestation reader refuses a linked ancestor before opening the statement'
   )
 })
 
-test('resume, status, and stop reuse the engagement without another attestation', async () => {
+test('resume, status, and stop validate and reuse the engagement without another attestation', async () => {
   for (const [command, expected] of [
     ['resume', 'resume'],
     ['status', 'status'],
@@ -201,11 +208,17 @@ test('resume, status, and stop reuse the engagement without another attestation'
     const args = [command, 'C:\\engagements\\target', '--json']
     if (command === 'stop') args.push('--reason', 'operator requested stop')
     assert.equal(await runEngageCli(args, { ...operations(calls), ...io }), 0)
-    assert.equal(calls.length, 1)
-    assert.equal(calls[0][0], expected)
-    assert.equal(calls[0][1].bundle, 'C:\\engagements\\target')
-    assert.equal('statement' in calls[0][1], false)
-    assert.equal('authorization' in calls[0][1], false)
+    assert.deepEqual(calls[0], ['identify', { bundle: 'C:\\engagements\\target' }])
+    const operationCalls = command === 'status' ? [] : calls.slice(1)
+    if (command === 'status') {
+      assert.equal(calls.length, 1)
+    } else {
+      assert.equal(operationCalls.length, 1)
+      assert.equal(operationCalls[0][0], expected)
+      assert.equal(operationCalls[0][1].bundle, 'C:\\engagements\\target')
+      assert.equal('statement' in operationCalls[0][1], false)
+      assert.equal('authorization' in operationCalls[0][1], false)
+    }
   }
 })
 
