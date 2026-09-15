@@ -22,11 +22,16 @@ import {
 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  assertValidControllerPolicyHttpReconAuthority,
+  assertValidControllerPolicyHttpReconReceipt,
   assertValidHttpReconObservation,
   assertValidHttpReconRun,
   assertValidOperatorAttestedHttpReconScope,
+  buildControllerPolicyHttpReconPlan,
   buildOperatorAttestedHttpReconPlan,
   canonicalJson,
+  createControllerPolicyHttpReconAuthority,
+  createControllerPolicyHttpReconReceipt,
   createOperatorAttestedHttpReconScope,
   sha256Hex,
 } from './http-recon-contracts.mjs'
@@ -43,11 +48,17 @@ import {
   publishFileCreateOnlyDurably,
   replaceFileDurably,
 } from './durable-file-publication.mjs'
+import { assertLocalFilesystemEndpoint } from './filesystem-endpoint.mjs'
 import { stableJson } from './run-engine.mjs'
+import {
+  assertUnleashPrivateEndpoint,
+  hardenUnleashPrivateEndpoint,
+} from './unleash-policy-loader.mjs'
 
 const PROJECT_ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const RUN_FILE = 'run.json'
 const ATTESTED_SCOPE_FILE = 'attested-scope.json'
+const CONTROLLER_POLICY_AUTHORITY_FILE = 'controller-policy-authority.json'
 const EVENTS_FILE = 'events.jsonl'
 const REPORT_FILE = 'report.md'
 const OBSERVATIONS_DIRECTORY = 'observations'
@@ -77,6 +88,130 @@ export class HttpReconControllerError extends Error {
 
 function controllerError(code, message, options) {
   return new HttpReconControllerError(code, message, options)
+}
+
+function boundedActionErrorCode(value) {
+  const normalized = String(value ?? 'HTTP_RECON_EXECUTION_FAILED')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '')
+  const prefixed = /^[A-Z]/u.test(normalized)
+    ? normalized
+    : `HTTP_RECON_${normalized}`
+  return /^[A-Z][A-Z0-9_]{2,95}$/u.test(prefixed)
+    ? prefixed
+    : 'HTTP_RECON_EXECUTION_FAILED'
+}
+
+function boundedActionErrorMessage(value) {
+  const sanitized = String(value ?? 'HTTP reconnaissance execution failed')
+    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+    .slice(0, 1024)
+  return sanitized.length > 0 ? sanitized : 'HTTP reconnaissance execution failed'
+}
+
+function sameLocalPath(left, right) {
+  const normalizedLeft = resolve(left)
+  const normalizedRight = resolve(right)
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
+}
+
+function assertHttpReconLocalPath(value, label) {
+  try {
+    assertLocalFilesystemEndpoint(value, label)
+  } catch (cause) {
+    throw controllerError(
+      'HTTP_RECON_FILESYSTEM_ENDPOINT_NOT_LOCAL',
+      `${label} must be a local filesystem path`,
+      { cause },
+    )
+  }
+  return value
+}
+
+async function assertHttpReconPrivateEndpoint(
+  path,
+  expectedKind,
+  { allowedFileLinks } = {},
+) {
+  try {
+    return await assertUnleashPrivateEndpoint(
+      assertHttpReconLocalPath(path, `HTTP-recon ${expectedKind}`),
+      expectedKind,
+      allowedFileLinks === undefined ? {} : { allowedFileLinks },
+    )
+  } catch (cause) {
+    if (cause instanceof HttpReconControllerError) throw cause
+    throw controllerError(
+      expectedKind === 'directory'
+        ? 'HTTP_RECON_BUNDLE_AUTHORITY_UNSAFE'
+        : 'HTTP_RECON_ARTIFACT_AUTHORITY_UNSAFE',
+      `HTTP-recon ${expectedKind} must be owned by the current account, private, canonical, and link-free`,
+      { cause },
+    )
+  }
+}
+
+function errorCauseHasCode(error, code) {
+  const seen = new Set()
+  let current = error
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    if (current.code === code) return true
+    seen.add(current)
+    current = current.cause
+  }
+  return false
+}
+
+function errorCauseIsCanonicalPathRace(error) {
+  const seen = new Set()
+  let current = error
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    if (
+      current.code === 'UNLEASH_CONTROL_ENDPOINT_UNSAFE'
+      && current.message === 'controller state path is not canonical and alias-free'
+    ) return true
+    seen.add(current)
+    current = current.cause
+  }
+  return false
+}
+
+function endpointSnapshotMatches(left, right) {
+  return left.isFile()
+    && right.isFile()
+    && !left.isSymbolicLink()
+    && !right.isSymbolicLink()
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.nlink === right.nlink
+}
+
+async function rethrowSnapshotAuthorityFailure(cause, path, expected, label, timing) {
+  let current
+  try {
+    current = await lstat(path)
+  } catch (inspectionError) {
+    if (inspectionError.code !== 'ENOENT') throw cause
+  }
+  if (
+    current === undefined
+    || !endpointSnapshotMatches(current, expected)
+    || errorCauseHasCode(cause, 'ENOENT')
+    || errorCauseIsCanonicalPathRace(cause)
+  ) {
+    throw controllerError(
+      'HTTP_RECON_ARTIFACT_CHANGED',
+      `${label} changed ${timing} its private endpoint verification`,
+      { cause },
+    )
+  }
+  throw cause
 }
 
 function tlsPolicyForRun(run) {
@@ -345,6 +480,24 @@ function makeOperatorAttestedIds({ operatorId, targetUrl, at, randomBytesImpl })
   }
 }
 
+function makeControllerPolicyEngagementId({ authority, targetUrl, randomBytesImpl }) {
+  const suffix = randomBytesImpl(6)
+  if (!Buffer.isBuffer(suffix) || suffix.length !== 6) {
+    throw controllerError(
+      'HTTP_RECON_RANDOM_INVALID',
+      'controller-policy engagement ID source must return exactly six bytes',
+    )
+  }
+  return `http-recon-controller-policy:${sha256Hex(canonicalJson({
+    policy_id: authority.policy_id,
+    policy_sha256: authority.policy_sha256,
+    target_id: authority.target_id,
+    target_url: targetUrl,
+    admitted_at: authority.admitted_at,
+    nonce: suffix.toString('hex'),
+  }))}`
+}
+
 function isInside(parent, child) {
   const path = relative(resolve(parent), resolve(child))
   return path !== '' && !path.startsWith('..') && !isAbsolute(path)
@@ -385,6 +538,11 @@ async function readBoundedNoFollowSnapshot(
       'HTTP_RECON_ARTIFACT_NOT_REGULAR',
       `${label} must be a regular non-symlink file`,
     )
+  }
+  try {
+    await assertHttpReconPrivateEndpoint(path, 'file', { allowedFileLinks: allowedLinks })
+  } catch (cause) {
+    await rethrowSnapshotAuthorityFailure(cause, path, info, label, 'during')
   }
   if (info.size > maxBytes) {
     throw controllerError(
@@ -481,6 +639,11 @@ async function readBoundedNoFollowSnapshot(
         `${label} changed while it was being read`,
       )
     }
+    try {
+      await assertHttpReconPrivateEndpoint(path, 'file', { allowedFileLinks: allowedLinks })
+    } catch (cause) {
+      await rethrowSnapshotAuthorityFailure(cause, path, after, label, 'during final')
+    }
     return { bytes: content.subarray(0, offset), info: after }
   } finally {
     await handle.close()
@@ -506,6 +669,7 @@ async function readJson(path, maxBytes, label) {
 
 async function atomicReplace(path, content, publicationImpl = replaceFileDurably) {
   const target = resolve(path)
+  await assertHttpReconPrivateEndpoint(dirname(target), 'directory')
   const temporary = `${target}.tmp-${process.pid}-${randomBytes(6).toString('hex')}`
   const handle = await open(temporary, 'wx', 0o600)
   let writeError
@@ -521,33 +685,39 @@ async function atomicReplace(path, content, publicationImpl = replaceFileDurably
     await rm(temporary, { force: true })
     throw writeError
   }
+  await assertHttpReconPrivateEndpoint(temporary, 'file')
   try {
     await publicationImpl(temporary, target)
   } catch (error) {
     await rm(temporary, { force: true })
     throw error
   }
+  await assertHttpReconPrivateEndpoint(target, 'file')
 }
 
 async function exclusiveWrite(path, content) {
+  await assertHttpReconPrivateEndpoint(dirname(path), 'directory')
   const handle = await open(path, 'wx', 0o600)
   try {
     await handle.writeFile(content, { encoding: 'utf8' })
     await handle.sync()
     const info = await handle.stat()
-    return {
+    const created = {
       path,
       content,
       info,
       bytes: Buffer.from(content, 'utf8'),
     }
-  } finally {
     await handle.close()
+    await assertHttpReconPrivateEndpoint(path, 'file')
+    return created
+  } finally {
+    await handle.close().catch(() => {})
   }
 }
 
 async function createStagingDirectory(destination) {
-  const requestedTarget = resolve(destination)
+  const requestedTarget = resolve(assertHttpReconLocalPath(destination, 'HTTP-recon destination'))
   const requestedParent = dirname(requestedTarget)
   const requestedParentInfo = await lstat(requestedParent)
   if (!requestedParentInfo.isDirectory() || requestedParentInfo.isSymbolicLink()) {
@@ -557,6 +727,12 @@ async function createStagingDirectory(destination) {
     )
   }
   const parent = await realpath(requestedParent)
+  if (!sameLocalPath(parent, requestedParent)) {
+    throw controllerError(
+      'HTTP_RECON_PARENT_UNSAFE',
+      'HTTP-recon destination cannot traverse a link, junction, reparse point, or path alias',
+    )
+  }
   const projectRoot = await realpath(PROJECT_ROOT)
   const target = join(parent, basename(requestedTarget))
   let targetInfo
@@ -582,11 +758,21 @@ async function createStagingDirectory(destination) {
     `.${basename(target)}.staging-${process.pid}-${randomBytes(6).toString('hex')}`,
   )
   await mkdir(staging, { recursive: false, mode: 0o700 })
+  try {
+    await hardenUnleashPrivateEndpoint(staging, 'directory')
+  } catch (cause) {
+    await rm(staging, { recursive: true, force: true }).catch(() => {})
+    throw controllerError(
+      'HTTP_RECON_BUNDLE_AUTHORITY_UNSAFE',
+      'HTTP-recon staging directory could not be made private',
+      { cause },
+    )
+  }
   return { target, staging }
 }
 
 function resolveBundle(argument) {
-  const value = resolve(argument)
+  const value = resolve(assertHttpReconLocalPath(argument, 'HTTP-recon bundle'))
   return basename(value).toLowerCase() === RUN_FILE
     ? { directory: dirname(value), runPath: value }
     : { directory: value, runPath: join(value, RUN_FILE) }
@@ -594,14 +780,7 @@ function resolveBundle(argument) {
 
 async function loadRun(argument) {
   const bundle = resolveBundle(argument)
-  const realDirectory = await realpath(bundle.directory)
-  const directoryInfo = await lstat(realDirectory)
-  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
-    throw controllerError(
-      'HTTP_RECON_BUNDLE_UNSAFE',
-      'HTTP-recon bundle must be a real directory',
-    )
-  }
+  const realDirectory = await assertHttpReconPrivateEndpoint(bundle.directory, 'directory')
   const loaded = await readJson(join(realDirectory, RUN_FILE), MAX_RUN_BYTES, RUN_FILE)
   assertValidHttpReconRun(loaded.value)
   return {
@@ -692,16 +871,80 @@ async function loadOperatorAttestedTrust({
   }
 }
 
+async function loadControllerPolicyTrust({
+  loaded,
+  now,
+  requireCurrentValidity = true,
+}) {
+  const artifact = await readJson(
+    join(loaded.directory, CONTROLLER_POLICY_AUTHORITY_FILE),
+    MAX_ATTESTED_SCOPE_BYTES,
+    CONTROLLER_POLICY_AUTHORITY_FILE,
+  )
+  const receipt = assertValidControllerPolicyHttpReconReceipt(artifact.value, {
+    now: now(),
+    requireCurrentValidity,
+  })
+  const plan = buildControllerPolicyHttpReconPlan({
+    engagementId: loaded.run.engagement_id,
+    authority: receipt.authority,
+    targetUrl: receipt.canonical_target,
+    tlsSpkiSha256: tlsSpkiPinForRun(loaded.run),
+  })
+  const runActions = loaded.run.actions.map((action) => ({
+    action_id: action.action_id,
+    sequence: action.sequence,
+    method: action.method,
+    url: action.url,
+    ...(action.request_headers === undefined
+      ? {}
+      : { request_headers: structuredClone(action.request_headers) }),
+    safe_to_get: action.safe_to_get,
+  }))
+  if (
+    receipt.plan_sha256 !== loaded.run.plan_sha256
+    || plan.plan_sha256 !== loaded.run.plan_sha256
+    || canonicalJson(receipt.authority) !== canonicalJson(loaded.run.authorization)
+    || receipt.canonical_target !== loaded.run.actions[0]?.url
+    || canonicalJson(receipt.limits) !== canonicalJson(loaded.run.limits)
+    || canonicalJson(plan.plan.target) !== canonicalJson(loaded.run.target)
+    || canonicalJson(plan.actions) !== canonicalJson(runActions)
+  ) {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_RECEIPT_MISMATCH',
+      'controller deployment-policy receipt does not bind the retained plan, target, limits, and authority',
+    )
+  }
+  return {
+    mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+    receipt,
+    plan,
+  }
+}
+
 async function loadAuthorizationContext({
   loaded,
   now,
   requireCurrentValidity = true,
 }) {
-  return loadOperatorAttestedTrust({
-    loaded,
-    now,
-    requireCurrentValidity,
-  })
+  if (loaded.run.authorization.mode === 'OPERATOR_ATTESTED') {
+    return loadOperatorAttestedTrust({
+      loaded,
+      now,
+      requireCurrentValidity,
+    })
+  }
+  if (loaded.run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+    return loadControllerPolicyTrust({
+      loaded,
+      now,
+      requireCurrentValidity,
+    })
+  }
+  throw controllerError(
+    'HTTP_RECON_AUTHORIZATION_MODE_INVALID',
+    'HTTP-recon run uses an unsupported authorization mode',
+  )
 }
 
 function eventRecord({ run, type, at, details }) {
@@ -729,13 +972,17 @@ async function appendEvent(loaded, type, details, now) {
     at: timestamp(now),
     details,
   })
-  const handle = await open(join(loaded.directory, EVENTS_FILE), 'a', 0o600)
+  await assertHttpReconPrivateEndpoint(loaded.directory, 'directory')
+  const eventPath = join(loaded.directory, EVENTS_FILE)
+  await assertHttpReconPrivateEndpoint(eventPath, 'file')
+  const handle = await open(eventPath, 'a', 0o600)
   try {
     await handle.writeFile(stableJson(record, 0), { encoding: 'utf8' })
     await handle.sync()
   } finally {
     await handle.close()
   }
+  await assertHttpReconPrivateEndpoint(eventPath, 'file')
   loaded.run.event_chain = {
     count: record.sequence,
     last_sha256: record.record_sha256,
@@ -858,7 +1105,9 @@ async function acquireRunLockReclaimGuard(directory, now) {
     try {
       const created = await exclusiveWrite(temporary, content)
       await link(temporary, path)
+      await assertHttpReconPrivateEndpoint(path, 'file', { allowedFileLinks: [1, 2] })
       await rm(temporary, { force: true }).catch(() => {})
+      await assertHttpReconPrivateEndpoint(path, 'file')
       return { ...created, path }
     } catch (error) {
       await rm(temporary, { force: true }).catch(() => {})
@@ -931,6 +1180,7 @@ async function releaseRunLockReclaimGuard(guard, faultInjector) {
 }
 
 async function acquireRunLock(directory, now, faultInjector) {
+  await assertHttpReconPrivateEndpoint(directory, 'directory')
   const path = join(directory, LOCK_FILE)
   const content = stableJson({
     schema_version: '1.0.0',
@@ -948,8 +1198,11 @@ async function acquireRunLock(directory, now, faultInjector) {
       const info = await handle.stat()
       await handle.close()
       handle = undefined
+      await assertHttpReconPrivateEndpoint(temporary, 'file')
       await link(temporary, path)
+      await assertHttpReconPrivateEndpoint(path, 'file', { allowedFileLinks: [1, 2] })
       await rm(temporary, { force: true }).catch(() => {})
+      await assertHttpReconPrivateEndpoint(path, 'file')
       return { path, content, info, bytes: Buffer.from(content, 'utf8') }
     } catch (error) {
       await handle?.close().catch(() => {})
@@ -1074,6 +1327,54 @@ function initialOperatorAttestedRun({ scope, plan, now, randomBytesImpl }) {
   }
 }
 
+function initialControllerPolicyRun({
+  engagementId,
+  authority,
+  plan,
+  now,
+  randomBytesImpl,
+}) {
+  const createdAt = timestamp(now)
+  return {
+    schema_version: '1.0.0',
+    kind: 'red-team-audit/http-recon-run',
+    capability_mode: 'AUTHORIZED_HTTP_RECON',
+    run_id: makeRunId(engagementId, now, randomBytesImpl),
+    engagement_id: engagementId,
+    created_at: createdAt,
+    updated_at: createdAt,
+    state: 'PLANNED',
+    authorization: structuredClone(authority),
+    target: structuredClone(plan.plan.target),
+    plan_sha256: plan.plan_sha256,
+    limits: structuredClone(plan.plan.limits),
+    budget: {
+      proof_requests_used: 0,
+      probe_requests_used: 0,
+      response_bytes_used: 0,
+      started_at: null,
+      last_request_at: null,
+    },
+    actions: plan.actions.map((action) => ({
+      ...structuredClone(action),
+      state: 'PENDING',
+      attempt_count: 0,
+      leased_at: null,
+      sent_at: null,
+      completed_at: null,
+      observation_path: null,
+      observation_sha256: null,
+      error: null,
+    })),
+    stop: null,
+    report: null,
+    event_chain: {
+      count: 0,
+      last_sha256: ZERO_SHA256,
+    },
+  }
+}
+
 export async function planOperatorAttestedHttpReconBundle({
   targetUrl,
   tlsSpkiSha256,
@@ -1170,6 +1471,7 @@ export async function planOperatorAttestedHttpReconBundle({
       recursive: false,
       mode: 0o700,
     })
+    await assertHttpReconPrivateEndpoint(join(staging, OBSERVATIONS_DIRECTORY), 'directory')
     await exclusiveWrite(join(staging, ATTESTED_SCOPE_FILE), stableJson(scope))
     await exclusiveWrite(join(staging, EVENTS_FILE), '')
     const staged = {
@@ -1191,6 +1493,7 @@ export async function planOperatorAttestedHttpReconBundle({
     assertValidHttpReconRun(run)
     await exclusiveWrite(join(staging, RUN_FILE), stableJson(run))
     await rename(staging, target)
+    await assertHttpReconPrivateEndpoint(target, 'directory')
     return {
       directory: target,
       run,
@@ -1201,6 +1504,223 @@ export async function planOperatorAttestedHttpReconBundle({
     await rm(staging, { recursive: true, force: true })
     throw error
   }
+}
+
+export async function planControllerPolicyHttpReconBundle({
+  targetUrl,
+  tlsSpkiSha256,
+  controllerPolicyAuthority,
+  out,
+  now = () => new Date(),
+  randomBytesImpl = randomBytes,
+}) {
+  if (controllerPolicyAuthority === undefined) {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_AUTHORITY_REQUIRED',
+      'controller-policy planning requires one exact deployment-policy admission record',
+    )
+  }
+  const ingressTime = timestamp(now)
+  const authority = createControllerPolicyHttpReconAuthority({
+    controllerPolicyAuthority,
+  })
+  assertValidControllerPolicyHttpReconAuthority(authority, {
+    now: new Date(ingressTime),
+  })
+  const engagementId = makeControllerPolicyEngagementId({
+    authority,
+    targetUrl,
+    randomBytesImpl,
+  })
+  const plan = buildControllerPolicyHttpReconPlan({
+    engagementId,
+    authority,
+    targetUrl,
+    tlsSpkiSha256,
+  })
+  const run = initialControllerPolicyRun({
+    engagementId,
+    authority,
+    plan,
+    now,
+    randomBytesImpl,
+  })
+  const receipt = createControllerPolicyHttpReconReceipt({
+    authority,
+    targetUrl,
+    planSha256: run.plan_sha256,
+  })
+  assertValidHttpReconRun(run)
+
+  const { target, staging } = await createStagingDirectory(out)
+  try {
+    await mkdir(join(staging, OBSERVATIONS_DIRECTORY), {
+      recursive: false,
+      mode: 0o700,
+    })
+    await assertHttpReconPrivateEndpoint(join(staging, OBSERVATIONS_DIRECTORY), 'directory')
+    await exclusiveWrite(
+      join(staging, CONTROLLER_POLICY_AUTHORITY_FILE),
+      stableJson(receipt),
+    )
+    await exclusiveWrite(join(staging, EVENTS_FILE), '')
+    const staged = {
+      directory: staging,
+      runPath: join(staging, RUN_FILE),
+      run,
+    }
+    await appendEvent(staged, 'PLAN_CREATED', {
+      authorization_mode: 'CONTROLLER_DEPLOYMENT_POLICY',
+      plan_sha256: run.plan_sha256,
+      controller_policy_authority_receipt: receipt,
+      tls_policy: tlsPolicyForRun(run),
+      action_count: 1,
+      network_activity: false,
+    }, now)
+    assertValidHttpReconRun(run)
+    await exclusiveWrite(join(staging, RUN_FILE), stableJson(run))
+    await rename(staging, target)
+    await assertHttpReconPrivateEndpoint(target, 'directory')
+    return {
+      directory: target,
+      run,
+      controller_policy_authority_receipt: receipt,
+    }
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true })
+    throw error
+  }
+}
+
+async function revalidateControllerPolicyReceipt({
+  receipt,
+  revalidateAuthority,
+  phase,
+}) {
+  if (typeof revalidateAuthority !== 'function') {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_REQUIRED',
+      'controller-policy execution requires a fail-closed authority revalidation function',
+    )
+  }
+  let result
+  try {
+    result = await revalidateAuthority(Object.freeze({
+      phase,
+      authority: Object.freeze(structuredClone(receipt.authority)),
+      canonical_target: receipt.canonical_target,
+      limits: Object.freeze(structuredClone(receipt.limits)),
+      plan_sha256: receipt.plan_sha256,
+    }))
+  } catch (cause) {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED',
+      'controller deployment-policy authority revalidation failed closed',
+      { cause },
+    )
+  }
+  if (result !== true) {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED',
+      'controller deployment-policy authority revalidation must return exactly true',
+    )
+  }
+}
+
+export async function goControllerPolicyHttpRecon({
+  targetUrl,
+  tlsSpkiSha256,
+  controllerPolicyAuthority,
+  revalidateAuthority,
+  out,
+  now = () => new Date(),
+  randomBytesImpl = randomBytes,
+  planImpl = planControllerPolicyHttpReconBundle,
+  runImpl = runControllerPolicyHttpReconAction,
+  finalizeImpl = finalizeHttpReconBundle,
+  onPlanned,
+}) {
+  if (
+    typeof planImpl !== 'function'
+    || typeof runImpl !== 'function'
+    || typeof finalizeImpl !== 'function'
+    || (onPlanned !== undefined && typeof onPlanned !== 'function')
+  ) {
+    throw controllerError(
+      'HTTP_RECON_GO_CONTROLLER_INVALID',
+      'controller-policy target-and-go requires controller-owned plan, execution, and finalization functions',
+    )
+  }
+  if (typeof revalidateAuthority !== 'function') {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_REQUIRED',
+      'controller-policy target-and-go requires fail-closed authority revalidation',
+    )
+  }
+  const output = typeof out === 'string' && out.trim() !== ''
+    ? out
+    : join(tmpdir(), `red-team-audit-http-recon-${randomBytesImpl(8).toString('hex')}`)
+  const planned = await planImpl({
+    targetUrl,
+    tlsSpkiSha256,
+    controllerPolicyAuthority,
+    out: output,
+    now,
+    randomBytesImpl,
+  })
+  if (!Array.isArray(planned?.run?.actions) || planned.run.actions.length !== 1) {
+    throw controllerError(
+      'HTTP_RECON_GO_PLAN_INVALID',
+      'controller-policy target-and-go requires exactly one controller-sealed action',
+    )
+  }
+  assertValidHttpReconRun(planned.run)
+  const receipt = assertValidControllerPolicyHttpReconReceipt(
+    planned.controller_policy_authority_receipt,
+    { now: now() },
+  )
+  if (
+    planned.run.authorization.mode !== 'CONTROLLER_DEPLOYMENT_POLICY'
+    || canonicalJson(receipt.authority)
+      !== canonicalJson(planned.run.authorization)
+    || receipt.canonical_target !== planned.run.actions[0].url
+    || canonicalJson(receipt.limits) !== canonicalJson(planned.run.limits)
+    || receipt.plan_sha256 !== planned.run.plan_sha256
+  ) {
+    throw controllerError(
+      'HTTP_RECON_CONTROLLER_POLICY_RECEIPT_MISMATCH',
+      'planned controller-policy run differs from its authority receipt',
+    )
+  }
+  await revalidateControllerPolicyReceipt({
+    receipt,
+    revalidateAuthority,
+    phase: 'PRE_EXECUTION',
+  })
+  await onPlanned?.(Object.freeze({
+    bundle: planned.directory,
+    action_id: planned.run.actions[0].action_id,
+    authority: Object.freeze(structuredClone(receipt.authority)),
+  }))
+  const executed = await runImpl({
+    bundle: planned.directory,
+    actionId: planned.run.actions[0].action_id,
+    controllerPolicyAuthority: receipt.authority,
+    revalidateAuthority,
+    now,
+  })
+  const finalized = await finalizeImpl({
+    bundle: planned.directory,
+    now,
+  })
+  return Object.freeze({
+    action: executed.action,
+    bundle: planned.directory,
+    engagement_id: finalized.run.engagement_id,
+    controller_policy_authority_receipt: receipt,
+    report: finalized.reportPath,
+    state: finalized.run.state,
+  })
 }
 
 export async function goOperatorAttestedHttpRecon({
@@ -1311,18 +1831,25 @@ export async function goOperatorAttestedHttpRecon({
 
 function assertActionWindow(run, now) {
   const current = new Date(timestamp(now)).getTime()
-  const validFrom = Date.parse(run.authorization.valid_from)
-  const validUntil = Date.parse(run.authorization.valid_until)
+  const controllerPolicy = run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+  const validFrom = Date.parse(
+    controllerPolicy
+      ? run.authorization.admitted_at
+      : run.authorization.valid_from,
+  )
+  const validUntil = controllerPolicy
+    ? validFrom + run.limits.max_wall_time_ms
+    : Date.parse(run.authorization.valid_until)
   if (current < validFrom) {
     throw controllerError(
       'HTTP_RECON_AUTHORIZATION_NOT_YET_VALID',
-      `authorization is not valid before ${run.authorization.valid_from}`,
+      `authorization is not valid before ${new Date(validFrom).toISOString()}`,
     )
   }
   if (current >= validUntil) {
     throw controllerError(
       'HTTP_RECON_AUTHORIZATION_EXPIRED',
-      `authorization expired at ${run.authorization.valid_until}`,
+      `authorization expired at ${new Date(validUntil).toISOString()}`,
     )
   }
   if (run.budget.started_at) {
@@ -1418,7 +1945,6 @@ async function loadStopMarker(directory) {
     engagement_id: null,
     run_id: null,
     requested_at: new Date().toISOString(),
-    operator_id: 'controller',
     reason: `fail-closed stop: ${message}`.slice(0, 1024),
   })
   let bytes
@@ -1454,11 +1980,37 @@ async function loadStopMarker(directory) {
   } catch {
     return fallback('stop marker is not valid JSON')
   }
+  const baseFields = [
+    'schema_version',
+    'kind',
+    'engagement_id',
+    'run_id',
+    'requested_at',
+    'reason',
+  ]
+  const operatorMarker = hasExactObjectKeys(marker, [...baseFields, 'operator_id'])
+    && /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$/.test(marker.operator_id ?? '')
+  let controllerMarker = hasExactObjectKeys(
+    marker,
+    [...baseFields, 'controller_policy_authority'],
+  )
+  if (controllerMarker) {
+    try {
+      assertValidControllerPolicyHttpReconAuthority(
+        marker.controller_policy_authority,
+        { requireCurrentValidity: false },
+      )
+    } catch {
+      controllerMarker = false
+    }
+  }
   if (
     marker?.schema_version !== '1.0.0'
     || marker?.kind !== 'red-team-audit/http-recon-stop-request'
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(marker.requested_at ?? '')
-    || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$/.test(marker.operator_id ?? '')
+    || ![marker.engagement_id, marker.run_id].every((value) => value === null
+      || /^[A-Za-z0-9][A-Za-z0-9._:/-]{2,159}$/.test(value))
+    || (!operatorMarker && !controllerMarker)
     || typeof marker.reason !== 'string'
     || marker.reason.length < 1
     || marker.reason.length > 1024
@@ -1486,6 +2038,17 @@ function assertRunnableState(run) {
   }
 }
 
+function controllerPolicyBindingsMatch(left, right) {
+  return left?.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+    && right?.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+    && left.policy_id === right.policy_id
+    && left.policy_sha256 === right.policy_sha256
+    && left.target_id === right.target_id
+    && left.effect === right.effect
+    && left.admitted_at === right.admitted_at
+    && left.revocation_check_id === right.revocation_check_id
+}
+
 export async function nextHttpReconAction({
   bundle,
   now = () => new Date(),
@@ -1511,26 +2074,63 @@ export async function nextHttpReconAction({
 export async function requestHttpReconStop({
   bundle,
   operatorId,
+  controllerPolicyAuthority,
   reason,
   now = () => new Date(),
   stopPublicationFaultInjector,
 }) {
-  const normalizedOperatorId = normalizeOperatorId(operatorId)
   const normalizedReason = normalizeHumanReason(reason, 'stop_reason')
   const resolved = resolveBundle(bundle)
-  const directory = await realpath(resolved.directory)
-  const directoryInfo = await lstat(directory)
-  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
-    throw controllerError(
-      'HTTP_RECON_BUNDLE_UNSAFE',
-      'HTTP-recon stop target must be a real directory',
-    )
-  }
+  const directory = await assertHttpReconPrivateEndpoint(resolved.directory, 'directory')
   let loaded = null
   try {
     loaded = await loadRun(directory)
   } catch {
     // The kill path intentionally remains available when run.json is damaged.
+  }
+  const controllerInput = controllerPolicyAuthority !== undefined
+  const operatorInput = operatorId !== undefined
+  if (controllerInput === operatorInput) {
+    throw controllerError(
+      'HTTP_RECON_STOP_AUTHORITY_INVALID',
+      'stop requests require exactly one operator identity or controller-policy authority',
+    )
+  }
+  let stopIdentity
+  if (controllerInput) {
+    assertValidControllerPolicyHttpReconAuthority(controllerPolicyAuthority, {
+      requireCurrentValidity: false,
+    })
+    if (
+      loaded?.run.authorization.mode !== undefined
+      && (
+        loaded.run.authorization.mode !== 'CONTROLLER_DEPLOYMENT_POLICY'
+        || !controllerPolicyBindingsMatch(
+          controllerPolicyAuthority,
+          loaded.run.authorization,
+        )
+      )
+    ) {
+      throw controllerError(
+        'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+        'stop authority differs from the loaded controller-policy run',
+      )
+    }
+    stopIdentity = {
+      controller_policy_authority: structuredClone(controllerPolicyAuthority),
+    }
+  } else {
+    const normalizedOperatorId = normalizeOperatorId(operatorId)
+    if (
+      loaded?.run.authorization.mode !== undefined
+      && loaded.run.authorization.mode !== 'OPERATOR_ATTESTED'
+    ) {
+      throw controllerError(
+        'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+        'operator stop identity cannot be attached to a controller-policy run',
+      )
+    }
+    stopIdentity = { operator_id: normalizedOperatorId }
   }
   const marker = {
     schema_version: '1.0.0',
@@ -1538,7 +2138,7 @@ export async function requestHttpReconStop({
     engagement_id: loaded?.run.engagement_id ?? null,
     run_id: loaded?.run.run_id ?? null,
     requested_at: timestamp(now),
-    operator_id: normalizedOperatorId,
+    ...stopIdentity,
     reason: normalizedReason,
   }
   const path = join(directory, STOP_FILE)
@@ -1551,7 +2151,9 @@ export async function requestHttpReconStop({
     await handle.sync()
     await handle.close()
     handle = undefined
+    await assertHttpReconPrivateEndpoint(temporary, 'file')
     await publishFileCreateOnlyDurably(temporary, path)
+    await assertHttpReconPrivateEndpoint(path, 'file', { allowedFileLinks: [1, 2] })
   } catch (error) {
     await handle?.close().catch(() => {})
     await rm(temporary, { force: true }).catch(() => {})
@@ -1561,6 +2163,7 @@ export async function requestHttpReconStop({
         engagement_id: existing?.engagement_id ?? null,
         path,
         requested_at: existing?.requested_at ?? null,
+        reason: existing?.reason ?? normalizedReason,
       }
     }
     throw error
@@ -1569,7 +2172,43 @@ export async function requestHttpReconStop({
     engagement_id: loaded?.run.engagement_id ?? null,
     path,
     requested_at: marker.requested_at,
+    reason: marker.reason,
   }
+}
+
+export async function inspectControllerPolicyHttpReconStop({
+  bundle,
+  controllerPolicyAuthority,
+}) {
+  assertValidControllerPolicyHttpReconAuthority(controllerPolicyAuthority, {
+    requireCurrentValidity: false,
+  })
+  const loaded = await loadRun(bundle)
+  if (
+    loaded.run.authorization.mode !== 'CONTROLLER_DEPLOYMENT_POLICY'
+    || !controllerPolicyBindingsMatch(
+      controllerPolicyAuthority,
+      loaded.run.authorization,
+    )
+  ) {
+    throw controllerError(
+      'HTTP_RECON_STOP_AUTHORITY_MISMATCH',
+      'stop inspection authority differs from the loaded controller-policy run',
+    )
+  }
+  const marker = await loadStopMarker(loaded.directory)
+  if (marker === null) return null
+  const markerMatchesRun = controllerPolicyBindingsMatch(
+    marker.controller_policy_authority,
+    loaded.run.authorization,
+  ) && marker.engagement_id === loaded.run.engagement_id
+    && marker.run_id === loaded.run.run_id
+  return Object.freeze({
+    requested_at: marker.requested_at,
+    reason: markerMatchesRun
+      ? marker.reason
+      : 'fail-closed stop: retained stop marker does not match the controller-policy run',
+  })
 }
 
 function startStopWatcher(directory, abortController, intervalMs = 100) {
@@ -1675,14 +2314,16 @@ function normalizeTransportObservation({
       'transport TLS evidence does not match the sealed verification policy',
     )
   }
-  const authority = {
-    mode: 'OPERATOR_ATTESTED',
-    authorization_id: run.authorization.authorization_id,
-    operator_id: run.authorization.operator_id,
-    scope_sha256: run.authorization.scope_sha256,
-    plan_sha256: run.plan_sha256,
-    independently_verified: false,
-  }
+  const authority = run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+    ? structuredClone(run.authorization)
+    : {
+        mode: 'OPERATOR_ATTESTED',
+        authorization_id: run.authorization.authorization_id,
+        operator_id: run.authorization.operator_id,
+        scope_sha256: run.authorization.scope_sha256,
+        plan_sha256: run.plan_sha256,
+        independently_verified: false,
+      }
   const observation = {
     schema_version: '1.0.0',
     kind: 'red-team-audit/http-recon-observation',
@@ -1769,6 +2410,22 @@ function responseStopReason(stopCondition) {
     : `${stopCondition.code}: ${stopCondition.message}`
 }
 
+function stopIdentityForRun(run, marker) {
+  if (run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+    return {
+      controller_policy_authority: structuredClone(
+        controllerPolicyBindingsMatch(
+          marker?.controller_policy_authority,
+          run.authorization,
+        )
+          ? marker.controller_policy_authority
+          : run.authorization,
+      ),
+    }
+  }
+  return { operator_id: marker?.operator_id ?? 'controller' }
+}
+
 async function markStopped(
   loaded,
   marker,
@@ -1781,7 +2438,7 @@ async function markStopped(
   loaded.run.stop = {
     requested_at: marker?.requested_at ?? timestamp(now),
     observed_at: timestamp(now),
-    operator_id: marker?.operator_id ?? 'controller',
+    ...stopIdentityForRun(loaded.run, marker),
     reason: reason ?? marker?.reason ?? 'stop condition observed',
   }
   if (action && ['LEASED', 'SENT'].includes(action.state)) {
@@ -1858,11 +2515,14 @@ async function terminalizeInterruptedAction(loaded, now, priorEvents = []) {
   return action
 }
 
-export async function runHttpReconAction({
+async function runHttpReconActionForMode({
   bundle,
   actionId,
   operatorId,
   rationale,
+  controllerPolicyAuthority,
+  revalidateAuthority,
+  expectedAuthorizationMode,
   now = () => new Date(),
   probeImpl = probeHttps,
   clientDependencies,
@@ -1883,13 +2543,47 @@ export async function runHttpReconAction({
       now,
     })
     await verifyExistingEvidence({ loaded, trust })
-    const normalizedOperatorId = normalizeOperatorId(operatorId)
-    const normalizedRationale = normalizeHumanReason(rationale, 'rationale')
-    if (normalizedOperatorId !== loaded.run.authorization.operator_id) {
+    if (loaded.run.authorization.mode !== expectedAuthorizationMode) {
       throw controllerError(
-        'HTTP_RECON_ATTESTING_OPERATOR_MISMATCH',
-        'operator-attested execution must use the operator identity that created the sealed attestation',
+        'HTTP_RECON_AUTHORIZATION_MODE_MISMATCH',
+        `execution entry requires ${expectedAuthorizationMode} authority`,
       )
+    }
+    let normalizedOperatorId
+    let normalizedRationale
+    if (trust.mode === 'OPERATOR_ATTESTED') {
+      normalizedOperatorId = normalizeOperatorId(operatorId)
+      normalizedRationale = normalizeHumanReason(rationale, 'rationale')
+      if (normalizedOperatorId !== loaded.run.authorization.operator_id) {
+        throw controllerError(
+          'HTTP_RECON_ATTESTING_OPERATOR_MISMATCH',
+          'operator-attested execution must use the operator identity that created the sealed attestation',
+        )
+      }
+    } else {
+      if (operatorId !== undefined || rationale !== undefined) {
+        throw controllerError(
+          'HTTP_RECON_CONTROLLER_POLICY_OPERATOR_FIELDS_INVALID',
+          'controller-policy execution cannot contain an operator identity or rationale',
+        )
+      }
+      assertValidControllerPolicyHttpReconAuthority(controllerPolicyAuthority, {
+        now: now(),
+      })
+      if (
+        canonicalJson(controllerPolicyAuthority)
+          !== canonicalJson(loaded.run.authorization)
+      ) {
+        throw controllerError(
+          'HTTP_RECON_CONTROLLER_POLICY_AUTHORITY_MISMATCH',
+          'execution authority differs from the sealed controller-policy admission',
+        )
+      }
+      await revalidateControllerPolicyReceipt({
+        receipt: trust.receipt,
+        revalidateAuthority,
+        phase: 'ACTION_LEASE',
+      })
     }
     const marker = await loadStopMarker(loaded.directory)
     if (marker) {
@@ -1923,20 +2617,25 @@ export async function runHttpReconAction({
     action.attempt_count += 1
     action.leased_at = timestamp(now)
     await saveRun(loaded)
-    await appendEvent(loaded, 'ACTION_LEASED', {
+    const leaseDetails = {
       action_id: action.action_id,
       method: action.method,
       url: action.url,
       request_headers: action.request_headers ?? null,
-      operator_id: normalizedOperatorId,
-      rationale: normalizedRationale,
       authorization_mode: trust.mode,
       tls_policy: tlsPolicyForRun(loaded.run),
-      // This is derived from the controller's successful window, receipt,
-      // event-chain, and identity checks above. It is not caller consent.
       current_authorization_confirmed: true,
       budget_before: structuredClone(loaded.run.budget),
-    }, now)
+      ...(trust.mode === 'OPERATOR_ATTESTED'
+        ? {
+            operator_id: normalizedOperatorId,
+            rationale: normalizedRationale,
+          }
+        : {
+            controller_policy_authority_receipt: structuredClone(trust.receipt),
+          }),
+    }
+    await appendEvent(loaded, 'ACTION_LEASED', leaseDetails, now)
     await saveRun(loaded)
 
     const abortController = new AbortController()
@@ -1951,6 +2650,13 @@ export async function runHttpReconAction({
     let actionStartedAt = null
     const beforeSend = async ({ url, method, request_headers: requestHeaders, dns, tls }) => {
       assertActionWindow(loaded.run, now)
+      if (trust.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+        await revalidateControllerPolicyReceipt({
+          receipt: trust.receipt,
+          revalidateAuthority,
+          phase: 'PRE_DISPATCH',
+        })
+      }
       const currentMarker = await loadStopMarker(loaded.directory)
       if (currentMarker) {
         abortController.abort(new Error(currentMarker.reason))
@@ -2095,15 +2801,15 @@ export async function runHttpReconAction({
       }
       action.completed_at = timestamp(now)
       action.error = {
-        code: error.code ?? 'HTTP_RECON_EXECUTION_FAILED',
-        message: String(error.message ?? error).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 1024),
+        code: boundedActionErrorCode(error.code),
+        message: boundedActionErrorMessage(error.message ?? error),
       }
       loaded.run.state = requestMayHaveBeenSent ? 'OUTCOME_UNCERTAIN' : 'FAILED'
       if (currentMarker) {
         loaded.run.stop = {
           requested_at: currentMarker.requested_at,
           observed_at: timestamp(now),
-          operator_id: currentMarker.operator_id,
+          ...stopIdentityForRun(loaded.run, currentMarker),
           reason: currentMarker.reason,
         }
         if (!requestMayHaveBeenSent) loaded.run.state = 'STOPPED'
@@ -2130,6 +2836,20 @@ export async function runHttpReconAction({
       stopWatching()
     }
   }, { lockFaultInjector })
+}
+
+export async function runHttpReconAction(input) {
+  return runHttpReconActionForMode({
+    ...input,
+    expectedAuthorizationMode: 'OPERATOR_ATTESTED',
+  })
+}
+
+export async function runControllerPolicyHttpReconAction(input) {
+  return runHttpReconActionForMode({
+    ...input,
+    expectedAuthorizationMode: 'CONTROLLER_DEPLOYMENT_POLICY',
+  })
 }
 
 function reportCoverage(run) {
@@ -2161,23 +2881,44 @@ async function loadObservations(loaded) {
 
 export function renderHttpReconReport({ run, observations }) {
   const coverage = reportCoverage(run)
-  const authorityLines = [
-    '- Authorization mode: `OPERATOR_ATTESTED`',
-    `- Declaring operator: \`${run.authorization.operator_id}\``,
-    `- Declared authorizer: ${run.authorization.authorized_by}`,
-    `- Authorization reference: ${run.authorization.authorization_reference}`,
-    `- Locally sealed scope SHA-256: \`${run.authorization.scope_sha256}\``,
-    '- Authorization source: operator declaration',
-  ]
-  const completionBoundary = 'Completion means only that the locally hash-bound HTTP request denominator ran within the operator-attested scope.'
-  const authorityBoundary = 'Authorization is an operator declaration; the controller records the statement and exact scope without independently deciding legal authority.'
-  const boundaryLabel = 'Operator-attested external HTTP reconnaissance only.'
+  const controllerPolicy = run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+  const authorityLines = controllerPolicy
+    ? [
+        '- Authorization mode: `CONTROLLER_DEPLOYMENT_POLICY`',
+        `- Deployment policy: \`${run.authorization.policy_id}\``,
+        `- Deployment policy SHA-256: \`${run.authorization.policy_sha256}\``,
+        `- Target ID: \`${run.authorization.target_id}\``,
+        `- Admitted effect: \`${run.authorization.effect}\``,
+        `- Admitted at: \`${run.authorization.admitted_at}\``,
+        `- Revocation check: \`${run.authorization.revocation_check_id}\``,
+        '- Authorization source: controller deployment-policy admission',
+      ]
+    : [
+        '- Authorization mode: `OPERATOR_ATTESTED`',
+        `- Declaring operator: \`${run.authorization.operator_id}\``,
+        `- Declared authorizer: ${run.authorization.authorized_by}`,
+        `- Authorization reference: ${run.authorization.authorization_reference}`,
+        `- Locally sealed scope SHA-256: \`${run.authorization.scope_sha256}\``,
+        '- Authorization source: operator declaration',
+      ]
+  const completionBoundary = controllerPolicy
+    ? 'Completion means only that the single hash-bound HTTP request ran within the retained controller policy admission.'
+    : 'Completion means only that the locally hash-bound HTTP request denominator ran within the operator-attested scope.'
+  const authorityBoundary = controllerPolicy
+    ? 'The receipt records a controller-supplied deployment-policy admission and makes no independent-verification or legal-authority claim.'
+    : 'Authorization is an operator declaration; the controller records the statement and exact scope without independently deciding legal authority.'
+  const boundaryLabel = controllerPolicy
+    ? 'Controller deployment-policy external HTTP reconnaissance only.'
+    : 'Operator-attested external HTTP reconnaissance only.'
+  const reportTitle = controllerPolicy
+    ? '# Controller deployment-policy external HTTP reconnaissance'
+    : '# Operator-attested external HTTP reconnaissance'
   const tlsPolicy = tlsPolicyForRun(run)
   const tlsPolicyLine = tlsPolicy.mode === 'PKIX_HOSTNAME'
     ? '- TLS verification policy: runtime-configured CA trust and hostname validation; no advance SPKI pin'
     : `- TLS verification policy: runtime-configured CA trust, hostname validation, and SPKI pin \`${tlsPolicy.spki_sha256}\``
   const lines = [
-    '# Operator-attested external HTTP reconnaissance',
+    reportTitle,
     '',
     `- Engagement: \`${run.engagement_id}\``,
     `- Run: \`${run.run_id}\``,
@@ -2441,12 +3182,39 @@ function eventTailError(message) {
   return controllerError('HTTP_RECON_EVENT_TAIL_INVALID', message)
 }
 
-async function recoveredStop(event, directory) {
+function hasExactObjectKeys(value, keys) {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).toSorted().join(',') === [...keys].toSorted().join(',')
+}
+
+function controllerPolicyLeaseIsValid(event, run, trust) {
+  const expectedKeys = [
+    'action_id',
+    'method',
+    'url',
+    'request_headers',
+    'authorization_mode',
+    'tls_policy',
+    'current_authorization_confirmed',
+    'budget_before',
+    'controller_policy_authority_receipt',
+  ]
+  return hasExactObjectKeys(event.details, expectedKeys)
+    && event.details.current_authorization_confirmed === true
+    && canonicalJson(event.details.controller_policy_authority_receipt)
+      === canonicalJson(trust.receipt)
+    && canonicalJson(event.details.controller_policy_authority_receipt.authority)
+      === canonicalJson(run.authorization)
+}
+
+async function recoveredStop(event, directory, run) {
   const marker = await loadStopMarker(directory)
   return {
     requested_at: marker?.requested_at ?? event.at,
     observed_at: event.at,
-    operator_id: marker?.operator_id ?? 'controller',
+    ...stopIdentityForRun(run, marker),
     reason: marker?.reason ?? event.details?.reason
       ?? event.details?.error?.message
       ?? 'recovered terminal event',
@@ -2498,6 +3266,10 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         || canonicalJson(event.details?.request_headers ?? null)
           !== canonicalJson(action.request_headers ?? null)
         || event.details?.authorization_mode !== trust.mode
+        || (
+          trust.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+          && !controllerPolicyLeaseIsValid(event, run, trust)
+        )
         || canonicalJson(event.details?.budget_before)
           !== canonicalJson(run.budget)
       ) {
@@ -2596,7 +3368,7 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         ? 'OUTCOME_UNCERTAIN'
         : (event.details?.stop_requested === true ? 'STOPPED' : 'FAILED')
       if (event.details?.stop_requested === true) {
-        run.stop = await recoveredStop(event, loaded.directory)
+        run.stop = await recoveredStop(event, loaded.directory, run)
       }
     } else if (event.type === 'STOP_CONFIRMED') {
       if (
@@ -2619,7 +3391,7 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
         throw eventTailError('stop tail names an unknown action')
       }
       run.state = event.details.terminal_state
-      run.stop = await recoveredStop(event, loaded.directory)
+      run.stop = await recoveredStop(event, loaded.directory, run)
     } else if (event.type === 'RUN_FINALIZED') {
       const committed = run.actions.filter(({ state }) => state === 'COMMITTED').length
       const recoveredFinalState = ['STOPPED', 'FAILED', 'OUTCOME_UNCERTAIN'].includes(
@@ -2740,6 +3512,35 @@ async function verifyExistingEvidence({
         'operator authorization receipt does not bind the sealed authorization identity',
       )
     }
+  } else if (loaded.run.authorization.mode === 'CONTROLLER_DEPLOYMENT_POLICY') {
+    const expectedPlanEventKeys = [
+      'authorization_mode',
+      'plan_sha256',
+      'controller_policy_authority_receipt',
+      'tls_policy',
+      'action_count',
+      'network_activity',
+    ]
+    const receipt = assertValidControllerPolicyHttpReconReceipt(
+      events[0]?.details?.controller_policy_authority_receipt,
+      { requireCurrentValidity: false },
+    )
+    if (
+      !hasExactObjectKeys(events[0]?.details, expectedPlanEventKeys)
+      || canonicalJson(receipt) !== canonicalJson(trust.receipt)
+      || canonicalJson(receipt.authority)
+        !== canonicalJson(loaded.run.authorization)
+      || receipt.canonical_target !== loaded.run.actions[0]?.url
+      || canonicalJson(receipt.limits) !== canonicalJson(loaded.run.limits)
+      || receipt.plan_sha256 !== loaded.run.plan_sha256
+      || events[0].details.action_count !== 1
+      || events[0].details.network_activity !== false
+    ) {
+      throw controllerError(
+        'HTTP_RECON_CONTROLLER_POLICY_RECEIPT_INVALID',
+        'plan event does not preserve the exact controller-policy authority receipt',
+      )
+    }
   }
   if (forDispatch && events.some(({ type }) => type === 'RUN_FINALIZED')) {
     throw controllerError(
@@ -2796,8 +3597,10 @@ async function verifyExistingEvidence({
     }
     if (event.type === 'ACTION_LEASED') {
       const plannedAction = actionById.get(eventActionId)
-      const attestedLeaseValid = event.details?.current_authorization_confirmed === true
-        && event.details?.operator_id === loaded.run.authorization.operator_id
+      const attestedLeaseValid = loaded.run.authorization.mode === 'OPERATOR_ATTESTED'
+        ? event.details?.current_authorization_confirmed === true
+          && event.details?.operator_id === loaded.run.authorization.operator_id
+        : controllerPolicyLeaseIsValid(event, loaded.run, trust)
       if (
         leasedByAction.has(eventActionId)
         || event.details?.authorization_mode !== trust.mode
@@ -2865,14 +3668,18 @@ async function verifyExistingEvidence({
     const commit = committedByAction.get(action.action_id)
     const lease = leasedByAction.get(action.action_id)
     const preDispatch = preDispatchByAction.get(action.action_id)
-    const authorityMatches = observation?.authority?.mode === 'OPERATOR_ATTESTED'
-      && observation.authority.authorization_id
-        === loaded.run.authorization.authorization_id
-      && observation.authority.operator_id
-        === loaded.run.authorization.operator_id
-      && observation.authority.scope_sha256
-        === loaded.run.authorization.scope_sha256
-      && observation.authority.plan_sha256 === loaded.run.plan_sha256
+    const authorityMatches = loaded.run.authorization.mode === 'OPERATOR_ATTESTED'
+      ? observation?.authority?.mode === 'OPERATOR_ATTESTED'
+        && observation.authority.authorization_id
+          === loaded.run.authorization.authorization_id
+        && observation.authority.operator_id
+          === loaded.run.authorization.operator_id
+        && observation.authority.scope_sha256
+          === loaded.run.authorization.scope_sha256
+        && observation.authority.plan_sha256 === loaded.run.plan_sha256
+      : observation?.authority?.mode === 'CONTROLLER_DEPLOYMENT_POLICY'
+        && canonicalJson(observation.authority)
+          === canonicalJson(loaded.run.authorization)
     const observationMatchesAction = observation !== undefined
       && observation.run_id === loaded.run.run_id
       && observation.engagement_id === loaded.run.engagement_id
@@ -2921,7 +3728,7 @@ async function verifyExistingEvidence({
   if (loaded.run.budget.proof_requests_used !== 0) {
     throw controllerError(
       'HTTP_RECON_ATTESTED_PROOF_STATE_INVALID',
-      'operator-attested evidence must not contain target-proof budget use',
+      'bounded HTTP-recon evidence must not contain target-proof budget use',
     )
   }
   return { events, observations, ...recovery }
@@ -3041,6 +3848,7 @@ export async function httpReconReportPath(bundle) {
 export const httpReconControllerConstants = Object.freeze({
   RUN_FILE,
   ATTESTED_SCOPE_FILE,
+  CONTROLLER_POLICY_AUTHORITY_FILE,
   EVENTS_FILE,
   REPORT_FILE,
   STOP_FILE,

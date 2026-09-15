@@ -62,9 +62,9 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Static checks do not inspect a Docker daemon, verify an image, or prove runtime readiness.',
     },
     {
-      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
-      description: 'Durable target-neutral engagement orchestration across registered routes that inventories every applicable packaged controller family under one operator statement and shared ledger.',
-      limitation: 'Only shipped registered routes marked available in the sealed registry can dispatch. Disabled controllers, missing engagement adapters, missing tools, and omitted immutable material remain explicit non-dispatching states.',
+      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage unleash', 'engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
+      description: 'Durable target-neutral engagement orchestration across registered routes, including one-target Unleash.',
+      limitation: 'Unleash currently accepts HTTPS targets and runs bounded reconnaissance. Only shipped registered routes marked available can dispatch. Applicable routes blocked by missing material or unavailable adapters remain explicit gaps; unrelated routes remain not applicable.',
     },
     {
       id: 't1-proof', status: 'AVAILABLE_NARROW', commands: ['run-proof'],

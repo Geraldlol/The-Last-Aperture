@@ -2,11 +2,11 @@
 
 Protocol: `http-recon-v1`
 
-Protocol design: introduced in 0.11.0. Version 0.14.1 retains the target-neutral
+Protocol design: introduced in 0.11.0. Version 0.15.0 retains the target-neutral
 1.0 and 1.1 formats. Retired target-specific 0.12 response-profile artifacts
 require the 0.12 verifier and cannot resume under the current controller.
 
-> **Current 0.14.1 execution status: active.** `go <exact-https-url>` records the
+> **Current 0.15.0 execution status: active.** `go <exact-https-url>` records the
 > invocation as the operator's launch directive and completes one bounded live
 > action. Lower-level `plan` and `run` invocations are also operator directives;
 > the controller does not request a second confirmation flag.
@@ -22,6 +22,16 @@ amendments. [`ADR 0021`](adr/0021-operator-statement-authorization.md) defines
 the current authorization model.
 
 ## Authorization
+
+The authorization model below applies to the direct and legacy `http-recon-v1`
+command family. Target-only `engage unleash <target>` is a separate controller
+entrypoint: it accepts no operator identity, attestation, profile, authority
+file, output path, provider, or credential input. The Unleash controller loads
+deployment policy and revocation state, admits the exact canonical target for
+the observation effect, and binds that controller-policy authority to its plan
+and retained completion evidence. Its current enrolled route fixes `HEAD`, uses
+only native transport-default headers, and accepts no caller-selected,
+diagnostic-profile, or credential headers.
 
 `OPERATOR_ATTESTED` is the authorization path. The operator supplies one
 exact HTTPS URL, their identity, the declared authorizer, an authorization
@@ -185,8 +195,8 @@ distinct terminal outcomes in the bundle and report.
 
 ## Report contract and nonclaims
 
-Every report begins with "Operator-attested external HTTP reconnaissance only"
-and includes:
+Every direct/legacy `OPERATOR_ATTESTED` report begins with "Operator-attested
+external HTTP reconnaissance only" and includes:
 
 > Completion means only that the locally hash-bound HTTP request denominator
 > ran within the operator-attested scope.

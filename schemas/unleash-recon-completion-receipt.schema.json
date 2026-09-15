@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-recon-completion-receipt.schema.json",
+  "title": "The Last Aperture verified HTTPS reconnaissance completion receipt",
+  "description": "A self-bound local receipt tying one completed HTTPS reconnaissance route to its exact execution contract, controller plan, verified run, event-chain head, policy, target, and evidence projection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "route_id",
+    "tool_id",
+    "execution_contract_sha256",
+    "adapter_id",
+    "verifier_id",
+    "recon_run_id",
+    "recon_plan_sha256",
+    "recon_event_count",
+    "recon_event_head_sha256",
+    "unleash_plan_sha256",
+    "unleash_registry_sha256",
+    "target_id",
+    "target_url",
+    "policy_id",
+    "policy_sha256",
+    "authority",
+    "authority_sha256",
+    "evidence_ref",
+    "evidence_receipt_sha256",
+    "observed_at",
+    "completion_receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/unleash-route-completion-receipt" },
+    "route_id": { "const": "https-recon" },
+    "tool_id": { "const": "tool:https-recon" },
+    "execution_contract_sha256": { "$ref": "#/$defs/sha256" },
+    "adapter_id": { "const": "adapter:last-aperture-http-recon" },
+    "verifier_id": { "const": "verifier:last-aperture-http-recon" },
+    "recon_run_id": { "$ref": "#/$defs/id" },
+    "recon_plan_sha256": { "$ref": "#/$defs/sha256" },
+    "recon_event_count": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+    "recon_event_head_sha256": { "$ref": "#/$defs/sha256" },
+    "unleash_plan_sha256": { "$ref": "#/$defs/sha256" },
+    "unleash_registry_sha256": { "$ref": "#/$defs/sha256" },
+    "target_id": {
+      "type": "string",
+      "pattern": "^target:sha256:[a-f0-9]{64}$"
+    },
+    "target_url": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 4096,
+      "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "policy_id": { "$ref": "#/$defs/id" },
+    "policy_sha256": { "$ref": "#/$defs/sha256" },
+    "authority": { "$ref": "#/$defs/controllerDeploymentPolicyAuthority" },
+    "authority_sha256": { "$ref": "#/$defs/sha256" },
+    "evidence_ref": {
+      "type": "string",
+      "pattern": "^evidence:sha256:[a-f0-9]{64}$"
+    },
+    "evidence_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "observed_at": { "$ref": "#/$defs/timestamp" },
+    "completion_receipt_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "controllerDeploymentPolicyAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "policy_id",
+        "policy_sha256",
+        "target_id",
+        "effect",
+        "admitted_at",
+        "revocation_check_id"
+      ],
+      "properties": {
+        "mode": { "const": "CONTROLLER_DEPLOYMENT_POLICY" },
+        "policy_id": { "$ref": "#/$defs/id" },
+        "policy_sha256": { "$ref": "#/$defs/sha256" },
+        "target_id": {
+          "type": "string",
+          "pattern": "^target:sha256:[a-f0-9]{64}$"
+        },
+        "effect": { "const": "OBSERVE" },
+        "admitted_at": { "$ref": "#/$defs/timestamp" },
+        "revocation_check_id": { "$ref": "#/$defs/id" }
+      }
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}

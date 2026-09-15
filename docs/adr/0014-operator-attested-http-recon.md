@@ -8,7 +8,7 @@
 - Amended by: ADR 0015, which removes the mandatory advance SPKI pin from
   operator-attested planning
 
-> **Current 0.14.1 execution status: active through the bounded controller.**
+> **Current 0.15.0 execution status: active through the bounded controller.**
 > `go <exact-https-url>` records the operator invocation as the authorization
 > declaration and executes one sealed action without a second attestation step.
 > The declaration is not independent proof of permission; exact-target and

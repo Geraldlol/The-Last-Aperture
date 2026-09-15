@@ -2,10 +2,16 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as httpReconContracts from '../scripts/lib/http-recon-contracts.mjs'
 import {
+  assertValidControllerPolicyHttpReconAuthority,
+  assertValidControllerPolicyHttpReconReceipt,
   assertValidHttpReconObservation,
   assertValidOperatorAttestedHttpReconScope,
+  buildControllerPolicyHttpReconPlan,
   buildOperatorAttestedHttpReconPlan,
   canonicalJson,
+  controllerPolicyHttpReconTargetId,
+  createControllerPolicyHttpReconAuthority,
+  createControllerPolicyHttpReconReceipt,
   createOperatorAttestedHttpReconScope,
 } from '../scripts/lib/http-recon-contracts.mjs'
 
@@ -180,6 +186,95 @@ test('operator attestation hash-binds one controller-owned diagnostic header pro
   )
 })
 
+test('controller deployment-policy authority seals one exact HEAD target without operator claims', () => {
+  const targetUrl = 'https://target.example/security.txt'
+  const admission = {
+    policy_id: 'deployment-policy-2026-08-04',
+    policy_sha256: 'a'.repeat(64),
+    target_id: controllerPolicyHttpReconTargetId(targetUrl),
+    effect: 'OBSERVE',
+    admitted_at: NOW.toISOString(),
+    revocation_check_id: 'deployment-revocations-v1',
+  }
+  const authority = createControllerPolicyHttpReconAuthority({
+    controllerPolicyAuthority: admission,
+  })
+  assert.deepEqual(Object.keys(authority).toSorted(), [
+    'admitted_at',
+    'effect',
+    'mode',
+    'policy_id',
+    'policy_sha256',
+    'revocation_check_id',
+    'target_id',
+  ])
+  assert.equal(Object.hasOwn(authority, 'operator_id'), false)
+  assert.equal(Object.hasOwn(authority, 'statement'), false)
+  assert.equal(Object.hasOwn(authority, 'independently_verified'), false)
+  assert.equal(
+    assertValidControllerPolicyHttpReconAuthority(authority, { now: NOW }),
+    authority,
+  )
+
+  const built = buildControllerPolicyHttpReconPlan({
+    engagementId: 'controller-policy-engagement',
+    authority,
+    targetUrl,
+  })
+  assert.equal(built.plan.authorization_mode, 'CONTROLLER_DEPLOYMENT_POLICY')
+  assert.equal(built.actions.length, 1)
+  assert.deepEqual(built.actions[0], {
+    action_id: built.actions[0].action_id,
+    sequence: 1,
+    method: 'HEAD',
+    url: targetUrl,
+    safe_to_get: false,
+  })
+  assert.equal(Object.hasOwn(built.actions[0], 'request_headers'), false)
+  const receipt = createControllerPolicyHttpReconReceipt({
+    authority,
+    targetUrl,
+    planSha256: built.plan_sha256,
+  })
+  assert.equal(
+    assertValidControllerPolicyHttpReconReceipt(receipt, { now: NOW }),
+    receipt,
+  )
+
+  assert.throws(
+    () => createControllerPolicyHttpReconAuthority({
+      controllerPolicyAuthority: { ...admission, operator_id: 'fabricated' },
+    }),
+    /exactly|authority/i,
+  )
+  assert.throws(
+    () => createControllerPolicyHttpReconAuthority({
+      controllerPolicyAuthority: { ...admission, effect: 'MUTATE' },
+    }),
+    /schema/i,
+  )
+  assert.throws(
+    () => buildControllerPolicyHttpReconPlan({
+      engagementId: 'controller-policy-engagement',
+      authority: { ...authority, target_id: `target:sha256:${'b'.repeat(64)}` },
+      targetUrl,
+    }),
+    /target_id|bind/i,
+  )
+  const limitsDrift = structuredClone(receipt)
+  limitsDrift.limits.max_probe_requests = 2
+  assert.throws(
+    () => assertValidControllerPolicyHttpReconReceipt(limitsDrift, { now: NOW }),
+    /limits|schema/i,
+  )
+  const targetDrift = structuredClone(receipt)
+  targetDrift.canonical_target = 'https://other.example/security.txt'
+  assert.throws(
+    () => assertValidControllerPolicyHttpReconReceipt(targetDrift, { now: NOW }),
+    /target_id|target/i,
+  )
+})
+
 test('observation contract retains transport metadata but never response bytes', () => {
   const digest = 'c'.repeat(64)
   const observation = {
@@ -238,6 +333,26 @@ test('observation contract retains transport metadata but never response bytes',
     stop_condition: null,
   }
   assert.equal(assertValidHttpReconObservation(observation), observation)
+  const controllerPolicyObservation = structuredClone(observation)
+  controllerPolicyObservation.authority = createControllerPolicyHttpReconAuthority({
+    controllerPolicyAuthority: {
+      policy_id: 'deployment-policy-2026-08-04',
+      policy_sha256: 'a'.repeat(64),
+      target_id: controllerPolicyHttpReconTargetId(observation.url),
+      effect: 'OBSERVE',
+      admitted_at: NOW.toISOString(),
+      revocation_check_id: 'deployment-revocations-v1',
+    },
+  })
+  assert.equal(
+    assertValidHttpReconObservation(controllerPolicyObservation),
+    controllerPolicyObservation,
+  )
+  controllerPolicyObservation.authority.operator_id = 'fabricated-operator'
+  assert.throws(
+    () => assertValidHttpReconObservation(controllerPolicyObservation),
+    /schema/i,
+  )
   const retiredAuthority = structuredClone(observation)
   retiredAuthority.authority = {
     mode: 'EXTERNAL_SIGNED',

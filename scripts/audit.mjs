@@ -250,8 +250,9 @@ const CREATE_EXCLUSIVE_NO_FOLLOW = fsConstants.O_WRONLY
 const HELP = `last-aperture ${PLATFORM_VERSION}
 
 Usage:
+  last-aperture engage unleash <target> [--json]
   last-aperture engage run <target> --attestation-file <file> --profile <full|repository-read|web|reverse|offline> --out <new-directory> [--target-kind <kind>] [--objective <text>] [--credential-reference <name> ...] [--input <kind=absolute-path> ...] [--json]
-  last-aperture engage resume|status|stop <engagement-directory> [options]
+  last-aperture engage resume|status|stop <engagement-or-campaign-directory> [options]
   last-aperture engage work next|status|finalize|validate <engagement-directory> [--json]
   last-aperture engage work submit <engagement-directory> --work-id <repository-work:sha256> --result <absolute-json-path> [--json]
     Browser auth accepts --credential-reference browser:<32-character a-p Chrome-extension-id>

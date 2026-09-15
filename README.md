@@ -9,20 +9,24 @@ owns inventory, activation, scope, state transitions, coverage accounting,
 evidence lineage, and reporting. Manual providers declare which scoped files
 and stores they examined. The optional sealed runner can prove byte consumption
 and the optional remote gateway can prove acceptance of one signed provider
-request; neither proves model comprehension. External HTTP reconnaissance uses
-the same operator-statement authorization with its own execution controller,
-action denominator, stop path, and nonclaims. It never becomes repository coverage.
+request; neither proves model comprehension. Direct and legacy external HTTP
+reconnaissance uses operator-statement authorization with its own execution
+controller, action denominator, stop path, and nonclaims. The target-only
+Unleash path instead uses controller-owned deployment policy and revocation
+state. Neither path becomes repository coverage.
 
 > **Protocol compatibility:** The Last Aperture is the user-facing name. Stable
 > `red-team-audit/...` IDs, kind strings, cryptographic domains, and producer
-> identities remain unchanged for formats that 0.14 still supports. Compatibility
-> is format-specific; it does not make every 0.12 extension readable by 0.14.
+> identities remain unchanged for formats that 0.15 still supports. Compatibility
+> is format-specific; it does not make every 0.12 extension readable by 0.15.
 
-> **0.14 migration:** `engage run` is now the normal entrypoint. It persists one
-> exact operator statement, explicit authority profile, and normalized target, plans every applicable shipped
-> route, records a dispatch permit before execution, and resumes from one shared
-> hash-chained ledger without asking for the statement again. Existing route CLIs
-> remain available as compatibility adapters.
+> **Point-Click-Shoot:** `engage unleash <target>` is the target-only entrypoint.
+> The controller loads deployment policy and chooses run storage; provider
+> configuration and credentials stay outside runtime input. The current
+> credential-free public slice accepts one HTTPS target, performs exactly one
+> bounded `HEAD` observation, records every route disposition in its plan, and
+> summarizes route and gap counts. `engage run` remains available for explicit
+> legacy intake.
 
 > **0.13 migration:** Target-specific HTTP response-profile formats were retired
 > to keep the shipped platform target-neutral. Existing HTTP-recon 1.2,
@@ -32,13 +36,18 @@ action denominator, stop path, and nonclaims. It never becomes repository covera
 > interaction contracts retain exact read compatibility with the released 1.0
 > shape; new multi-source contracts use 1.1.
 
-At agent/controller ingress, the authenticated operator statement naming target
-and scope is the sole authorization fact for every capability it names, including T2/service
-boots, controller-referenced credentials, and named external services. If
-target/scope is already supplied, proceed; ask once only when it is missing.
-Never require another consent, RoE, ownership, or legal check. A T1-only
-statement stays narrow, and the operator remains accountable. See
+For legacy `engage run` and direct command families, the authenticated operator
+statement naming target and scope is the controller-accepted authorization fact
+for each capability it names, including T2/service boots,
+controller-referenced credentials, and named external services. If target/scope
+is already supplied, proceed; ask once only when it is missing. Never require
+another consent, RoE, ownership, or legal check. A T1-only statement stays
+narrow, and the operator remains accountable. See
 [ADR 0023](docs/adr/0023-operator-authority-governs-named-capabilities.md).
+
+`engage unleash` does not accept or synthesize that statement. Its authority is
+an exact controller-owned deployment-policy decision bound to the target, plan,
+effect, admission time, and revocation check. Runtime intake remains one target.
 
 The statement can be ordinary language. It persists for the named objective
 across route selection and Codex/Claude handoffs, so one engagement does not
@@ -103,7 +112,24 @@ security conclusions. See [assessment improvements](docs/assessment-improvements
 for commands and [delivery status](docs/delivery-status.md) for the remaining
 work and verification record.
 
-Version 0.14.1 hardens the unified platform after a repository-wide review:
+Version 0.15.0 adds the first target-only controller slice:
+
+- `engage unleash <https-target>` accepts only a target. The controller loads
+  its deployment policy and revocation state, chooses protected campaign
+  storage, and freezes every registered route into one digest-bound plan.
+- The first available route executes exactly one credential-free HTTPS `HEAD`
+  with no caller-selected, diagnostic-profile, or credential headers. The native
+  client supplies only fixed transport defaults. Its controller-policy authority
+  is revalidated before execution, lease, and dispatch without fabricating an
+  operator attestation.
+- Append-only campaign state, Status/Stop/Resume, execution-contract binding,
+  typed completion receipts, evidence packets, and explicit route gaps recover
+  safely without replaying an uncertain request.
+- Provider hypothesis execution, crawling, authenticated tests, exploit proof
+  oracles, repair loops, other target families, and the graphical cockpit remain
+  outside this release.
+
+Version 0.14.1 hardened the unified platform after a repository-wide review:
 
 - Evidence acquisition, bundle verification, and OCI normalization enforce
   limits before consumption and bind verified metadata, roots, plans, tools,
@@ -345,11 +371,21 @@ does not execute shell snippets embedded in lenses. Run
 `npm run test:cloud-iac:conformance` explicitly from a trusted checkout when
 Bash and ripgrep are available.
 
+A deployment administrator must complete [Unleash setup](docs/unleash-setup.md)
+before the target-only command can load its policy and revocation state.
+
 ```powershell
 npm.cmd ci --ignore-scripts
 npm.cmd test
 
-# Normal target-and-go workflow. The UTF-8 statement is stored exactly once.
+# Point-Click-Shoot: one target, with controller-owned policy and run storage.
+npm.cmd run audit -- engage unleash https://target.example/app
+# Use the absolute campaign directory printed by the preceding command.
+npm.cmd run audit -- engage status <absolute-campaign-directory> --json
+npm.cmd run audit -- engage resume <absolute-campaign-directory>
+npm.cmd run audit -- engage stop <absolute-campaign-directory> --reason "operator stop"
+
+# Legacy explicit intake. The UTF-8 statement is stored exactly once.
 npm.cmd run audit -- engage run https://target.example/app `
   --attestation-file C:\engagement-inputs\authority.txt `
   --profile full `
@@ -381,7 +417,15 @@ npm.cmd run audit -- plan C:\path\to\repository --out C:\audit-runs `
   --max-shard-files 64 --max-shard-bytes 4194304 --max-closure-rounds 3
 ```
 
-`--profile full` grants every registered route for the named target. Narrower
+`engage unleash` accepts exactly one target and optional `--json`; it accepts no
+output path, profile, attestation file, local input, or credential flag. Its
+summary names the campaign and app-owned run directory, records the plan digest,
+and counts completed routes and exact gaps. The current public slice accepts
+HTTPS targets and completes the bounded HTTPS reconnaissance route. Its durable
+campaign journal recovers stale state without replaying an ambiguous request;
+route completion requires a typed receipt from the enrolled recon verifier.
+
+For legacy `engage run`, `--profile full` grants every registered route for the named target. Narrower
 machine profiles are `repository-read`, `web`, `reverse`, and `offline`; the
 stored statement must not contradict the selected profile. The profile is part
 of the durable authority record and is reused on resume without another prompt.
@@ -757,7 +801,7 @@ separate evidence, but their digest, issuer, or signature cannot grant a
 different mode, target, action, or limit.
 
 Load `browser/http-authed-chrome` as an unpacked extension and copy the extension
-ID shown by Chrome into `--browser-extension-id` when planning. Version 0.14.1
+ID shown by Chrome into `--browser-extension-id` when planning. Version 0.15.0
 uses `activeTab` and `scripting` only after the operator selects the target tab,
 `storage` for an extension-owned ephemeral recovery marker, plus an optional
 user-granted `http://127.0.0.1/*` permission for controller pairing. It has no
@@ -1553,10 +1597,12 @@ variants after the v1 result and lifecycle contracts have operational history.
 ## Project boundaries
 
 - Do not upload source, evidence, secrets, PII, or PHI by default.
-- Do not run repository T1/T2 proof against production. Production HTTP actions
-  use a route-specific `http-authed-v1` campaign. The same operator statement is
-  sufficient when it names that target and work; do not ask again. The route is
-  an execution and evidence boundary, not a separate authorization source.
+- Do not run repository T1/T2 proof against production. Legacy/direct production
+  HTTP actions use a route-specific `http-authed-v1` campaign. The same operator
+  statement is sufficient when it names that target and work; do not ask again.
+  The route is an execution and evidence boundary, not a separate authorization
+  source. Target-only Unleash actions instead require the controller-owned
+  deployment-policy decision and current revocation state.
 - Do not infer completeness from zero findings.
 - Do not automatically apply patches; external mutation requires its declared
   reversible action and one-use technical dispatch receipt.

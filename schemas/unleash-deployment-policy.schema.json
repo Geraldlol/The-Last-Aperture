@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-deployment-policy.schema.json",
+  "title": "The Last Aperture controller-owned unleash deployment policy",
+  "description": "Exact origins, supported target families, effects, budgets, opaque credential references, validity, and fail-closed revocation used outside target intake.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "policy_id",
+    "valid_from",
+    "valid_until",
+    "allowed_origins",
+    "allowed_target_families",
+    "allowed_effects",
+    "budgets",
+    "credential_references",
+    "revocation"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "kind": { "const": "last-aperture/unleash-deployment-policy" },
+    "policy_id": { "$ref": "#/$defs/id" },
+    "valid_from": { "$ref": "#/$defs/timestamp" },
+    "valid_until": { "$ref": "#/$defs/timestamp" },
+    "allowed_origins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 9,
+        "maxLength": 2048,
+        "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+      }
+    },
+    "allowed_target_families": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["https", "browser", "database", "network", "cloud", "artifact", "process", "device"]
+      }
+    },
+    "allowed_effects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "OBSERVE",
+          "PROBE",
+          "AUTHENTICATED_REQUEST",
+          "MUTATE_REVERSIBLE",
+          "EXECUTE_PROOF",
+          "EXFILTRATE_CANARY",
+          "PUBLISH_EVIDENCE"
+        ]
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_actions", "max_parallel_actions", "max_duration_ms", "max_response_bytes"],
+      "properties": {
+        "max_actions": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_parallel_actions": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "max_duration_ms": { "type": "integer", "minimum": 1, "maximum": 604800000 },
+        "max_response_bytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+      }
+    },
+    "credential_references": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 160,
+        "pattern": "^credential:[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      }
+    },
+    "revocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check_id", "fail_mode"],
+      "properties": {
+        "check_id": { "$ref": "#/$defs/id" },
+        "fail_mode": { "const": "CLOSED" }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}
