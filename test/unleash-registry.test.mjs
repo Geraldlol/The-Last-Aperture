@@ -169,10 +169,12 @@ test('creates default planner dependencies with the frozen registry and provider
   assert.deepEqual(dependencies.policy, policy)
   assert.deepEqual(dependencies.registry, buildUnleashToolRegistry())
   assert.equal(dependencies.registry.registry_version, ENGAGEMENT_ROUTE_REGISTRY_VERSION)
-  assert.deepEqual(dependencies.provider, {
-    protocol_version: '1.0.0',
-    proposal_kind: 'last-aperture/unleash-proposal',
-  })
+  assert.equal(dependencies.provider.protocol_version, '2.0.0')
+  assert.equal(dependencies.provider.proposal_kind, 'last-aperture/unleash-proposal')
+  assert.equal(dependencies.provider.roles.length, 7)
+  assert.equal(dependencies.provider.assignments.length, 7)
+  assert.equal(dependencies.provider.assignments.every(({ availability }) => availability === 'UNAVAILABLE'), true)
+  assert.equal(dependencies.provider.trust.provider_has_execution_authority, false)
 })
 
 test('plans the default HTTPS shot with complete ready, waiting, unavailable, and not-applicable states', () => {

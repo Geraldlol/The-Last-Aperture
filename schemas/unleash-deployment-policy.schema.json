@@ -15,6 +15,7 @@
     "allowed_target_families",
     "allowed_effects",
     "budgets",
+    "detection",
     "credential_references",
     "revocation"
   ],
@@ -71,6 +72,28 @@
         "max_parallel_actions": { "type": "integer", "minimum": 1, "maximum": 1024 },
         "max_duration_ms": { "type": "integer", "minimum": 1, "maximum": 604800000 },
         "max_response_bytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+      }
+    },
+    "detection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "noise_profile",
+        "target_environment",
+        "risk_tolerance",
+        "confirmation_mode"
+      ],
+      "properties": {
+        "noise_profile": {
+          "enum": ["AUTO", "AGGRESSIVE", "BALANCED", "CAUTIOUS"]
+        },
+        "target_environment": {
+          "enum": ["UNKNOWN", "PRODUCTION", "PRE_PRODUCTION", "LAB"]
+        },
+        "risk_tolerance": {
+          "enum": ["UNSPECIFIED", "LOW", "MODERATE", "HIGH"]
+        },
+        "confirmation_mode": { "const": "REQUIRED" }
       }
     },
     "credential_references": {

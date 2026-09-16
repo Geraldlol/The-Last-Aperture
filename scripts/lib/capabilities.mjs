@@ -62,9 +62,9 @@ export const CAPABILITY_REGISTRY = deepFreeze({
       limitation: 'Static checks do not inspect a Docker daemon, verify an image, or prove runtime readiness.',
     },
     {
-      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage unleash', 'engage run', 'engage resume', 'engage status', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
-      description: 'Durable target-neutral engagement orchestration across registered routes, including one-target Unleash.',
-      limitation: 'Unleash currently accepts HTTPS targets and runs bounded reconnaissance. Only shipped registered routes marked available can dispatch. Applicable routes blocked by missing material or unavailable adapters remain explicit gaps; unrelated routes remain not applicable.',
+      id: 'engagement-orchestration', status: 'AVAILABLE_NARROW', commands: ['engage unleash', 'engage run', 'engage resume', 'engage status', 'engage confirm', 'engage pause', 'engage rollback', 'engage stop', 'engage work next', 'engage work status', 'engage work submit', 'engage work finalize', 'engage work validate'],
+      description: 'Durable target-neutral engagement orchestration across registered routes, including one-target Unleash with a hash-bound BORG proposal swarm, action-risk preflight, confirmation, Pause, Resume, rollback, and Stop controls.',
+      limitation: 'Unleash accepts HTTPS targets, performs one bounded credential-free HEAD, and seals at most two reasoning rounds. Action-risk scores are uncalibrated relative-exposure estimates with unknown telemetry coverage. Rollback cancels future local work and inert proposals; it does not reverse target-side effects. Only shipped registered routes can dispatch. No reasoning adapter is enrolled by the packaged CLI; proposed actions stay inert and findings stay empty until typed execution and proof routes exist. Missing routes and adapters remain explicit gaps.',
     },
     {
       id: 't1-proof', status: 'AVAILABLE_NARROW', commands: ['run-proof'],

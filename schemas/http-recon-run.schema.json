@@ -26,7 +26,7 @@
   ],
   "properties": {
     "schema_version": {
-      "enum": ["1.0.0", "1.1.0"]
+      "enum": ["1.0.0", "1.1.0", "1.3.0"]
     },
     "kind": {
       "const": "red-team-audit/http-recon-run"
@@ -110,8 +110,8 @@
           "actions": { "contains": { "required": ["request_headers"] } }
         }
       },
-      "then": { "properties": { "schema_version": { "const": "1.1.0" } } },
-      "else": { "properties": { "schema_version": { "const": "1.0.0" } } }
+      "then": { "properties": { "schema_version": { "enum": ["1.1.0", "1.3.0"] } } },
+      "else": { "properties": { "schema_version": { "enum": ["1.0.0", "1.3.0"] } } }
     },
     {
       "if": {
@@ -127,7 +127,7 @@
       },
       "then": {
         "properties": {
-          "schema_version": { "const": "1.0.0" },
+          "schema_version": { "enum": ["1.0.0", "1.3.0"] },
           "limits": { "$ref": "#/$defs/controllerDeploymentPolicyLimits" },
           "actions": {
             "minItems": 1,
@@ -145,6 +145,21 @@
             }
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "actions": {
+            "contains": {
+              "properties": { "state": { "const": "PAUSED_BEFORE_SEND" } },
+              "required": ["state"]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": { "schema_version": { "const": "1.3.0" } }
       }
     }
   ],
@@ -564,6 +579,7 @@
           "enum": [
             "PENDING",
             "LEASED",
+            "PAUSED_BEFORE_SEND",
             "SENT",
             "COMMITTED",
             "FAILED",

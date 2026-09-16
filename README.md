@@ -1,32 +1,36 @@
 # The Last Aperture
 
-The Last Aperture is an evidence-first, agent-assisted security platform with a
-unified engagement controller over repository review, bounded HTTPS observation,
-authenticated campaigns, Burp/HAR capture, Ghidra, Frida, and protocol
-reconstruction. Its
-security lenses supply domain judgment; a deterministic Node.js control plane
-owns inventory, activation, scope, state transitions, coverage accounting,
-evidence lineage, and reporting. Manual providers declare which scoped files
-and stores they examined. The optional sealed runner can prove byte consumption
-and the optional remote gateway can prove acceptance of one signed provider
-request; neither proves model comprehension. Direct and legacy external HTTP
-reconnaissance uses operator-statement authorization with its own execution
-controller, action denominator, stop path, and nonclaims. The target-only
-Unleash path instead uses controller-owned deployment policy and revocation
-state. Neither path becomes repository coverage.
+The Last Aperture is a target-first autonomous security platform. Its primary
+product contract is **Point. Click. Shoot.** Supply one target and invoke
+`engage unleash`; the controller owns campaign storage, deployment authority,
+provider selection, concurrency, route admission, evidence, recovery, Stop,
+action-risk preflight, Pause, rollback, and reporting.
+
+The **BORG directive** is the campaign model: parallel attacker roles share one
+evidence-bound frontier, challenge one another, and propose only registered
+typed actions. A deterministic Node.js control plane owns target identity,
+effect policy, dispatch, cleanup, proof promotion, and coverage accounting. An
+enrolled reasoning provider can create hypotheses and choose among enrolled
+tools; it cannot widen the target, invent commands, declare its own proof, or
+erase unfinished work.
+
+Repository review, HTTPS observation, authenticated campaigns, Burp/HAR
+capture, Ghidra, Frida, and protocol reconstruction remain available capability
+families. Legacy explicit-intake commands are compatibility workflows described
+later in this document; they are not the Point-Click-Shoot product path.
 
 > **Protocol compatibility:** The Last Aperture is the user-facing name. Stable
 > `red-team-audit/...` IDs, kind strings, cryptographic domains, and producer
-> identities remain unchanged for formats that 0.15 still supports. Compatibility
-> is format-specific; it does not make every 0.12 extension readable by 0.15.
+> identities remain unchanged for formats that 0.16 still supports. Compatibility
+> is format-specific; it does not make every 0.12 extension readable by 0.16.
 
-> **Point-Click-Shoot:** `engage unleash <target>` is the target-only entrypoint.
-> The controller loads deployment policy and chooses run storage; provider
-> configuration and credentials stay outside runtime input. The current
-> credential-free public slice accepts one HTTPS target, performs exactly one
-> bounded `HEAD` observation, records every route disposition in its plan, and
-> summarizes route and gap counts. `engage run` remains available for explicit
-> legacy intake.
+> **Point-Click-Shoot:** `engage unleash <target>` is the only runtime input for
+> the autonomous path. The controller resolves the target, launches every ready
+> enrolled capability, feeds verified observations into the BORG frontier, and
+> exposes snapshot-bound routes, candidates, findings, gaps, timeline,
+> detection context, Pause, rollback, Stop, and Resume. Deployment policy,
+> credentials, providers, budgets, and storage
+> are controller configuration, never run-form fields.
 
 > **0.13 migration:** Target-specific HTTP response-profile formats were retired
 > to keep the shipped platform target-neutral. Existing HTTP-recon 1.2,
@@ -34,51 +38,115 @@ state. Neither path becomes repository coverage.
 > verifier and cannot be resumed with 0.13. Export their final reports with 0.12,
 > then create a new target-neutral 0.13 scope for continued work. Native
 > interaction contracts retain exact read compatibility with the released 1.0
-> shape; new multi-source contracts use 1.1.
+> shape; new multi-source contracts use 1.1. HTTP-recon run 1.3 is the
+> target-neutral continuation used only after a controller-proven before-send
+> Pause; retired target-specific run 1.2 remains unsupported.
 
-For legacy `engage run` and direct command families, the authenticated operator
-statement naming target and scope is the controller-accepted authorization fact
-for each capability it names, including T2/service boots,
-controller-referenced credentials, and named external services. If target/scope
-is already supplied, proceed; ask once only when it is missing. Never require
-another consent, RoE, ownership, or legal check. A T1-only statement stays
-narrow, and the operator remains accountable. See
-[ADR 0023](docs/adr/0023-operator-authority-governs-named-capabilities.md).
-
-`engage unleash` does not accept or synthesize that statement. Its authority is
-an exact controller-owned deployment-policy decision bound to the target, plan,
-effect, admission time, and revocation check. Runtime intake remains one target.
-
-The statement can be ordinary language. It persists for the named objective
-across route selection and Codex/Claude handoffs, so one engagement does not
-stop for per-action approval. Agents may compose the packaged registered routes
-while keeping the same target, time, evidence, cleanup, and stop bindings. Other
-host-tool actions and evidence remain outside the engagement until a registered
-route supports them; a missing wrapper does not revoke the stored authority.
-
-It is not another regex scanner. Agent and scanner output is provider evidence:
-it is packet-bound, attributed, schema-checked, scope-checked, and capped before
-it enters the run, but its factual accuracy still depends on proof and review.
+`engage unleash` does not accept or synthesize an operator statement. Its
+authority is an exact controller-owned deployment-policy decision bound to the
+target, plan, effect, admission time, and revocation check. Runtime intake
+remains one target. Provider and scanner output enters only as attributed,
+packet-bound candidate evidence; independent proof decides whether it becomes a
+finding.
 
 ## Current release
 
-> **Current boundary:** the unified engagement command starts and tracks the
-> applicable shipped adapters under one durable authority record. Repository T1
-> and the narrow Node/npm loopback T2 route
-> are active through sealed, network-none Docker workers. One exact bounded
-> operator-directed HTTP-recon action and adaptive sealed authenticated HTTP
-> campaigns are also active through their protocol controllers. The packaged
-> Chrome bridge can execute campaign actions in an operator-selected logged-in
-> tab without exporting browser-managed request credentials. A declared tool or
-> named host adapter that is temporarily unavailable remains a waiting condition
-> while independent routes continue. Capture, configuration, and credential
-> references omitted from immutable intake require a successor engagement. After authenticated dispatch, failure to
-> attach the selected tab is a settled child-route outcome, not resumable waiting.
-> Other T2/service shapes, semantic providers,
-> remote, bounty/OOB, acquisition,
-> database, transparency, and evidence-bundle import remain technically unavailable. Static repository inventory, source
-> sealing, offline planning/validation, and manual result ingestion are
-> available.
+> **v0.16.0 public capability:** `engage unleash <https-target>` creates an
+> app-owned durable campaign, inventories every registered route, executes one
+> credential-free HTTPS `HEAD`, and passes the independently reverified evidence
+> through the BORG controller. The controller runs a deterministic seven-role,
+> two-round attack/review schedule when matching reasoning adapters are enrolled,
+> deduplicates the merged frontier, and seals one final candidate admission,
+> completion, and status snapshot. Provider attempts use a crash-safe ledger;
+> captured bytes must decode as strict UTF-8 JSON, and ambiguous
+> started work is never replayed. Every deterministic merge is limited to
+> 262,144 JSON bytes. A response that would violate a merge-wide byte, count,
+> or provenance invariant becomes an explicit gap while later roles continue.
+> Before a target action can dispatch, a versioned action-risk catalog records
+> its expected relative exposure across endpoint, SIEM/logging, network, cloud,
+> identity, and application controls. High-risk or high-noise actions require an
+> exact assessment-bound confirmation; profile-limit violations remain blocked.
+> Recovery verifies the complete
+> attempt/merge chain, and status exposes `BASIS_READY` if a crash occurs after
+> immutable basis publication but before the SWARMING state revision.
+
+No reasoning adapter is enrolled by the packaged CLI by default. That path
+therefore seals seven exact `REASONING_ADAPTER_UNAVAILABLE` gaps after the HTTPS
+observation. The package exposes the adapter contract for controller integration,
+but runtime target input cannot select a provider or supply credentials. Proposed
+actions remain inert; `tool:https-recon` accepts only `{ "method": "HEAD" }`.
+The verified-findings view remains empty until typed
+execution and proof routes exist. v0.16.0 is not an exhaustive assessment and
+does not claim the target is secure.
+
+Detection profiles are `aggressive`, `balanced`, and `cautious`. Controller
+policy can select one explicitly or use `AUTO`, which derives a profile from the
+declared target environment and risk tolerance and records its selection reason.
+The action assessor accepts no implicit profile; the controller must materialize
+one explicit selection before it can create a preflight receipt.
+`AUTO` chooses aggressive for a high-tolerance lab, cautious for production or
+low tolerance, and balanced otherwise. Unknown posture is never silently called
+pre-production; it records `AUTO_UNKNOWN_POSTURE_BALANCED`. The scores are
+deterministic, uncalibrated relative-exposure estimates. They are not alert
+probabilities, and installed telemetry coverage remains `UNKNOWN` until measured.
+The catalog records its review date and primary defender references, including
+[MITRE ATT&CK Detection Strategies](https://attack.mitre.org/detectionstrategies/),
+[Microsoft Sentinel ASIM](https://learn.microsoft.com/en-us/azure/sentinel/normalization-content),
+[Microsoft Defender XDR](https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-schema-tables),
+[AWS GuardDuty](https://docs.aws.amazon.com/guardduty/latest/ug/guardduty_data-sources.html),
+and [Google Security Command Center](https://docs.cloud.google.com/security-command-center/docs/overview-threats).
+Its frozen generic detection-pattern model emits stable matched IDs for a
+single request, request sequences, high-rate or parallel activity,
+authenticated access, application state changes, workload execution, and
+canary or evidence transfer. These IDs describe possible telemetry exposure;
+they do not claim that a vendor alert exists or fired.
+Before each CLI-driven Unleash target dispatch, the controller sends the full
+preflight summary to the operator on stderr, including profile, risk and noise,
+likely impact, control exposure, uncertainty, confirmation state, and the bound
+assessment digest. JSON mode emits the same warning as a standalone JSON record
+on stderr before any target request can start.
+Profiles named `stealth`, `evasive`, or `bypass` are rejected because the
+controller does not suppress, impair, or evade defensive monitoring.
+
+Pause is a durable dispatch gate. The current in-flight wave settles, possibly
+delivered work is never replayed, and Resume binds acknowledgements to the
+exclusive swarm owner and revalidates current deployment authority before
+dispatch can reopen. Rollback records cancellation
+of not-yet-dispatched local work and inert proposals, then invokes the durable
+Stop kill switch. It explicitly records `target_side_effects_reversed: false`.
+Stop and Seal first contend for one immutable
+`swarm-terminal-fence.json`; its self-bound `STOP` or `SEAL` decision cannot be
+reversed. A winning Stop fence materializes the exact stop request, and the live
+controller seals `STOPPED`. A late Stop after Seal wins does not publish a
+contradictory request. `resume` must first win the campaign's atomic exclusive-owner
+claim and defers while the recorded owner PID is observed alive, regardless of
+elapsed time or an expired attempt lease. Every campaign-state or swarm-artifact
+mutation and every provider dispatch rechecks the owner token. Only an
+identity-bound lock from a dead process can be reclaimed, after which Resume
+performs local recovery without replaying work whose delivery may have started.
+PID reuse deliberately defers recovery until the observed process exits.
+The private `swarm-owner-lock` directory is a permanent container; its
+create-only `owner.json` file is the exclusive claim. A stable empty container
+is available. Exact dead pre-publication and two-link publication residues are
+recovered locally. Unique actor-bound retirement barriers prevent an old
+reclaimer from deleting a successor, and unexpected children fail closed.
+Protocol-v2 `status` is verification-only; it never repairs mutable projections.
+An owner-held Resume performs any proven projection repair.
+
+```powershell
+npm.cmd run audit -- engage status <absolute-campaign-directory> --json
+npm.cmd run audit -- engage confirm <absolute-campaign-directory> --action-id <id> --assessment-sha256 <sha256> --reason "reviewed exact action risk"
+npm.cmd run audit -- engage pause <absolute-campaign-directory> --reason "operator pause"
+npm.cmd run audit -- engage resume <absolute-campaign-directory>
+npm.cmd run audit -- engage rollback <absolute-campaign-directory> --reason "cancel future local work"
+npm.cmd run audit -- engage stop <absolute-campaign-directory> --reason "operator stop"
+```
+
+On POSIX, campaign storage can finish an interrupted create-only hard-link
+publication only when an exact dead-PID temporary name and its named destination
+are the same two-link inode with unchanged size and private metadata. Recovery
+unlinks only that temporary name and verifies the destination as a single-link
+file. Any unexplained alias fails closed.
 
 The reverse-engineering route adds Ghidra static export, typed Frida call
 tracing, offline value-redacted HAR and Burp HTTP-items XML import, an optional
@@ -127,7 +195,7 @@ Version 0.15.0 adds the first target-only controller slice:
   safely without replaying an uncertain request.
 - Provider hypothesis execution, crawling, authenticated tests, exploit proof
   oracles, repair loops, other target families, and the graphical cockpit remain
-  outside this release.
+  outside version 0.15.0.
 
 Version 0.14.1 hardened the unified platform after a repository-wide review:
 
@@ -303,7 +371,7 @@ through `run-service-proof`. An operator directive naming the local repository
 and requested dynamic scope is sufficient launch authority; do not ask again.
 T1 never boots a service. T2 admits one foreground Node/npm service in the same
 network-none container as its fixed loopback probe and proof command. Other T2
-shapes retain their authority but remain unavailable without a matching route.
+shapes retain their authority but are technically unavailable without a matching route.
 `http-recon-v1` is not T2 and cannot verify a repository finding. Local
 static mode does not execute target code or intentionally create socket traffic.
 Legacy route-CLI caller-selected filesystem paths remain trusted endpoints and
@@ -801,7 +869,7 @@ separate evidence, but their digest, issuer, or signature cannot grant a
 different mode, target, action, or limit.
 
 Load `browser/http-authed-chrome` as an unpacked extension and copy the extension
-ID shown by Chrome into `--browser-extension-id` when planning. Version 0.15.0
+ID shown by Chrome into `--browser-extension-id` when planning. Version 0.16.0
 uses `activeTab` and `scripting` only after the operator selects the target tab,
 `storage` for an extension-owned ephemeral recovery marker, plus an optional
 user-granted `http://127.0.0.1/*` permission for controller pairing. It has no

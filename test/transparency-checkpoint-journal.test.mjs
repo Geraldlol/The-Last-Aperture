@@ -6,11 +6,14 @@ import {
 } from 'node:crypto'
 import {
   link as hardLink,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  rmdir,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -114,6 +117,14 @@ function journalOptions(directory, keys, additions = {}) {
     now: () => VERIFY_NOW,
     ...additions,
   }
+}
+
+function deferred() {
+  let resolvePromise
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve
+  })
+  return { promise, resolve: resolvePromise }
 }
 
 test('journal record schema is strict and distinguishes its baseline', () => {
@@ -429,6 +440,87 @@ test('concurrent divergent advances preserve one branch and reject the fork', as
   assert.equal((await left.load()).record_count, 2)
   await left.close()
   await right.close()
+})
+
+test('an incomplete lock owner publication still serializes divergent advances', { timeout: 10_000 }, async (t) => {
+  const directory = await temporaryDirectory(t, 'incomplete-lock-owner-')
+  const keys = keyFixture()
+  const common = leafHash(0)
+  const leftLeaves = [common, leafHash(1, 'left')]
+  const rightLeaves = [common, leafHash(1, 'right')]
+  const first = signedCheckpoint(keys, leftLeaves, 1)
+  const leftHead = signedCheckpoint(keys, leftLeaves, 2, 2)
+  const rightHead = signedCheckpoint(keys, rightLeaves, 2, 3)
+  const left = await openTransparencyCheckpointJournal(
+    journalOptions(directory, keys),
+  )
+  await left.advance({ checkpoint: first })
+  const ownerObserved = deferred()
+  const releaseObservation = deferred()
+  let observationArmed = false
+  const right = await openTransparencyCheckpointJournal(
+    journalOptions(directory, keys, {
+      faultInjector: async (phase) => {
+        if (observationArmed && phase === 'after-incomplete-lock-owner-observed') {
+          ownerObserved.resolve()
+          await releaseObservation.promise
+        }
+      },
+    }),
+  )
+  const lockPath = join(directory, '.checkpoint-journal.lock')
+  const ownerPath = join(lockPath, 'owner.json')
+  await mkdir(lockPath, { mode: 0o700 })
+  await writeFile(ownerPath, '', { flag: 'wx', mode: 0o600 })
+  observationArmed = true
+
+  const rightAdvance = right.advance({
+    expectedHead: first,
+    checkpoint: rightHead,
+    consistencyProof: consistencyProof(first, rightHead, rightLeaves),
+  })
+  await ownerObserved.promise
+  assert.equal(await readFile(ownerPath, 'utf8'), '')
+  await unlink(ownerPath)
+  await rmdir(lockPath)
+  const leftAdvance = left.advance({
+    expectedHead: first,
+    checkpoint: leftHead,
+    consistencyProof: consistencyProof(first, leftHead, leftLeaves),
+  })
+  releaseObservation.resolve()
+
+  const results = await Promise.allSettled([leftAdvance, rightAdvance])
+  assert.equal(results.filter(({ status }) => status === 'fulfilled').length, 1)
+  assert.equal(results.filter(({ status }) => status === 'rejected').length, 1)
+  assert.match(
+    results.find(({ status }) => status === 'rejected').reason.message,
+    /fork|current tree size/i,
+  )
+  assert.equal((await left.load()).record_count, 2)
+  assert.equal((await readdir(directory)).includes('.checkpoint-journal.lock'), false)
+  await left.close()
+  await right.close()
+})
+
+test('a stable malformed lock owner remains untouched and fails closed', async (t) => {
+  const directory = await temporaryDirectory(t, 'malformed-lock-owner-')
+  const keys = keyFixture()
+  const lockPath = join(directory, '.checkpoint-journal.lock')
+  const ownerPath = join(lockPath, 'owner.json')
+  const malformedOwner = stableJson({ forged: true }, 0)
+  await mkdir(lockPath, { mode: 0o700 })
+  await writeFile(ownerPath, malformedOwner, { flag: 'wx', mode: 0o600 })
+
+  await assert.rejects(
+    openTransparencyCheckpointJournal(journalOptions(directory, keys, {
+      limits: { lockTimeoutMs: 250, lockPollMs: 1 },
+    })),
+    (error) => error.code === 'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_UNSAFE'
+      && /malformed and cannot be stolen/i.test(error.message),
+  )
+  assert.equal(await readFile(ownerPath, 'utf8'), malformedOwner)
+  assert.deepEqual(await readdir(lockPath), ['owner.json'])
 })
 
 test('fault windows recover only an orphan temp or the exact durable record', async (t) => {

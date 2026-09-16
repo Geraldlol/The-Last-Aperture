@@ -6,11 +6,9 @@ import {
 } from './engagement-route-registry.mjs'
 import { getUnleashHttpsReconExecutionContract } from './unleash-contracts.mjs'
 import { projectUnleashPolicy } from './unleash-policy.mjs'
+import { UNLEASH_PROVIDER_PROTOCOL } from './unleash-provider-profile.mjs'
 
-export const UNLEASH_PROVIDER_PROTOCOL = Object.freeze({
-  protocol_version: '1.0.0',
-  proposal_kind: 'last-aperture/unleash-proposal',
-})
+export { UNLEASH_PROVIDER_PROTOCOL } from './unleash-provider-profile.mjs'
 
 const ROUTE_REQUIRED_EFFECT = Object.freeze({
   'repository-audit': 'OBSERVE',
@@ -121,7 +119,10 @@ export function buildUnleashToolRegistry() {
   })
 }
 
-export function createDefaultUnleashPlannerDependencies({ policy } = {}) {
+export function createDefaultUnleashPlannerDependencies({
+  policy,
+  provider = UNLEASH_PROVIDER_PROTOCOL,
+} = {}) {
   const plannerPolicy = policy?.kind === 'last-aperture/unleash-deployment-policy'
     ? (() => {
         const projection = projectUnleashPolicy(policy)
@@ -142,6 +143,6 @@ export function createDefaultUnleashPlannerDependencies({ policy } = {}) {
   return deeplyFrozenCopy({
     registry: buildUnleashToolRegistry(),
     policy: plannerPolicy,
-    provider: UNLEASH_PROVIDER_PROTOCOL,
+    provider,
   })
 }

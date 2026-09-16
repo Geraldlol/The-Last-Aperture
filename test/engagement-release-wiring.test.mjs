@@ -6,26 +6,40 @@ import { test } from 'node:test'
 import { CAPABILITY_REGISTRY, renderCapabilityDocumentation } from '../scripts/lib/capabilities.mjs'
 import { PLATFORM_VERSION } from '../scripts/lib/version.mjs'
 
-const RELEASE_VERSION = '0.15.0'
+const RELEASE_VERSION = '0.16.0'
 
 test('unified engagement command ships through the package and root CLI', () => {
   for (const path of [
     'scripts/engage.mjs',
+    'scripts/lib/unleash-action-risk-assessment.mjs',
     'scripts/lib/unleash-contracts.mjs',
+    'scripts/lib/unleash-campaign-pause.mjs',
     'scripts/lib/unleash-campaign-state.mjs',
     'scripts/lib/unleash-campaign-storage.mjs',
+    'scripts/lib/unleash-candidate-frontier.mjs',
     'scripts/lib/unleash-controller.mjs',
     'scripts/lib/unleash-evidence-packet.mjs',
     'scripts/lib/unleash-policy-loader.mjs',
     'scripts/lib/unleash-policy.mjs',
+    'scripts/lib/unleash-provider-profile.mjs',
+    'scripts/lib/unleash-reasoning-adapter.mjs',
     'scripts/lib/unleash-recon-evidence.mjs',
     'scripts/lib/unleash-registry.mjs',
+    'scripts/lib/unleash-snapshot.mjs',
+    'scripts/lib/unleash-swarm-contracts.mjs',
+    'scripts/lib/unleash-swarm-controller.mjs',
+    'scripts/lib/unleash-swarm-ledger.mjs',
+    'scripts/lib/unleash-swarm-merge.mjs',
+    'scripts/lib/unleash-swarm-owner.mjs',
+    'scripts/lib/unleash-swarm-seal.mjs',
     'scripts/lib/unleash-vulnerability.mjs',
     'docs/unleash-setup.md',
     'schemas/engagement-authority.schema.json',
     'schemas/engagement-intake.schema.json',
     'schemas/engagement-ledger-record.schema.json',
     'schemas/engagement-manifest.schema.json',
+    'schemas/unleash-action-risk-assessment.schema.json',
+    'schemas/unleash-candidate-admission.schema.json',
     'schemas/unleash-deployment-policy.schema.json',
     'schemas/unleash-evidence-packet.schema.json',
     'schemas/unleash-intent.schema.json',
@@ -33,7 +47,23 @@ test('unified engagement command ships through the package and root CLI', () => 
     'schemas/unleash-proposal.schema.json',
     'schemas/unleash-recon-completion-receipt.schema.json',
     'schemas/unleash-revocations.schema.json',
+    'schemas/unleash-snapshot.schema.json',
+    'schemas/unleash-swarm.schema.json',
     'schemas/unleash-vulnerability.schema.json',
+    'test/unleash-action-risk-assessment.test.mjs',
+    'test/unleash-campaign-pause.test.mjs',
+    'test/unleash-candidate-frontier.test.mjs',
+    'test/unleash-controller-v2-e2e.test.mjs',
+    'test/unleash-provider-profile.test.mjs',
+    'test/unleash-reasoning-adapter.test.mjs',
+    'test/unleash-snapshot.test.mjs',
+    'test/unleash-swarm-contracts.test.mjs',
+    'test/unleash-swarm-controller.test.mjs',
+    'test/unleash-swarm-ledger.test.mjs',
+    'test/unleash-swarm-merge.test.mjs',
+    'test/unleash-swarm-owner.test.mjs',
+    'test/unleash-swarm-seal.test.mjs',
+    'test/unleash-synthetic-remote-e2e.test.mjs',
   ]) {
     assert.equal(existsSync(path), true, `${path} must ship`)
     assert.ok(readFileSync(path).length > 0, `${path} must not be empty`)
@@ -48,7 +78,10 @@ test('unified engagement command ships through the package and root CLI', () => 
   assert.deepEqual(shrinkwrapDocument, lockDocument)
   assert.ok(packageDocument.files.includes('npm-shrinkwrap.json'))
   assert.ok(packageDocument.files.includes('agents/'))
+  assert.ok(packageDocument.files.includes('schemas/'))
+  assert.ok(packageDocument.files.includes('scripts/'))
   assert.ok(packageDocument.files.includes('skills/'))
+  assert.ok(packageDocument.files.includes('test/'))
   assert.equal(PLATFORM_VERSION, RELEASE_VERSION)
   assert.equal(packageDocument.bin['last-aperture-engage'], './scripts/engage.mjs')
   assert.equal(packageDocument.scripts['audit:engage'], 'node scripts/engage.mjs')
@@ -62,7 +95,7 @@ test('unified engagement command ships through the package and root CLI', () => 
     windowsHide: true,
   })
   assert.equal(help.status, 0, help.stderr)
-  assert.match(help.stdout, /unified engagement 0\.15\.0/i)
+  assert.match(help.stdout, /unified engagement 0\.16\.0/i)
   assert.match(help.stdout, /engage unleash <target> \[--json\]/)
   assert.match(help.stdout, /engage run <target>/)
   assert.match(help.stdout, /engage resume <campaign-or-engagement-directory>/)
@@ -107,6 +140,9 @@ test('capability registry declares bounded engagement orchestration exactly', ()
     'engage run',
     'engage resume',
     'engage status',
+    'engage confirm',
+    'engage pause',
+    'engage rollback',
     'engage stop',
     'engage work next',
     'engage work status',

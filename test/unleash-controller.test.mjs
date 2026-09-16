@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
 import { test } from 'node:test'
@@ -21,7 +21,10 @@ import {
 import { appendUnleashCampaignState } from '../scripts/lib/unleash-campaign-state.mjs'
 import { createUnleashPlan, digestUnleashValue } from '../scripts/lib/unleash-contracts.mjs'
 import { createUnleashDeploymentPolicy } from '../scripts/lib/unleash-policy.mjs'
+import { createUnleashReasoningAdapter } from '../scripts/lib/unleash-reasoning-adapter.mjs'
 import { createDefaultUnleashPlannerDependencies } from '../scripts/lib/unleash-registry.mjs'
+import { createUnleashRoleRequest } from '../scripts/lib/unleash-swarm-contracts.mjs'
+import { appendUnleashSwarmAttemptEvent } from '../scripts/lib/unleash-swarm-ledger.mjs'
 import {
   requestHttpReconStop,
 } from '../scripts/lib/http-recon-controller.mjs'
@@ -29,6 +32,18 @@ import {
 const TARGET = 'https://example.test/'
 const NOW = '2026-09-15T09:30:00.000Z'
 const SCRATCH_PREFIX = 'rta-unleash-controller-denial-'
+const LEGACY_PROVIDER_PROFILE = Object.freeze({
+  protocol_version: '1.0.0',
+  proposal_kind: 'last-aperture/unleash-proposal',
+})
+
+async function writePrivateFixtureCreateOnly(path, value) {
+  await writeFile(path, value, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+  if (process.platform !== 'win32') {
+    const metadata = await lstat(path, { bigint: true })
+    assert.equal(metadata.mode & 0o077n, 0n)
+  }
+}
 
 test('Windows default campaign storage stays below LocalAppData even when the environment value is absent or invalid', () => {
   const home = 'C:\\Users\\fixture'
@@ -181,6 +196,7 @@ async function harness(t, overrides = {}) {
   secureWindowsTestDirectory(runsRoot)
   const deps = {
     policy: deploymentPolicy(),
+    unleashProviderProfile: LEGACY_PROVIDER_PROFILE,
     now: () => new Date(NOW),
     isRevoked: () => false,
     runsRoot,
@@ -238,6 +254,31 @@ async function runEntries(runsRoot) {
 
 async function completedCampaign(h) {
   return unleashTarget({ target: TARGET }, h.deps)
+}
+
+function emptySwarmLedgerState(basis) {
+  const unsigned = {
+    schema_version: '1.0.0',
+    kind: 'last-aperture/unleash-swarm-attempt-ledger-state',
+    basis_sha256: basis.basis_sha256,
+    campaign_id: basis.campaign_id,
+    event_count: 0,
+    attempt_count: 0,
+    response_bytes: 0,
+    head_record_sha256: null,
+    ledger_sha256: digestUnleashValue({
+      basis_sha256: basis.basis_sha256,
+      event_record_sha256s: [],
+    }),
+    updated_at: basis.recorded_at,
+  }
+  return { ...unsigned, state_sha256: digestUnleashValue(unsigned) }
+}
+
+function swarmMergeAtRound(merge, round) {
+  const unsigned = { ...structuredClone(merge), round }
+  delete unsigned.merge_sha256
+  return { ...unsigned, merge_sha256: digestUnleashValue(unsigned) }
 }
 
 async function rewindToRunning(result, runsRoot) {
@@ -649,6 +690,251 @@ test('campaign status recovers the immutable event head and repairs a stale snap
   assert.equal((await storage.readJson('campaign-state.json')).revision, 3)
 })
 
+test('campaign recovery rejects protocol-v2 swarm artifacts under a protocol-v1 state head', async (t) => {
+  const h = await harness(t)
+  const result = await completedCampaign(h)
+  await writePrivateFixtureCreateOnly(
+    join(result.run_directory, 'swarm-attempt-ledger-state.json'),
+    canonicalUnleashCampaignJson({ forged: true }),
+  )
+
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }),
+    (error) => error.code === 'UNLEASH_CAMPAIGN_PROTOCOL_ARTIFACT_INVALID'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+})
+
+test('protocol-v2 status stays read-only while owned Resume repairs the exact ledger head', { timeout: 180_000 }, async (t) => {
+  const h = await harness(t)
+  delete h.deps.unleashProviderProfile
+  h.deps.reasoningAdapters = [{
+    roleId: 'attacker:perimeter',
+    adapter: createUnleashReasoningAdapter({
+      identity: {
+        adapter_id: 'adapter:recovery-test-empty-response',
+        adapter_version: '1.0.0',
+        adapter_config_sha256: digestUnleashValue({ fixture: 'empty-response' }),
+      },
+      invoke: async ({ request }) => Buffer.from(JSON.stringify({
+        schema_version: '1.0.0',
+        kind: 'last-aperture/unleash-role-response',
+        request_id: request.request_id,
+        request_sha256: request.request_sha256,
+        basis_sha256: request.basis_sha256,
+        plan_sha256: request.plan_sha256,
+        round: request.round,
+        role_id: request.role_id,
+        role_kind: request.role_kind,
+        wave: request.wave,
+        proposal: {
+          schema_version: '1.0.0',
+          kind: 'last-aperture/unleash-proposal',
+          proposal_id: `proposal:recovery-test:r${request.round}`,
+          plan_sha256: request.plan_sha256,
+          provider_protocol_version: '2.0.0',
+          candidates: [],
+          actions: [],
+        },
+        challenges: [],
+      }), 'utf8'),
+    }),
+  }]
+  const result = await completedCampaign(h)
+  const basisPath = join(result.run_directory, 'swarm-basis.json')
+  const ledgerStatePath = join(result.run_directory, 'swarm-attempt-ledger-state.json')
+  const basis = JSON.parse(await readFile(basisPath, 'utf8'))
+  const eventNames = (await readdir(result.run_directory))
+    .filter((filename) => /^swarm-attempt-event-[0-9]{6}\.json$/u.test(filename))
+    .sort()
+  assert.ok(eventNames.length > 1)
+
+  await writeFile(
+    ledgerStatePath,
+    canonicalUnleashCampaignJson(emptySwarmLedgerState(basis)),
+    'utf8',
+  )
+  await assert.rejects(
+    getUnleashCampaignStatus(
+      { bundle: result.run_directory },
+      { now: h.deps.now },
+    ),
+    (error) => error.code === 'UNLEASH_SWARM_LEDGER_STATE_STALE'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+  assert.equal((JSON.parse(await readFile(ledgerStatePath, 'utf8'))).event_count, 0)
+  const repaired = await resumeUnleashCampaign(
+    { bundle: result.run_directory },
+    h.deps,
+  )
+  assert.equal(repaired.status, 'COMPLETE_WITH_GAPS')
+  assert.equal((JSON.parse(await readFile(ledgerStatePath, 'utf8'))).event_count, eventNames.length)
+
+  const eventDocuments = await Promise.all(eventNames.map(async (filename) => ({
+    filename,
+    event: JSON.parse(await readFile(join(result.run_directory, filename), 'utf8')),
+  })))
+  const committedDocument = eventDocuments.find(({ event }) => event.state === 'COMMITTED')
+  assert.ok(committedDocument)
+  const retainedLedgerState = JSON.parse(await readFile(ledgerStatePath, 'utf8'))
+  const forgedCommitted = structuredClone(committedDocument.event)
+  forgedCommitted.payload.merge_sha256 = 'f'.repeat(64)
+  delete forgedCommitted.record_sha256
+  forgedCommitted.record_sha256 = digestUnleashValue(forgedCommitted)
+  await writeFile(
+    join(result.run_directory, committedDocument.filename),
+    canonicalUnleashCampaignJson(forgedCommitted),
+    'utf8',
+  )
+  const forgedLedgerState = {
+    ...retainedLedgerState,
+    head_record_sha256: forgedCommitted.record_sha256,
+    ledger_sha256: digestUnleashValue({
+      basis_sha256: basis.basis_sha256,
+      event_record_sha256s: eventDocuments.map(({ filename, event }) => (
+        filename === committedDocument.filename ? forgedCommitted.record_sha256 : event.record_sha256
+      )),
+    }),
+  }
+  delete forgedLedgerState.state_sha256
+  forgedLedgerState.state_sha256 = digestUnleashValue(forgedLedgerState)
+  await writeFile(ledgerStatePath, canonicalUnleashCampaignJson(forgedLedgerState), 'utf8')
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
+    (error) => error.code === 'UNLEASH_SWARM_LEDGER_MERGE_DRIFT'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+  await writeFile(
+    join(result.run_directory, committedDocument.filename),
+    canonicalUnleashCampaignJson(committedDocument.event),
+    'utf8',
+  )
+  await writeFile(ledgerStatePath, canonicalUnleashCampaignJson(retainedLedgerState), 'utf8')
+
+  const missingEventPath = join(result.run_directory, eventNames[0])
+  const missingEvent = await readFile(missingEventPath, 'utf8')
+  await rm(missingEventPath)
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
+    (error) => error.code === 'UNLEASH_SWARM_LEDGER_GAP'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+  await writePrivateFixtureCreateOnly(missingEventPath, missingEvent)
+
+  const sourceRequest = eventDocuments[0].event.request
+  const postTerminalRequest = createUnleashRoleRequest({
+    basis,
+    round: 2,
+    roleId: 'attacker:perimeter',
+    inputFrontierSha256: sourceRequest.input_frontier_sha256,
+    inputChallengeSetSha256: sourceRequest.input_challenge_set_sha256,
+    evidenceRefs: sourceRequest.evidence_refs,
+    allowedToolIds: sourceRequest.allowed_tool_ids,
+    artifacts: sourceRequest.artifacts,
+  })
+  const provider = JSON.parse(await readFile(
+    join(result.run_directory, 'campaign-provider.json'),
+    'utf8',
+  ))
+  const assignment = provider.assignments.find(({ role_id: roleId }) => roleId === 'attacker:perimeter')
+  const adapterIdentity = {
+    adapter_id: assignment.adapter_id,
+    adapter_version: assignment.adapter_version,
+    adapter_config_sha256: assignment.adapter_config_sha256,
+  }
+  const campaignStorage = await openUnleashCampaignStorage({
+    runsRoot: h.runsRoot,
+    campaignDirectory: basename(result.run_directory),
+  })
+  const ledgerStorage = {
+    writeImmutableJson: campaignStorage.writeImmutableJson,
+    replaceMutableJson: campaignStorage.replaceMutableJson,
+    readJson: campaignStorage.readJson,
+    listJsonFilenames: campaignStorage.listJsonFilenames,
+  }
+  const retainedCompletion = JSON.parse(await readFile(
+    join(result.run_directory, 'swarm-completion.json'),
+    'utf8',
+  ))
+  const leasedAt = new Date(Date.parse(retainedCompletion.completed_at) + 1_000)
+  const failedAt = new Date(leasedAt.getTime() + 1_000)
+  const attemptId = `attempt:sha256:${digestUnleashValue({ fixture: 'post-terminal-append' })}`
+  const attemptLimits = eventDocuments.find(({ event }) => event.state === 'LEASED').event.payload.limits
+  await appendUnleashSwarmAttemptEvent({
+    basis,
+    attemptId,
+    request: postTerminalRequest,
+    adapterIdentity,
+    state: 'LEASED',
+    occurredAt: leasedAt.toISOString(),
+    payload: {
+      expires_at: new Date(leasedAt.getTime() + attemptLimits.wall_time_ms).toISOString(),
+      limits: attemptLimits,
+    },
+  }, { storage: ledgerStorage })
+  const appended = await appendUnleashSwarmAttemptEvent({
+    basis,
+    attemptId,
+    request: postTerminalRequest,
+    adapterIdentity,
+    state: 'FAILED',
+    occurredAt: failedAt.toISOString(),
+    payload: {
+      reason_code: 'SYNTHETIC_POST_TERMINAL_APPEND',
+      phase: 'LEASED',
+      delivery: 'NOT_STARTED',
+      detail_sha256: digestUnleashValue({ fixture: 'post-terminal-append-failure' }),
+    },
+  }, { storage: ledgerStorage })
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
+    (error) => error.code === 'UNLEASH_SWARM_COMPLETION_LEDGER_DRIFT'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+  for (const event of appended.events.slice(eventNames.length)) {
+    await rm(join(
+      result.run_directory,
+      `swarm-attempt-event-${String(event.sequence).padStart(6, '0')}.json`,
+    ))
+  }
+  await writeFile(ledgerStatePath, canonicalUnleashCampaignJson(retainedLedgerState), 'utf8')
+
+  const attackPath = join(result.run_directory, 'swarm-merge-r01-attack.json')
+  const attack = JSON.parse(await readFile(attackPath, 'utf8'))
+  await writeFile(
+    attackPath,
+    canonicalUnleashCampaignJson(swarmMergeAtRound(attack, 2)),
+    'utf8',
+  )
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
+    (error) => error.code === 'UNLEASH_SWARM_MERGE_FILENAME_DRIFT'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+  await writeFile(attackPath, canonicalUnleashCampaignJson(attack), 'utf8')
+
+  const review = JSON.parse(await readFile(
+    join(result.run_directory, 'swarm-merge-r01-review.json'),
+    'utf8',
+  ))
+  const roundTwo = swarmMergeAtRound(review, 2)
+  const trailing = [
+    join(result.run_directory, 'swarm-merge-r02-attack.json'),
+    join(result.run_directory, 'swarm-merge-r02-review.json'),
+  ]
+  for (const filename of trailing) {
+    await writePrivateFixtureCreateOnly(
+      filename,
+      canonicalUnleashCampaignJson(roundTwo),
+    )
+  }
+  await assert.rejects(
+    getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
+    (error) => error.code === 'UNLEASH_SWARM_MERGE_SEQUENCE_INVALID'
+      && error.status === 'RECONCILIATION_REQUIRED',
+  )
+})
+
 test('campaign status rejects a snapshot that references a truncated event chain', async (t) => {
   const h = await harness(t)
   const result = await completedCampaign(h)
@@ -859,10 +1145,16 @@ test('a missing previously planned recon bundle remains reconciliation-required 
   assert.equal(stopped.failure.code, 'UNLEASH_RECON_BUNDLE_MISSING_AFTER_PLANNING')
   assert.match(stopped.failure.message, /delivery history cannot be proven/u)
   assert.equal(h.calls.length, requestCountBeforeStop)
-  assert.deepEqual(
-    await getUnleashCampaignStatus({ bundle: completed.run_directory }, { now: h.deps.now }),
-    stopped,
+  const status = await getUnleashCampaignStatus(
+    { bundle: completed.run_directory },
+    { now: h.deps.now },
   )
+  assert.equal(status.kind, 'last-aperture/unleash-campaign-snapshot')
+  assert.equal(status.status, stopped.status)
+  assert.equal(status.revision, stopped.revision)
+  assert.equal(status.stop_reason, stopped.stop_reason)
+  assert.deepEqual(status.failure, stopped.failure)
+  assert.match(status.snapshot_sha256, /^[a-f0-9]{64}$/u)
   assert.deepEqual(
     await resumeUnleashCampaign({ bundle: completed.run_directory }, { now: h.deps.now }),
     stopped,
@@ -981,7 +1273,10 @@ test('stop durably records intent, finalizes nested recon, and is idempotent aft
     requestHttpReconStop: async () => { throw new Error('terminal resume must not republish') },
     finalizeHttpReconBundle: async () => { throw new Error('terminal resume must not refinalize') },
   })
-  assert.deepEqual(stoppedAgain, stopped)
+  assert.equal(stoppedAgain.status, stopped.status)
+  assert.equal(stoppedAgain.revision, stopped.revision)
+  assert.equal(stoppedAgain.stop_reason, stopped.stop_reason)
+  assert.deepEqual(stoppedAgain.failure, stopped.failure)
   assert.deepEqual(resumedAgain, stopped)
   assert.equal((await storage.listJsonFilenames()).filter((name) => /^campaign-event-/u.test(name)).length, 4)
 })
@@ -1028,7 +1323,10 @@ test('stop reuses the real durable HTTP marker and real nested finalizer after c
     bundle: initial.run_directory,
     reason: 'later stop must remain idempotent',
   }, { now: h.deps.now })
-  assert.deepEqual(stoppedAgain, stopped)
+  assert.equal(stoppedAgain.status, stopped.status)
+  assert.equal(stoppedAgain.revision, stopped.revision)
+  assert.equal(stoppedAgain.stop_reason, stopped.stop_reason)
+  assert.deepEqual(stoppedAgain.failure, stopped.failure)
 })
 
 test('restart reissues a retained stop marker and settles after finalization becomes available', async (t) => {
@@ -1257,6 +1555,10 @@ test('resume finalizes first and dispatches only an untouched pending recon acti
   await rewindToRunning(result, h.runsRoot)
   const operations = []
   let finalizeCount = 0
+  const retainedActionId = JSON.parse(await readFile(
+    join(result.run_directory, 'campaign-action-risk-preflight.json'),
+    'utf8',
+  )).action_id
 
   const resumed = await resumeUnleashCampaign({ bundle: result.run_directory }, {
     policy: h.deps.policy,
@@ -1272,11 +1574,11 @@ test('resume finalizes first and dispatches only an untouched pending recon acti
     },
     nextHttpReconAction: async () => {
       operations.push('next')
-      return { action_id: 'action:untouched-fixture', state: 'PENDING' }
+      return { action_id: retainedActionId, state: 'PENDING' }
     },
     runHttpReconAction: async (request) => {
       operations.push('run')
-      assert.equal(request.actionId, 'action:untouched-fixture')
+      assert.equal(request.actionId, retainedActionId)
       assert.equal(request.controllerPolicyAuthority.mode, 'CONTROLLER_DEPLOYMENT_POLICY')
       assert.equal(typeof request.revalidateAuthority, 'function')
       assert.equal(Object.hasOwn(request, 'operatorId'), false)
@@ -1294,6 +1596,10 @@ test('resume reconciles a thrown recon attempt and never interprets it as retry 
   await rewindToRunning(result, h.runsRoot)
   const operations = []
   let finalizeCount = 0
+  const retainedActionId = JSON.parse(await readFile(
+    join(result.run_directory, 'campaign-action-risk-preflight.json'),
+    'utf8',
+  )).action_id
 
   const resumed = await resumeUnleashCampaign({ bundle: result.run_directory }, {
     policy: h.deps.policy,
@@ -1309,7 +1615,7 @@ test('resume reconciles a thrown recon attempt and never interprets it as retry 
     },
     nextHttpReconAction: async () => {
       operations.push('next')
-      return { action_id: 'action:untouched-fixture', state: 'PENDING' }
+      return { action_id: retainedActionId, state: 'PENDING' }
     },
     runHttpReconAction: async () => {
       operations.push('run')

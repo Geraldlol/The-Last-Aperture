@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-action-risk-assessment.schema.json",
+  "title": "The Last Aperture defender action-risk documents",
+  "description": "Deterministic defender-observability assessment, action-bound receipt, or controller confirmation for an inert proposed action. These documents grant no execution authority.",
+  "oneOf": [
+    { "$ref": "#/$defs/assessment" },
+    { "$ref": "#/$defs/receipt" },
+    { "$ref": "#/$defs/confirmation" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "detectionPatternId": {
+      "enum": [
+        "pattern:single-request",
+        "pattern:request-sequence",
+        "pattern:high-rate-request-activity",
+        "pattern:parallel-request-activity",
+        "pattern:authenticated-access",
+        "pattern:application-state-change",
+        "pattern:workload-execution",
+        "pattern:data-transfer"
+      ]
+    },
+    "matchedDetectionPatternIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/detectionPatternId" }
+    },
+    "humanText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "catalogSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "url"],
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 96,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "url": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 2048,
+          "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+        }
+      }
+    },
+    "catalogSources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/catalogSource" }
+    },
+    "volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_count",
+        "max_parallel_requests",
+        "max_requests_per_minute",
+        "minimum_interval_ms"
+      ],
+      "properties": {
+        "request_count": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "max_parallel_requests": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "max_requests_per_minute": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "minimum_interval_ms": { "type": "integer", "minimum": 0, "maximum": 3600000 }
+      }
+    },
+    "profileConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_parallel_requests",
+        "max_requests_per_minute",
+        "minimum_interval_ms",
+        "risk_confirmation_threshold",
+        "noise_confirmation_threshold"
+      ],
+      "properties": {
+        "max_parallel_requests": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "max_requests_per_minute": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "minimum_interval_ms": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+        "risk_confirmation_threshold": { "$ref": "#/$defs/score" },
+        "noise_confirmation_threshold": { "$ref": "#/$defs/score" }
+      }
+    },
+    "signalName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 96,
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "signalNames": {
+      "type": "array",
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/signalName" }
+    },
+    "controlBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "control",
+        "relative_exposure_score",
+        "relative_exposure_level",
+        "potential_telemetry",
+        "telemetry_coverage",
+        "collection_precondition",
+        "rationale"
+      ],
+      "properties": {
+        "control": {
+          "enum": ["ENDPOINT", "SIEM_LOGGING", "NETWORK", "CLOUD", "IDENTITY", "APPLICATION"]
+        },
+        "relative_exposure_score": { "$ref": "#/$defs/score" },
+        "relative_exposure_level": { "enum": ["NONE", "LOW", "MEDIUM", "HIGH"] },
+        "potential_telemetry": { "$ref": "#/$defs/signalNames" },
+        "telemetry_coverage": { "const": "UNKNOWN" },
+        "collection_precondition": { "const": "UNKNOWN" },
+        "rationale": { "$ref": "#/$defs/humanText" }
+      }
+    },
+    "endpointControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "ENDPOINT" } } }
+      ]
+    },
+    "siemControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "SIEM_LOGGING" } } }
+      ]
+    },
+    "networkControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "NETWORK" } } }
+      ]
+    },
+    "cloudControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "CLOUD" } } }
+      ]
+    },
+    "identityControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "IDENTITY" } } }
+      ]
+    },
+    "applicationControl": {
+      "allOf": [
+        { "$ref": "#/$defs/controlBase" },
+        { "properties": { "control": { "const": "APPLICATION" } } }
+      ]
+    },
+    "controlSignals": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "prefixItems": [
+        { "$ref": "#/$defs/endpointControl" },
+        { "$ref": "#/$defs/siemControl" },
+        { "$ref": "#/$defs/networkControl" },
+        { "$ref": "#/$defs/cloudControl" },
+        { "$ref": "#/$defs/identityControl" },
+        { "$ref": "#/$defs/applicationControl" }
+      ],
+      "items": false
+    },
+    "impactBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["impact", "score", "level", "rationale"],
+      "properties": {
+        "impact": {
+          "enum": ["CONFIDENTIALITY", "INTEGRITY", "AVAILABILITY", "OPERATIONAL_RESPONSE"]
+        },
+        "score": { "$ref": "#/$defs/score" },
+        "level": { "enum": ["NONE", "LOW", "MODERATE", "HIGH", "SEVERE"] },
+        "rationale": { "$ref": "#/$defs/humanText" }
+      }
+    },
+    "confidentialityImpact": {
+      "allOf": [
+        { "$ref": "#/$defs/impactBase" },
+        { "properties": { "impact": { "const": "CONFIDENTIALITY" } } }
+      ]
+    },
+    "integrityImpact": {
+      "allOf": [
+        { "$ref": "#/$defs/impactBase" },
+        { "properties": { "impact": { "const": "INTEGRITY" } } }
+      ]
+    },
+    "availabilityImpact": {
+      "allOf": [
+        { "$ref": "#/$defs/impactBase" },
+        { "properties": { "impact": { "const": "AVAILABILITY" } } }
+      ]
+    },
+    "operationalImpact": {
+      "allOf": [
+        { "$ref": "#/$defs/impactBase" },
+        { "properties": { "impact": { "const": "OPERATIONAL_RESPONSE" } } }
+      ]
+    },
+    "likelyImpacts": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "$ref": "#/$defs/confidentialityImpact" },
+        { "$ref": "#/$defs/integrityImpact" },
+        { "$ref": "#/$defs/availabilityImpact" },
+        { "$ref": "#/$defs/operationalImpact" }
+      ],
+      "items": false
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "catalog_id",
+        "catalog_version",
+        "reviewed_at",
+        "sources",
+        "detection_pattern_model_id",
+        "detection_pattern_model_version",
+        "scope",
+        "methodology",
+        "control_signal_score_semantics",
+        "telemetry_coverage",
+        "collection_precondition",
+        "action_state",
+        "executable",
+        "execution_authorized",
+        "tool_id",
+        "parameters",
+        "target",
+        "effect",
+        "volume",
+        "action_fingerprint_sha256",
+        "matched_pattern_ids",
+        "operational_profile",
+        "profile_constraints",
+        "profile_constraints_met",
+        "constraint_violations",
+        "control_signals",
+        "risk_score",
+        "risk_level",
+        "noise_score",
+        "noise_level",
+        "rationale",
+        "likely_impacts",
+        "controller_confirmation_required",
+        "confirmation_reasons"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-action-risk-assessment" },
+        "catalog_id": { "const": "last-aperture/defender-action-risk" },
+        "catalog_version": { "const": "1.0.0" },
+        "reviewed_at": { "const": "2026-09-16" },
+        "sources": { "$ref": "#/$defs/catalogSources" },
+        "detection_pattern_model_id": {
+          "const": "last-aperture/generic-defender-detection-patterns"
+        },
+        "detection_pattern_model_version": { "const": "1.0.0" },
+        "scope": { "const": "DEFENDER_OBSERVABILITY_ASSESSMENT" },
+        "methodology": { "const": "HEURISTIC_UNCALIBRATED" },
+        "control_signal_score_semantics": {
+          "const": "RELATIVE_EXPOSURE_NOT_ALERT_PROBABILITY"
+        },
+        "telemetry_coverage": { "const": "UNKNOWN" },
+        "collection_precondition": { "const": "UNKNOWN" },
+        "action_state": { "const": "PROPOSED_INERT" },
+        "executable": { "const": false },
+        "execution_authorized": { "const": false },
+        "tool_id": { "$ref": "#/$defs/id" },
+        "parameters": { "type": "object", "maxProperties": 32 },
+        "target": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 4096,
+          "pattern": "^https://[^\\u0000-\\u0020\\u007f]+$"
+        },
+        "effect": {
+          "enum": [
+            "OBSERVE",
+            "PROBE",
+            "AUTHENTICATED_REQUEST",
+            "MUTATE_REVERSIBLE",
+            "EXECUTE_PROOF",
+            "EXFILTRATE_CANARY",
+            "PUBLISH_EVIDENCE"
+          ]
+        },
+        "volume": { "$ref": "#/$defs/volume" },
+        "action_fingerprint_sha256": { "$ref": "#/$defs/sha256" },
+        "matched_pattern_ids": { "$ref": "#/$defs/matchedDetectionPatternIds" },
+        "operational_profile": { "enum": ["aggressive", "balanced", "cautious"] },
+        "profile_constraints": { "$ref": "#/$defs/profileConstraints" },
+        "profile_constraints_met": { "type": "boolean" },
+        "constraint_violations": {
+          "type": "array",
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "MAX_PARALLEL_REQUESTS_EXCEEDED",
+              "MAX_REQUESTS_PER_MINUTE_EXCEEDED",
+              "MINIMUM_INTERVAL_NOT_MET"
+            ]
+          }
+        },
+        "control_signals": { "$ref": "#/$defs/controlSignals" },
+        "risk_score": { "$ref": "#/$defs/score" },
+        "risk_level": {
+          "enum": ["MINIMAL", "LOW", "MODERATE", "HIGH", "CRITICAL"]
+        },
+        "noise_score": { "$ref": "#/$defs/score" },
+        "noise_level": {
+          "enum": ["MINIMAL", "LOW", "MODERATE", "HIGH", "VERY_HIGH"]
+        },
+        "rationale": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/humanText" }
+        },
+        "likely_impacts": { "$ref": "#/$defs/likelyImpacts" },
+        "controller_confirmation_required": { "type": "boolean" },
+        "confirmation_reasons": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "RISK_THRESHOLD_MET",
+              "NOISE_THRESHOLD_MET",
+              "PROFILE_CONSTRAINT_EXCEEDED",
+              "REVERSIBILITY_UNCERTAIN",
+              "IRREVERSIBLE_CHANGE",
+              "PRIVILEGED_CONTROL_CHANGE"
+            ]
+          }
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "catalog_id",
+        "catalog_version",
+        "reviewed_at",
+        "sources",
+        "detection_pattern_model_id",
+        "detection_pattern_model_version",
+        "action_id",
+        "action_fingerprint_sha256",
+        "assessment_sha256",
+        "assessment",
+        "controller_confirmation_required",
+        "profile_constraints_met",
+        "receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-action-risk-receipt" },
+        "catalog_id": { "const": "last-aperture/defender-action-risk" },
+        "catalog_version": { "const": "1.0.0" },
+        "reviewed_at": { "const": "2026-09-16" },
+        "sources": { "$ref": "#/$defs/catalogSources" },
+        "detection_pattern_model_id": {
+          "const": "last-aperture/generic-defender-detection-patterns"
+        },
+        "detection_pattern_model_version": { "const": "1.0.0" },
+        "action_id": { "$ref": "#/$defs/id" },
+        "action_fingerprint_sha256": { "$ref": "#/$defs/sha256" },
+        "assessment_sha256": { "$ref": "#/$defs/sha256" },
+        "assessment": { "$ref": "#/$defs/assessment" },
+        "controller_confirmation_required": { "type": "boolean" },
+        "profile_constraints_met": { "type": "boolean" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "confirmation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "action_id",
+        "assessment_sha256",
+        "receipt_sha256",
+        "confirmed"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-action-risk-confirmation" },
+        "action_id": { "$ref": "#/$defs/id" },
+        "assessment_sha256": { "$ref": "#/$defs/sha256" },
+        "receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "confirmed": { "const": true }
+      }
+    }
+  }
+}

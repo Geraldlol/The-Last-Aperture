@@ -5,6 +5,21 @@
 **Product phrase:** Point. Click. Shoot.
 **Operating doctrine:** Black-hat creativity. White-hat control, proof, cleanup, and repair.
 
+## BORG directive
+
+The campaign operates as one durable collective instead of isolated chat turns.
+Perimeter, identity, API, data, client, exploit, forensics, and skeptic roles
+share the same target graph and evidence-bound hypothesis frontier. Each round
+fans out independent reasoning, merges only schema-valid candidates, challenges
+the strongest claims, admits typed actions through the controller, and expands
+the frontier from verified observations.
+
+The collective does not stop at the first finding. It continues until every
+discovered surface and applicable registered technique reaches a terminal
+coverage state, the operator presses Stop, or a controller budget or technical
+gap prevents further work. Provider prose never establishes proof; registered
+attack/control oracles, independent observation, cleanup, and replay do.
+
 ## 1. North star
 
 The runtime input is one target.
@@ -57,8 +72,11 @@ The campaign starts immediately and shows:
 - the current hypothesis frontier;
 - queued, running, completed, waiting, and unavailable tools;
 - proof strength for every finding;
+- the selected action-risk profile, rationale, expected defender exposure, and
+  residual uncertainty before dispatch;
 - cleanup and retest state;
-- a permanent Stop control;
+- durable Pause and owner-bound Resume controls that revalidate current authority;
+- bounded local rollback and a permanent Stop kill switch;
 - exact coverage gaps;
 - Markdown, JSON, and SARIF results bound to one verified snapshot.
 
@@ -70,14 +88,15 @@ The controller runs a repeated observe-think-act-verify loop:
 2. **Inventory** all immediately observable surfaces with deterministic collectors.
 3. **Hypothesize** with one or more provider-neutral reasoning agents. Agents receive bounded evidence packets and generate competing attack hypotheses.
 4. **Propose** typed actions using only capabilities in the frozen tool registry.
-5. **Admit** actions through controller checks for exact target binding, deployment policy, effect budget, prerequisites, rate, concurrency, and deadline.
-6. **Execute** admitted actions in isolated workers with fixed entry points and structured arguments.
-7. **Verify** the claimed security invariant independently of the proposing model.
-8. **Expand** the target graph and hypothesis frontier from schema-valid discoveries.
-9. **Chain** verified preconditions into new hypotheses and revisit earlier assumptions when evidence changes.
-10. **Clean up** every mutation and verify the cleanup result.
-11. **Retest** repaired targets with ordinary regression checks and the security replay.
-12. **Stop** when the frontier is quiescent, a controller limit is reached, the operator stops the run, or all remaining work has an explicit gap state.
+5. **Assess** likely defender exposure and operational impact with the versioned action-risk catalog and frozen generic detection-pattern model, recording stable matched pattern IDs, the selected profile, and residual uncertainty.
+6. **Admit** actions through controller checks for exact target binding, deployment policy, effect budget, profile limits, prerequisites, rate, concurrency, deadline, and any exact receipt-bound confirmation.
+7. **Execute** admitted actions in isolated workers with fixed entry points and structured arguments.
+8. **Verify** the claimed security invariant independently of the proposing model.
+9. **Expand** the target graph and hypothesis frontier from schema-valid discoveries.
+10. **Chain** verified preconditions into new hypotheses and revisit earlier assumptions when evidence changes.
+11. **Clean up** every mutation and verify the cleanup result.
+12. **Retest** repaired targets with ordinary regression checks and the security replay.
+13. **Stop** when the frontier is quiescent, a controller limit is reached, the operator stops the run, or all remaining work has an explicit gap state.
 
 Models can be creative about hypotheses and ordering. They cannot add tools, construct shell commands, change target identity, alter effect policy, declare their own output verified, or erase coverage obligations.
 
@@ -217,7 +236,7 @@ The model references a tool ID and typed parameters. The controller builds the i
 
 ### Scheduler
 
-The scheduler uses durable pre-dispatch permits and attempt states. Independent routes continue after waiting conditions and recoverable route failures. Evidence-integrity failures, policy revocation, ambiguous mutation delivery, or uncertain cleanup halt new dispatch and move the run into reconciliation or cleanup. Restart recovery never repeats an ambiguous action automatically. Stop prevents new dispatch and drives outstanding cleanup before terminal projection.
+The scheduler uses durable risk preflights, pre-dispatch permits, and attempt states. Independent routes continue after waiting conditions and recoverable route failures. Evidence-integrity failures, policy revocation, ambiguous mutation delivery, or uncertain cleanup halt new dispatch and move the run into reconciliation or cleanup. Restart recovery never repeats an ambiguous action automatically. Pause closes new dispatch while in-flight work settles; Resume requires the exclusive owner. Rollback cancels eligible local future work and inert proposals. Stop prevents new dispatch and drives outstanding cleanup before terminal projection.
 
 ## 7. Trust boundaries
 
@@ -230,7 +249,12 @@ The scheduler uses durable pre-dispatch permits and attempt states. Independent 
 | Evidence store | tampering, rollback, mixed revisions, secret retention | append-only hash chain, external anchors, snapshot-bound reads, redaction |
 | Desktop renderer | arbitrary filesystem/process access | sandbox, context isolation, restrictive CSP, allowlisted sender-validated IPC |
 
-Controller-owned deployment policy defines target ownership, allowed effects, excluded networks, validity, and revocation for the environment. The runtime target field and models cannot modify it. This boundary does not add a Point-Click-Shoot screen.
+Controller-owned deployment policy defines target ownership, allowed effects,
+excluded networks, validity, revocation, target environment, risk tolerance, and
+action-risk profile for the environment. The runtime target field and models
+cannot modify it. Contextual `AUTO` selection records the reason for its choice;
+scores are uncalibrated relative exposure, not alert probability. This boundary
+does not add a Point-Click-Shoot screen.
 
 ## 8. Architecture
 
@@ -240,9 +264,12 @@ The existing engagement controller, route registry, durable permits, stop/recove
 2. **Campaign planner** — freezes target, registry, provider protocol, policy, and initial coverage.
 3. **Campaign brain protocol** — provider-neutral Codex/Claude hypothesis and action proposals.
 4. **Target graph and frontier** — versioned discoveries, hypotheses, obligations, and gap accounting.
-5. **Evidence verifier** — converts observations into proof levels without trusting provider prose.
-6. **Snapshot API** — verified, paginated views of progress, graph, findings, gaps, cleanup, and timeline.
-7. **Cockpit** — target field and Unleash action over a sandboxed local desktop boundary.
+5. **Action-risk model** — versioned defender-control exposure and impact
+   assessment with hard profile limits and exact confirmation receipts.
+6. **Evidence verifier** — converts observations into proof levels without trusting provider prose.
+7. **Snapshot API** — verified, paginated views of progress, graph, findings,
+   gaps, detection context, controls, cleanup, and timeline.
+8. **Cockpit** — target field and Unleash action over a sandboxed local desktop boundary.
 
 ## 9. Delivery slices
 
@@ -253,9 +280,12 @@ The existing engagement controller, route registry, durable permits, stop/recove
 - resolve and bind the exact origin;
 - freeze a complete route/capability inventory and known gaps;
 - execute the existing bounded HTTPS reconnaissance collector;
+- assess and record its action-risk before dispatch, blocking on hard profile
+  limits or required exact confirmation;
 - create a sealed evidence packet for a provider-neutral reasoning adapter;
 - accept schema-valid, evidence-linked hypotheses as candidates only;
-- expose status, Stop, findings, and gaps from one snapshot;
+- expose status, detection context, Pause, rollback, Stop, findings, and gaps
+  from one snapshot;
 - ship a synthetic remote HTTP target for deterministic end-to-end tests.
 
 This is the first remotely useful shot. It does not depend on a local repository.
@@ -271,7 +301,8 @@ This is the first remotely useful shot. It does not depend on a local repository
 ### Slice 3 — Cockpit
 
 - paste, choose recent target, or double-click target;
-- Unleash, live progress, Stop/Resume, findings, gaps, evidence, and SARIF;
+- Unleash, live progress, detection context, Pause/Resume, rollback, Stop,
+  findings, gaps, evidence, and SARIF;
 - zero terminal, JSON, route, profile, output-path, or provider setup in the run flow;
 - packaged Windows smoke test from the exact release commit.
 
@@ -294,8 +325,12 @@ This is the first remotely useful shot. It does not depend on a local repository
 - Every verified vulnerability has a CWE/CVSS record and either a trusted existing-CVE mapping or an explicitly unassigned CVE-candidate state.
 - Every mutation has a cleanup obligation before dispatch and a separately reported cleanup result after execution.
 - Policy expiry or revocation prevents new dispatch without erasing retained evidence or cleanup obligations.
+- Every target dispatch has one immutable action-risk receipt; required
+  confirmation binds the exact action, assessment, and receipt, while profile
+  constraint violations stay blocked.
 - Restart does not duplicate an in-flight or completed effect.
-- Stop prevents new dispatch and preserves durable evidence.
+- Pause prevents new dispatch without losing recoverable state. Rollback makes
+  no target-side reversal claim. Stop prevents new dispatch and preserves durable evidence.
 - Final output enumerates findings and every coverage gap against one verified snapshot.
 - Existing conformance and release gates remain green.
 

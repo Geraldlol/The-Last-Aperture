@@ -71,7 +71,7 @@ test('method-complete operator-attested probe reaches one injected transport wit
   assert.equal(calls[0].method, 'PROPFIND')
   assert.equal(calls[0].url, candidate.url)
   assert.equal(calls[0].responseObserver, undefined)
-  assert.equal(calls[0].headers['user-agent'], 'red-team-audit-http-authed/0.15')
+  assert.equal(calls[0].headers['user-agent'], 'red-team-audit-http-authed/0.16')
   assert.equal(calls[0].headers.authorization, `Bearer ${CREDENTIAL.toString('utf8')}`)
   assert.equal(result.action.sequence, 2_000_000)
   assert.deepEqual(result.response, {

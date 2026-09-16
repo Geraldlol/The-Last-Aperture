@@ -29,9 +29,23 @@ const POLICY_FIELDS = [
   'allowed_target_families',
   'allowed_effects',
   'budgets',
+  'detection',
   'credential_references',
   'revocation',
 ]
+const LEGACY_POLICY_FIELDS = POLICY_FIELDS.filter((field) => field !== 'detection')
+const DETECTION_FIELDS = [
+  'noise_profile',
+  'target_environment',
+  'risk_tolerance',
+  'confirmation_mode',
+]
+export const DEFAULT_UNLEASH_DETECTION_POLICY = Object.freeze({
+  noise_profile: 'AUTO',
+  target_environment: 'UNKNOWN',
+  risk_tolerance: 'UNSPECIFIED',
+  confirmation_mode: 'REQUIRED',
+})
 const TARGET_FIELDS = ['family', 'canonical_locator', 'target_id', 'supplied_sha256']
 const ALLOWED_EFFECTS = new Set([
   'OBSERVE',
@@ -109,10 +123,13 @@ function canonicalOrigin(value) {
 }
 
 function normalizePolicy(value) {
-  if (!hasExactKeys(value, POLICY_FIELDS)) {
+  const legacy = hasExactKeys(value, LEGACY_POLICY_FIELDS)
+  if (!legacy && !hasExactKeys(value, POLICY_FIELDS)) {
     fail('UNLEASH_POLICY_SCHEMA_INVALID', 'deployment policy contains missing or unknown fields')
   }
-  const candidate = structuredClone(value)
+  const candidate = structuredClone(legacy
+    ? { ...value, detection: DEFAULT_UNLEASH_DETECTION_POLICY }
+    : value)
   if (!validatePolicySchema(candidate)) {
     fail('UNLEASH_POLICY_SCHEMA_INVALID', 'deployment policy violates its schema', validatePolicySchema.errors ?? [])
   }
@@ -121,6 +138,9 @@ function normalizePolicy(value) {
   ])) fail('UNLEASH_POLICY_BUDGET_INVALID', 'deployment policy budgets contain missing or unknown fields')
   if (!hasExactKeys(candidate.revocation, ['check_id', 'fail_mode'])) {
     fail('UNLEASH_POLICY_REVOCATION_INVALID', 'deployment policy revocation record contains missing or unknown fields')
+  }
+  if (!hasExactKeys(candidate.detection, DETECTION_FIELDS)) {
+    fail('UNLEASH_POLICY_DETECTION_INVALID', 'deployment policy detection settings contain missing or unknown fields')
   }
   const validFrom = canonicalTimestamp(candidate.valid_from, 'valid_from')
   const validUntil = canonicalTimestamp(candidate.valid_until, 'valid_until')
@@ -148,6 +168,64 @@ function assertCreatedPolicy(value) {
     fail('UNLEASH_POLICY_NOT_CANONICAL', 'deployment policy must use its canonical frozen representation')
   }
   return value
+}
+
+export function selectUnleashDetectionProfile(policy) {
+  assertCreatedPolicy(policy)
+  const configured = policy.detection.noise_profile
+  if (configured !== 'AUTO') {
+    return deeplyFrozenCopy({
+      configured_profile: configured,
+      operational_profile: configured.toLowerCase(),
+      selection_reason: 'CONTROLLER_POLICY_EXPLICIT',
+    })
+  }
+  const aggressive = policy.detection.target_environment === 'LAB'
+    && policy.detection.risk_tolerance === 'HIGH'
+  const cautious = policy.detection.target_environment === 'PRODUCTION'
+    || policy.detection.risk_tolerance === 'LOW'
+  return deeplyFrozenCopy({
+    configured_profile: 'AUTO',
+    operational_profile: aggressive ? 'aggressive' : cautious ? 'cautious' : 'balanced',
+    selection_reason: aggressive
+      ? 'AUTO_LAB_HIGH_TOLERANCE'
+      : cautious
+        ? 'AUTO_PRODUCTION_OR_LOW_TOLERANCE'
+        : policy.detection.target_environment === 'UNKNOWN'
+          ? 'AUTO_UNKNOWN_POSTURE_BALANCED'
+          : 'AUTO_PRE_PRODUCTION_MODERATE_TOLERANCE',
+  })
+}
+
+export function resolveUnleashDetectionPolicyBinding(policy, policySha256) {
+  assertCreatedPolicy(policy)
+  if (typeof policySha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(policySha256)) {
+    fail('UNLEASH_POLICY_BINDING_INVALID', 'retained policy digest must be one SHA-256 value')
+  }
+  const fullPolicySha256 = digestUnleashValue(policy)
+  if (policySha256 === fullPolicySha256) {
+    return deeplyFrozenCopy({
+      binding: 'DETECTION_POLICY_BOUND',
+      policy_sha256: policySha256,
+      detection: policy.detection,
+      selection: selectUnleashDetectionProfile(policy),
+    })
+  }
+  const { detection: ignoredDetection, ...legacyPolicy } = policy
+  const legacyPolicySha256 = digestUnleashValue(legacyPolicy)
+  if (policySha256 !== legacyPolicySha256) {
+    fail('UNLEASH_POLICY_PLAN_DRIFT', 'deployment policy no longer matches the retained campaign plan')
+  }
+  const automaticPolicy = createUnleashDeploymentPolicy({
+    ...legacyPolicy,
+    detection: DEFAULT_UNLEASH_DETECTION_POLICY,
+  })
+  return deeplyFrozenCopy({
+    binding: 'LEGACY_POLICY_DEFAULTED',
+    policy_sha256: policySha256,
+    detection: DEFAULT_UNLEASH_DETECTION_POLICY,
+    selection: selectUnleashDetectionProfile(automaticPolicy),
+  })
 }
 
 function canonicalTarget(value) {

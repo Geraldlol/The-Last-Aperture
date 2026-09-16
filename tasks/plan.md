@@ -17,7 +17,8 @@ Source of truth: `docs/design/2026-09-15-target-only-autonomous-controller.md`.
 
 ## Constraints
 
-- Preserve existing route-registry, fixed-invocation, durable permit, stop, recovery, output-binding, and append-only ledger guarantees.
+- Preserve existing route-registry, fixed-invocation, action-risk preflight,
+  durable permit, Pause/Stop, recovery, output-binding, and append-only ledger guarantees.
 - Keep deployment authority, credentials, effect limits, and retention policy outside target intake.
 - Treat target responses and provider output as untrusted data.
 - Do not silently widen destinations or let providers construct commands.
@@ -41,7 +42,8 @@ Source of truth: `docs/design/2026-09-15-target-only-autonomous-controller.md`.
 3. Execute the existing bounded HTTPS reconnaissance route.
 4. Convert verified reconnaissance into a sealed provider packet.
 5. Accept evidence-linked provider hypotheses as candidates.
-6. Expose progress, Stop/Resume, findings, route inventory, and gaps from one verified snapshot.
+6. Expose progress, detection context, confirmation, Pause/Resume, rollback,
+   Stop, findings, route inventory, and gaps from one verified snapshot.
 7. Validate end to end against a deterministic synthetic HTTP target.
 
 ## Phase 3 — Autonomous web/API swarm
@@ -56,7 +58,9 @@ Source of truth: `docs/design/2026-09-15-target-only-autonomous-controller.md`.
 ## Phase 4 — Point-Click-Shoot cockpit
 
 1. Build the hosted campaign control plane and a narrow local bridge only where browser/device/process access requires it.
-2. Implement target field, saved-target double-click, Unleash, live graph, frontier, proof levels, Stop/Resume, gaps, and exports.
+2. Implement target field, saved-target double-click, Unleash, live graph,
+   frontier, proof levels, detection context, Pause/Resume, rollback, Stop,
+   gaps, and exports.
 3. Add snapshot-bound pagination and exact GUI/CLI classification parity.
 4. Package the optional local bridge and verify artifacts from the exact release commit.
 

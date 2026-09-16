@@ -1,4 +1,4 @@
 interface:
   display_name: "The Last Aperture"
   short_description: "Unified authorized security engagements"
-  default_prompt: "Use $last-aperture to start the target-only campaign with engage unleash <target>, run its bounded HTTPS reconnaissance, and preserve evidence and exact route gaps."
+  default_prompt: "Use $last-aperture to start the target-only campaign with engage unleash <target>, evaluate and record action-risk before dispatch, run its bounded HTTPS reconnaissance and BORG proposal lifecycle, and preserve evidence, candidates, exact gaps, Pause, rollback, and Stop controls."

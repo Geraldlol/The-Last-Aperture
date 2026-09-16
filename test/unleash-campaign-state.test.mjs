@@ -50,6 +50,19 @@ function initialState(overrides = {}) {
   }
 }
 
+function initialV2State(overrides = {}) {
+  return {
+    ...initialState(),
+    schema_version: '2.0.0',
+    swarm_basis_sha256: null,
+    swarm_completion_sha256: null,
+    candidate_frontier_sha256: null,
+    candidate_frontier_head_sha256: null,
+    swarm_gap_count: 0,
+    ...overrides,
+  }
+}
+
 function memoryStorage({ failEvent = false, failSnapshot = false } = {}) {
   const files = new Map()
   const operations = []
@@ -130,6 +143,56 @@ test('rejects illegal, rollback, and identity-changing transitions', () => {
   assert.equal(running.revision, 2)
 })
 
+test('protocol v2 retains verified recon through SWARMING and binds terminal completion', () => {
+  const planned = initialV2State()
+  const running = nextUnleashCampaignState(
+    planned,
+    { status: 'RUNNING' },
+    '2026-09-15T09:30:01.000Z',
+  )
+  const swarming = nextUnleashCampaignState(running, {
+    status: 'SWARMING',
+    completed_routes: ['https-recon'],
+    evidence_packet_path: resolve(RUN_DIRECTORY, 'evidence-packet.json'),
+    evidence_packet_sha256: '5'.repeat(64),
+    completion_receipt_sha256: '6'.repeat(64),
+    swarm_basis_sha256: '7'.repeat(64),
+  }, '2026-09-15T09:30:02.000Z')
+  const complete = nextUnleashCampaignState(swarming, {
+    status: 'COMPLETE_WITH_GAPS',
+    swarm_completion_sha256: '8'.repeat(64),
+    candidate_frontier_sha256: '9'.repeat(64),
+    candidate_frontier_head_sha256: null,
+    swarm_gap_count: 2,
+  }, '2026-09-15T09:30:03.000Z')
+
+  assert.equal(assertValidUnleashCampaignState(swarming).status, 'SWARMING')
+  assert.equal(assertValidUnleashCampaignState(complete).swarm_gap_count, 2)
+  assert.throws(
+    () => nextUnleashCampaignState(swarming, {
+      status: 'COMPLETE_WITH_GAPS',
+    }, '2026-09-15T09:30:03.000Z'),
+    rejectsCode('UNLEASH_CAMPAIGN_STATE_INVALID'),
+  )
+  assert.throws(
+    () => nextUnleashCampaignState(swarming, {
+      swarm_basis_sha256: 'a'.repeat(64),
+    }, '2026-09-15T09:30:03.000Z'),
+    rejectsCode('UNLEASH_CAMPAIGN_TRANSITION_INVALID'),
+  )
+  assert.throws(
+    () => assertValidUnleashCampaignState(initialV2State({
+      status: 'RUNNING',
+      completed_routes: ['https-recon'],
+      evidence_packet_path: resolve(RUN_DIRECTORY, 'evidence-packet.json'),
+      evidence_packet_sha256: '5'.repeat(64),
+      completion_receipt_sha256: '6'.repeat(64),
+      swarm_basis_sha256: '7'.repeat(64),
+    })),
+    rejectsCode('UNLEASH_CAMPAIGN_STATE_INVALID'),
+  )
+})
+
 test('recovers the full chain and repairs only a proven stale snapshot', async () => {
   const storage = memoryStorage()
   const planned = await appendUnleashCampaignState({ storage, nextState: initialState() })
@@ -140,9 +203,57 @@ test('recovers the full chain and repairs only a proven stale snapshot', async (
   const recovered = await recoverUnleashCampaignState({ storage })
 
   assert.equal(recovered.event_count, 2)
+  assert.deepEqual(recovered.states, [planned, running])
+  assert.ok(Object.isFrozen(recovered.states))
+  assert.deepEqual(recovered.events.map(({ state }) => state), [planned, running])
+  assert.ok(Object.isFrozen(recovered.events))
   assert.equal(recovered.snapshot_repaired, true)
   assert.equal(recovered.state.status, 'RUNNING')
   assert.deepEqual(storage.files.get('campaign-state.json'), running)
+})
+
+test('recovery admits exact protocol namespaces and rejects v2 swarm artifacts in v1', async () => {
+  const v1Storage = memoryStorage()
+  const v1Planned = await appendUnleashCampaignState({ storage: v1Storage, nextState: initialState() })
+  v1Storage.files.set('candidate-admission-000001.json', { retained: true })
+  v1Storage.files.set('candidate-frontier-state.json', { retained: true })
+  assert.deepEqual((await recoverUnleashCampaignState({ storage: v1Storage })).states, [v1Planned])
+
+  v1Storage.files.set('swarm-terminal-fence.json', { retained: true })
+  await assert.rejects(
+    recoverUnleashCampaignState({ storage: v1Storage }),
+    rejectsCode('UNLEASH_CAMPAIGN_PROTOCOL_ARTIFACT_INVALID'),
+  )
+  v1Storage.files.delete('swarm-terminal-fence.json')
+  v1Storage.files.set('swarm-attempt-ledger-state.json', { retained: true })
+  await assert.rejects(
+    recoverUnleashCampaignState({ storage: v1Storage }),
+    rejectsCode('UNLEASH_CAMPAIGN_PROTOCOL_ARTIFACT_INVALID'),
+  )
+
+  const storage = memoryStorage()
+  const planned = await appendUnleashCampaignState({ storage, nextState: initialV2State() })
+  storage.files.set('candidate-admission-000001.json', { retained: true })
+  storage.files.set('candidate-frontier-state.json', { retained: true })
+  storage.files.set('swarm-attempt-ledger-state.json', { retained: true })
+  storage.files.set('swarm-terminal-fence.json', { retained: true })
+  storage.files.set('swarm-attempt-event-000001.json', { retained: true })
+  storage.files.set('swarm-merge-r01-attack.json', { retained: true })
+  storage.files.set('swarm-merge-r01-review.json', { retained: true })
+  assert.deepEqual((await recoverUnleashCampaignState({ storage })).states, [planned])
+
+  storage.files.set('candidate-frontier.json', { unexpected: true })
+  await assert.rejects(
+    recoverUnleashCampaignState({ storage }),
+    rejectsCode('UNLEASH_CAMPAIGN_INVENTORY_INVALID'),
+  )
+
+  storage.files.delete('candidate-frontier.json')
+  storage.files.set('swarm-merge-r1-attack.json', { unexpected: true })
+  await assert.rejects(
+    recoverUnleashCampaignState({ storage }),
+    rejectsCode('UNLEASH_CAMPAIGN_INVENTORY_INVALID'),
+  )
 })
 
 test('rejects forged events, forged snapshots, chain gaps, and truncated chains', async () => {

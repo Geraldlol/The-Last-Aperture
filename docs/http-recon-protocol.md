@@ -2,11 +2,15 @@
 
 Protocol: `http-recon-v1`
 
-Protocol design: introduced in 0.11.0. Version 0.15.0 retains the target-neutral
-1.0 and 1.1 formats. Retired target-specific 0.12 response-profile artifacts
-require the 0.12 verifier and cannot resume under the current controller.
+Protocol design: introduced in 0.11.0. Version 0.16.0 retains exact read support
+for the target-neutral run 1.0 and 1.1 formats. Retired target-specific run 1.2
+response-profile artifacts require the 0.12 verifier and cannot resume under the
+current controller. Run 1.3 is the target-neutral continuation used after a
+controller-proven before-send Pause; the corresponding
+`ACTION_PAUSED_BEFORE_SEND` event uses event-record 1.1 while legacy event shapes
+remain event-record 1.0.
 
-> **Current 0.15.0 execution status: active.** `go <exact-https-url>` records the
+> **Current 0.16.0 execution status: active.** `go <exact-https-url>` records the
 > invocation as the operator's launch directive and completes one bounded live
 > action. Lower-level `plan` and `run` invocations are also operator directives;
 > the controller does not request a second confirmation flag.
@@ -31,7 +35,13 @@ deployment policy and revocation state, admits the exact canonical target for
 the observation effect, and binds that controller-policy authority to its plan
 and retained completion evidence. Its current enrolled route fixes `HEAD`, uses
 only native transport-default headers, and accepts no caller-selected,
-diagnostic-profile, or credential headers.
+diagnostic-profile, or credential headers. Before that action dispatches, the
+Unleash controller writes an immutable risk receipt, records a contextual or
+explicit aggressive/balanced/cautious profile, and enforces hard volume limits.
+An exact high-risk or high-noise receipt requires controller confirmation bound
+to its action and assessment digests. This technical gate does not replace or
+renew deployment authority. Direct and legacy `http-recon-v1` commands retain
+the authorization behavior described below and do not use the Unleash profile.
 
 `OPERATOR_ATTESTED` is the authorization path. The operator supplies one
 exact HTTPS URL, their identity, the declared authorizer, an authorization
@@ -112,6 +122,12 @@ authority statement.
 failure. `finalize` reports the terminal denominator; `validate` rechecks the
 scope and operator-statement bindings; `report` returns the generated report path and
 does not contact the target.
+
+The 15-minute authority and wall-clock windows continue to elapse while an
+action is in a controller-proven before-send Pause. Resume revalidates current
+authority before dispatch can reopen; expiry or revocation keeps it closed.
+Stop remains available after that point. Any later target dispatch requires a
+successor campaign with current authority.
 
 ## Exact v1 network boundary
 

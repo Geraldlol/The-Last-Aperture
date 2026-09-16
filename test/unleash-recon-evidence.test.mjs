@@ -6,6 +6,7 @@ import {
   assertValidUnleashReconCompletion,
   createVerifiedReconCompletion,
   createVerifiedReconEvidencePacket,
+  readVerifiedUnleashReconProviderArtifact,
   verifyUnleashReconCompletion,
 } from '../scripts/lib/unleash-recon-evidence.mjs'
 import {
@@ -170,6 +171,35 @@ test('emits one typed completion receipt bound to the exact route execution and 
   }, {
     readVerifiedRecon: async () => structuredClone(verified),
   }))
+})
+
+test('re-verifies and returns the exact evidence bytes for bounded provider delivery', async () => {
+  const verified = verifiedRecon()
+  const completion = await verifiedCompletion(verified)
+  const projection = await readVerifiedUnleashReconProviderArtifact({
+    bundle: 'controller-owned/recon',
+    plan: PLAN,
+    completion,
+  }, {
+    readVerifiedRecon: async () => structuredClone(verified),
+  })
+
+  assert.deepEqual(projection.artifact, {
+    artifact_id: `artifact:sha256:${projection.payload.sha256}`,
+    kind: 'EVIDENCE',
+    logical_name: 'https-recon/verified-evidence.json',
+    sha256: projection.payload.sha256,
+    size: projection.payload.size,
+  })
+  assert.equal(projection.payload.media_type, 'application/json')
+  assert.equal(projection.payload.size, projection.payload.bytes.length)
+  assert.equal(
+    createHash('sha256').update(projection.payload.bytes).digest('hex'),
+    completion.evidence_packet.sources[0].source_sha256,
+  )
+  const decoded = JSON.parse(projection.payload.bytes.toString('utf8'))
+  assert.equal(decoded.kind, 'last-aperture/verified-http-recon-evidence')
+  assert.equal(decoded.run.target.origin, 'https://example.test')
 })
 
 test('rejects every resealed route, adapter, verifier, run, plan, event, target, policy, and evidence rebind', async () => {

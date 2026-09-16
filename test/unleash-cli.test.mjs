@@ -61,7 +61,64 @@ test('help advertises the target-only unleash command', async () => {
 
   assert.equal(calls, 0)
   assert.match(io.stdoutText(), /engage unleash <target> \[--json\]/)
+  assert.match(io.stdoutText(), /engage pause <campaign-directory>/)
+  assert.match(io.stdoutText(), /engage rollback <campaign-directory> --reason <text>/)
   assert.equal(io.stderrText(), '')
+})
+
+test('Pause and rollback are direct protocol-v2 Unleash controls with bounded reasons', async () => {
+  const bundle = resolve('campaign-0123456789abcdef01234567')
+  const result = unleashResult({
+    run_directory: bundle,
+    pause: {
+      state: 'PAUSED',
+      dispatch_open: false,
+      reason: 'operator requested pause',
+      request_count: 1,
+      acknowledgement_count: 0,
+    },
+    rollback: {
+      enabled: true,
+      state: 'AVAILABLE',
+      request_count: 0,
+      scope: ['NOT_YET_DISPATCHED', 'PROPOSED_INERT'],
+      target_side_effects_reversed: false,
+    },
+  })
+  const cases = [
+    {
+      argv: ['pause', bundle, '--json'],
+      operation: 'pauseUnleashCampaign',
+      expected: { bundle, reason: 'operator requested pause' },
+    },
+    {
+      argv: ['rollback', bundle, '--reason', 'cancel future local work', '--json'],
+      operation: 'rollbackUnleashCampaign',
+      expected: { bundle, reason: 'cancel future local work' },
+    },
+  ]
+  for (const { argv, operation, expected } of cases) {
+    const io = capture()
+    const calls = []
+    assert.equal(await runEngageCli(argv, {
+      [operation]: async (input) => {
+        calls.push(input)
+        return result
+      },
+      ...io,
+    }), 0, io.stderrText())
+    assert.deepEqual(calls, [expected])
+    assert.deepEqual(JSON.parse(io.stdoutText()), result)
+  }
+
+  const io = capture()
+  let calls = 0
+  assert.equal(await runEngageCli(['rollback', bundle, '--json'], {
+    rollbackUnleashCampaign: async () => { calls += 1 },
+    ...io,
+  }), 1)
+  assert.equal(calls, 0)
+  assert.match(io.stderrText(), /requires --reason/u)
 })
 
 test('unleash accepts exactly one target and delegates exactly once with no other runtime input', async () => {
@@ -84,6 +141,56 @@ test('unleash accepts exactly one target and delegates exactly once with no othe
   assert.deepEqual(calls, [{ target: TARGET }])
   assert.deepEqual(JSON.parse(io.stdoutText()), result)
   assert.equal(io.stderrText(), '')
+})
+
+test('unleash surfaces the action-risk preflight before target dispatch completes', async () => {
+  const io = capture()
+  const result = unleashResult()
+  const detection = {
+    state: 'ADMITTED',
+    action_id: `http-recon-action:${'d'.repeat(64)}`,
+    profile: 'balanced',
+    methodology: 'HEURISTIC_UNCALIBRATED',
+    telemetry_coverage: 'UNKNOWN',
+    collection_precondition: 'UNKNOWN',
+    risk_score: 23,
+    risk_level: 'LOW',
+    noise_score: 43,
+    noise_level: 'MODERATE',
+    likely_impacts: [
+      { impact: 'CONFIDENTIALITY', score: 25, level: 'LOW' },
+      { impact: 'OPERATIONAL_RESPONSE', score: 43, level: 'MEDIUM' },
+    ],
+    control_signals: [
+      { control: 'NETWORK', relative_exposure_score: 45, relative_exposure_level: 'MEDIUM' },
+    ],
+    confirmation_required: false,
+    assessment_sha256: 'e'.repeat(64),
+  }
+  let preflightWasVisibleBeforeReturn = false
+
+  assert.equal(await runEngageCli(
+    ['unleash', TARGET, '--json'],
+    {
+      unleashTarget: async (_input, runtime) => {
+        assert.equal(io.stdoutText(), '')
+        await runtime.onActionRiskPreflight(detection)
+        const surfaced = JSON.parse(io.stderrText())
+        assert.equal(surfaced.kind, 'last-aperture/action-risk-preflight')
+        assert.deepEqual(surfaced.detection, detection)
+        assert.equal(surfaced.detection.risk_level, 'LOW')
+        assert.equal(surfaced.detection.noise_level, 'MODERATE')
+        assert.deepEqual(surfaced.detection.likely_impacts, detection.likely_impacts)
+        assert.deepEqual(surfaced.detection.control_signals, detection.control_signals)
+        preflightWasVisibleBeforeReturn = true
+        return result
+      },
+      ...io,
+    },
+  ), 0, io.stderrText())
+
+  assert.equal(preflightWasVisibleBeforeReturn, true)
+  assert.deepEqual(JSON.parse(io.stdoutText()), result)
 })
 
 test('unleash rejects missing and additional targets before invoking the controller', async () => {

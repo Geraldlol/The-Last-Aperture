@@ -6,8 +6,9 @@ const SHA256 = /^[a-f0-9]{64}$/u
 const CAMPAIGN_ID = /^campaign:sha256:[a-f0-9]{64}$/u
 const ROUTE_ID = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,159}$/u
 const EVENT_FILENAME = /^campaign-event-([0-9]{6})\.json$/u
+const CANDIDATE_ADMISSION_FILENAME = /^candidate-admission-([0-9]{6})\.json$/u
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
-const STATE_FIELDS = [
+const STATE_V1_FIELDS = [
   'schema_version',
   'kind',
   'revision',
@@ -27,6 +28,14 @@ const STATE_FIELDS = [
   'stop_reason',
   'failure',
 ]
+const STATE_V2_SWARM_FIELDS = [
+  'swarm_basis_sha256',
+  'swarm_completion_sha256',
+  'candidate_frontier_sha256',
+  'candidate_frontier_head_sha256',
+  'swarm_gap_count',
+]
+const STATE_V2_FIELDS = [...STATE_V1_FIELDS, ...STATE_V2_SWARM_FIELDS]
 const EVENT_FIELDS = [
   'schema_version',
   'kind',
@@ -42,13 +51,28 @@ const TARGET_FIELDS = ['family', 'canonical_locator', 'target_id', 'supplied_sha
 const TERMINAL_STATUSES = new Set(['COMPLETE', 'COMPLETE_WITH_GAPS', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED'])
 const STATUS_TRANSITIONS = new Map([
   ['PLANNED', new Set(['RUNNING', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED', 'RECONCILIATION_REQUIRED'])],
-  ['RUNNING', new Set(['COMPLETE', 'COMPLETE_WITH_GAPS', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED', 'RECONCILIATION_REQUIRED'])],
+  ['RUNNING', new Set(['SWARMING', 'COMPLETE', 'COMPLETE_WITH_GAPS', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED', 'RECONCILIATION_REQUIRED'])],
+  ['SWARMING', new Set(['COMPLETE', 'COMPLETE_WITH_GAPS', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED', 'RECONCILIATION_REQUIRED'])],
   ['STOP_REQUESTED', new Set(['COMPLETE', 'COMPLETE_WITH_GAPS', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED', 'RECONCILIATION_REQUIRED'])],
-  ['RECONCILIATION_REQUIRED', new Set(['COMPLETE', 'COMPLETE_WITH_GAPS', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED'])],
+  ['RECONCILIATION_REQUIRED', new Set(['SWARMING', 'COMPLETE', 'COMPLETE_WITH_GAPS', 'STOP_REQUESTED', 'STOPPED', 'OUTCOME_UNCERTAIN', 'FAILED'])],
+])
+const SWARM_ATTEMPT_EVENT_FILENAME = /^swarm-attempt-event-([0-9]{6})\.json$/u
+const SWARM_MERGE_FILENAME = /^swarm-merge-r([0-9]{2})-(attack|review)\.json$/u
+const PAUSE_REQUEST_FILENAME = /^campaign-pause-request-([a-f0-9]{64})\.json$/u
+const PAUSE_ACK_FILENAME = /^campaign-pause-resume-([a-f0-9]{64})\.json$/u
+const ROLLBACK_REQUEST_FILENAME = /^campaign-rollback-request-([a-f0-9]{64})\.json$/u
+const PROTOCOL_V2_ONLY_JSON_FILES = new Set([
+  'swarm-attempt-ledger-state.json',
+  'swarm-basis.json',
+  'swarm-completion.json',
+  'swarm-terminal-fence.json',
 ])
 const ALLOWED_JSON_FILES = new Set([
   'campaign-plan.json',
   'campaign-provider.json',
+  'campaign-action-risk-confirmation.json',
+  'campaign-action-risk-preflight.json',
+  'candidate-frontier-state.json',
   'campaign-recon-authority.json',
   'campaign-recon-planned.json',
   'campaign-registry.json',
@@ -56,6 +80,10 @@ const ALLOWED_JSON_FILES = new Set([
   'campaign-state.json',
   'evidence-packet.json',
   'https-recon-completion.json',
+  'swarm-attempt-ledger-state.json',
+  'swarm-basis.json',
+  'swarm-completion.json',
+  'swarm-terminal-fence.json',
 ])
 
 export class UnleashCampaignStateError extends Error {
@@ -141,9 +169,11 @@ function assertCounts(value, gapCount) {
 }
 
 export function assertValidUnleashCampaignState(value) {
+  const isV2 = value?.schema_version === '2.0.0'
+  const stateFields = isV2 ? STATE_V2_FIELDS : STATE_V1_FIELDS
   if (
-    !exactRecord(value, STATE_FIELDS)
-    || value.schema_version !== '1.0.0'
+    !exactRecord(value, stateFields)
+    || !['1.0.0', '2.0.0'].includes(value.schema_version)
     || value.kind !== 'last-aperture/unleash-state'
     || !Number.isSafeInteger(value.revision)
     || value.revision < 1
@@ -208,19 +238,65 @@ export function assertValidUnleashCampaignState(value) {
   }
   assertFailure(value.failure, value.status)
   const isComplete = value.status === 'COMPLETE' || value.status === 'COMPLETE_WITH_GAPS'
-  if (isComplete && (evidenceAbsent || value.completed_routes.length < 1)) {
-    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'complete campaign state requires completed routes and verified evidence')
+  if (!isV2) {
+    if (isComplete && (evidenceAbsent || value.completed_routes.length < 1)) {
+      fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'complete campaign state requires completed routes and verified evidence')
+    }
+    if (!isComplete && (!evidenceAbsent || value.completed_routes.length > 0)) {
+      fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'non-complete campaign state cannot claim route completion or evidence')
+    }
+    if (value.status === 'COMPLETE' && value.gap_count !== 0) {
+      fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE requires zero recorded coverage gaps')
+    }
+    if (value.status === 'COMPLETE_WITH_GAPS' && value.gap_count === 0) {
+      fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE_WITH_GAPS requires at least one recorded coverage gap')
+    }
+    return value
   }
-  if (!isComplete && (!evidenceAbsent || value.completed_routes.length > 0)) {
-    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'non-complete campaign state cannot claim route completion or evidence')
-  }
-  if (value.status === 'COMPLETE' && value.gap_count !== 0) {
-    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE requires zero recorded coverage gaps')
-  }
-  if (value.status === 'COMPLETE_WITH_GAPS' && value.gap_count === 0) {
-    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE_WITH_GAPS requires at least one recorded coverage gap')
-  }
+  assertV2SwarmState(value, { evidenceAbsent, evidencePresent, isComplete })
   return value
+}
+
+function assertV2SwarmState(value, { evidenceAbsent, evidencePresent, isComplete }) {
+  const basisPresent = SHA256.test(value.swarm_basis_sha256 ?? '')
+  const completionPresent = SHA256.test(value.swarm_completion_sha256 ?? '')
+    && SHA256.test(value.candidate_frontier_sha256 ?? '')
+    && (value.candidate_frontier_head_sha256 === null
+      || SHA256.test(value.candidate_frontier_head_sha256 ?? ''))
+  const completionAbsent = value.swarm_completion_sha256 === null
+    && value.candidate_frontier_sha256 === null
+    && value.candidate_frontier_head_sha256 === null
+  if (
+    !Number.isSafeInteger(value.swarm_gap_count)
+    || value.swarm_gap_count < 0
+    || value.swarm_gap_count > 1_000_000
+    || (!completionPresent && !completionAbsent)
+  ) fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'campaign swarm bindings are incomplete or invalid')
+  if (evidenceAbsent) {
+    if (
+      value.completed_routes.length !== 0
+      || value.swarm_basis_sha256 !== null
+      || !completionAbsent
+      || value.swarm_gap_count !== 0
+    ) fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'pre-evidence campaign state cannot carry swarm progress')
+  } else if (
+    !evidencePresent
+    || value.completed_routes.length < 1
+    || !basisPresent
+    || ['PLANNED', 'RUNNING'].includes(value.status)
+  ) fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'verified evidence and a swarm basis are required before swarm progress')
+  if (value.status === 'SWARMING' && (evidenceAbsent || completionPresent)) {
+    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'SWARMING requires verified evidence and cannot claim sealed swarm completion')
+  }
+  if (isComplete && !completionPresent) {
+    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'complete protocol-v2 campaign state requires sealed swarm completion and frontier bindings')
+  }
+  if (value.status === 'COMPLETE' && value.gap_count + value.swarm_gap_count !== 0) {
+    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE requires zero recorded route and swarm gaps')
+  }
+  if (value.status === 'COMPLETE_WITH_GAPS' && value.gap_count + value.swarm_gap_count === 0) {
+    fail('UNLEASH_CAMPAIGN_STATE_INVALID', 'COMPLETE_WITH_GAPS requires at least one recorded route or swarm gap')
+  }
 }
 
 function immutableProjection(state) {
@@ -261,6 +337,17 @@ export function assertUnleashCampaignStateTransition(previous, next) {
       || next.completion_receipt_sha256 !== previous.completion_receipt_sha256
     ))
     || (previous.stop_reason !== null && next.stop_reason !== previous.stop_reason)
+    || (previous.schema_version === '2.0.0' && (
+      next.schema_version !== previous.schema_version
+      || next.swarm_gap_count < previous.swarm_gap_count
+      || (previous.swarm_basis_sha256 !== null
+        && next.swarm_basis_sha256 !== previous.swarm_basis_sha256)
+      || (previous.swarm_completion_sha256 !== null && (
+        next.swarm_completion_sha256 !== previous.swarm_completion_sha256
+        || next.candidate_frontier_sha256 !== previous.candidate_frontier_sha256
+        || next.candidate_frontier_head_sha256 !== previous.candidate_frontier_head_sha256
+      ))
+    ))
   ) fail('UNLEASH_CAMPAIGN_TRANSITION_INVALID', 'campaign transition rolls back or changes retained evidence')
   return next
 }
@@ -332,6 +419,15 @@ export async function appendUnleashCampaignState({ storage, previousState = null
           evidence_packet_path: null,
           evidence_packet_sha256: null,
           completion_receipt_sha256: null,
+          ...(state.schema_version === '2.0.0'
+            ? {
+                swarm_basis_sha256: null,
+                swarm_completion_sha256: null,
+                candidate_frontier_sha256: null,
+                candidate_frontier_head_sha256: null,
+                swarm_gap_count: 0,
+              }
+            : {}),
           failure: {
             code: 'UNLEASH_CAMPAIGN_EVENT_PUBLICATION_UNCERTAIN',
             message: 'Campaign event publication requires storage reconciliation before another transition.',
@@ -371,13 +467,22 @@ export async function recoverUnleashCampaignState({ storage, repairSnapshot = tr
     const match = EVENT_FILENAME.exec(filename)
     if (match) {
       eventFiles.push({ filename, revision: Number.parseInt(match[1], 10) })
-    } else if (!ALLOWED_JSON_FILES.has(filename)) {
+    } else if (
+      !ALLOWED_JSON_FILES.has(filename)
+      && !CANDIDATE_ADMISSION_FILENAME.test(filename)
+      && !SWARM_ATTEMPT_EVENT_FILENAME.test(filename)
+      && !SWARM_MERGE_FILENAME.test(filename)
+      && !PAUSE_REQUEST_FILENAME.test(filename)
+      && !PAUSE_ACK_FILENAME.test(filename)
+      && !ROLLBACK_REQUEST_FILENAME.test(filename)
+    ) {
       fail('UNLEASH_CAMPAIGN_INVENTORY_INVALID', `campaign contains an unrecognized JSON artifact: ${filename}`)
     }
   }
   if (eventFiles.length < 1) fail('UNLEASH_CAMPAIGN_CHAIN_MISSING', 'campaign has no immutable state events')
   let previous = null
   const states = []
+  const events = []
   for (const [index, descriptor] of eventFiles.entries()) {
     const expected = index + 1
     if (descriptor.revision !== expected || descriptor.filename !== eventFilename(expected)) {
@@ -385,9 +490,24 @@ export async function recoverUnleashCampaignState({ storage, repairSnapshot = tr
     }
     const event = await storage.readJson(descriptor.filename)
     previous = frozenCopy(assertEvent(event, expected, previous))
+    events.push(frozenCopy(event))
     states.push(previous)
   }
   const head = states.at(-1)
+  const protocolV2Artifact = filenames.find((filename) => (
+    PROTOCOL_V2_ONLY_JSON_FILES.has(filename)
+    || SWARM_ATTEMPT_EVENT_FILENAME.test(filename)
+    || SWARM_MERGE_FILENAME.test(filename)
+    || PAUSE_REQUEST_FILENAME.test(filename)
+    || PAUSE_ACK_FILENAME.test(filename)
+    || ROLLBACK_REQUEST_FILENAME.test(filename)
+  ))
+  if (head.schema_version === '1.0.0' && protocolV2Artifact !== undefined) {
+    fail(
+      'UNLEASH_CAMPAIGN_PROTOCOL_ARTIFACT_INVALID',
+      `protocol-v1 campaign contains a protocol-v2 swarm artifact: ${protocolV2Artifact}`,
+    )
+  }
   const snapshot = await readSnapshot(storage)
   let snapshotStale = snapshot === null
   if (snapshot !== null) {
@@ -410,6 +530,8 @@ export async function recoverUnleashCampaignState({ storage, repairSnapshot = tr
   }
   return Object.freeze({
     state: head,
+    states: frozenCopy(states),
+    events: frozenCopy(events),
     event_count: states.length,
     state_sha256: digestUnleashValue(head),
     snapshot_repaired: snapshotStale && repairSnapshot,
@@ -432,4 +554,5 @@ export function nextUnleashCampaignState(previous, changes, updatedAt) {
   return frozenCopy(next)
 }
 
-export const unleashCampaignStateFields = Object.freeze([...STATE_FIELDS])
+export const unleashCampaignStateFields = Object.freeze([...STATE_V1_FIELDS])
+export const unleashCampaignStateV2Fields = Object.freeze([...STATE_V2_FIELDS])

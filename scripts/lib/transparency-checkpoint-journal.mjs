@@ -588,6 +588,16 @@ async function inspectLock(lockPath) {
   }
 }
 
+function sameLockObservation(left, right) {
+  return sameFileIdentity(left.info, right.info)
+    && left.info.mtimeMs === right.info.mtimeMs
+    && (
+      left.ownerBytes === null
+        ? right.ownerBytes === null
+        : right.ownerBytes !== null && left.ownerBytes.equals(right.ownerBytes)
+    )
+}
+
 async function removeEmptyDirectory(path) {
   const deadline = Date.now() + 2000
   for (;;) {
@@ -672,6 +682,7 @@ async function createLockOwner(lockPath, owner) {
 async function acquireLock(journal) {
   const lockPath = join(journal.directory, LOCK_DIRECTORY)
   const deadline = Date.now() + journal.limits.lockTimeoutMs
+  let incompleteOwner = null
   for (;;) {
     try {
       await mkdir(lockPath, { recursive: false, mode: 0o700 })
@@ -696,17 +707,46 @@ async function acquireLock(journal) {
       if (
         error.code === 'ENOENT'
         || error.code === 'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_CHANGED'
+        || error.code === 'TRANSPARENCY_CHECKPOINT_JOURNAL_FILE_CHANGED'
       ) {
+        incompleteOwner = null
+        if (Date.now() >= deadline) {
+          throw journalError(
+            'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_TIMEOUT',
+            'timed out waiting for a complete checkpoint journal lock owner record',
+            { cause: error },
+          )
+        }
+        await sleep(Math.min(
+          journal.limits.lockPollMs,
+          Math.max(1, deadline - Date.now()),
+        ))
         continue
       }
       throw error
     }
     if (inspected.ownerBytes !== null && !validLockOwner(inspected.owner)) {
-      throw journalError(
-        'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_UNSAFE',
-        'checkpoint journal lock owner is malformed and cannot be stolen',
-      )
+      const unchanged = incompleteOwner !== null
+        && sameLockObservation(incompleteOwner, inspected)
+      incompleteOwner = inspected
+      await journal._inject('after-incomplete-lock-owner-observed', { unchanged })
+      if (Date.now() >= deadline) {
+        throw journalError(
+          unchanged
+            ? 'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_UNSAFE'
+            : 'TRANSPARENCY_CHECKPOINT_JOURNAL_LOCK_TIMEOUT',
+          unchanged
+            ? 'checkpoint journal lock owner is malformed and cannot be stolen'
+            : 'timed out waiting for a complete checkpoint journal lock owner record',
+        )
+      }
+      await sleep(Math.min(
+        journal.limits.lockPollMs,
+        Math.max(1, deadline - Date.now()),
+      ))
+      continue
     }
+    incompleteOwner = null
     const age = Date.now() - inspected.ageReference
     const ownerAlive = inspected.missingOwner
       ? false
