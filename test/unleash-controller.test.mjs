@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
 import { test } from 'node:test'
@@ -36,6 +36,14 @@ const LEGACY_PROVIDER_PROFILE = Object.freeze({
   protocol_version: '1.0.0',
   proposal_kind: 'last-aperture/unleash-proposal',
 })
+
+async function writePrivateFixtureCreateOnly(path, value) {
+  await writeFile(path, value, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+  if (process.platform !== 'win32') {
+    const metadata = await lstat(path, { bigint: true })
+    assert.equal(metadata.mode & 0o077n, 0n)
+  }
+}
 
 test('Windows default campaign storage stays below LocalAppData even when the environment value is absent or invalid', () => {
   const home = 'C:\\Users\\fixture'
@@ -685,10 +693,9 @@ test('campaign status recovers the immutable event head and repairs a stale snap
 test('campaign recovery rejects protocol-v2 swarm artifacts under a protocol-v1 state head', async (t) => {
   const h = await harness(t)
   const result = await completedCampaign(h)
-  await writeFile(
+  await writePrivateFixtureCreateOnly(
     join(result.run_directory, 'swarm-attempt-ledger-state.json'),
     canonicalUnleashCampaignJson({ forged: true }),
-    'utf8',
   )
 
   await assert.rejects(
@@ -812,7 +819,7 @@ test('protocol-v2 status stays read-only while owned Resume repairs the exact le
     (error) => error.code === 'UNLEASH_SWARM_LEDGER_GAP'
       && error.status === 'RECONCILIATION_REQUIRED',
   )
-  await writeFile(missingEventPath, missingEvent, 'utf8')
+  await writePrivateFixtureCreateOnly(missingEventPath, missingEvent)
 
   const sourceRequest = eventDocuments[0].event.request
   const postTerminalRequest = createUnleashRoleRequest({
