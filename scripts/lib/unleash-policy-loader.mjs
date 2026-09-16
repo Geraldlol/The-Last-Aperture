@@ -1056,8 +1056,9 @@ export async function loadUnleashControllerPolicy({
 } = {}) {
   const root = assertControlRoot(controlRoot)
   await inspectEndpoint(root, 'directory')
-  const policy = createUnleashDeploymentPolicy(await readControllerJson(join(root, POLICY_FILE)))
-  const policySha256 = digestUnleashValue(policy)
+  const storedPolicy = await readControllerJson(join(root, POLICY_FILE))
+  const policySha256 = digestUnleashValue(storedPolicy)
+  const policy = createUnleashDeploymentPolicy(storedPolicy)
   const initialRevocations = normalizeRevocations(
     await readControllerJson(join(root, REVOCATIONS_FILE)),
     policy.revocation.check_id,

@@ -1,0 +1,686 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-swarm.schema.json",
+  "title": "The Last Aperture provider-neutral reasoning swarm",
+  "description": "Controller-bound role requests, inert provider responses, deterministic merge records, and terminal swarm receipts.",
+  "oneOf": [
+    { "$ref": "#/$defs/basis" },
+    { "$ref": "#/$defs/roleRequest" },
+    { "$ref": "#/$defs/roleResponse" },
+    { "$ref": "#/$defs/responseCapture" },
+    { "$ref": "#/$defs/merge" },
+    { "$ref": "#/$defs/completion" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "campaignId": {
+      "type": "string",
+      "pattern": "^campaign:sha256:[a-f0-9]{64}$"
+    },
+    "targetId": {
+      "type": "string",
+      "pattern": "^target:sha256:[a-f0-9]{64}$"
+    },
+    "evidenceRef": {
+      "type": "string",
+      "pattern": "^evidence:sha256:[a-f0-9]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "humanText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sortedIds": {
+      "type": "array",
+      "maxItems": 1024,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/evidenceRef" }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role_id", "role_kind", "wave", "order"],
+      "properties": {
+        "role_id": { "$ref": "#/$defs/id" },
+        "role_kind": { "enum": ["ATTACKER", "REVIEWER"] },
+        "wave": { "enum": ["ATTACK", "REVIEW"] },
+        "order": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_rounds",
+        "max_provider_calls",
+        "max_parallel_provider_calls",
+        "wall_time_ms_per_call",
+        "max_response_bytes_per_call",
+        "max_total_response_bytes",
+        "max_merge_json_bytes",
+        "max_candidates",
+        "max_proposed_actions"
+      ],
+      "properties": {
+        "max_rounds": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "max_provider_calls": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "max_parallel_provider_calls": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "wall_time_ms_per_call": { "type": "integer", "minimum": 100, "maximum": 3600000 },
+        "max_response_bytes_per_call": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "max_total_response_bytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "max_merge_json_bytes": { "type": "integer", "minimum": 4096, "maximum": 262144 },
+        "max_candidates": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_proposed_actions": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "recorded_at", "campaign_id",
+        "campaign_state_revision", "campaign_state_sha256", "plan_sha256",
+        "target_id", "registry_sha256", "provider_protocol_version",
+        "provider_profile_sha256", "evidence_packet_sha256",
+        "completion_receipt_sha256", "role_set_id", "role_set_sha256",
+        "roles", "limits", "basis_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-swarm-basis" },
+        "recorded_at": { "$ref": "#/$defs/timestamp" },
+        "campaign_id": { "$ref": "#/$defs/campaignId" },
+        "campaign_state_revision": { "type": "integer", "minimum": 1, "maximum": 999999 },
+        "campaign_state_sha256": { "$ref": "#/$defs/sha256" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "target_id": { "$ref": "#/$defs/targetId" },
+        "registry_sha256": { "$ref": "#/$defs/sha256" },
+        "provider_protocol_version": { "const": "2.0.0" },
+        "provider_profile_sha256": { "$ref": "#/$defs/sha256" },
+        "evidence_packet_sha256": { "$ref": "#/$defs/sha256" },
+        "completion_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "role_set_id": { "const": "role-set:https-v1" },
+        "role_set_sha256": { "$ref": "#/$defs/sha256" },
+        "roles": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": { "$ref": "#/$defs/role" }
+        },
+        "limits": { "$ref": "#/$defs/limits" },
+        "basis_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "kind", "logical_name", "sha256", "size"],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^artifact:sha256:[a-f0-9]{64}$"
+        },
+        "kind": { "enum": ["EVIDENCE", "CONTROL"] },
+        "logical_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 4194304 }
+      }
+    },
+    "requestLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_response_bytes", "max_merge_json_bytes", "max_candidates",
+        "max_proposed_actions"
+      ],
+      "properties": {
+        "max_response_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "max_merge_json_bytes": { "type": "integer", "minimum": 4096, "maximum": 262144 },
+        "max_candidates": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_proposed_actions": { "type": "integer", "minimum": 1, "maximum": 4096 }
+      }
+    },
+    "requestTrust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_content_is_untrusted_data", "target_content_may_change_scope_or_policy",
+        "provider_has_target_authority", "provider_has_execution_authority",
+        "provider_output_is_proposal_only", "provider_may_declare_proof"
+      ],
+      "properties": {
+        "target_content_is_untrusted_data": { "const": true },
+        "target_content_may_change_scope_or_policy": { "const": false },
+        "provider_has_target_authority": { "const": false },
+        "provider_has_execution_authority": { "const": false },
+        "provider_output_is_proposal_only": { "const": true },
+        "provider_may_declare_proof": { "const": false }
+      }
+    },
+    "roleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "request_id", "basis_sha256", "campaign_id",
+        "plan_sha256", "target_id", "round", "role_id", "role_kind", "wave",
+        "input_frontier_sha256", "input_challenge_set_sha256",
+        "evidence_packet_sha256", "evidence_refs", "allowed_tool_ids", "artifacts",
+        "limits", "trust", "request_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-role-request" },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request:sha256:[a-f0-9]{64}$"
+        },
+        "basis_sha256": { "$ref": "#/$defs/sha256" },
+        "campaign_id": { "$ref": "#/$defs/campaignId" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "target_id": { "$ref": "#/$defs/targetId" },
+        "round": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "role_id": { "$ref": "#/$defs/id" },
+        "role_kind": { "enum": ["ATTACKER", "REVIEWER"] },
+        "wave": { "enum": ["ATTACK", "REVIEW"] },
+        "input_frontier_sha256": { "$ref": "#/$defs/sha256" },
+        "input_challenge_set_sha256": { "$ref": "#/$defs/sha256" },
+        "evidence_packet_sha256": { "$ref": "#/$defs/sha256" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "allowed_tool_ids": { "$ref": "#/$defs/sortedIds" },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "limits": { "$ref": "#/$defs/requestLimits" },
+        "trust": { "$ref": "#/$defs/requestTrust" },
+        "request_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_id", "candidate_id", "disposition", "reason",
+        "evidence_refs", "competing_explanations"
+      ],
+      "properties": {
+        "challenge_id": { "$ref": "#/$defs/id" },
+        "candidate_id": { "$ref": "#/$defs/id" },
+        "disposition": {
+          "enum": ["UNRESOLVED", "INSUFFICIENT_EVIDENCE", "POSSIBLE_DUPLICATE"]
+        },
+        "reason": { "$ref": "#/$defs/humanText" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "competing_explanations": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/humanText" }
+        }
+      }
+    },
+    "roleResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "request_id", "request_sha256", "basis_sha256",
+        "plan_sha256", "round", "role_id", "role_kind", "wave", "proposal", "challenges"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-role-response" },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request:sha256:[a-f0-9]{64}$"
+        },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "basis_sha256": { "$ref": "#/$defs/sha256" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "round": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "role_id": { "$ref": "#/$defs/id" },
+        "role_kind": { "enum": ["ATTACKER", "REVIEWER"] },
+        "wave": { "enum": ["ATTACK", "REVIEW"] },
+        "proposal": {
+          "$ref": "https://last-aperture.dev/schemas/unleash-proposal.schema.json"
+        },
+        "challenges": {
+          "type": "array",
+          "maxItems": 512,
+          "items": { "$ref": "#/$defs/challenge" }
+        }
+      }
+    },
+    "transportReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "adapter_id", "adapter_version",
+        "adapter_config_sha256", "request_id", "request_sha256",
+        "response_sha256", "scope", "semantic_analysis_proven"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-provider-transport-receipt" },
+        "adapter_id": { "$ref": "#/$defs/id" },
+        "adapter_version": { "$ref": "#/$defs/id" },
+        "adapter_config_sha256": { "$ref": "#/$defs/sha256" },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request:sha256:[a-f0-9]{64}$"
+        },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "response_sha256": { "$ref": "#/$defs/sha256" },
+        "scope": { "const": "TRANSPORT_ONLY" },
+        "semantic_analysis_proven": { "const": false }
+      }
+    },
+    "responseCapture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "captured_at", "request_id", "request_sha256",
+        "basis_sha256", "adapter_id", "adapter_version", "adapter_config_sha256", "response_bytes",
+        "response_sha256", "content_encoding", "content_base64",
+        "transport_receipt_sha256", "transport_receipt_scope",
+        "semantic_analysis_proven", "transport_receipt", "capture_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-role-response-capture" },
+        "captured_at": { "$ref": "#/$defs/timestamp" },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request:sha256:[a-f0-9]{64}$"
+        },
+        "request_sha256": { "$ref": "#/$defs/sha256" },
+        "basis_sha256": { "$ref": "#/$defs/sha256" },
+        "adapter_id": { "$ref": "#/$defs/id" },
+        "adapter_version": { "$ref": "#/$defs/id" },
+        "adapter_config_sha256": { "$ref": "#/$defs/sha256" },
+        "response_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "response_sha256": { "$ref": "#/$defs/sha256" },
+        "content_encoding": { "const": "base64" },
+        "content_base64": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 1398104,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "transport_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "transport_receipt_scope": { "const": "TRANSPORT_ONLY" },
+        "semantic_analysis_proven": { "const": false },
+        "transport_receipt": { "$ref": "#/$defs/transportReceipt" },
+        "capture_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "mergedCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id", "state", "candidate_sha256", "title", "hypothesis",
+        "invariant", "provider_confidence", "evidence_refs",
+        "competing_explanations", "proposed_action_ids"
+      ],
+      "properties": {
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^candidate:sha256:[a-f0-9]{64}$"
+        },
+        "state": { "const": "CANDIDATE" },
+        "candidate_sha256": { "$ref": "#/$defs/sha256" },
+        "title": { "$ref": "#/$defs/humanText" },
+        "hypothesis": { "$ref": "#/$defs/humanText" },
+        "invariant": { "$ref": "#/$defs/humanText" },
+        "provider_confidence": { "enum": ["LOW", "MEDIUM", "HIGH"] },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "competing_explanations": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/humanText" }
+        },
+        "proposed_action_ids": { "$ref": "#/$defs/sortedIds" }
+      }
+    },
+    "mergedAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_id", "state", "action_sha256", "candidate_id", "tool_id",
+        "evidence_refs", "parameters", "expected_observation", "executable"
+      ],
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "pattern": "^action:sha256:[a-f0-9]{64}$"
+        },
+        "state": { "const": "PROPOSED_INERT" },
+        "action_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^candidate:sha256:[a-f0-9]{64}$"
+        },
+        "tool_id": { "const": "tool:https-recon" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method"],
+          "maxProperties": 1,
+          "properties": { "method": { "const": "HEAD" } }
+        },
+        "expected_observation": { "$ref": "#/$defs/humanText" },
+        "executable": { "const": false }
+      }
+    },
+    "mergedChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challenge_id", "challenge_sha256", "candidate_id", "disposition",
+        "reason", "evidence_refs", "competing_explanations"
+      ],
+      "properties": {
+        "challenge_id": {
+          "type": "string",
+          "pattern": "^challenge:sha256:[a-f0-9]{64}$"
+        },
+        "challenge_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^candidate:sha256:[a-f0-9]{64}$"
+        },
+        "disposition": {
+          "enum": ["UNRESOLVED", "INSUFFICIENT_EVIDENCE", "POSSIBLE_DUPLICATE"]
+        },
+        "reason": { "$ref": "#/$defs/humanText" },
+        "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
+        "competing_explanations": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/humanText" }
+        }
+      }
+    },
+    "provenanceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item_id", "source_refs"],
+      "properties": {
+        "item_id": { "$ref": "#/$defs/id" },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^source:sha256:[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidates", "actions", "challenges"],
+      "properties": {
+        "candidates": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/provenanceEntry" } },
+        "actions": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/provenanceEntry" } },
+        "challenges": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/provenanceEntry" } }
+      }
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "new_candidate_count", "changed_candidate_count", "new_action_count",
+        "changed_action_count", "new_challenge_count", "changed_challenge_count"
+      ],
+      "properties": {
+        "new_candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "changed_candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "new_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "changed_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "new_challenge_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "changed_challenge_count": { "type": "integer", "minimum": 0, "maximum": 4096 }
+      }
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "basis_sha256", "round", "plan_sha256",
+        "provider_protocol_version", "proposal", "candidate_count",
+        "proposed_action_count", "challenge_count", "candidates", "actions",
+        "challenges", "provenance", "frontier_sha256", "challenge_set_sha256",
+        "delta", "merge_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-swarm-merge" },
+        "basis_sha256": { "$ref": "#/$defs/sha256" },
+        "round": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "provider_protocol_version": { "const": "2.0.0" },
+        "proposal": { "$ref": "https://last-aperture.dev/schemas/unleash-proposal.schema.json" },
+        "candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "proposed_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "challenge_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "candidates": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/mergedCandidate" } },
+        "actions": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/mergedAction" } },
+        "challenges": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/mergedChallenge" } },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "frontier_sha256": { "$ref": "#/$defs/sha256" },
+        "challenge_set_sha256": { "$ref": "#/$defs/sha256" },
+        "delta": { "$ref": "#/$defs/delta" },
+        "merge_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "termination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "reason", "stable", "terminal"],
+      "properties": {
+        "decision": { "enum": ["QUIESCENT", "BUDGET_EXHAUSTED", "STOPPED", "POLICY_BLOCKED"] },
+        "reason": {
+          "enum": [
+            "FRONTIER_STABLE", "MAX_ROUNDS", "MAX_PROVIDER_CALLS",
+            "MAX_RESPONSE_BYTES", "DEADLINE", "STOP_REQUESTED", "AUTHORITY_UNAVAILABLE"
+          ]
+        },
+        "stable": { "type": "boolean" },
+        "terminal": { "const": true }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "decision": { "const": "QUIESCENT" },
+            "reason": { "const": "FRONTIER_STABLE" },
+            "stable": { "const": true }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "BUDGET_EXHAUSTED" },
+            "reason": { "const": "MAX_ROUNDS" },
+            "stable": { "const": false }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "BUDGET_EXHAUSTED" },
+            "reason": { "const": "MAX_PROVIDER_CALLS" },
+            "stable": { "const": false }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "BUDGET_EXHAUSTED" },
+            "reason": { "const": "MAX_RESPONSE_BYTES" },
+            "stable": { "const": false }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "BUDGET_EXHAUSTED" },
+            "reason": { "const": "DEADLINE" },
+            "stable": { "type": "boolean" }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "STOPPED" },
+            "reason": { "const": "STOP_REQUESTED" },
+            "stable": { "type": "boolean" }
+          }
+        },
+        {
+          "properties": {
+            "decision": { "const": "POLICY_BLOCKED" },
+            "reason": { "const": "AUTHORITY_UNAVAILABLE" },
+            "stable": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rounds_completed", "provider_calls_started", "response_bytes"],
+      "properties": {
+        "rounds_completed": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "provider_calls_started": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "response_bytes": { "type": "integer", "minimum": 0, "maximum": 16777216 }
+      }
+    },
+    "gap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gap_id", "round", "role_id", "state", "reason_code", "request_id"],
+      "properties": {
+        "gap_id": {
+          "type": "string",
+          "pattern": "^gap:sha256:[a-f0-9]{64}$"
+        },
+        "round": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
+        "role_id": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+        "state": { "enum": ["UNAVAILABLE", "FAILED_CLOSED", "INCONCLUSIVE", "STOPPED"] },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,159}$"
+        },
+        "request_id": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^request:sha256:[a-f0-9]{64}$" }
+          ]
+        }
+      }
+    },
+    "attemptLedgerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_count", "attempt_count", "head_record_sha256", "ledger_sha256"],
+      "properties": {
+        "event_count": { "type": "integer", "minimum": 0, "maximum": 1280 },
+        "attempt_count": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "head_record_sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/sha256" }
+          ]
+        },
+        "ledger_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "kind", "completed_at", "basis_sha256", "campaign_id",
+        "plan_sha256", "status", "reason", "merge_sha256", "frontier_sha256",
+        "challenge_set_sha256", "candidate_count", "proposed_action_count",
+        "challenge_count", "attempt_ledger", "usage", "gaps", "completion_sha256"
+      ],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "kind": { "const": "last-aperture/unleash-swarm-completion" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "basis_sha256": { "$ref": "#/$defs/sha256" },
+        "campaign_id": { "$ref": "#/$defs/campaignId" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "enum": ["QUIESCENT", "BUDGET_EXHAUSTED", "STOPPED", "POLICY_BLOCKED"] },
+        "reason": {
+          "enum": [
+            "FRONTIER_STABLE", "MAX_ROUNDS", "MAX_PROVIDER_CALLS",
+            "MAX_RESPONSE_BYTES", "DEADLINE", "STOP_REQUESTED", "AUTHORITY_UNAVAILABLE"
+          ]
+        },
+        "merge_sha256": { "$ref": "#/$defs/sha256" },
+        "frontier_sha256": { "$ref": "#/$defs/sha256" },
+        "challenge_set_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "proposed_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "challenge_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "attempt_ledger": { "$ref": "#/$defs/attemptLedgerBinding" },
+        "usage": { "$ref": "#/$defs/usage" },
+        "gaps": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/gap" } },
+        "completion_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": { "const": "QUIESCENT" },
+            "reason": { "const": "FRONTIER_STABLE" }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "BUDGET_EXHAUSTED" },
+            "reason": { "enum": ["MAX_ROUNDS", "MAX_PROVIDER_CALLS", "MAX_RESPONSE_BYTES", "DEADLINE"] }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "STOPPED" },
+            "reason": { "const": "STOP_REQUESTED" }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "POLICY_BLOCKED" },
+            "reason": { "const": "AUTHORITY_UNAVAILABLE" }
+          }
+        }
+      ]
+    }
+  }
+}

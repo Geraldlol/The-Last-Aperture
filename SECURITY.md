@@ -17,9 +17,74 @@ details of an unfixed vulnerability in a public issue.
 
 **Current release status:** legacy `engage run` persists one operator-statement
 target/authority binding and orchestrates the applicable shipped routes. The
-target-only `engage unleash` path accepts one HTTPS target and derives its exact
-authority from controller-owned deployment policy and revocation state. Sealed
-repository T1 proof, narrow Node/npm loopback T2 proof, bounded HTTP-recon,
+target-only `engage unleash` path accepts one HTTPS target, derives its exact
+authority from controller-owned deployment policy and revocation state, and
+feeds reverified reconnaissance evidence into a bounded BORG proposal swarm.
+The packaged CLI enrolls no reasoning adapter by default, so each role settles
+as an explicit gap; proposed actions are inert and findings require independent
+typed proof.
+
+Every dispatchable Unleash target action receives an immutable pre-flight risk
+receipt before execution. The deterministic catalog models potential telemetry
+and relative exposure across endpoint, SIEM/logging, network, cloud, identity,
+and application controls. Its scores are `HEURISTIC_UNCALIBRATED` and explicitly
+mean `RELATIVE_EXPOSURE_NOT_ALERT_PROBABILITY`; telemetry coverage and collection
+preconditions remain `UNKNOWN`. `AUTO` selects and records an operational profile
+from controller-owned target environment and risk tolerance. Exact high-risk or
+high-noise assessments require a receipt-bound confirmation. Profile volume,
+rate, concurrency, and interval violations cannot be confirmed through. Stealth,
+evasive, and bypass profiles are rejected; this control does not disable or
+avoid defensive telemetry.
+The frozen generic detection-pattern model emits stable IDs for request shape,
+rate/concurrency, authenticated access, state change, workload execution, and
+declared canary or evidence transfer. Pattern matches identify possible
+telemetry-producing activity only; they are not vendor alert rules or proof
+that an alert fired.
+The CLI surfaces the complete risk/noise, likely-impact, control-exposure,
+uncertainty, confirmation, and digest summary on stderr before dispatch. JSON
+mode uses a standalone structured warning record on stderr so final campaign
+output remains machine-readable on stdout.
+The assessor has no implicit operational profile; policy must resolve and record
+an explicit profile before preflight creation.
+
+Protocol-v2 recovery verifies the full provider-attempt ledger and exact
+attack/review merge sequence before status is accepted. Captures reject invalid
+UTF-8 before JSON interpretation. A fixed 262,144-byte merge ceiling and all
+merge-wide count and provenance limits are enforced by a deterministic
+role-ordered fold; an offending response is retained as a gap and later roles
+continue. Immutable Pause requests close new provider dispatch while an in-flight
+wave settles. A possibly delivered attempt is recorded ambiguous and never
+replayed. The 15-minute authority and wall-clock windows continue to elapse
+during a proven-unsent Pause. Resume acknowledgements require the exact exclusive
+swarm owner and revalidated current authority; expiry or revocation keeps
+dispatch closed. Stop remains usable, and later dispatch requires a successor
+campaign.
+Rollback is local cancellation of not-yet-dispatched work and inert proposals;
+it invokes Stop and never claims that target-side effects were reversed. Stop
+and Seal linearize through one create-only, self-bound terminal
+fence. A STOP fence materializes the exact request, while a SEAL fence prevents
+a later contradictory request. A live swarm remains the only writer of campaign
+state and swarm artifacts. Every protocol-v2 Resume must atomically acquire the
+campaign's exclusive owner lock and defers while its recorded owner PID is
+observed alive.
+The owner token is rechecked before campaign-state or swarm-artifact mutations
+and provider dispatch; only a dead process's identity-bound lock is reclaimable.
+A reused live PID deliberately defers recovery. A possibly delivered provider
+request is never replayed.
+The permanent private `swarm-owner-lock` container treats create-only
+`owner.json` as the exclusive claim. A stable empty container is available;
+unexpected children fail closed. Exact dead stages and POSIX two-link tails are
+recoverable. Unique, actor-bound retirement barriers stay visible through each
+old-owner unlink attempt, so no stale snapshot can remove a successor claim.
+Protocol-v2 Status is read-only; only an owner-held Resume repairs a proven stale
+mutable projection.
+POSIX campaign storage recovers a create-only publication interrupted after
+hard-link visibility only for an exact dead-PID temporary and named destination
+that repeatedly resolve to the same unchanged two-link inode. It unlinks only
+the temporary and then requires the destination at one link; unexplained aliases
+remain untouched and fail closed.
+
+Sealed repository T1 proof, narrow Node/npm loopback T2 proof, bounded HTTP-recon,
 adaptive authenticated campaigns, and the narrow reverse-engineering CLI are
 active. Browser sessions, Burp, Ghidra, and Frida are shipped as narrow routes.
 A `go <exact-https-url>` invocation is the operator's launch
@@ -265,7 +330,7 @@ same bytes; offline validation needs none.
 
 `--credential-browser` seals
 `{ mode: CHROME_ACTIVE_TAB_SESSION, extension_id, origin }` and starts the public
-loopback bridge. The packaged companion 0.15.0 uses `activeTab` and `scripting`
+loopback bridge. The packaged companion 0.16.0 uses `activeTab` and `scripting`
 after an operator gesture, `storage` for extension-owned ephemeral recovery
 state, and requests only optional IPv4 loopback host access. It has no persistent
 target-host, cookie, debugger, tabs, or web-request permission. Recovery state is

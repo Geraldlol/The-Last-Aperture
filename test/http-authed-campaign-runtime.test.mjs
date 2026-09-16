@@ -201,7 +201,7 @@ test('operator-attested campaign runtime binds protected transport, discovery, a
 
   assert.equal(calls.length, 2)
   assert.equal(result.actions.completed, 2)
-  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.15')
+  assert.equal(calls[0].userAgent, 'red-team-audit-http-authed/0.16')
   assert.equal(result.actions.discovered, 1)
   assert.equal(result.ledger.terminal_actions, 2)
   assert.doesNotMatch(

@@ -156,6 +156,34 @@ test('loads, validates, detaches, and freezes the controller-owned policy', asyn
   assert.deepEqual(Object.keys(loaded).toSorted(), ['control_root', 'isRevoked', 'policy'])
 })
 
+test('legacy revocation binding is accepted only when detection was absent from the stored policy', async (t) => {
+  const h = await harness(t)
+  const explicitPolicy = {
+    ...policyInput(),
+    detection: {
+      noise_profile: 'AUTO',
+      target_environment: 'UNKNOWN',
+      risk_tolerance: 'UNSPECIFIED',
+      confirmation_mode: 'REQUIRED',
+    },
+  }
+  await writeFile(h.policyPath, stableJson(explicitPolicy), 'utf8')
+
+  await assert.rejects(
+    () => loadUnleashControllerPolicy({ controlRoot: h.controlRoot }),
+    (error) => error.code === 'UNLEASH_REVOCATION_STATE_INVALID',
+  )
+
+  await writeFile(h.revocationsPath, stableJson(revocations(
+    [],
+    '2026-09-15T09:15:00.000Z',
+    1,
+    { policy_sha256: digestUnleashValue(explicitPolicy) },
+  )), 'utf8')
+  const loaded = await loadUnleashControllerPolicy({ controlRoot: h.controlRoot })
+  assert.deepEqual(loaded.policy.detection, explicitPolicy.detection)
+})
+
 test('re-reads revocation state for every admission and observes withdrawal', async (t) => {
   const h = await harness(t)
   const loaded = await loadUnleashControllerPolicy({ controlRoot: h.controlRoot })

@@ -610,6 +610,8 @@ function assertActionState(action) {
       && !hasLease && !hasSent && !hasCompleted && !hasObservation && !hasError,
     LEASED: action.attempt_count === 1
       && hasLease && !hasSent && !hasCompleted && !hasObservation && !hasError,
+    PAUSED_BEFORE_SEND: action.attempt_count === 1
+      && hasLease && !hasSent && !hasCompleted && !hasObservation && !hasError,
     SENT: action.attempt_count === 1
       && hasLease && hasSent && !hasCompleted && !hasObservation && !hasError,
     COMMITTED: action.attempt_count === 1
@@ -708,6 +710,15 @@ export function assertValidHttpReconRun(value) {
     throw contractError(
       'HTTP_RECON_RUN_STATE_INVALID',
       'PLANNED run cannot contain attempted actions',
+    )
+  }
+  if (
+    value.actions.some(({ state }) => state === 'PAUSED_BEFORE_SEND')
+    && (value.state !== 'ACTIVE' || value.schema_version !== '1.3.0')
+  ) {
+    throw contractError(
+      'HTTP_RECON_RUN_STATE_INVALID',
+      'a safely paused before-send action requires an ACTIVE resumable schema-1.3 run',
     )
   }
   if (

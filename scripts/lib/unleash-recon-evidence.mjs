@@ -495,3 +495,51 @@ export async function verifyUnleashReconCompletion(input, dependencies = {}) {
   assertCompletionMatchesVerified(completion, verified, plan, target, observedAt)
   return completion
 }
+
+/**
+ * Reauthenticates the retained recon immediately before provider delivery and
+ * returns the exact bytes behind the packet's metadata-only evidence source.
+ */
+export async function readVerifiedUnleashReconProviderArtifact(input, dependencies = {}) {
+  if (
+    !exactRecord(input, COMPLETION_INPUT_FIELDS)
+    || typeof input.bundle !== 'string'
+    || input.bundle.length < 1
+  ) fail('UNLEASH_RECON_COMPLETION_INVALID', 'provider evidence projection requires one bundle, plan, and completion')
+  const { plan, target } = assertPlan(input.plan)
+  const completion = assertValidUnleashReconCompletion(input.completion, { plan })
+  const readVerifiedRecon = dependencies.readVerifiedRecon ?? readVerifiedHttpReconEvidence
+  if (typeof readVerifiedRecon !== 'function') {
+    fail('UNLEASH_RECON_EVIDENCE_DEPENDENCY_INVALID', 'recon evidence verifier is unavailable')
+  }
+  const observedAt = new Date(completion.completion_receipt.observed_at)
+  const fixedNow = () => new Date(observedAt.getTime())
+  const verified = assertVerifiedRecon(await readVerifiedRecon({
+    bundle: input.bundle,
+    now: fixedNow,
+  }))
+  assertCompletionMatchesVerified(completion, verified, plan, target, observedAt)
+  const projection = evidenceProjection(
+    verified,
+    plan,
+    getUnleashHttpsReconExecutionContract(),
+    observedAt,
+  )
+  const artifactId = `artifact:sha256:${projection.content_sha256}`
+  return Object.freeze({
+    artifact: Object.freeze({
+      artifact_id: artifactId,
+      kind: 'EVIDENCE',
+      logical_name: 'https-recon/verified-evidence.json',
+      sha256: projection.content_sha256,
+      size: projection.source_bytes,
+    }),
+    payload: Object.freeze({
+      artifact_id: artifactId,
+      media_type: 'application/json',
+      sha256: projection.content_sha256,
+      size: projection.source_bytes,
+      bytes: Buffer.from(projection.content, 'utf8'),
+    }),
+  })
+}

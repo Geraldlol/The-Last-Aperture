@@ -99,16 +99,26 @@
         "candidate_id": { "$ref": "#/$defs/id" },
         "tool_id": { "$ref": "#/$defs/id" },
         "evidence_refs": { "$ref": "#/$defs/evidenceRefs" },
-        "parameters": {
-          "type": "object",
-          "additionalProperties": false,
-          "maxProperties": 1,
-          "properties": {
-            "method": { "const": "HEAD" }
-          }
-        },
+        "parameters": { "type": "object", "maxProperties": 32 },
         "expected_observation": { "$ref": "#/$defs/humanText" }
-      }
+      },
+      "allOf": [{
+        "if": {
+          "properties": { "tool_id": { "const": "tool:https-recon" } },
+          "required": ["tool_id"]
+        },
+        "then": {
+          "properties": {
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method"],
+              "maxProperties": 1,
+              "properties": { "method": { "const": "HEAD" } }
+            }
+          }
+        }
+      }]
     }
   }
 }

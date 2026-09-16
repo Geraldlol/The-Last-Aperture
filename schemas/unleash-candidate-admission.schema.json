@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://last-aperture.dev/schemas/unleash-candidate-admission.schema.json",
+  "title": "The Last Aperture candidate-only provider admission",
+  "description": "An append-only controller admission of one evidence-linked provider proposal. Protocol v2 admits exactly one final swarm merge. Every hypothesis remains a candidate and every proposed action remains inert.",
+  "type": "object",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": { "schema_version": { "const": "1.0.0" } },
+      "not": {
+        "anyOf": [
+          { "required": ["swarm_basis_sha256"] },
+          { "required": ["swarm_merge_sha256"] }
+        ]
+      }
+    },
+    {
+      "required": ["swarm_basis_sha256", "swarm_merge_sha256"],
+      "properties": {
+        "schema_version": { "const": "2.0.0" },
+        "provider_protocol_version": { "const": "2.0.0" },
+        "sequence": { "const": 1 },
+        "previous_admission_sha256": { "type": "null" }
+      }
+    }
+  ],
+  "required": [
+    "schema_version",
+    "kind",
+    "sequence",
+    "recorded_at",
+    "campaign_id",
+    "campaign_state_revision",
+    "campaign_state_sha256",
+    "plan_sha256",
+    "target_id",
+    "evidence_packet_sha256",
+    "completion_receipt_sha256",
+    "provider_protocol_version",
+    "provider_sha256",
+    "proposal_id",
+    "proposal_sha256",
+    "previous_admission_sha256",
+    "candidate_count",
+    "proposed_action_count",
+    "disposition",
+    "proposal",
+    "admission_sha256"
+  ],
+  "properties": {
+    "schema_version": { "enum": ["1.0.0", "2.0.0"] },
+    "kind": { "const": "last-aperture/unleash-candidate-admission" },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 256 },
+    "recorded_at": { "$ref": "#/$defs/timestamp" },
+    "campaign_id": {
+      "type": "string",
+      "pattern": "^campaign:sha256:[a-f0-9]{64}$"
+    },
+    "campaign_state_revision": { "type": "integer", "minimum": 1, "maximum": 999999 },
+    "campaign_state_sha256": { "$ref": "#/$defs/sha256" },
+    "plan_sha256": { "$ref": "#/$defs/sha256" },
+    "target_id": {
+      "type": "string",
+      "pattern": "^target:sha256:[a-f0-9]{64}$"
+    },
+    "evidence_packet_sha256": { "$ref": "#/$defs/sha256" },
+    "completion_receipt_sha256": { "$ref": "#/$defs/sha256" },
+    "provider_protocol_version": { "$ref": "#/$defs/id" },
+    "provider_sha256": { "$ref": "#/$defs/sha256" },
+    "swarm_basis_sha256": { "$ref": "#/$defs/sha256" },
+    "swarm_merge_sha256": { "$ref": "#/$defs/sha256" },
+    "proposal_id": { "$ref": "#/$defs/id" },
+    "proposal_sha256": { "$ref": "#/$defs/sha256" },
+    "previous_admission_sha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+    "proposed_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_state",
+        "provider_authentication",
+        "semantic_authority",
+        "proof_authority",
+        "actions_executable"
+      ],
+      "properties": {
+        "candidate_state": { "const": "CANDIDATE" },
+        "provider_authentication": { "const": "UNVERIFIED" },
+        "semantic_authority": { "const": "NONE" },
+        "proof_authority": { "const": "NONE" },
+        "actions_executable": { "const": false }
+      }
+    },
+    "proposal": {
+      "$ref": "https://last-aperture.dev/schemas/unleash-proposal.schema.json"
+    },
+    "admission_sha256": { "$ref": "#/$defs/sha256" }
+  },
+  "$defs": {
+    "frontierState": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "schema_version": { "const": "1.0.0" },
+            "proposal_count": { "minimum": 1 },
+            "head_admission_sha256": { "$ref": "#/$defs/sha256" }
+          },
+          "not": {
+            "anyOf": [
+              { "required": ["swarm_basis_sha256"] },
+              { "required": ["swarm_merge_sha256"] },
+              { "required": ["swarm_completion_sha256"] }
+            ]
+          }
+        },
+        {
+          "required": ["swarm_basis_sha256", "swarm_merge_sha256", "swarm_completion_sha256"],
+          "properties": {
+            "schema_version": { "const": "2.0.0" },
+            "proposal_count": { "maximum": 1 }
+          },
+          "if": {
+            "properties": {
+              "swarm_completion_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "then": {
+            "properties": {
+              "proposal_count": { "const": 1 },
+              "head_admission_sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      ],
+      "required": [
+        "schema_version",
+        "kind",
+        "updated_at",
+        "campaign_id",
+        "campaign_state_revision",
+        "campaign_state_sha256",
+        "plan_sha256",
+        "target_id",
+        "evidence_packet_sha256",
+        "completion_receipt_sha256",
+        "proposal_count",
+        "candidate_count",
+        "proposed_action_count",
+        "head_admission_sha256",
+        "frontier_sha256",
+        "frontier_state_sha256"
+      ],
+      "properties": {
+        "schema_version": { "enum": ["1.0.0", "2.0.0"] },
+        "kind": { "const": "last-aperture/unleash-candidate-frontier-state" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^campaign:sha256:[a-f0-9]{64}$"
+        },
+        "campaign_state_revision": { "type": "integer", "minimum": 1, "maximum": 999999 },
+        "campaign_state_sha256": { "$ref": "#/$defs/sha256" },
+        "plan_sha256": { "$ref": "#/$defs/sha256" },
+        "target_id": {
+          "type": "string",
+          "pattern": "^target:sha256:[a-f0-9]{64}$"
+        },
+        "evidence_packet_sha256": { "$ref": "#/$defs/sha256" },
+        "completion_receipt_sha256": { "$ref": "#/$defs/sha256" },
+        "proposal_count": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "candidate_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "proposed_action_count": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "head_admission_sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/sha256" }
+          ]
+        },
+        "swarm_basis_sha256": { "$ref": "#/$defs/sha256" },
+        "swarm_merge_sha256": { "$ref": "#/$defs/sha256" },
+        "swarm_completion_sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/sha256" }
+          ]
+        },
+        "frontier_sha256": { "$ref": "#/$defs/sha256" },
+        "frontier_state_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    }
+  }
+}

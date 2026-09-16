@@ -12,6 +12,7 @@ import {
   rm,
   rmdir,
   symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -474,6 +475,108 @@ test('reclaims an identity-bound temporary publication left by a crashed child p
     (await readdir(storage.campaign_directory)).filter((name) => name.endsWith('.tmp')),
     [],
   )
+})
+
+test('recovers the exact two-link POSIX create-only publication crash tail', async (t) => {
+  const { runsRoot } = await fixture(t, 'linked-publication-tail')
+  const storage = await createUnleashCampaignStorage({
+    runsRoot,
+    campaignDirectory: CAMPAIGN_DIRECTORY,
+  })
+  const publicationModule = new URL(
+    '../scripts/lib/durable-file-publication.mjs',
+    import.meta.url,
+  ).href
+  const script = String.raw`
+    import { writeFile } from 'node:fs/promises'
+    import { join } from 'node:path'
+    const { publishFileCreateOnlyDurably } = await import(process.argv[1])
+    const directory = process.argv[2]
+    const temporary = join(
+      directory,
+      '.campaign-plan.json.' + process.pid + '.' + 'd'.repeat(32) + '.tmp',
+    )
+    const destination = join(directory, 'campaign-plan.json')
+    await writeFile(temporary, '{"revision":1}\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    try {
+      await publishFileCreateOnlyDurably(temporary, destination, {
+        platform: 'linux',
+        afterVisible() {
+          throw new Error('simulated process loss after create-only link publication')
+        },
+      })
+    } catch {}
+    process.stdout.write(temporary)
+  `
+  const child = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e',
+    script,
+    publicationModule,
+    storage.campaign_directory,
+  ], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  assert.equal(child.status, 0, child.stderr)
+  const publicationTemporary = child.stdout
+  assert.equal(typeof publicationTemporary, 'string')
+  assert.notEqual(publicationTemporary, '')
+  const destination = join(storage.campaign_directory, 'campaign-plan.json')
+  const temporaryBefore = await lstat(publicationTemporary, { bigint: true })
+  const destinationBefore = await lstat(destination, { bigint: true })
+  assert.equal(temporaryBefore.nlink, 2n)
+  assert.equal(destinationBefore.nlink, 2n)
+  assert.equal(temporaryBefore.dev, destinationBefore.dev)
+  assert.equal(temporaryBefore.ino, destinationBefore.ino)
+  assert.equal(temporaryBefore.size, destinationBefore.size)
+
+  const reopened = await openUnleashCampaignStorage({
+    runsRoot,
+    campaignDirectory: CAMPAIGN_DIRECTORY,
+  })
+  assert.deepEqual(await reopened.listJsonFilenames(), ['campaign-plan.json'])
+  await assert.rejects(lstat(publicationTemporary), (error) => error?.code === 'ENOENT')
+  const destinationAfter = await lstat(destination, { bigint: true })
+  assert.equal(destinationAfter.nlink, 1n)
+  assert.equal(destinationAfter.dev, destinationBefore.dev)
+  assert.equal(destinationAfter.ino, destinationBefore.ino)
+  assert.equal(destinationAfter.size, destinationBefore.size)
+  assert.deepEqual(await reopened.readJson('campaign-plan.json'), { revision: 1 })
+})
+
+test('rejects an exact dead-owner temporary whose second link is not its named destination', async (t) => {
+  const { scratch, runsRoot } = await fixture(t, 'linked-publication-alias')
+  const storage = await createUnleashCampaignStorage({
+    runsRoot,
+    campaignDirectory: CAMPAIGN_DIRECTORY,
+  })
+  const child = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  assert.equal(child.status, 0, child.stderr)
+  const deadPid = Number(child.stdout)
+  assert.equal(Number.isSafeInteger(deadPid) && deadPid > 0, true)
+  const temporary = join(
+    storage.campaign_directory,
+    `.campaign-plan.json.${deadPid}.${'c'.repeat(32)}.tmp`,
+  )
+  const unexplainedAlias = join(scratch, 'unexplained-alias.json')
+  await writeFile(temporary, '{"revision":1}\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+  await link(temporary, unexplainedAlias)
+
+  const reopened = await openUnleashCampaignStorage({
+    runsRoot,
+    campaignDirectory: CAMPAIGN_DIRECTORY,
+  })
+  await assert.rejects(
+    reopened.listJsonFilenames(),
+    rejectsCode('UNLEASH_STORAGE_TEMP_RESIDUE'),
+  )
+  assert.equal((await lstat(temporary, { bigint: true })).nlink, 2n)
+  assert.equal((await lstat(unexplainedAlias, { bigint: true })).nlink, 2n)
+  await unlink(unexplainedAlias)
 })
 
 test('does not reclaim a temporary campaign publication owned by a live process', async (t) => {

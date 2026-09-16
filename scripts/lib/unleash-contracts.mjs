@@ -512,10 +512,15 @@ function assertPolicy(policy, targetFamily) {
     'valid_until',
     'revocation',
   ]
+  const detectionFields = [
+    'noise_profile', 'target_environment', 'risk_tolerance', 'confirmation_mode',
+  ]
   if (
     !(
       hasExactKeys(policy, baseFields)
+      || hasExactKeys(policy, [...baseFields, 'detection'])
       || hasExactKeys(policy, [...baseFields, 'controller_policy_sha256'])
+      || hasExactKeys(policy, [...baseFields, 'controller_policy_sha256', 'detection'])
     )
     || policy.schema_version !== '1.0.0'
     || !ID.test(policy.policy_id ?? '')
@@ -524,6 +529,13 @@ function assertPolicy(policy, targetFamily) {
       && !SHA256.test(policy.controller_policy_sha256)
     )
   ) fail('UNLEASH_POLICY_INVALID', 'deployment policy is invalid')
+  if (Object.hasOwn(policy, 'detection') && (
+    !hasExactKeys(policy.detection, detectionFields)
+    || !['AUTO', 'AGGRESSIVE', 'BALANCED', 'CAUTIOUS'].includes(policy.detection.noise_profile)
+    || !['UNKNOWN', 'PRODUCTION', 'PRE_PRODUCTION', 'LAB'].includes(policy.detection.target_environment)
+    || !['UNSPECIFIED', 'LOW', 'MODERATE', 'HIGH'].includes(policy.detection.risk_tolerance)
+    || policy.detection.confirmation_mode !== 'REQUIRED'
+  )) fail('UNLEASH_POLICY_INVALID', 'deployment policy detection settings are invalid')
   assertUniqueStrings(policy.allowed_target_families, 'allowed target families')
   assertUniqueStrings(policy.allowed_effects, 'allowed effects')
   assertUniqueStrings(policy.allowed_origins, 'allowed origins', { pattern: /^https:\/\/[^\s/]+(?::[0-9]+)?$/u })
@@ -574,11 +586,100 @@ function authorityProjection(policy) {
 
 function assertProvider(provider) {
   assertPlainJson(provider, 'unleash provider contract')
+  if (hasExactKeys(provider, ['protocol_version', 'proposal_kind'])) {
+    if (
+      !ID.test(provider.protocol_version ?? '')
+      || provider.proposal_kind !== 'last-aperture/unleash-proposal'
+    ) fail('UNLEASH_PROVIDER_INVALID', 'provider protocol contract is invalid')
+    return provider
+  }
+  const fields = [
+    'schema_version', 'protocol_version', 'proposal_kind', 'role_set_id',
+    'role_set_sha256', 'roles', 'limits', 'assignments', 'trust',
+  ]
+  const roleFields = ['role_id', 'role_kind', 'wave', 'order']
+  const assignmentFields = [
+    'role_id', 'adapter_id', 'adapter_version', 'adapter_config_sha256',
+    'availability', 'reason_code',
+  ]
+  const limitFields = [
+    'max_rounds', 'max_provider_calls', 'max_parallel_provider_calls',
+    'wall_time_ms_per_call', 'max_response_bytes_per_call',
+    'max_total_response_bytes', 'max_merge_json_bytes', 'max_candidates',
+    'max_proposed_actions',
+  ]
+  const trustFields = [
+    'provider_has_target_authority', 'provider_has_execution_authority',
+    'provider_output_is_proposal_only', 'provider_may_declare_proof',
+  ]
   if (
-    !hasExactKeys(provider, ['protocol_version', 'proposal_kind'])
-    || !ID.test(provider.protocol_version ?? '')
+    !hasExactKeys(provider, fields)
+    || provider.schema_version !== '1.0.0'
+    || provider.protocol_version !== '2.0.0'
     || provider.proposal_kind !== 'last-aperture/unleash-proposal'
-  ) fail('UNLEASH_PROVIDER_INVALID', 'provider protocol contract is invalid')
+    || !ID.test(provider.role_set_id ?? '')
+    || !SHA256.test(provider.role_set_sha256 ?? '')
+    || !Array.isArray(provider.roles)
+    || provider.roles.length < 1
+    || provider.roles.length > 32
+    || !Array.isArray(provider.assignments)
+    || provider.assignments.length !== provider.roles.length
+    || !hasExactKeys(provider.limits, limitFields)
+    || limitFields.some((field) => !Number.isSafeInteger(provider.limits[field]) || provider.limits[field] < 1)
+    || provider.limits.max_parallel_provider_calls > provider.limits.max_provider_calls
+    || provider.limits.max_response_bytes_per_call > provider.limits.max_total_response_bytes
+    || provider.limits.max_merge_json_bytes > 262_144
+    || !hasExactKeys(provider.trust, trustFields)
+    || provider.trust.provider_has_target_authority !== false
+    || provider.trust.provider_has_execution_authority !== false
+    || provider.trust.provider_output_is_proposal_only !== true
+    || provider.trust.provider_may_declare_proof !== false
+  ) fail('UNLEASH_PROVIDER_INVALID', 'provider swarm profile is invalid')
+  const roleIds = new Set()
+  let priorOrder = -1
+  for (const role of provider.roles) {
+    if (
+      !hasExactKeys(role, roleFields)
+      || !ID.test(role.role_id ?? '')
+      || !['ATTACKER', 'REVIEWER'].includes(role.role_kind)
+      || !['ATTACK', 'REVIEW'].includes(role.wave)
+      || !Number.isSafeInteger(role.order)
+      || role.order <= priorOrder
+      || roleIds.has(role.role_id)
+    ) fail('UNLEASH_PROVIDER_INVALID', 'provider swarm role set is invalid')
+    if (
+      (role.role_kind === 'ATTACKER') !== (role.wave === 'ATTACK')
+    ) fail('UNLEASH_PROVIDER_INVALID', 'provider swarm role kind and wave differ')
+    roleIds.add(role.role_id)
+    priorOrder = role.order
+  }
+  if (provider.role_set_sha256 !== digestUnleashValue({
+    role_set_id: provider.role_set_id,
+    roles: provider.roles,
+  })) fail('UNLEASH_PROVIDER_INVALID', 'provider swarm role set digest differs')
+  const assignmentIds = new Set()
+  for (const assignment of provider.assignments) {
+    const available = assignment?.availability === 'AVAILABLE'
+    if (
+      !hasExactKeys(assignment, assignmentFields)
+      || !roleIds.has(assignment.role_id)
+      || assignmentIds.has(assignment.role_id)
+      || !['AVAILABLE', 'UNAVAILABLE'].includes(assignment.availability)
+      || (available && (
+        !ID.test(assignment.adapter_id ?? '')
+        || !ID.test(assignment.adapter_version ?? '')
+        || !SHA256.test(assignment.adapter_config_sha256 ?? '')
+        || assignment.reason_code !== null
+      ))
+      || (!available && (
+        assignment.adapter_id !== null
+        || assignment.adapter_version !== null
+        || assignment.adapter_config_sha256 !== null
+        || !REASON_CODE.test(assignment.reason_code ?? '')
+      ))
+    ) fail('UNLEASH_PROVIDER_INVALID', 'provider swarm role assignment is invalid')
+    assignmentIds.add(assignment.role_id)
+  }
   return provider
 }
 

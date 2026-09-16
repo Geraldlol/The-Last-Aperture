@@ -214,7 +214,7 @@ test('Chrome bridge manifest has active-tab injection, ephemeral recovery, and o
 
   assert.equal(manifest.manifest_version, 3)
   assert.equal(manifest.name, 'The Last Aperture Browser Bridge')
-  assert.equal(manifest.version, '0.15.0')
+  assert.equal(manifest.version, '0.16.0')
   assert.equal(manifest.minimum_chrome_version, '110')
   assert.deepEqual(manifest.permissions, ['activeTab', 'scripting', 'storage'])
   assert.deepEqual(manifest.host_permissions, [])

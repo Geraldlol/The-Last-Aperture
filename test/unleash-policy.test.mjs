@@ -2,10 +2,15 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 
+import { digestUnleashValue } from '../scripts/lib/unleash-contracts.mjs'
+
 import {
+  DEFAULT_UNLEASH_DETECTION_POLICY,
   assertPolicyAllowsTarget,
   createUnleashDeploymentPolicy,
   projectUnleashPolicy,
+  resolveUnleashDetectionPolicyBinding,
+  selectUnleashDetectionProfile,
 } from '../scripts/lib/unleash-policy.mjs'
 
 const VALID_FROM = '2026-09-15T09:00:00.000Z'
@@ -170,6 +175,107 @@ test('requires explicit bounded effect and target-family allowlists', () => {
   assert.throws(() => assertPolicyAllowsTarget(policy, { ...target(), family: 'database' }, checkOptions()))
 })
 
+test('defaults to a context-selected automatic detection policy and rejects evasion profiles', () => {
+  const policy = createUnleashDeploymentPolicy(policyInput())
+  assert.deepEqual(policy.detection, DEFAULT_UNLEASH_DETECTION_POLICY)
+
+  for (const noiseProfile of ['STEALTH', 'STEALTHY', 'EVASIVE', 'BYPASS']) {
+    assert.throws(() => createUnleashDeploymentPolicy({
+      ...policyInput(),
+      detection: {
+        ...DEFAULT_UNLEASH_DETECTION_POLICY,
+        noise_profile: noiseProfile,
+      },
+    }), noiseProfile)
+  }
+})
+
+test('accepts only exact controller-owned detection settings', () => {
+  const configured = createUnleashDeploymentPolicy({
+    ...policyInput(),
+    detection: {
+      noise_profile: 'BALANCED',
+      target_environment: 'PRE_PRODUCTION',
+      risk_tolerance: 'MODERATE',
+      confirmation_mode: 'REQUIRED',
+    },
+  })
+  assert.equal(configured.detection.noise_profile, 'BALANCED')
+  assert.equal(Object.isFrozen(configured.detection), true)
+
+  for (const detection of [
+    null,
+    {},
+    { ...DEFAULT_UNLEASH_DETECTION_POLICY, confirmation_mode: 'OPTIONAL' },
+    { ...DEFAULT_UNLEASH_DETECTION_POLICY, target_environment: 'MYSTERY' },
+    { ...DEFAULT_UNLEASH_DETECTION_POLICY, risk_tolerance: 'UNBOUNDED' },
+    { ...DEFAULT_UNLEASH_DETECTION_POLICY, extra: true },
+  ]) {
+    assert.throws(() => createUnleashDeploymentPolicy({ ...policyInput(), detection }))
+  }
+})
+
+test('selects an explicit or automatic operational profile from immutable target posture', () => {
+  const automatic = selectUnleashDetectionProfile(
+    createUnleashDeploymentPolicy(policyInput()),
+  )
+  assert.deepEqual(automatic, {
+    configured_profile: 'AUTO',
+    operational_profile: 'balanced',
+    selection_reason: 'AUTO_UNKNOWN_POSTURE_BALANCED',
+  })
+
+  const cases = [
+    [{ noise_profile: 'AGGRESSIVE' }, 'aggressive', 'CONTROLLER_POLICY_EXPLICIT'],
+    [{ noise_profile: 'BALANCED' }, 'balanced', 'CONTROLLER_POLICY_EXPLICIT'],
+    [{ noise_profile: 'CAUTIOUS' }, 'cautious', 'CONTROLLER_POLICY_EXPLICIT'],
+    [{ target_environment: 'LAB', risk_tolerance: 'HIGH' }, 'aggressive', 'AUTO_LAB_HIGH_TOLERANCE'],
+    [{ target_environment: 'PRE_PRODUCTION', risk_tolerance: 'MODERATE' }, 'balanced', 'AUTO_PRE_PRODUCTION_MODERATE_TOLERANCE'],
+  ]
+  for (const [overrides, operationalProfile, selectionReason] of cases) {
+    const policy = createUnleashDeploymentPolicy({
+      ...policyInput(),
+      detection: { ...DEFAULT_UNLEASH_DETECTION_POLICY, ...overrides },
+    })
+    assert.deepEqual(selectUnleashDetectionProfile(policy), {
+      configured_profile: policy.detection.noise_profile,
+      operational_profile: operationalProfile,
+      selection_reason: selectionReason,
+    })
+  }
+})
+
+test('binds new detection policy digests and defaults legacy campaign digests automatically', () => {
+  const explicit = createUnleashDeploymentPolicy({
+    ...policyInput(),
+    detection: {
+      noise_profile: 'AGGRESSIVE',
+      target_environment: 'LAB',
+      risk_tolerance: 'HIGH',
+      confirmation_mode: 'REQUIRED',
+    },
+  })
+  const current = resolveUnleashDetectionPolicyBinding(
+    explicit,
+    projectUnleashPolicy(explicit).policy_sha256,
+  )
+  assert.equal(current.binding, 'DETECTION_POLICY_BOUND')
+  assert.equal(current.selection.operational_profile, 'aggressive')
+
+  const { detection: ignoredDetection, ...legacyPolicy } = explicit
+  const legacy = resolveUnleashDetectionPolicyBinding(
+    explicit,
+    digestUnleashValue(legacyPolicy),
+  )
+  assert.equal(legacy.binding, 'LEGACY_POLICY_DEFAULTED')
+  assert.equal(legacy.selection.operational_profile, 'balanced')
+  assert.equal(legacy.detection.target_environment, 'UNKNOWN')
+  assert.throws(
+    () => resolveUnleashDetectionPolicyBinding(explicit, '0'.repeat(64)),
+    (error) => error?.code === 'UNLEASH_POLICY_PLAN_DRIFT',
+  )
+})
+
 test('requires one declared allowed effect for every action admission', () => {
   const policy = createUnleashDeploymentPolicy(policyInput())
   assert.doesNotThrow(() => assertPolicyAllowsTarget(
@@ -244,7 +350,10 @@ test('projects only public policy fields, opaque credential references, and a st
   assert.deepEqual(first.budgets, input.budgets)
   assert.equal(first.valid_from, VALID_FROM)
   assert.equal(first.valid_until, VALID_UNTIL)
-  assert.deepEqual(Object.keys(first).sort(), [...Object.keys(input), 'policy_sha256'].sort())
+  assert.deepEqual(
+    Object.keys(first).sort(),
+    [...Object.keys(input), 'detection', 'policy_sha256'].sort(),
+  )
 
   const changed = policyInput()
   changed.credential_references = ['credential:browser:secondary']

@@ -471,6 +471,236 @@ test('controller-policy stop inspection is authority-bound and returns the first
   )
 })
 
+test('controller-policy Stop terminalizes a safely paused before-send action', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-paused-stop-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const planned = await planControllerPolicyHttpReconBundle({
+    targetUrl,
+    controllerPolicyAuthority: controllerPolicyAdmission(
+      targetUrl,
+      clock.now().toISOString(),
+    ),
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+  })
+  const paused = Object.assign(
+    new Error('campaign Pause closed dispatch before the request was sent'),
+    { code: 'UNLEASH_CAMPAIGN_PAUSED' },
+  )
+  let probeCalls = 0
+  const revalidateAuthority = async ({ phase }) => {
+    if (phase === 'PRE_DISPATCH') throw paused
+    return true
+  }
+  const pauseProbe = async (options) => {
+    probeCalls += 1
+    await options.beforeSend(preDispatchMetadata({
+      url: options.url,
+      method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
+    }))
+    assert.fail('a rejected beforeSend must prevent transport dispatch')
+  }
+  await assert.rejects(
+    runControllerPolicyHttpReconAction({
+      bundle: out,
+      actionId: planned.run.actions[0].action_id,
+      controllerPolicyAuthority: planned.run.authorization,
+      revalidateAuthority,
+      now: clock.now,
+      probeImpl: pauseProbe,
+    }),
+    (error) => error.code === 'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED'
+      && error.cause === paused,
+  )
+  const pausedRun = JSON.parse(await readFile(join(out, 'run.json'), 'utf8'))
+  assert.equal(pausedRun.state, 'ACTIVE')
+  assert.equal(pausedRun.actions[0].state, 'PAUSED_BEFORE_SEND')
+  assert.equal(pausedRun.actions[0].sent_at, null)
+
+  const marker = await requestHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: planned.run.authorization,
+    reason: 'stop the safely paused action without target dispatch',
+    now: clock.now,
+  })
+  const stopped = await runControllerPolicyHttpReconAction({
+    bundle: out,
+    actionId: planned.run.actions[0].action_id,
+    controllerPolicyAuthority: planned.run.authorization,
+    revalidateAuthority,
+    now: clock.now,
+    probeImpl: pauseProbe,
+  })
+  assert.equal(probeCalls, 1)
+  assert.equal(stopped.run.state, 'STOPPED')
+  assert.equal(stopped.run.stop.reason, marker.reason)
+  assert.equal(stopped.action, null)
+  assert.equal(stopped.run.actions[0].state, 'FAILED')
+  assert.equal(stopped.run.actions[0].sent_at, null)
+  assert.equal(stopped.run.actions[0].error.code, 'STOPPED_BEFORE_SEND')
+  const events = (await readFile(join(out, 'events.jsonl'), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line))
+  assert.equal(events.filter(({ type }) => type === 'ACTION_PAUSED_BEFORE_SEND').length, 1)
+  const stopEvent = events.find(({ type }) => type === 'STOP_CONFIRMED')
+  assert.equal(stopEvent.details.action_id, planned.run.actions[0].action_id)
+  assert.equal(stopEvent.details.terminal_state, 'STOPPED')
+  assert.equal((await validateHttpReconBundle({ bundle: out, now: clock.now })).valid, true)
+})
+
+test('before-send Pause tail recovery promotes legacy run 1.0 to run 1.3', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-paused-tail-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const planned = await planControllerPolicyHttpReconBundle({
+    targetUrl,
+    controllerPolicyAuthority: controllerPolicyAdmission(
+      targetUrl,
+      clock.now().toISOString(),
+    ),
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+  })
+  assert.equal(planned.run.schema_version, '1.0.0')
+  const paused = Object.assign(new Error('Pause before send'), {
+    code: 'UNLEASH_CAMPAIGN_PAUSED',
+  })
+  await assert.rejects(
+    runControllerPolicyHttpReconAction({
+      bundle: out,
+      actionId: planned.run.actions[0].action_id,
+      controllerPolicyAuthority: planned.run.authorization,
+      revalidateAuthority: async ({ phase }) => {
+        if (phase === 'PRE_DISPATCH') throw paused
+        return true
+      },
+      now: clock.now,
+      probeImpl: async (options) => {
+        await options.beforeSend(preDispatchMetadata({
+          url: options.url,
+          method: options.method,
+          tlsVerification: 'PKIX_HOSTNAME',
+        }))
+        assert.fail('a rejected beforeSend must prevent transport dispatch')
+      },
+    }),
+    (error) => error.code === 'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED'
+      && error.cause === paused,
+  )
+
+  const runPath = join(out, 'run.json')
+  const eventPath = join(out, 'events.jsonl')
+  const durablePaused = JSON.parse(await readFile(runPath, 'utf8'))
+  const events = (await readFile(eventPath, 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line))
+  const pauseEventIndex = events.findIndex(({ type }) => type === 'ACTION_PAUSED_BEFORE_SEND')
+  assert.equal(pauseEventIndex, events.length - 1)
+  assert.equal(events[pauseEventIndex].schema_version, '1.1.0')
+
+  const staleRoot = structuredClone(durablePaused)
+  staleRoot.schema_version = '1.0.0'
+  staleRoot.actions[0].state = 'LEASED'
+  staleRoot.event_chain = {
+    count: pauseEventIndex,
+    last_sha256: events[pauseEventIndex - 1].record_sha256,
+  }
+  await writeFile(runPath, stableJson(staleRoot))
+
+  await assert.rejects(
+    finalizeHttpReconBundle({ bundle: out, now: clock.now }),
+    (error) => error.code === 'HTTP_RECON_PLAN_INCOMPLETE',
+  )
+  const recovered = JSON.parse(await readFile(runPath, 'utf8'))
+  assert.equal(recovered.schema_version, '1.3.0')
+  assert.equal(recovered.state, 'ACTIVE')
+  assert.equal(recovered.actions[0].state, 'PAUSED_BEFORE_SEND')
+  assert.equal(recovered.event_chain.count, events.length)
+  assert.equal(recovered.event_chain.last_sha256, events.at(-1).record_sha256)
+  assert.equal((await validateHttpReconBundle({ bundle: out, now: clock.now })).valid, true)
+})
+
+test('before-send Pause does not suspend authority expiry and Stop remains usable', async (t) => {
+  const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-paused-expiry-'))
+  t.after(() => rm(parent, { recursive: true, force: true }))
+  const out = join(parent, 'bundle')
+  const clock = mutableClock()
+  const targetUrl = 'https://target.example/'
+  const planned = await planControllerPolicyHttpReconBundle({
+    targetUrl,
+    controllerPolicyAuthority: controllerPolicyAdmission(
+      targetUrl,
+      clock.now().toISOString(),
+    ),
+    out,
+    now: clock.now,
+    randomBytesImpl: () => Buffer.from('abcdef123456', 'hex'),
+  })
+  const paused = Object.assign(new Error('Pause before send'), {
+    code: 'UNLEASH_CAMPAIGN_PAUSED',
+  })
+  let probeCalls = 0
+  const probeImpl = async (options) => {
+    probeCalls += 1
+    await options.beforeSend(preDispatchMetadata({
+      url: options.url,
+      method: options.method,
+      tlsVerification: 'PKIX_HOSTNAME',
+    }))
+    assert.fail('a rejected beforeSend must prevent transport dispatch')
+  }
+  const revalidateAuthority = async ({ phase }) => {
+    if (phase === 'PRE_DISPATCH') throw paused
+    return true
+  }
+  await assert.rejects(
+    runControllerPolicyHttpReconAction({
+      bundle: out,
+      actionId: planned.run.actions[0].action_id,
+      controllerPolicyAuthority: planned.run.authorization,
+      revalidateAuthority,
+      now: clock.now,
+      probeImpl,
+    }),
+    (error) => error.code === 'HTTP_RECON_CONTROLLER_POLICY_REVALIDATION_FAILED'
+      && error.cause === paused,
+  )
+  assert.equal(probeCalls, 1)
+
+  clock.advance(planned.run.limits.max_wall_time_ms)
+  await assert.rejects(
+    runControllerPolicyHttpReconAction({
+      bundle: out,
+      actionId: planned.run.actions[0].action_id,
+      controllerPolicyAuthority: planned.run.authorization,
+      revalidateAuthority: async () => true,
+      now: clock.now,
+      probeImpl,
+    }),
+    (error) => error.code === 'HTTP_RECON_AUTHORIZATION_EXPIRED',
+  )
+  assert.equal(probeCalls, 1)
+
+  const marker = await requestHttpReconStop({
+    bundle: out,
+    controllerPolicyAuthority: planned.run.authorization,
+    reason: 'settle the expired paused campaign',
+    now: clock.now,
+  })
+  assert.equal(marker.reason, 'settle the expired paused campaign')
+  const finalized = await finalizeHttpReconBundle({ bundle: out, now: clock.now })
+  assert.equal(finalized.run.state, 'STOPPED')
+  assert.equal(finalized.run.actions[0].state, 'FAILED')
+  assert.equal(finalized.run.actions[0].error.code, 'STOPPED_BEFORE_SEND')
+  assert.equal((await validateHttpReconBundle({ bundle: out, now: clock.now })).valid, true)
+})
+
 test('controller-policy revocation loss at action admission fails before transport', async (t) => {
   const parent = await mkdtemp(join(tmpdir(), 'rta-http-recon-controller-revoked-'))
   t.after(() => rm(parent, { recursive: true, force: true }))
@@ -991,6 +1221,55 @@ function attestedTransports(
     },
   }
 }
+
+test('operator-attested Stop uses the shared terminal path for a safely paused action', async (t) => {
+  const value = await attestedFixture(t)
+  const actionId = value.planned.run.actions[0].action_id
+  const paused = Object.assign(
+    new Error('campaign Pause closed dispatch before the request was sent'),
+    { code: 'UNLEASH_CAMPAIGN_PAUSED' },
+  )
+  let probeCalls = 0
+  const pauseProbe = async () => {
+    probeCalls += 1
+    throw paused
+  }
+  await assert.rejects(
+    runHttpReconAction({
+      bundle: value.out,
+      actionId,
+      operatorId: 'operator-001',
+      rationale: 'retain the safely unsent action for controlled Resume',
+      now: value.clock.now,
+      probeImpl: pauseProbe,
+    }),
+    (error) => error === paused,
+  )
+  const marker = await requestHttpReconStop({
+    bundle: value.out,
+    operatorId: 'operator-001',
+    reason: 'stop the safely paused operator action',
+    now: value.clock.now,
+  })
+  const stopped = await runHttpReconAction({
+    bundle: value.out,
+    actionId,
+    operatorId: 'operator-001',
+    rationale: 'observe the retained Stop before any target dispatch',
+    now: value.clock.now,
+    probeImpl: pauseProbe,
+  })
+  assert.equal(probeCalls, 1)
+  assert.equal(stopped.run.state, 'STOPPED')
+  assert.equal(stopped.run.stop.reason, marker.reason)
+  assert.equal(stopped.run.actions[0].state, 'FAILED')
+  assert.equal(stopped.run.actions[0].sent_at, null)
+  assert.equal(stopped.run.actions[0].error.code, 'STOPPED_BEFORE_SEND')
+  assert.equal((await validateHttpReconBundle({
+    bundle: value.out,
+    now: value.clock.now,
+  })).valid, true)
+})
 
 test('operator-attested mode needs no repeat authorization, authority files, or proof requests', async (t) => {
   const value = await attestedFixture(t)

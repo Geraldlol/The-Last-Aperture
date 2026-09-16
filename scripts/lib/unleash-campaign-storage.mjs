@@ -169,9 +169,9 @@ async function inspectDirectoryPath(path, { requirePrivateRoot = false } = {}) {
   }
 }
 
-async function assertPrivateStorageEndpoint(path, expectedKind) {
+async function assertPrivateStorageEndpoint(path, expectedKind, options = undefined) {
   try {
-    return await assertUnleashPrivateEndpoint(path, expectedKind)
+    return await assertUnleashPrivateEndpoint(path, expectedKind, options)
   } catch (cause) {
     fail(
       'UNLEASH_STORAGE_AUTHORITY_UNSAFE',
@@ -320,23 +320,29 @@ export function canonicalUnleashCampaignJson(value) {
   return json
 }
 
-async function inspectRegularFile(path) {
+async function inspectRegularFileWithLinks(path, allowedLinks) {
   try {
     const metadata = await lstat(path, { bigint: true })
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1n) {
-      fail('UNLEASH_STORAGE_FILE_UNSAFE', 'campaign JSON destination must be one regular single-link file')
+    if (!metadata.isFile() || metadata.isSymbolicLink() || !allowedLinks.includes(metadata.nlink)) {
+      fail('UNLEASH_STORAGE_FILE_UNSAFE', 'campaign JSON destination has an unsafe file type or link count')
     }
     const canonical = await realpath(path)
     if (!samePath(canonical, path)) {
       fail('UNLEASH_STORAGE_FILE_UNSAFE', 'campaign JSON destination must use its canonical path')
     }
-    await assertPrivateStorageEndpoint(canonical, 'file')
+    await assertPrivateStorageEndpoint(canonical, 'file', {
+      allowedFileLinks: allowedLinks.map((count) => Number(count)),
+    })
     return { canonical, metadata }
   } catch (cause) {
     if (cause instanceof UnleashCampaignStorageError) throw cause
     if (cause?.code === 'ENOENT') return null
     fail('UNLEASH_STORAGE_FILE_UNSAFE', 'campaign JSON destination cannot be inspected safely', cause)
   }
+}
+
+async function inspectRegularFile(path) {
+  return inspectRegularFileWithLinks(path, [1n])
 }
 
 async function verifyPublishedFile(path, expectedBytes) {
@@ -493,6 +499,61 @@ async function quarantineAndRemoveStaleTemporary(campaignDirectory, name) {
   }
 }
 
+function sameFileIdentityAndSize(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+}
+
+async function recoverLinkedPublicationTail(campaignDirectory, name, owned) {
+  const temporaryPath = join(campaignDirectory, name)
+  const destinationPath = join(campaignDirectory, assertJsonFilename(owned[1]))
+  const temporary = await inspectRegularFileWithLinks(temporaryPath, [1n, 2n])
+  if (temporary === null) {
+    fail('UNLEASH_STORAGE_CHANGED', 'temporary campaign publication disappeared during recovery')
+  }
+  if (temporary.metadata.nlink === 1n) return false
+
+  const destination = await inspectRegularFileWithLinks(destinationPath, [2n])
+  if (
+    destination === null
+    || !sameFileIdentityAndSize(temporary.metadata, destination.metadata)
+  ) {
+    fail(
+      'UNLEASH_STORAGE_TEMP_RESIDUE',
+      'temporary campaign publication has an unexplained hard-link alias',
+    )
+  }
+
+  const temporaryBeforeUnlink = await inspectRegularFileWithLinks(temporaryPath, [2n])
+  const destinationBeforeUnlink = await inspectRegularFileWithLinks(destinationPath, [2n])
+  if (
+    temporaryBeforeUnlink === null
+    || destinationBeforeUnlink === null
+    || !sameFileMetadata(temporary.metadata, temporaryBeforeUnlink.metadata)
+    || !sameFileMetadata(destination.metadata, destinationBeforeUnlink.metadata)
+    || !sameFileIdentityAndSize(temporaryBeforeUnlink.metadata, destinationBeforeUnlink.metadata)
+  ) {
+    fail('UNLEASH_STORAGE_CHANGED', 'linked campaign publication changed before recovery')
+  }
+
+  try {
+    await unlink(temporaryBeforeUnlink.canonical)
+  } catch (cause) {
+    fail('UNLEASH_STORAGE_CHANGED', 'linked campaign publication could not be recovered safely', cause)
+  }
+  await syncRecoverableDirectoryChange(campaignDirectory)
+
+  const recovered = await inspectRegularFile(destinationPath)
+  if (
+    recovered === null
+    || !sameFileIdentityAndSize(destinationBeforeUnlink.metadata, recovered.metadata)
+  ) {
+    fail('UNLEASH_STORAGE_CHANGED', 'recovered campaign publication changed after temporary unlink')
+  }
+  return true
+}
+
 async function recoverStaleTemporaryPublications(campaignDirectory) {
   let entries
   try {
@@ -510,6 +571,9 @@ async function recoverStaleTemporaryPublications(campaignDirectory) {
     const ownerPid = Number(owned !== null ? owned[2] : recovery[1])
     if (!Number.isSafeInteger(ownerPid) || ownerPid < 1 || processIsAlive(ownerPid)) {
       fail('UNLEASH_STORAGE_TEMP_RESIDUE', 'campaign directory contains a live or unverifiable temporary publication')
+    }
+    if (owned !== null && await recoverLinkedPublicationTail(campaignDirectory, entry.name, owned)) {
+      continue
     }
     await quarantineAndRemoveStaleTemporary(campaignDirectory, entry.name)
   }

@@ -125,7 +125,7 @@ test('reverse engineering ships its consumer contracts and public entry points t
 
   const packageDocument = JSON.parse(readFileSync('package.json', 'utf8'))
   assert.equal(packageDocument.bin['last-aperture-reverse'], './scripts/reverse.mjs')
-  assert.equal(packageDocument.version, '0.15.0')
+  assert.equal(packageDocument.version, '0.16.0')
   assert.ok(packageDocument.files.includes('CHANGELOG.md'))
   assert.ok(packageDocument.files.includes('integrations/'))
   assert.ok(packageDocument.files.includes('!docs/remediation/'))
@@ -216,12 +216,42 @@ test('release pack excludes local and nested build artifacts and retains compati
       'browser/http-authed-chrome/README.md',
       'integrations/burp-montoya/README.md',
       'schemas/page-session-adapter.schema.json',
+      'schemas/unleash-action-risk-assessment.schema.json',
+      'schemas/unleash-candidate-admission.schema.json',
+      'schemas/unleash-snapshot.schema.json',
+      'schemas/unleash-swarm.schema.json',
       'scripts/ghidra/GhidraBundleLocationAgent.java.source',
       'scripts/lib/reverse-v1-compat-semantics.mjs',
       'scripts/lib/reverse-web-burp.mjs',
+      'scripts/lib/unleash-action-risk-assessment.mjs',
+      'scripts/lib/unleash-campaign-pause.mjs',
+      'scripts/lib/unleash-candidate-frontier.mjs',
+      'scripts/lib/unleash-provider-profile.mjs',
+      'scripts/lib/unleash-reasoning-adapter.mjs',
+      'scripts/lib/unleash-snapshot.mjs',
+      'scripts/lib/unleash-swarm-contracts.mjs',
+      'scripts/lib/unleash-swarm-controller.mjs',
+      'scripts/lib/unleash-swarm-ledger.mjs',
+      'scripts/lib/unleash-swarm-merge.mjs',
+      'scripts/lib/unleash-swarm-owner.mjs',
+      'scripts/lib/unleash-swarm-seal.mjs',
       'test/fixtures/compat/0.12/native-interaction-contract-1.0.0-retired-auth-semantics.json',
       'test/fixtures/compat/0.12/web-session-evidence-1.0.0-expanded-cookie-carrier.json',
       'test/fixtures/compat/0.12/web-session-evidence-1.0.0-retired-cookie-carrier.json',
+      'test/unleash-action-risk-assessment.test.mjs',
+      'test/unleash-campaign-pause.test.mjs',
+      'test/unleash-candidate-frontier.test.mjs',
+      'test/unleash-controller-v2-e2e.test.mjs',
+      'test/unleash-provider-profile.test.mjs',
+      'test/unleash-reasoning-adapter.test.mjs',
+      'test/unleash-snapshot.test.mjs',
+      'test/unleash-swarm-contracts.test.mjs',
+      'test/unleash-swarm-controller.test.mjs',
+      'test/unleash-swarm-ledger.test.mjs',
+      'test/unleash-swarm-merge.test.mjs',
+      'test/unleash-swarm-owner.test.mjs',
+      'test/unleash-swarm-seal.test.mjs',
+      'test/unleash-synthetic-remote-e2e.test.mjs',
     ]) {
       assert.equal(paths.includes(required), true, `${required} must be packed`)
     }

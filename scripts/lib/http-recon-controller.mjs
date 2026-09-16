@@ -947,9 +947,13 @@ async function loadAuthorizationContext({
   )
 }
 
+function eventSchemaVersion(type) {
+  return type === 'ACTION_PAUSED_BEFORE_SEND' ? '1.1.0' : '1.0.0'
+}
+
 function eventRecord({ run, type, at, details }) {
   const unsigned = {
-    schema_version: '1.0.0',
+    schema_version: eventSchemaVersion(type),
     kind: 'red-team-audit/http-recon-event',
     run_id: run.run_id,
     engagement_id: run.engagement_id,
@@ -2067,7 +2071,8 @@ export async function nextHttpReconAction({
       'a stop marker exists; no action can be selected',
     )
   }
-  const action = loaded.run.actions.find(({ state }) => state === 'PENDING')
+  const action = loaded.run.actions.find(({ state }) =>
+    state === 'PENDING' || state === 'PAUSED_BEFORE_SEND')
   return action ? structuredClone(action) : null
 }
 
@@ -2441,7 +2446,7 @@ async function markStopped(
     ...stopIdentityForRun(loaded.run, marker),
     reason: reason ?? marker?.reason ?? 'stop condition observed',
   }
-  if (action && ['LEASED', 'SENT'].includes(action.state)) {
+  if (action && ['LEASED', 'PAUSED_BEFORE_SEND', 'SENT'].includes(action.state)) {
     const hasPreDispatch = hasUnsettledPreDispatch(
       priorEvents,
       action.action_id,
@@ -2542,7 +2547,7 @@ async function runHttpReconActionForMode({
       loaded,
       now,
     })
-    await verifyExistingEvidence({ loaded, trust })
+    const evidence = await verifyExistingEvidence({ loaded, trust })
     if (loaded.run.authorization.mode !== expectedAuthorizationMode) {
       throw controllerError(
         'HTTP_RECON_AUTHORIZATION_MODE_MISMATCH',
@@ -2587,7 +2592,17 @@ async function runHttpReconActionForMode({
     }
     const marker = await loadStopMarker(loaded.directory)
     if (marker) {
-      await markStopped(loaded, marker, marker.reason, now)
+      const safelyPaused = loaded.run.actions.find(
+        ({ state }) => state === 'PAUSED_BEFORE_SEND',
+      )
+      await markStopped(
+        loaded,
+        marker,
+        marker.reason,
+        now,
+        safelyPaused,
+        evidence.events,
+      )
       return {
         run: structuredClone(loaded.run),
         action: null,
@@ -2601,42 +2616,49 @@ async function runHttpReconActionForMode({
         `action ${JSON.stringify(actionId)} is not in the sealed plan`,
       )
     }
-    const next = loaded.run.actions.find(({ state }) => state === 'PENDING')
-    if (!next || next.action_id !== action.action_id || action.state !== 'PENDING') {
+    const next = loaded.run.actions.find(({ state }) =>
+      state === 'PENDING' || state === 'PAUSED_BEFORE_SEND')
+    if (
+      !next
+      || next.action_id !== action.action_id
+      || !['PENDING', 'PAUSED_BEFORE_SEND'].includes(action.state)
+    ) {
       throw controllerError(
         'HTTP_RECON_ACTION_NOT_NEXT',
-        `action ${action.action_id} is not the next pending sealed action`,
+        `action ${action.action_id} is not the next safely resumable sealed action`,
       )
     }
 
-    if (loaded.run.budget.started_at === null) {
-      loaded.run.budget.started_at = timestamp(now)
+    if (action.state === 'PENDING') {
+      if (loaded.run.budget.started_at === null) {
+        loaded.run.budget.started_at = timestamp(now)
+      }
+      loaded.run.state = 'ACTIVE'
+      action.state = 'LEASED'
+      action.attempt_count += 1
+      action.leased_at = timestamp(now)
+      await saveRun(loaded)
+      const leaseDetails = {
+        action_id: action.action_id,
+        method: action.method,
+        url: action.url,
+        request_headers: action.request_headers ?? null,
+        authorization_mode: trust.mode,
+        tls_policy: tlsPolicyForRun(loaded.run),
+        current_authorization_confirmed: true,
+        budget_before: structuredClone(loaded.run.budget),
+        ...(trust.mode === 'OPERATOR_ATTESTED'
+          ? {
+              operator_id: normalizedOperatorId,
+              rationale: normalizedRationale,
+            }
+          : {
+              controller_policy_authority_receipt: structuredClone(trust.receipt),
+            }),
+      }
+      await appendEvent(loaded, 'ACTION_LEASED', leaseDetails, now)
+      await saveRun(loaded)
     }
-    loaded.run.state = 'ACTIVE'
-    action.state = 'LEASED'
-    action.attempt_count += 1
-    action.leased_at = timestamp(now)
-    await saveRun(loaded)
-    const leaseDetails = {
-      action_id: action.action_id,
-      method: action.method,
-      url: action.url,
-      request_headers: action.request_headers ?? null,
-      authorization_mode: trust.mode,
-      tls_policy: tlsPolicyForRun(loaded.run),
-      current_authorization_confirmed: true,
-      budget_before: structuredClone(loaded.run.budget),
-      ...(trust.mode === 'OPERATOR_ATTESTED'
-        ? {
-            operator_id: normalizedOperatorId,
-            rationale: normalizedRationale,
-          }
-        : {
-            controller_policy_authority_receipt: structuredClone(trust.receipt),
-          }),
-    }
-    await appendEvent(loaded, 'ACTION_LEASED', leaseDetails, now)
-    await saveRun(loaded)
 
     const abortController = new AbortController()
     const stopWatching = startStopWatcher(
@@ -2795,6 +2817,25 @@ async function runHttpReconActionForMode({
       }
       const requestMayHaveBeenSent = sentRecorded
         || error.request_may_have_been_sent === true
+      if (
+        currentMarker === null
+        && !requestMayHaveBeenSent
+        && action.sent_at === null
+        && errorCauseHasCode(error, 'UNLEASH_CAMPAIGN_PAUSED')
+      ) {
+        loaded.run.schema_version = '1.3.0'
+        action.state = 'PAUSED_BEFORE_SEND'
+        loaded.run.state = 'ACTIVE'
+        await appendEvent(loaded, 'ACTION_PAUSED_BEFORE_SEND', {
+          action_id: action.action_id,
+          phase: 'PRE_DISPATCH',
+          pause_code: 'UNLEASH_CAMPAIGN_PAUSED',
+          request_may_have_been_sent: false,
+        }, now)
+        await saveRun(loaded)
+        error.bundle = loaded.directory
+        throw error
+      }
       action.state = requestMayHaveBeenSent ? 'DELIVERY_AMBIGUOUS' : 'FAILED'
       if (requestMayHaveBeenSent && action.sent_at === null) {
         action.sent_at = action.leased_at
@@ -3055,7 +3096,7 @@ export async function finalizeHttpReconBundle({
     const marker = await loadStopMarker(loaded.directory)
     if (marker && !['STOPPED', 'OUTCOME_UNCERTAIN'].includes(loaded.run.state)) {
       const inFlight = loaded.run.actions.find(({ state }) =>
-        state === 'LEASED' || state === 'SENT')
+        ['LEASED', 'PAUSED_BEFORE_SEND', 'SENT'].includes(state))
       await markStopped(
         loaded,
         marker,
@@ -3149,7 +3190,9 @@ function verifyEventRecords(run, records) {
     const record = records[index]
     const { record_sha256: digest, ...unsigned } = record
     if (
-      record.sequence !== index + 1
+      record.schema_version !== eventSchemaVersion(record.type)
+      || record.kind !== 'red-team-audit/http-recon-event'
+      || record.sequence !== index + 1
       || record.run_id !== run.run_id
       || record.engagement_id !== run.engagement_id
       || record.previous_sha256 !== previous
@@ -3275,6 +3318,25 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
       ) {
         throw eventTailError('ACTION_LEASED tail does not match durable run state')
       }
+    } else if (event.type === 'ACTION_PAUSED_BEFORE_SEND') {
+      if (
+        !action
+        || !['LEASED', 'PAUSED_BEFORE_SEND'].includes(action.state)
+        || run.state !== 'ACTIVE'
+        || !hasExactObjectKeys(event.details, [
+          'action_id',
+          'phase',
+          'pause_code',
+          'request_may_have_been_sent',
+        ])
+        || event.details.phase !== 'PRE_DISPATCH'
+        || event.details.pause_code !== 'UNLEASH_CAMPAIGN_PAUSED'
+        || event.details.request_may_have_been_sent !== false
+      ) {
+        throw eventTailError('before-send Pause tail does not match a safely resumable action')
+      }
+      run.schema_version = '1.3.0'
+      action.state = 'PAUSED_BEFORE_SEND'
     } else if (event.type === 'ACTION_REQUEST_PRE_DISPATCH') {
       if (
         !action
@@ -3348,7 +3410,7 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
     ) {
       if (
         !action
-        || !['LEASED', 'SENT'].includes(action.state)
+        || !['LEASED', 'PAUSED_BEFORE_SEND', 'SENT'].includes(action.state)
         || !event.details?.error
       ) {
         throw eventTailError('terminal action tail does not match an in-flight action')
@@ -3378,7 +3440,7 @@ async function replayFsyncedEventTail({ loaded, trust, events }) {
       ) {
         throw eventTailError('stop tail has an invalid terminal state')
       }
-      if (action && ['LEASED', 'SENT'].includes(action.state)) {
+      if (action && ['LEASED', 'PAUSED_BEFORE_SEND', 'SENT'].includes(action.state)) {
         const ambiguous = event.details.terminal_state === 'OUTCOME_UNCERTAIN'
         action.state = ambiguous ? 'DELIVERY_AMBIGUOUS' : 'FAILED'
         if (ambiguous && action.sent_at === null) action.sent_at = event.at
@@ -3560,12 +3622,14 @@ async function verifyExistingEvidence({
     loaded.run.actions.map((action) => [action.action_id, action]),
   )
   const leasedByAction = new Map()
+  const pausedBeforeSendByAction = new Map()
   const preDispatchByAction = new Map()
   const committedByAction = new Map()
   const dispatchedActions = new Set()
   const allowedEventTypes = new Set([
     'PLAN_CREATED',
     'ACTION_LEASED',
+    'ACTION_PAUSED_BEFORE_SEND',
     'ACTION_REQUEST_PRE_DISPATCH',
     'ACTION_COMMITTED',
     'ACTION_DELIVERY_AMBIGUOUS',
@@ -3619,10 +3683,36 @@ async function verifyExistingEvidence({
       }
       leasedByAction.set(eventActionId, event)
     }
+    if (event.type === 'ACTION_PAUSED_BEFORE_SEND') {
+      const pauses = pausedBeforeSendByAction.get(eventActionId) ?? []
+      if (
+        !leasedByAction.has(eventActionId)
+        || preDispatchByAction.has(eventActionId)
+        || committedByAction.has(eventActionId)
+        || !hasExactObjectKeys(event.details, [
+          'action_id',
+          'phase',
+          'pause_code',
+          'request_may_have_been_sent',
+        ])
+        || event.details.phase !== 'PRE_DISPATCH'
+        || event.details.pause_code !== 'UNLEASH_CAMPAIGN_PAUSED'
+        || event.details.request_may_have_been_sent !== false
+      ) {
+        throw controllerError(
+          'HTTP_RECON_ACTION_PAUSE_INVALID',
+          `before-send Pause event ${event.sequence} is not bound to one leased, proven-unsent action`,
+        )
+      }
+      pauses.push(event)
+      pausedBeforeSendByAction.set(eventActionId, pauses)
+    }
     if (event.type === 'ACTION_REQUEST_PRE_DISPATCH') {
       const plannedAction = actionById.get(eventActionId)
       if (
-        preDispatchByAction.has(eventActionId)
+        !leasedByAction.has(eventActionId)
+        || committedByAction.has(eventActionId)
+        || preDispatchByAction.has(eventActionId)
         || event.details?.method !== plannedAction?.method
         || event.details?.url !== plannedAction?.url
         || canonicalJson(event.details?.request_headers ?? null)
@@ -3667,6 +3757,7 @@ async function verifyExistingEvidence({
     const observation = observationByAction.get(action.action_id)
     const commit = committedByAction.get(action.action_id)
     const lease = leasedByAction.get(action.action_id)
+    const pausedBeforeSend = pausedBeforeSendByAction.get(action.action_id) ?? []
     const preDispatch = preDispatchByAction.get(action.action_id)
     const authorityMatches = loaded.run.authorization.mode === 'OPERATOR_ATTESTED'
       ? observation?.authority?.mode === 'OPERATOR_ATTESTED'
@@ -3691,7 +3782,22 @@ async function verifyExistingEvidence({
       && preDispatch !== undefined
       && canonicalJson(observationTransportIdentity(observation))
         === canonicalJson(preDispatch.details.transport_identity)
-    if (action.state === 'COMMITTED') {
+    if (action.state === 'PAUSED_BEFORE_SEND') {
+      if (
+        loaded.run.state !== 'ACTIVE'
+        || !lease
+        || pausedBeforeSend.length === 0
+        || pausedBeforeSend[0].sequence <= lease.sequence
+        || preDispatch
+        || commit
+        || observation
+      ) {
+        throw controllerError(
+          'HTTP_RECON_ACTION_PAUSE_STATE_MISMATCH',
+          `safely paused action ${action.action_id} lacks its leased, proven-unsent event history`,
+        )
+      }
+    } else if (action.state === 'COMMITTED') {
       if (
         !observation
         || !commit
@@ -3712,7 +3818,15 @@ async function verifyExistingEvidence({
           `committed action ${action.action_id} lacks matching event or observation evidence`,
         )
       }
-    } else if (observation || commit) {
+    } else if (
+      observation
+      || commit
+      || (
+        pausedBeforeSend.length > 0
+        && !preDispatch
+        && ['PENDING', 'LEASED'].includes(action.state)
+      )
+    ) {
       throw controllerError(
         'HTTP_RECON_ACTION_STATE_MISMATCH',
         `non-committed action ${action.action_id} has committed evidence`,
