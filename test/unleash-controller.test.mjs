@@ -923,7 +923,10 @@ test('protocol-v2 status stays read-only while owned Resume repairs the exact le
     join(result.run_directory, 'swarm-merge-r02-review.json'),
   ]
   for (const filename of trailing) {
-    await writeFile(filename, canonicalUnleashCampaignJson(roundTwo), 'utf8')
+    await writePrivateFixtureCreateOnly(
+      filename,
+      canonicalUnleashCampaignJson(roundTwo),
+    )
   }
   await assert.rejects(
     getUnleashCampaignStatus({ bundle: result.run_directory }, { now: h.deps.now }),
