@@ -638,6 +638,93 @@ test('a concurrent opener waits through the lock owner publication window', asyn
   assert.equal(held, true)
 })
 
+test('a concurrent opener proceeds while the prior lock retires outside the ledger', { timeout: 10_000 }, async (t) => {
+  const directory = await directoryFor(t, 'lock-retirement-window')
+  let retirementEntered
+  let releaseRetirement
+  const retirementEnteredPromise = new Promise((resolvePromise) => {
+    retirementEntered = resolvePromise
+  })
+  const releaseRetirementPromise = new Promise((resolvePromise) => {
+    releaseRetirement = resolvePromise
+  })
+  t.after(() => releaseRetirement())
+  let retirementArmed = false
+  let retirementPath
+  const first = await openLedger(directory, {
+    faultInjector: async (phase, detail) => {
+      if (!retirementArmed || phase !== 'after-lock-release-quarantine') return
+      retirementPath = detail.quarantine
+      retirementEntered()
+      await releaseRetirementPromise
+    },
+  })
+  retirementArmed = true
+  const firstClosePromise = first.close()
+  await retirementEnteredPromise
+  assert.equal(join(retirementPath, '..'), join(directory, '..'))
+  assert.equal((await readdir(directory)).includes('.http-authed-campaign.lock'), false)
+
+  const second = await openLedger(directory, {
+    initialize: false,
+    limits: { lockTimeoutMs: 2_000, staleLockMs: 1_000, lockPollMs: 1 },
+  })
+  assert.equal((await readdir(directory)).includes('.http-authed-campaign.lock'), true)
+
+  releaseRetirement()
+  await firstClosePromise
+  await second.close()
+  await assert.rejects(readFile(retirementPath), (error) => error.code === 'ENOENT')
+})
+
+test('a forged in-ledger lock retirement name fails closed without deletion', async (t) => {
+  const directory = await directoryFor(t, 'forged-lock-retirement')
+  const initialized = await openLedger(directory)
+  await initialized.close()
+  const retirementPath = join(
+    directory,
+    `.http-authed-campaign.lock.release-${process.pid}-cccccccccccccccccccccccc`,
+  )
+  await writeFile(retirementPath, 'operator-owned sentinel', 'utf8')
+
+  await assert.rejects(
+    openLedger(directory, {
+      initialize: false,
+    }),
+    (error) => error.code === 'HTTP_AUTHED_LEDGER_DIRECTORY_UNSAFE',
+  )
+  assert.equal(await readFile(retirementPath, 'utf8'), 'operator-owned sentinel')
+})
+
+test('an interrupted release quarantine cannot poison ledger projection', async (t) => {
+  const directory = await directoryFor(t, 'interrupted-release-quarantine')
+  const injectedFailure = new Error('synthetic interruption after release quarantine')
+  let retirementArmed = false
+  let retirementPath
+  const ledger = await openLedger(directory, {
+    faultInjector: async (phase, detail) => {
+      if (!retirementArmed || phase !== 'after-lock-release-quarantine') return
+      retirementPath = detail.quarantine
+      throw injectedFailure
+    },
+  })
+  retirementArmed = true
+
+  await assert.rejects(
+    ledger.close(),
+    (error) => (
+      error.code === 'HTTP_AUTHED_LEDGER_LOCK_CHANGED'
+      && error.cause === injectedFailure
+    ),
+  )
+  assert.equal(join(retirementPath, '..'), join(directory, '..'))
+  assert.match(await readFile(join(retirementPath, 'owner.json'), 'utf8'), /"pid":/)
+
+  const reopened = await openLedger(directory, { initialize: false })
+  await reopened.close()
+  assert.match(await readFile(join(retirementPath, 'owner.json'), 'utf8'), /"pid":/)
+})
+
 test('a failed lock acquisition removes its controller-created partial directory', async (t) => {
   const directory = await directoryFor(t, 'failed-owner-publication-cleanup')
   let injected = false

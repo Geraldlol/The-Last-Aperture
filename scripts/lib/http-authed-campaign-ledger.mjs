@@ -788,6 +788,14 @@ async function removeInspectedLock(path, inspected) {
   await syncRecoverableDirectoryChange(dirname(path))
 }
 
+function lockQuarantinePath(lockPath, suffix) {
+  const ledgerDirectory = dirname(lockPath)
+  return join(
+    dirname(ledgerDirectory),
+    `.http-authed-campaign-lock-${suffix}-${process.pid}-${randomBytes(12).toString('hex')}.tmp`,
+  )
+}
+
 async function quarantineAndRemoveInspectedLock({
   ledger,
   path,
@@ -796,7 +804,9 @@ async function quarantineAndRemoveInspectedLock({
   suffix,
   missingReturnsFalse = false,
 }) {
-  const quarantine = `${path}.${suffix}-${process.pid}-${randomBytes(12).toString('hex')}`
+  // Keep an interrupted retirement outside the strict ledger root. A crash
+  // can leave private owner metadata behind, but it cannot poison projection.
+  const quarantine = lockQuarantinePath(path, suffix)
   await ledger._inject(phase, {})
   const renameDeadline = Date.now() + ledger.limits.lockTimeoutMs
   while (true) {
@@ -816,6 +826,9 @@ async function quarantineAndRemoveInspectedLock({
       throw error
     }
   }
+  await syncRecoverableDirectoryChange(dirname(path))
+  await syncRecoverableDirectoryChange(dirname(quarantine))
+  await ledger._inject(phase.replace(/^before-/u, 'after-'), { quarantine })
   let current
   try {
     current = await inspectLock(quarantine)
@@ -828,6 +841,8 @@ async function quarantineAndRemoveInspectedLock({
   } catch (error) {
     try {
       await rename(quarantine, path)
+      await syncRecoverableDirectoryChange(dirname(quarantine))
+      await syncRecoverableDirectoryChange(dirname(path))
     } catch (restoreError) {
       throw ledgerError(
         'HTTP_AUTHED_LEDGER_LOCK_CHANGED',
@@ -856,8 +871,10 @@ async function recoverStaleLock(ledger, lockPath, inspected) {
 }
 
 async function discardControllerCreatedLock(lockPath, createdInfo) {
-  const quarantine = `${lockPath}.failed-${process.pid}-${randomBytes(12).toString('hex')}`
+  const quarantine = lockQuarantinePath(lockPath, 'failed')
   await rename(lockPath, quarantine)
+  await syncRecoverableDirectoryChange(dirname(lockPath))
+  await syncRecoverableDirectoryChange(dirname(quarantine))
   const quarantined = await lstat(quarantine)
   if (
     !quarantined.isDirectory()
@@ -866,6 +883,8 @@ async function discardControllerCreatedLock(lockPath, createdInfo) {
   ) {
     try {
       await rename(quarantine, lockPath)
+      await syncRecoverableDirectoryChange(dirname(quarantine))
+      await syncRecoverableDirectoryChange(dirname(lockPath))
     } catch (restoreError) {
       throw new AggregateError(
         [ledgerError(
@@ -898,7 +917,7 @@ async function discardControllerCreatedLock(lockPath, createdInfo) {
     )
   }
   await rmdir(quarantine)
-  await syncRecoverableDirectoryChange(dirname(lockPath))
+  await syncRecoverableDirectoryChange(dirname(quarantine))
 }
 
 const TRANSIENT_LOCK_INSPECTION_CODES = new Set([
